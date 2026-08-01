@@ -1,0 +1,4 @@
+interface:
+  display_name: "Service Design"
+  short_description: "서비스별 SRS, 레퍼런스, 제안, 요청 기록을 관리해요"
+  default_prompt: "Use $service-design to create or update a service SRS."

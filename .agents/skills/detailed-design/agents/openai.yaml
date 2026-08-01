@@ -1,0 +1,4 @@
+interface:
+  display_name: "상세 설계"
+  short_description: "SRS를 구현 가능한 상세 설계 문서로 변환합니다."
+  default_prompt: "$detailed-design를 사용해 서비스 SRS를 기반으로 상세 설계 문서를 작성해 주세요."

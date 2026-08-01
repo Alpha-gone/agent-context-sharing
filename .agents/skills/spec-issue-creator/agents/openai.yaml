@@ -1,0 +1,4 @@
+interface:
+  display_name: "명세 기반 이슈 작성"
+  short_description: "명세를 추적 가능한 GitHub 이슈 초안으로 변환합니다."
+  default_prompt: "$spec-issue-creator를 사용해 대상 명세에서 구현 가능한 GitHub 이슈 초안을 작성해 주세요."

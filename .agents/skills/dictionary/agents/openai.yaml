@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dictionary"
+  short_description: "서비스 용어와 기획 용어를 분리해 정리해요"
+  default_prompt: "Use $dictionary to create or update the project glossary."

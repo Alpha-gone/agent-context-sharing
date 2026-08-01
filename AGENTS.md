@@ -37,12 +37,12 @@
 
 - 폴더가 고유한 목적, 규칙, 책임, workflow, 자료, 품질 기준을 가진 지속 경계가 되면 child `AGENTS.md`를 만든다.
 - 기본 섹션 순서는 다음을 따른다.
-	- Purpose
-	- Ownership
-	- Local Contracts
-	- Work Guidance
-	- Verification
-	- Child DOX Index
+    - Purpose
+    - Ownership
+    - Local Contracts
+    - Work Guidance
+    - Verification
+    - Child DOX Index
 - 구체적인 기준이 아직 없으면 `Work Guidance` 또는 `Verification`을 비워둘 수 있다.
 
 ## Style
@@ -91,4 +91,5 @@
 
 ## Child DOX Index
 
+- `.agents/skills/AGENTS.md`: 프로젝트 로컬 스킬의 작성·실행·검증 계약을 정의한다.
 - `spec/AGENTS.md`: 명세 문서와 용어 정리집의 로컬 작업 계약을 정의한다.

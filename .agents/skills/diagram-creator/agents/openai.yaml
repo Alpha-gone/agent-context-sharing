@@ -1,4 +1,4 @@
 interface:
-  display_name: "다이어그램 작성"
-  short_description: "문서 관계를 적합한 Mermaid 다이어그램으로 표현합니다."
-  default_prompt: "$diagram-creator를 사용해 문서의 구조와 흐름을 Mermaid 다이어그램으로 작성해 주세요."
+  display_name: "Mermaid 다이어그램"
+  short_description: "명세 근거를 일관된 Mermaid 다이어그램으로 표현합니다."
+  default_prompt: "$diagram-creator를 사용해 문서 근거에 맞는 Mermaid 다이어그램을 작성해 주세요."

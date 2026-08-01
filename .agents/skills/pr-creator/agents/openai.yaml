@@ -1,4 +1,4 @@
 interface:
-  display_name: "현재 커밋 PR 게시"
-  short_description: "검증된 현재 브랜치 커밋을 push하고 PR로 게시합니다."
-  default_prompt: "$pr-creator를 사용해 현재 브랜치의 검증된 커밋을 push하고 이슈에 연결된 PR을 준비해 주세요."
+  display_name: "Pull Request 게시"
+  short_description: "검증된 현재 브랜치 커밋을 승인된 Pull Request로 게시합니다."
+  default_prompt: "$pr-creator를 사용해 현재 브랜치의 검증된 커밋으로 Pull Request를 준비해 주세요."

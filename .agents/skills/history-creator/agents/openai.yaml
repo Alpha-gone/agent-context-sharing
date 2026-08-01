@@ -1,4 +1,4 @@
 interface:
-  display_name: "History Creator"
-  short_description: "서비스 요청과 제안을 날짜별 작업 일지로 정리해요"
-  default_prompt: "Use $history-creator to build history/HISTORY.md and daily work journals from service prompt and suggestion files."
+  display_name: "프로젝트 이력 작성"
+  short_description: "서비스 요청 기록을 공개 가능한 날짜별 이력으로 정리합니다."
+  default_prompt: "$history-creator를 사용해 서비스 기록에서 프로젝트 이력을 작성해 주세요."

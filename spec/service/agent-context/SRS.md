@@ -118,7 +118,7 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 
 ## 연구 기반 기초 설계 원칙
 
-다음 원칙은 컨텍스트 그래프와 에이전트 기억 관련 연구에서 도출한 설계 후보이며 사용자 확정 사항이 아니다. 논문의 특정 구현과 성능 수치는 요구사항으로 채택하지 않고, 서비스 경계를 구체화하는 근거로만 사용한다.
+다음 원칙은 컨텍스트 그래프와 에이전트 기억 관련 연구에서 도출했다. 상태가 `확정`인 항목은 사용자가 채택한 설계 방향이며, 나머지는 사용자 확정 전의 설계 후보다. 논문의 특정 구현과 성능 수치는 별도 채택 전까지 요구사항으로 간주하지 않고 서비스 경계를 구체화하는 근거로만 사용한다.
 
 | 설계 원칙                  | 기초 설계 반영                                                                                        | 상태      | 근거                          |
 |----------------------------|-------------------------------------------------------------------------------------------------------|-----------|-------------------------------|
@@ -128,9 +128,9 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | 직접 검색과 연상 검색 결합 | 단순 사실 조회와 그래프 관계를 따르는 다중 홉 탐색을 함께 사용할 수 있는 검색 경계를 둔다.            | 초안      | HippoRAG 2                    |
 | 국소 검색과 전역 요약 분리 | 특정 컨텍스트를 찾는 검색과 전체 그래프의 주제·집단을 요약하는 검색을 서로 다른 사용 사례로 취급한다. | 검토 필요 | GraphRAG                      |
 | 그래프 효과의 통제 검증    | 그래프 구조의 효과를 가정하지 않고 동일한 표현·검색·평가 조건의 비그래프 기준선과 비교한다.           | 검토 필요 | Does Memory Need Graphs?      |
-| 사건과 논리 관계 중심 조직 | 장기 상호작용을 사건 단위로 나누고 시간·인과·부분 관계를 검색과 추론에 활용할 수 있도록 한다.          | 검토 필요 | CompassMem, Associa           |
+| 사건과 논리 관계 중심 조직 | 상호작용을 사건 컨텍스트로 묶고 사건 사이 시간·인과·부분·의미 관계를 최소 관계 후보로 실험한다.          | 확정      | 사용자 채택, CompassMem, Associa |
 | 관리와 검색의 명시적 분리  | 컨텍스트의 추가·갱신·폐기·유지 판단과 검색 후보 선택을 서로 검증 가능한 단계로 구분한다.              | 검토 필요 | Memory-R1                     |
-| 근거와 해석의 구분         | 원천 사실, 관찰, 경험과 의견 성격의 파생 정보를 구분하고 해석이 의존한 근거를 추적한다.                | 검토 필요 | HINDSIGHT                     |
+| 근거와 해석의 구분         | 원천 사실과 관찰·경험·의견 성격의 파생 정보를 구분하고 의견이나 해석에 근거와 신뢰 상태를 연결한다.    | 확정      | 사용자 채택, HINDSIGHT       |
 | 예산 기반 검색 결과 구성   | 검색 결과를 구성할 때 컨텍스트 예산을 적용하고 품질과 지연·비용의 관계를 측정한다.                    | 검토 필요 | HINDSIGHT                     |
 
 ### 기초 데이터 모델 후보
@@ -144,7 +144,7 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | 검색 근거       | 검색 결과가 선택된 원천, 파생 과정과 그래프 경로를 추적한다.       | 결과 메타데이터와 경로를 구성하는 vertex·edge | 영속화 범위, 경로 길이와 노출 수준        |
 | 그래프 요약     | 관련 컨텍스트 집단에서 도출한 상위 수준의 주제나 요약을 표현한다.  | 파생 vertex와 구성원 관계 edge                | 집단 구성 알고리즘, 생성 주기와 갱신 정책 |
 | 사건 컨텍스트   | 하나의 상호작용이나 경험에서 함께 해석해야 하는 정보를 사건 단위로 묶는다. | 별도 vertex label과 원천 컨텍스트 구성 관계 edge | 사건 분할 기준, 중첩과 병합 정책          |
-| 근거 상태       | 원천 사실, 관찰, 경험과 의견 등 컨텍스트의 성격과 신뢰 근거를 구분한다. | vertex property 또는 별도 label                | 분류 체계, 신뢰도와 갱신 권한              |
+| 근거 상태       | 원천 사실과 관찰·경험·의견 성격의 파생 정보를 구분하고 의견·해석에 근거와 신뢰 상태를 연결한다. | vertex property 또는 별도 label | 분류 규칙, 근거 연결 스키마, 신뢰 상태 계산과 상충 처리 |
 | 작업자 기여 정보 | 컨텍스트와 관계를 생성·변경한 작업자와 시점을 추적한다.               | vertex·edge property 또는 별도 감사 이벤트     | 작업자 식별 방식, 기록 범위와 보존 정책    |
 
 ## 기능 요구사항
@@ -159,9 +159,9 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `FR-AGENT_CONTEXT-006` | 수명주기  | 시스템은 컨텍스트와 관계의 시간 유효성 및 대체 관계를 관리할 수 있어야 한다.   | 수정·삭제 대신 이력을 보존할 범위는 후속 기획에서 정의한다.  | 상       | 초안      | Zep Temporal Knowledge Graph | -         |
 | `FR-AGENT_CONTEXT-007` | 검색      | 시스템은 직접 검색과 그래프 기반 연상 검색을 조합할 수 있어야 한다.            | 후보 검색, 그래프 확장과 순위화 알고리즘은 확정하지 않는다.  | 상       | 초안      | HippoRAG 2                   | -         |
 | `FR-AGENT_CONTEXT-008` | 검색      | 시스템은 국소 컨텍스트 검색과 그래프 전역 요약을 구분할 수 있어야 한다.        | 전역 요약 제공 여부와 생성 정책은 후속 기획에서 확정한다.    | 중       | 검토 필요 | GraphRAG                     | -         |
-| `FR-AGENT_CONTEXT-009` | 관계 관리 | 시스템은 컨텍스트를 사건 단위로 묶고 사건 사이의 명시적 논리 관계를 표현할 수 있어야 한다. | 사건 단위와 시간·인과·부분 관계의 구체 유형은 후속 기획에서 정의한다. | 중 | 검토 필요 | CompassMem, Associa | - |
+| `FR-AGENT_CONTEXT-009` | 관계 관리 | 시스템은 상호작용을 사건 컨텍스트로 묶고 사건 사이의 시간·인과·부분·의미 관계를 최소 후보로 표현할 수 있어야 한다. | 사건 분할·중첩·병합 기준과 각 관계의 정의·방향·제약은 후속 기획에서 정의한다. | 중 | 확정 | 사용자 채택, CompassMem, Associa | - |
 | `FR-AGENT_CONTEXT-010` | 수명주기  | 시스템은 컨텍스트별 관리 연산의 판단과 적용 결과를 추적할 수 있어야 한다.       | 추가·갱신·대체·폐기·유지 연산의 허용 조건과 자동화 범위는 확정하지 않는다. | 상 | 검토 필요 | Memory-R1 | - |
-| `FR-AGENT_CONTEXT-011` | 정보 계층 | 시스템은 근거가 확인된 정보와 관찰·경험·의견 성격의 파생 정보를 구분할 수 있어야 한다. | 구분 체계와 신뢰도 계산 방식은 후속 기획에서 정의한다. | 중 | 검토 필요 | HINDSIGHT | - |
+| `FR-AGENT_CONTEXT-011` | 정보 계층 | 시스템은 원천 사실과 관찰·경험·의견 성격의 파생 정보를 구분하고 의견이나 해석에 근거와 신뢰 상태를 연결해야 한다. | 분류 규칙, 근거 연결 스키마, 신뢰 상태 값·계산 방식과 상충 처리는 후속 기획에서 정의한다. | 중 | 확정 | 사용자 채택, HINDSIGHT | - |
 | `FR-AGENT_CONTEXT-012` | 컨텍스트 조회 | 시스템은 에이전트가 현재 사용자 입력과 관련된 컨텍스트를 MCP를 통해 조회할 수 있도록 해야 한다. | 시스템은 MCP 서버를 담당하며 primitive와 요청·응답 스키마는 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청 | - |
 | `FR-AGENT_CONTEXT-013` | 업무 연속성 | 시스템은 에이전트가 조회한 작업 컨텍스트 흐름을 후속 응답과 작업에 활용할 수 있도록 제공해야 한다. | 업무 연속성의 평가 시나리오와 합격 기준은 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청 | - |
 | `FR-AGENT_CONTEXT-014` | 시각화 | 시스템은 조회된 컨텍스트와 그 관계의 시각화를 지원해야 한다. | Obsidian Graph view를 참고 모델로 사용하며 구체적인 기능 채택 범위와 렌더링 주체는 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청, Obsidian Graph view | - |
@@ -325,6 +325,8 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `TBD-AGENT_CONTEXT-028` | 보관과 소프트 삭제 정책 | 계정 플랜별 보관 정책이 적용되기 전에는 접근 가능한 계정이 있는 컨텍스트를 사용자 직접 삭제 전까지 무기한 보관한다. 마지막 접근 가능 계정이 사라지면 30일 유예 기간을 시작하고 기간 안에 계정이 다시 연결되면 예정된 소프트 삭제를 취소한다. 기간이 만료되면 소프트 삭제해 사용자 접근을 차단하며 영구 삭제는 수행하지 않는다. 사용자 직접 삭제도 소프트 삭제로 처리한다. | `FR-AGENT_CONTEXT-026`, `FR-AGENT_CONTEXT-031`~`FR-AGENT_CONTEXT-033`, `NFR-AGENT_CONTEXT-010` | 확정 | - |
 | `TBD-AGENT_CONTEXT-029` | MCP 토큰 인증 | 시스템과 함께 배치되는 인증 서버가 MCP 인증 정보를 검증해 1시간 접근 토큰을 발급하고, 모든 보호 요청에서 토큰을 검증하며 만료 직전 10초 구간의 유효한 요청에 대해 토큰을 자동 갱신한다. 클라이언트 토큰은 메모리에 보관한다. | `FR-AGENT_CONTEXT-027`~`FR-AGENT_CONTEXT-030`, `NFR-AGENT_CONTEXT-013` | 확정 | - |
 | `TBD-AGENT_CONTEXT-033` | 서비스 비전과 핵심 접근 | 궁극적인 목적은 AI 에이전트를 위한 제텔카스텐 시스템 구축이며, 공유 컨텍스트 그래프를 이를 실현하기 위한 현재의 핵심 접근 방식으로 사용한다. | 서비스 전체 | 확정 | - |
+| `TBD-AGENT_CONTEXT-036` | 사건 중심 최소 관계 후보 | 상호작용을 사건 컨텍스트로 묶고 사건 사이의 시간·인과·부분·의미 관계를 최소 관계 후보로 실험한다. 구체적인 사건 경계와 관계 스키마는 후속 기획에서 정의한다. | `FR-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-014` | 확정 | - |
+| `TBD-AGENT_CONTEXT-037` | 근거와 해석 구분 | 원천 사실과 관찰·경험·의견 성격의 파생 정보를 구분하고 의견이나 해석에는 근거와 신뢰 상태를 연결한다. 구체적인 분류와 신뢰 정책은 후속 기획에서 정의한다. | `FR-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-016`, `NFR-AGENT_CONTEXT-007` | 확정 | - |
 
 ## 미정 사항
 
@@ -339,9 +341,9 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `TBD-AGENT_CONTEXT-011` | 파생 정책     | 요약·성찰·구조화 정보의 생성 주체, 생성 조건, 갱신과 폐기 정책을 정의한다.         | `FR-AGENT_CONTEXT-004`, `FR-AGENT_CONTEXT-008`, `NFR-AGENT_CONTEXT-003` | 미확정 | -         |
 | `TBD-AGENT_CONTEXT-012` | 품질 평가     | 사실·연상·전역 검색별 데이터셋, 지표와 합격 기준을 정의한다.                       | `NFR-AGENT_CONTEXT-004`                                                 | 미확정 | -         |
 | `TBD-AGENT_CONTEXT-013` | 그래프 효과   | 비그래프 기준선과 비교할 그래프 기능, 통제 조건과 채택 기준을 정의한다.             | `FR-AGENT_CONTEXT-003`, `FR-AGENT_CONTEXT-007`, `NFR-AGENT_CONTEXT-005` | 미확정 | -         |
-| `TBD-AGENT_CONTEXT-014` | 사건 모델     | 사건 분할 기준과 사건 사이 시간·인과·부분·의미 관계의 유형 및 제약을 정의한다.       | `FR-AGENT_CONTEXT-003`, `FR-AGENT_CONTEXT-009`                          | 미확정 | -         |
+| `TBD-AGENT_CONTEXT-014` | 사건 모델     | 채택된 최소 후보인 시간·인과·부분·의미 관계의 정의·방향·제약과 사건 분할·중첩·병합 기준을 정의한다. | `FR-AGENT_CONTEXT-003`, `FR-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-036` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-015` | 관리 연산     | 컨텍스트 추가·갱신·대체·폐기·유지 연산의 판단 주체, 허용 조건과 감사 범위를 정의한다. | `FR-AGENT_CONTEXT-006`, `FR-AGENT_CONTEXT-010`, `FR-AGENT_CONTEXT-023`, `FR-AGENT_CONTEXT-025`, `FR-AGENT_CONTEXT-026`, `NFR-AGENT_CONTEXT-007` | 미확정 | - |
-| `TBD-AGENT_CONTEXT-016` | 근거 상태     | 원천 사실, 관찰, 경험과 의견 성격의 정보 구분, 신뢰도와 상충 처리 정책을 정의한다.    | `FR-AGENT_CONTEXT-004`, `FR-AGENT_CONTEXT-011`, `NFR-AGENT_CONTEXT-007` | 미확정 | -         |
+| `TBD-AGENT_CONTEXT-016` | 근거 상태     | 채택된 원천 사실과 관찰·경험·의견 성격의 파생 정보 구분에 적용할 분류 규칙, 의견·해석의 근거 연결 스키마, 신뢰 상태 값·계산 방식, 상충 처리와 갱신 권한을 정의한다. | `FR-AGENT_CONTEXT-004`, `FR-AGENT_CONTEXT-011`, `NFR-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-037` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-017` | 검색 예산     | 검색 결과의 컨텍스트 예산 단위, 기본값과 품질·지연·비용 측정 기준을 정의한다.         | `FR-AGENT_CONTEXT-007`, `NFR-AGENT_CONTEXT-006`                         | 미확정 | -         |
 | `TBD-AGENT_CONTEXT-018` | 지속 평가     | 온라인 갱신, 재생, 전이, 복구와 망각을 검증할 평가 시나리오와 합격 기준을 정의한다.    | `NFR-AGENT_CONTEXT-004`, `NFR-AGENT_CONTEXT-008`                        | 미확정 | -         |
 | `TBD-AGENT_CONTEXT-019` | 시각화        | Obsidian Graph view를 참고해 전체·국소 보기, 탐색 깊이, 필터·그룹, 관계 방향, 표시 속성, 상호작용, 렌더링 주체와 접근 제어의 채택 범위를 정의한다. | `FR-AGENT_CONTEXT-014`, `NFR-AGENT_CONTEXT-003` | 미확정 | - |
@@ -371,9 +373,9 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `FR-AGENT_CONTEXT-006`  | Zep Temporal Knowledge Graph            | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-034`                          |
 | `FR-AGENT_CONTEXT-007`  | HippoRAG 2                              | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-034`                          |
 | `FR-AGENT_CONTEXT-008`  | GraphRAG                                | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-034` |
-| `FR-AGENT_CONTEXT-009`  | CompassMem, Associa                     | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-014`, `TBD-AGENT_CONTEXT-034`                          |
+| `FR-AGENT_CONTEXT-009`  | 사용자 채택, CompassMem, Associa        | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-014`, `TBD-AGENT_CONTEXT-034`, `TBD-AGENT_CONTEXT-036` |
 | `FR-AGENT_CONTEXT-010`  | Memory-R1                               | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-034`                          |
-| `FR-AGENT_CONTEXT-011`  | HINDSIGHT                               | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-016`, `TBD-AGENT_CONTEXT-034` |
+| `FR-AGENT_CONTEXT-011`  | 사용자 채택, HINDSIGHT                  | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-016`, `TBD-AGENT_CONTEXT-034`, `TBD-AGENT_CONTEXT-037` |
 | `FR-AGENT_CONTEXT-012`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-004`, `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-027`, `TBD-AGENT_CONTEXT-034` |
 | `FR-AGENT_CONTEXT-013`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-020`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-034` |
 | `FR-AGENT_CONTEXT-014`  | 사용자 요청, Obsidian Graph view        | `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-019`                                                   |

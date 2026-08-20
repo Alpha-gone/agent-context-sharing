@@ -5,14 +5,16 @@
 | 항목          | 내용                                                         |
 |---------------|--------------------------------------------------------------|
 | 문서 상태     | 초안                                                         |
-| 최종 수정일   | 2026-08-18                                                   |
+| 최종 수정일   | 2026-08-21                                                   |
 | 서비스 식별자 | `AGENT_CONTEXT`                                              |
-| 담당 범위     | 공유 컨텍스트 그래프 기반 다중 작업자 협업과 MCP 기반 조회·활용·시각화 |
+| 담당 범위     | AI 에이전트 제텔카스텐을 위한 공유 컨텍스트 그래프와 MCP 기반 조회·활용·시각화 |
 | 주요 출처     | 사용자 요청, `reference.md`                                  |
 
 ## 서비스 개요
 
-에이전트 컨텍스트 관리 시스템의 최종 목적은 여러 작업자가 하나의 컨텍스트 그래프에 접근해 컨텍스트를 공유하고 공동 업무에 활용할 수 있는 협업 체계를 제공하는 것이다. 컨텍스트 데이터베이스에는 Apache AGE를 사용한다.
+에이전트 컨텍스트 관리 시스템의 궁극적인 목적은 AI 에이전트가 지식과 작업 맥락을 지속적으로 축적하고 연결하며 다시 활용할 수 있는 제텔카스텐 시스템을 구축하는 것이다. 공유 컨텍스트 그래프는 이 목적에 현재 가장 근접한 핵심 접근 방식이며, 컨텍스트 데이터베이스에는 Apache AGE를 사용한다.
+
+여러 작업자가 하나의 컨텍스트 그래프에 접근해 컨텍스트를 공유하고 공동 업무에 활용하는 협업 체계는 이 비전의 핵심 활용 목표다. 다만 컨텍스트 그래프를 전통적인 제텔카스텐과 동일한 것으로 간주하지 않으며, AI 에이전트에 적합한 컨텍스트 단위, 연결 원칙과 지식 성장 방식은 후속 기획에서 정의한다.
 
 각 작업자는 에이전트를 통해 현재 입력과 관련된 컨텍스트를 MCP로 조회하고, 다른 작업자가 공유한 컨텍스트를 후속 응답과 작업에 활용할 수 있다. 시스템은 MCP 서버로서 에이전트 측 MCP 클라이언트의 요청을 기다리고, 요청에 포함된 현재 작업 컨텍스트를 기준으로 그래프를 조회해 에이전트가 작업에 필요한 연결된 컨텍스트 흐름을 응답한다. 이 작업 컨텍스트 흐름은 사용자에게 표시하는 그래프 UI와 구분한다.
 
@@ -22,26 +24,36 @@
 
 | 구분        | 내용                                                                    | 상태      |
 |-------------|-------------------------------------------------------------------------|-----------|
-| 최종 목적   | 여러 작업자가 하나의 컨텍스트 그래프에 접근해 컨텍스트를 공유하고 협업할 수 있는 체계를 제공한다. | 확정 |
+| 궁극적 목적 | AI 에이전트가 지식과 작업 맥락을 지속적으로 축적·연결·재활용할 수 있는 제텔카스텐 시스템을 구축한다. | 확정 |
+| 핵심 접근   | 공유 컨텍스트 그래프를 AI 에이전트 제텔카스텐을 구현하기 위한 현재의 핵심 접근 방식으로 사용한다. | 확정 |
+| 활용 목표   | 여러 작업자가 하나의 컨텍스트 그래프에 접근해 컨텍스트를 공유하고 협업할 수 있는 체계를 제공한다. | 확정 |
 | 목표        | MCP를 사용하는 에이전트 컨텍스트 관리 경계를 정의한다.                  | 확정      |
 | 목표        | Apache AGE에 컨텍스트와 관계를 저장할 수 있는 요구사항 기반을 마련한다. | 확정      |
 | 목표        | 에이전트가 사용자 입력과 관련된 컨텍스트를 MCP를 통해 조회하도록 한다.  | 확정      |
 | 목표        | 조회한 컨텍스트를 활용해 사용자 업무의 연속성을 유지하도록 한다.        | 확정      |
 | 목표        | 조회된 컨텍스트와 관계의 시각화를 지원한다.                             | 확정      |
-| 목표        | 컨텍스트 그래프와 컨텍스트 노드의 생성·조회·수정을 MCP로 제공하고 삭제는 사용자용 웹 페이지로 제한한다. | 확정 |
+| 목표        | 컨텍스트 그래프와 컨텍스트 노드의 생성·조회·수정을 MCP로 제공하고 사용자 직접 삭제는 웹 페이지로 제한한다. | 확정 |
+| 목표        | 접근 가능한 계정이 있는 컨텍스트는 기본적으로 무기한 보관하고 계정 접근이 사라진 뒤 30일 유예 기간을 거쳐 소프트 삭제한다. | 확정 |
 | 목표        | MCP 클라이언트를 토큰으로 인증하고 인증된 요청만 처리한다.              | 확정      |
 | 목표        | 후속 상세 설계가 추적 가능한 요구사항과 미정 사항을 유지한다.           | 초안      |
 | 현재 비목표 | MCP primitive, 메시지 스키마와 transport를 확정한다.                    | 후속 기획 |
 | 현재 비목표 | Apache AGE 그래프 스키마와 질의를 상세 설계한다.                        | 후속 기획 |
 | 현재 비목표 | 시각화·삭제 UI, 그래프 배치 방식과 세부 상호작용을 확정한다.             | 후속 기획 |
 | 현재 비목표 | 작업자 식별·권한, 동시 갱신 충돌, 인증 주체·범위와 세부 보안·운영 구성을 확정한다. | 후속 기획 |
+| 현재 비목표 | 전통적인 제텔카스텐의 모든 방법론을 그대로 재현하거나 AI 에이전트용 노트·연결·성장 정책을 확정한다. | 후속 기획 |
+
+### 제텔카스텐 비전과 컨텍스트 그래프 접근
+
+AI 에이전트 제텔카스텐은 단순한 대화 기록 저장소가 아니라 에이전트가 이후 작업에서 다시 활용할 수 있도록 지식과 작업 맥락을 연결된 형태로 축적하는 서비스 비전이다. 현재는 컨텍스트 노드와 관계를 관리·탐색하는 공유 컨텍스트 그래프를 이 비전의 핵심 구현 접근으로 사용한다.
+
+컨텍스트 그래프는 현재 채택한 접근 방식이지 제텔카스텐의 완성 조건 자체는 아니다. 에이전트가 어떤 정보를 하나의 컨텍스트 단위로 만들고, 어떤 관계를 생성·검토하며, 축적된 지식을 어떻게 갱신·재구성·재사용할지는 별도의 검증 가능한 정책으로 정의해야 한다.
 
 ## 대상 사용자와 시스템 경계
 
 | 대상                  | 역할                                                | 상태      |
 |-----------------------|-----------------------------------------------------|-----------|
 | 작업자                | 하나의 공유 컨텍스트 그래프에 접근해 컨텍스트를 조회·기여·활용하며 협업하는 주체다. | 확정 |
-| 사용자                | 에이전트에 업무 입력을 제공하고 결과와 컨텍스트 시각화를 확인하며 웹 페이지에서 삭제를 직접 수행하는 주체다. | 확정 |
+| 사용자                | 에이전트에 업무 입력을 제공하고 결과와 컨텍스트 시각화를 확인하며 웹 페이지에서 소프트 삭제를 직접 요청하는 주체다. | 확정 |
 | 에이전트              | 사용자 입력을 처리하고 MCP를 통해 관련 컨텍스트를 조회·활용하는 주체다. | 확정      |
 | 에이전트 측 MCP 클라이언트 | 에이전트를 대신해 인증 토큰을 발급받고 토큰과 함께 컨텍스트 요청을 시작하며 응답을 전달한다. | 확정 |
 | 인증 서버             | MCP 클라이언트의 인증 정보를 검증하고 MCP 서버용 접근 토큰을 발급하는 시스템 구성 요소다. | 확정 |
@@ -91,7 +103,18 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | 1 | 에이전트 측 MCP 클라이언트 | 클라이언트는 접근 가능한 컨텍스트 그래프 목록을 조회하거나 새 그래프를 생성한다. | 확정 |
 | 2 | 에이전트 측 MCP 클라이언트 | 클라이언트는 선택한 그래프의 정보를 조회·수정하고 컨텍스트 노드를 생성·수정한다. | 확정 |
 | 3 | 에이전트 측 MCP 클라이언트 | 클라이언트는 시작 노드와 홉 수를 지정해 단일 노드 또는 지정 홉까지 연결된 노드를 조회한다. | 확정 |
-| 4 | 사용자 | 사용자는 삭제가 필요하면 웹 페이지에서 대상 그래프 또는 노드를 직접 삭제한다. | 확정 |
+| 4 | 사용자 | 사용자는 삭제가 필요하면 웹 페이지에서 대상 그래프 또는 노드의 소프트 삭제를 직접 요청한다. | 확정 |
+
+### 계정 접근과 보관 수명주기 시나리오
+
+| 단계 | 조건 | 시스템 동작 | 상태 |
+|------|------|-------------|------|
+| 1 | 컨텍스트에 접근 가능한 계정이 하나 이상 존재한다. | 계정 플랜별 보관 정책이 별도로 적용되기 전까지 사용자가 직접 삭제하지 않은 컨텍스트를 무기한 보관한다. | 확정 |
+| 2 | 마지막 접근 가능 계정이 사라진다. | 30일의 소프트 삭제 유예 기간을 시작한다. | 확정 |
+| 3 | 유예 기간 안에 접근 가능한 계정이 다시 연결된다. | 예정된 소프트 삭제를 취소하고 기본 보관 상태로 되돌린다. | 확정 |
+| 4 | 30일 동안 접근 가능한 계정이 연결되지 않는다. | 컨텍스트를 소프트 삭제하고 사용자 접근을 차단한다. | 확정 |
+
+시스템은 사용자 직접 삭제와 계정 접근 소멸에 따른 자동 삭제를 모두 소프트 삭제로 처리하며 영구 삭제하지 않는다.
 
 ## 연구 기반 기초 설계 원칙
 
@@ -153,11 +176,14 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `FR-AGENT_CONTEXT-023` | 노드 생성 | 시스템은 MCP를 통해 선택한 그래프에 컨텍스트 노드를 생성할 수 있도록 해야 한다. | 노드의 최소 단위, 필수 속성과 관계 생성 범위는 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청 | - |
 | `FR-AGENT_CONTEXT-024` | 노드 조회 | 시스템은 MCP를 통해 선택한 그래프에서 시작 노드와 홉 수를 지정해 컨텍스트 노드를 조회할 수 있도록 해야 한다. | `0홉`은 시작 노드 한 개만 반환하는 단일 노드 조회와 동일하며 홉 방향·관계 유형·최대값은 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청 | - |
 | `FR-AGENT_CONTEXT-025` | 노드 수정 | 시스템은 MCP를 통해 선택한 그래프의 컨텍스트 노드를 수정할 수 있도록 해야 한다. | 수정 가능한 필드, 관계 영향과 동시 갱신 정책은 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청 | - |
-| `FR-AGENT_CONTEXT-026` | 삭제 경계 | 시스템은 컨텍스트 그래프와 컨텍스트 노드의 삭제 기능을 MCP로 제공하지 않고 사용자가 웹 페이지에서 직접 수행하도록 해야 한다. | 삭제 권한, 확인 절차, 연쇄 영향, 복구와 감사 정책은 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청 | - |
+| `FR-AGENT_CONTEXT-026` | 삭제 경계 | 시스템은 컨텍스트 그래프와 컨텍스트 노드의 사용자 직접 삭제 기능을 MCP로 제공하지 않고 웹 페이지에서 소프트 삭제로 수행하도록 해야 한다. | 계정 접근 소멸에 따른 자동 소프트 삭제는 시스템 수명주기 동작으로 구분하며 삭제 확인, 연쇄 영향, 복구와 감사 정책은 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청 | - |
 | `FR-AGENT_CONTEXT-027` | 토큰 발급 | 시스템의 인증 서버는 MCP 클라이언트가 제출한 인증 정보를 검증하고 성공하면 접근 토큰을 발급해야 한다. | 초기 인증 정보의 형식과 인증 주체는 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청, MCP 2026-07-28 인증 | - |
 | `FR-AGENT_CONTEXT-028` | 요청 인증 | MCP 클라이언트는 모든 보호된 MCP 요청에 접근 토큰을 포함하고 시스템은 요청 처리 전에 토큰을 검증해야 한다. | HTTP 기반 transport에서는 `Authorization: Bearer` 헤더와 대상 서버 검증을 적용한다. | 상 | 확정 | 사용자 요청, MCP 2026-07-28 인증 | - |
 | `FR-AGENT_CONTEXT-029` | 토큰 만료 | 접근 토큰은 최초 발급 또는 갱신 시점부터 1시간 동안 유효해야 한다. | 만료 시각에 도달한 토큰은 인증에 사용할 수 없다. | 상 | 확정 | 사용자 요청 | - |
 | `FR-AGENT_CONTEXT-030` | 토큰 자동 갱신 | 시스템은 유효한 접근 토큰의 만료 10초 전부터 만료 전까지 인증된 MCP 요청을 수신하면 유효기간이 1시간인 새 접근 토큰을 자동 발급해야 한다. | 갱신 응답, 기존 토큰 폐기, 동시 갱신과 최대 연속 사용 기간은 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청 | - |
+| `FR-AGENT_CONTEXT-031` | 기본 보관 | 시스템은 계정 플랜별 보관 정책이 별도로 적용되기 전까지 접근 가능한 계정이 하나 이상 존재하고 사용자가 직접 삭제하지 않은 컨텍스트를 무기한 보관해야 한다. | 향후 비즈니스 모델과 계정 플랜에 따른 소프트 삭제 전 보관 기간은 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청 | - |
+| `FR-AGENT_CONTEXT-032` | 보관 유예 | 시스템은 마지막 접근 가능 계정이 사라지면 30일의 소프트 삭제 유예 기간을 시작하고, 기간 안에 접근 가능한 계정이 다시 연결되면 예정된 소프트 삭제를 취소해야 한다. | 유예 기간의 시작 시각과 계정 연결 판정 기준은 상세 설계에서 구체화한다. | 상 | 확정 | 사용자 요청 | - |
+| `FR-AGENT_CONTEXT-033` | 소프트 삭제 | 시스템은 마지막 접근 가능 계정이 사라진 뒤 30일 동안 계정이 다시 연결되지 않으면 컨텍스트를 소프트 삭제하고 사용자 접근을 차단해야 하며 영구 삭제해서는 안 된다. | 사용자 직접 삭제도 소프트 삭제로 처리하며 운영자 복구 권한과 감사 절차는 후속 기획에서 정의한다. | 상 | 확정 | 사용자 요청 | - |
 
 ## 데이터와 상태 요구사항
 
@@ -211,10 +237,10 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 
 | 대상 | 생성 | 조회 | 수정 | 삭제 |
 |------|------|------|------|------|
-| 컨텍스트 그래프 | MCP로 제공 | MCP로 목록·상세 조회 | MCP로 제공 | 사용자용 웹 페이지에서만 제공 |
-| 컨텍스트 노드 | MCP로 제공 | MCP로 `0홉` 단일 노드 또는 지정 홉 범위 조회 | MCP로 제공 | 사용자용 웹 페이지에서만 제공 |
+| 컨텍스트 그래프 | MCP로 제공 | MCP로 목록·상세 조회 | MCP로 제공 | 사용자 직접 요청은 웹 페이지에서 소프트 삭제 |
+| 컨텍스트 노드 | MCP로 제공 | MCP로 `0홉` 단일 노드 또는 지정 홉 범위 조회 | MCP로 제공 | 사용자 직접 요청은 웹 페이지에서 소프트 삭제 |
 
-삭제 기능은 에이전트 또는 MCP 클라이언트에 노출하지 않는다. 관계 자체의 생성·조회·수정·삭제 범위는 이 결정에 포함하지 않으며 기존 관계 관리 미정 사항에서 계속 추적한다.
+사용자 직접 삭제 기능은 에이전트 또는 MCP 클라이언트에 노출하지 않는다. 마지막 접근 가능 계정이 사라진 뒤 실행하는 자동 소프트 삭제는 시스템 수명주기 동작이며, 관계 자체의 생성·조회·수정·삭제 범위는 기존 관계 관리 미정 사항에서 계속 추적한다.
 
 ## 작업 컨텍스트 흐름 요구사항
 
@@ -243,8 +269,8 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | 렌더링 주체 | 컨텍스트 관리 시스템과 MCP 호환 애플리케이션 사이의 책임은 미정이다. | 미확정 |
 | 상호작용 | 연결 강조, 노드 선택과 상세 조회, 확대·축소와 이동을 검토한다. | 검토 필요 |
 | 협업 정보 표시 | 컨텍스트의 기여 작업자, 변경 시점과 공유 범위의 표시 여부를 검토한다. | 검토 필요 |
-| 삭제 수행 채널 | 컨텍스트 그래프와 노드의 삭제는 사용자가 웹 페이지에서만 직접 수행한다. | 확정 |
-| 삭제 화면 상세 | 삭제 확인, 연쇄 영향 안내, 복구와 감사 정보를 포함한 화면 흐름은 미정이다. | 미확정 |
+| 삭제 수행 채널 | 컨텍스트 그래프와 노드의 사용자 직접 삭제 요청은 웹 페이지에서만 소프트 삭제로 수행한다. | 확정 |
+| 삭제 화면 상세 | 삭제 확인, 연쇄 영향 안내, 운영자 복구와 감사 정보를 포함한 화면 흐름은 미정이다. | 미확정 |
 
 ## 데이터 저장 제약
 
@@ -253,6 +279,10 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | 데이터베이스               | Apache AGE                                           | 확정   |
 | 기반 데이터베이스          | PostgreSQL                                           | 확정   |
 | 공유 단위                  | 여러 작업자가 접근하는 하나의 컨텍스트 그래프        | 확정   |
+| 기본 보관                  | 접근 가능한 계정이 있으면 사용자 직접 삭제 전까지 무기한 보관 | 확정 |
+| 계정 접근 소멸             | 30일 유예 후 소프트 삭제하고 사용자 접근 차단        | 확정   |
+| 삭제 방식                  | 모든 삭제는 소프트 삭제하며 영구 삭제하지 않음        | 확정   |
+| 계정 플랜별 소프트 삭제 전 보관 기간 | 향후 비즈니스 모델과 함께 결정                 | 미확정 |
 | 그래프 모델                | 원천·파생 컨텍스트, 관계와 시간 메타데이터 계층 후보 | 미확정 |
 | 질의 경계                  | openCypher와 SQL 사용 범위 미정                      | 미확정 |
 | PostgreSQL·Apache AGE 버전 | 호환성 검토 후 결정                                  | 미확정 |
@@ -277,7 +307,10 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 - 선택한 그래프에 존재하지 않는 시작 노드 조회
 - 음수이거나 허용 범위를 초과한 홉 수 지정
 - MCP를 통한 그래프 또는 노드 삭제 요청
-- 웹 삭제 권한 확인, 연쇄 영향 처리 또는 복구 처리 실패
+- 웹 소프트 삭제 권한 확인, 연쇄 영향 처리 또는 복구 처리 실패
+- 마지막 접근 가능 계정 소멸 시각 또는 30일 유예 기간 계산 실패
+- 유예 기간 중 계정 재연결에 따른 소프트 삭제 취소 실패
+- 유예 기간 만료 후 소프트 삭제 또는 사용자 접근 차단 실패
 - Apache AGE 연결, 트랜잭션과 질의 실패
 - 컨텍스트 시각화 데이터 생성 또는 렌더링 실패
 
@@ -288,8 +321,10 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `TBD-AGENT_CONTEXT-001` | 외부 상호작용         | MCP를 사용한다.        | `FR-AGENT_CONTEXT-002`                          | 확정 | -         |
 | `TBD-AGENT_CONTEXT-002` | 컨텍스트 데이터베이스 | Apache AGE를 사용한다. | `FR-AGENT_CONTEXT-003`, `NFR-AGENT_CONTEXT-001` | 확정 | -         |
 | `TBD-AGENT_CONTEXT-004` | MCP 역할과 상호작용 | 시스템은 에이전트 측 MCP 클라이언트의 요청을 기다리는 MCP 서버 역할을 담당하고 비지속 요청-응답 방식을 지향한다. | `FR-AGENT_CONTEXT-002`, `FR-AGENT_CONTEXT-012`, `FR-AGENT_CONTEXT-018`, `NFR-AGENT_CONTEXT-012` | 확정 | - |
-| `TBD-AGENT_CONTEXT-005` | MCP 기능과 삭제 경계 | MCP는 컨텍스트 그래프·노드의 생성·조회·수정과 홉 범위 조회를 제공한다. `0홉`은 단일 노드 조회와 동일하며 삭제는 MCP에 노출하지 않고 사용자가 웹 페이지에서 직접 수행한다. | `FR-AGENT_CONTEXT-002`, `FR-AGENT_CONTEXT-012`, `FR-AGENT_CONTEXT-018`~`FR-AGENT_CONTEXT-026` | 확정 | - |
+| `TBD-AGENT_CONTEXT-005` | MCP 기능과 삭제 경계 | MCP는 컨텍스트 그래프·노드의 생성·조회·수정과 홉 범위 조회를 제공한다. `0홉`은 단일 노드 조회와 동일하며 사용자 직접 삭제는 MCP에 노출하지 않고 웹 페이지에서 소프트 삭제로 수행한다. 계정 접근 소멸에 따른 자동 소프트 삭제는 시스템 수명주기 동작으로 구분한다. | `FR-AGENT_CONTEXT-002`, `FR-AGENT_CONTEXT-012`, `FR-AGENT_CONTEXT-018`~`FR-AGENT_CONTEXT-026`, `FR-AGENT_CONTEXT-033` | 확정 | - |
+| `TBD-AGENT_CONTEXT-028` | 보관과 소프트 삭제 정책 | 계정 플랜별 보관 정책이 적용되기 전에는 접근 가능한 계정이 있는 컨텍스트를 사용자 직접 삭제 전까지 무기한 보관한다. 마지막 접근 가능 계정이 사라지면 30일 유예 기간을 시작하고 기간 안에 계정이 다시 연결되면 예정된 소프트 삭제를 취소한다. 기간이 만료되면 소프트 삭제해 사용자 접근을 차단하며 영구 삭제는 수행하지 않는다. 사용자 직접 삭제도 소프트 삭제로 처리한다. | `FR-AGENT_CONTEXT-026`, `FR-AGENT_CONTEXT-031`~`FR-AGENT_CONTEXT-033`, `NFR-AGENT_CONTEXT-010` | 확정 | - |
 | `TBD-AGENT_CONTEXT-029` | MCP 토큰 인증 | 시스템과 함께 배치되는 인증 서버가 MCP 인증 정보를 검증해 1시간 접근 토큰을 발급하고, 모든 보호 요청에서 토큰을 검증하며 만료 직전 10초 구간의 유효한 요청에 대해 토큰을 자동 갱신한다. 클라이언트 토큰은 메모리에 보관한다. | `FR-AGENT_CONTEXT-027`~`FR-AGENT_CONTEXT-030`, `NFR-AGENT_CONTEXT-013` | 확정 | - |
+| `TBD-AGENT_CONTEXT-033` | 서비스 비전과 핵심 접근 | 궁극적인 목적은 AI 에이전트를 위한 제텔카스텐 시스템 구축이며, 공유 컨텍스트 그래프를 이를 실현하기 위한 현재의 핵심 접근 방식으로 사용한다. | 서비스 전체 | 확정 | - |
 
 ## 미정 사항
 
@@ -298,7 +333,7 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `TBD-AGENT_CONTEXT-003` | 컨텍스트 모델 | 원천·파생 계층을 포함한 컨텍스트의 최소 단위, 필수 속성과 식별 방식을 정의한다.    | `FR-AGENT_CONTEXT-001`, `FR-AGENT_CONTEXT-004`, `FR-AGENT_CONTEXT-023`, `FR-AGENT_CONTEXT-025` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-006` | 그래프 모델   | 원천·파생 컨텍스트와 요약의 vertex, edge, label, property 및 관계 방향을 정의한다. | `FR-AGENT_CONTEXT-003`~`FR-AGENT_CONTEXT-006`, `FR-AGENT_CONTEXT-023`, `FR-AGENT_CONTEXT-024`, `NFR-AGENT_CONTEXT-001` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-007` | 격리와 권한   | 작업자, 에이전트, 사용자와 프로젝트별 데이터 경계 및 공유 그래프 접근 정책을 정의한다. | 전체 기능 요구사항                                                   | 미확정 | -         |
-| `TBD-AGENT_CONTEXT-008` | 수명주기      | 컨텍스트와 관계의 버전, 유효기간, 대체, 보존, 수정과 폐기 정책을 정의한다.         | `FR-AGENT_CONTEXT-001`, `FR-AGENT_CONTEXT-006`, `FR-AGENT_CONTEXT-020`, `FR-AGENT_CONTEXT-022`, `FR-AGENT_CONTEXT-025`, `FR-AGENT_CONTEXT-026`, `NFR-AGENT_CONTEXT-002` | 미확정 | - |
+| `TBD-AGENT_CONTEXT-008` | 수명주기      | 컨텍스트와 관계의 버전·유효기간·대체 정책, 향후 비즈니스 모델과 계정 플랜별 소프트 삭제 전 보관 기간 및 플랜 변경 시 적용 기준을 정의한다. 기본 보관과 계정 접근 소멸에 따른 소프트 삭제는 `TBD-AGENT_CONTEXT-028`의 확정 결정을 따른다. | `FR-AGENT_CONTEXT-001`, `FR-AGENT_CONTEXT-006`, `FR-AGENT_CONTEXT-020`, `FR-AGENT_CONTEXT-022`, `FR-AGENT_CONTEXT-025`, `FR-AGENT_CONTEXT-026`, `FR-AGENT_CONTEXT-031`~`FR-AGENT_CONTEXT-033`, `NFR-AGENT_CONTEXT-002` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-009` | 검색          | 직접 후보 검색, 그래프 확장, 필터링, 순위화와 국소·전역 검색 방식을 정의한다.      | `FR-AGENT_CONTEXT-007`, `FR-AGENT_CONTEXT-008`, `FR-AGENT_CONTEXT-012`, `FR-AGENT_CONTEXT-018`, `FR-AGENT_CONTEXT-024`, `NFR-AGENT_CONTEXT-003` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-010` | 배포와 운영   | 비지속 요청-응답과 호환되는 MCP transport 및 protocol revision, 배포 단위, 관측성과 복구 정책을 정의한다. | `FR-AGENT_CONTEXT-002`, `FR-AGENT_CONTEXT-028`, `NFR-AGENT_CONTEXT-012`, `NFR-AGENT_CONTEXT-013` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-011` | 파생 정책     | 요약·성찰·구조화 정보의 생성 주체, 생성 조건, 갱신과 폐기 정책을 정의한다.         | `FR-AGENT_CONTEXT-004`, `FR-AGENT_CONTEXT-008`, `NFR-AGENT_CONTEXT-003` | 미확정 | -         |
@@ -318,28 +353,29 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `TBD-AGENT_CONTEXT-025` | 그래프 관리 계약 | 컨텍스트 그래프의 식별자, 이름, 메타데이터, 목록 필터·정렬·페이지 처리, 생성·수정 검증과 중복 정책을 정의한다. | `FR-AGENT_CONTEXT-019`~`FR-AGENT_CONTEXT-022` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-026` | 홉 범위 조회 | 시작 노드 식별 방식, 탐색 방향, 관계 유형 필터, 최대 홉 수, 순환 처리, 결과 제한과 페이지 처리 정책을 정의한다. | `FR-AGENT_CONTEXT-024`, `NFR-AGENT_CONTEXT-003`, `NFR-AGENT_CONTEXT-006` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-027` | MCP 연산 매핑 | 그래프·노드 생성·조회·수정과 홉 범위 조회를 MCP primitive, 연산 이름 및 요청·응답 스키마에 매핑한다. | `FR-AGENT_CONTEXT-002`, `FR-AGENT_CONTEXT-012`, `FR-AGENT_CONTEXT-018`~`FR-AGENT_CONTEXT-025` | 미확정 | - |
-| `TBD-AGENT_CONTEXT-028` | 웹 삭제 정책 | 사용자의 그래프·노드 삭제 권한, 확인 절차, 연쇄 영향, soft delete 또는 hard delete, 복구, 감사와 웹 화면 흐름을 정의한다. | `FR-AGENT_CONTEXT-026`, `NFR-AGENT_CONTEXT-010` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-030` | 인증 프로토콜 매핑 | 초기 인증 정보, 인증 주체, OAuth grant, scope, audience, 인증 서버 배치, discovery와 HTTP 기반 MCP transport를 구체화한다. | `FR-AGENT_CONTEXT-027`, `FR-AGENT_CONTEXT-028` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-031` | 토큰 갱신 정책 | 갱신 토큰 사용 여부, 새 접근 토큰 전달 방식, 기존 토큰 폐기, 동시 갱신, 최대 연속 사용 기간, 시간 오차와 실패 재시도를 정의한다. | `FR-AGENT_CONTEXT-029`, `FR-AGENT_CONTEXT-030`, `NFR-AGENT_CONTEXT-013` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-032` | 토큰 검증 상태 | 접근 토큰 형식, 서명·검증 키, 서버 측 원문 토큰 미저장, 폐기 상태, 메모리 정리와 다중 인스턴스 공유 방식을 정의한다. | `FR-AGENT_CONTEXT-028`~`FR-AGENT_CONTEXT-030`, `NFR-AGENT_CONTEXT-012`, `NFR-AGENT_CONTEXT-013` | 미확정 | - |
+| `TBD-AGENT_CONTEXT-034` | AI 에이전트 제텔카스텐 운영 모델 | 에이전트에 적합한 컨텍스트 단위, 연결 생성·검토 원칙, 지식의 축적·갱신·재구성·재활용 정책과 제텔카스텐 비전의 충족 기준을 정의한다. | `FR-AGENT_CONTEXT-001`, `FR-AGENT_CONTEXT-004`~`FR-AGENT_CONTEXT-013`, `NFR-AGENT_CONTEXT-002`~`NFR-AGENT_CONTEXT-009` | 미확정 | - |
+| `TBD-AGENT_CONTEXT-035` | 웹 삭제 세부 정책 | 사용자 직접 삭제의 확인 절차, 그래프·노드와 관계의 연쇄 영향, 운영자 복구 권한, 감사 기록과 웹 화면 흐름을 정의한다. | `FR-AGENT_CONTEXT-026`, `FR-AGENT_CONTEXT-033`, `NFR-AGENT_CONTEXT-010` | 미확정 | - |
 
 ## 추적성
 
 | 요구사항 ID             | 근거                                    | 관련 결정·미정 사항                                                                                |
 |-------------------------|-----------------------------------------|----------------------------------------------------------------------------------------------------|
-| `FR-AGENT_CONTEXT-001`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-009` |
+| `FR-AGENT_CONTEXT-001`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-034` |
 | `FR-AGENT_CONTEXT-002`  | 사용자 요청, MCP 공식 아키텍처          | `TBD-AGENT_CONTEXT-001`, `TBD-AGENT_CONTEXT-004`, `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-010`, `TBD-AGENT_CONTEXT-027` |
 | `FR-AGENT_CONTEXT-003`  | 사용자 요청, Apache AGE 공식 개요       | `TBD-AGENT_CONTEXT-002`, `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-009`                          |
-| `FR-AGENT_CONTEXT-004`  | Generative Agents, HippoRAG 2           | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-011`                          |
-| `FR-AGENT_CONTEXT-005`  | A-MEM                                   | `TBD-AGENT_CONTEXT-006`                                                                            |
-| `FR-AGENT_CONTEXT-006`  | Zep Temporal Knowledge Graph            | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-008`                                                   |
-| `FR-AGENT_CONTEXT-007`  | HippoRAG 2                              | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-012`                                                   |
-| `FR-AGENT_CONTEXT-008`  | GraphRAG                                | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-012`                          |
-| `FR-AGENT_CONTEXT-009`  | CompassMem, Associa                     | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-014`                                                   |
-| `FR-AGENT_CONTEXT-010`  | Memory-R1                               | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`                                                   |
-| `FR-AGENT_CONTEXT-011`  | HINDSIGHT                               | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-016`                          |
-| `FR-AGENT_CONTEXT-012`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-004`, `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-027` |
-| `FR-AGENT_CONTEXT-013`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-020`, `TBD-AGENT_CONTEXT-024` |
+| `FR-AGENT_CONTEXT-004`  | Generative Agents, HippoRAG 2           | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-034` |
+| `FR-AGENT_CONTEXT-005`  | A-MEM                                   | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-034`                                                   |
+| `FR-AGENT_CONTEXT-006`  | Zep Temporal Knowledge Graph            | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-034`                          |
+| `FR-AGENT_CONTEXT-007`  | HippoRAG 2                              | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-034`                          |
+| `FR-AGENT_CONTEXT-008`  | GraphRAG                                | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-034` |
+| `FR-AGENT_CONTEXT-009`  | CompassMem, Associa                     | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-014`, `TBD-AGENT_CONTEXT-034`                          |
+| `FR-AGENT_CONTEXT-010`  | Memory-R1                               | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-034`                          |
+| `FR-AGENT_CONTEXT-011`  | HINDSIGHT                               | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-016`, `TBD-AGENT_CONTEXT-034` |
+| `FR-AGENT_CONTEXT-012`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-004`, `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-027`, `TBD-AGENT_CONTEXT-034` |
+| `FR-AGENT_CONTEXT-013`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-020`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-034` |
 | `FR-AGENT_CONTEXT-014`  | 사용자 요청, Obsidian Graph view        | `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-019`                                                   |
 | `FR-AGENT_CONTEXT-015`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-021`                                                   |
 | `FR-AGENT_CONTEXT-016`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-021`, `TBD-AGENT_CONTEXT-022`, `TBD-AGENT_CONTEXT-023` |
@@ -352,21 +388,24 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `FR-AGENT_CONTEXT-023`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-027` |
 | `FR-AGENT_CONTEXT-024`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-026`, `TBD-AGENT_CONTEXT-027` |
 | `FR-AGENT_CONTEXT-025`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-027` |
-| `FR-AGENT_CONTEXT-026`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-028` |
+| `FR-AGENT_CONTEXT-026`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-028`, `TBD-AGENT_CONTEXT-035` |
 | `FR-AGENT_CONTEXT-027`  | 사용자 요청, MCP 2026-07-28 인증        | `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-021`, `TBD-AGENT_CONTEXT-029`, `TBD-AGENT_CONTEXT-030` |
 | `FR-AGENT_CONTEXT-028`  | 사용자 요청, MCP 2026-07-28 인증        | `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-010`, `TBD-AGENT_CONTEXT-029`, `TBD-AGENT_CONTEXT-030`, `TBD-AGENT_CONTEXT-032` |
 | `FR-AGENT_CONTEXT-029`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-029`, `TBD-AGENT_CONTEXT-031`, `TBD-AGENT_CONTEXT-032` |
 | `FR-AGENT_CONTEXT-030`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-029`, `TBD-AGENT_CONTEXT-031`, `TBD-AGENT_CONTEXT-032` |
+| `FR-AGENT_CONTEXT-031`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-028` |
+| `FR-AGENT_CONTEXT-032`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-028` |
+| `FR-AGENT_CONTEXT-033`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-028`, `TBD-AGENT_CONTEXT-035` |
 | `NFR-AGENT_CONTEXT-001` | 사용자 요청, Apache AGE 공식 개요       | `TBD-AGENT_CONTEXT-002`, `TBD-AGENT_CONTEXT-006`                                                   |
-| `NFR-AGENT_CONTEXT-002` | 설계 판단, Zep Temporal Knowledge Graph | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-008`                                                   |
-| `NFR-AGENT_CONTEXT-003` | 설계 판단, 관련 연구                    | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-026` |
-| `NFR-AGENT_CONTEXT-004` | HippoRAG 2, GraphRAG                    | `TBD-AGENT_CONTEXT-012`                                                                            |
-| `NFR-AGENT_CONTEXT-005` | Does Memory Need Graphs?                | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-013`                                                   |
-| `NFR-AGENT_CONTEXT-006` | HINDSIGHT                               | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-017`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-026` |
-| `NFR-AGENT_CONTEXT-007` | Memory-R1, Experience-Following 연구    | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-016`                          |
-| `NFR-AGENT_CONTEXT-008` | AgentMemoryBench                        | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-018`                                                   |
-| `NFR-AGENT_CONTEXT-009` | 사용자 요청, 설계 판단                  | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-018`, `TBD-AGENT_CONTEXT-020`                          |
-| `NFR-AGENT_CONTEXT-010` | 사용자 요청, 설계 판단                  | `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-021`, `TBD-AGENT_CONTEXT-023`, `TBD-AGENT_CONTEXT-028` |
+| `NFR-AGENT_CONTEXT-002` | 설계 판단, Zep Temporal Knowledge Graph | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-034`                          |
+| `NFR-AGENT_CONTEXT-003` | 설계 판단, 관련 연구                    | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-026`, `TBD-AGENT_CONTEXT-034` |
+| `NFR-AGENT_CONTEXT-004` | HippoRAG 2, GraphRAG                    | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-034`                                                   |
+| `NFR-AGENT_CONTEXT-005` | Does Memory Need Graphs?                | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-013`, `TBD-AGENT_CONTEXT-034`                          |
+| `NFR-AGENT_CONTEXT-006` | HINDSIGHT                               | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-017`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-026`, `TBD-AGENT_CONTEXT-034` |
+| `NFR-AGENT_CONTEXT-007` | Memory-R1, Experience-Following 연구    | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-016`, `TBD-AGENT_CONTEXT-034` |
+| `NFR-AGENT_CONTEXT-008` | AgentMemoryBench                        | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-018`, `TBD-AGENT_CONTEXT-034`                          |
+| `NFR-AGENT_CONTEXT-009` | 사용자 요청, 설계 판단                  | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-018`, `TBD-AGENT_CONTEXT-020`, `TBD-AGENT_CONTEXT-034` |
+| `NFR-AGENT_CONTEXT-010` | 사용자 요청, 설계 판단                  | `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-021`, `TBD-AGENT_CONTEXT-023`, `TBD-AGENT_CONTEXT-028`, `TBD-AGENT_CONTEXT-035` |
 | `NFR-AGENT_CONTEXT-011` | 사용자 요청, 설계 판단                  | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-022`                          |
 | `NFR-AGENT_CONTEXT-012` | 사용자 요청, MCP 2026-07-28             | `TBD-AGENT_CONTEXT-004`, `TBD-AGENT_CONTEXT-010`                                                   |
 | `NFR-AGENT_CONTEXT-013` | MCP 2026-07-28 인증, RFC 6750, RFC 6819 | `TBD-AGENT_CONTEXT-029`, `TBD-AGENT_CONTEXT-031`, `TBD-AGENT_CONTEXT-032` |

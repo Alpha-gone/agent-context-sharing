@@ -30,7 +30,7 @@ description: Apply the confirmed scope of an existing GitHub issue to this repos
 8. 승인 후 요구사항은 `service-design`, 상세 설계는 `detailed-design`, 시각화는 `diagram-creator`, 용어는 `dictionary` 계약으로 반영한다.
 9. 단계별 검증에 성공한 항목만 완료 근거로 수집한다.
 10. 승인된 이슈 체크리스트 중 근거가 충족된 항목만 수정하고 이슈를 재조회한다.
-11. 사용자가 커밋을 요청하면 정확한 변경 범위와 검증 결과를 `git-commit-changes`에 전달한다.
+11. 사용자가 커밋을 요청하면 정확한 변경 범위와 검증 결과를 정리해 전달하고 커밋 자체는 이 스킬의 범위 밖으로 둔다.
 12. 프로젝트 작업 로그와 DOX pass를 수행한다.
 
 ## 승인 경계
@@ -49,7 +49,7 @@ description: Apply the confirmed scope of an existing GitHub issue to this repos
 | 아키텍처, 인터페이스, 데이터 모델, 처리 흐름 | `detailed-design`    |
 | 구조, 상호작용, 상태, 데이터 관계 시각화     | `diagram-creator`    |
 | 신규 프로젝트 용어                           | `dictionary`         |
-| 명시적으로 요청된 로컬 커밋                  | `git-commit-changes` |
+| 명시적으로 요청된 로컬 커밋                  | 이 스킬의 범위 밖    |
 
 ## 실패 처리
 

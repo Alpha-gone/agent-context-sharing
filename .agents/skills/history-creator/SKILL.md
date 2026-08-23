@@ -7,7 +7,7 @@ description: Create and maintain spec/history project history documents from dat
 
 ## 목적
 
-`spec/service/` 아래의 날짜가 있는 요청 기록과 제안 문서를 근거로 공개 가능한 프로젝트 이력을 `spec/history/`에 정리한다. 비공개 운영 기록인 `.personal/log/`는 입력이나
+`spec/service/` 아래의 날짜가 있는 요청 기록과 제안 문서를 근거로 공개 가능한 프로젝트 이력을 `spec/history/`에 정리한다. 비공개 운영 기록인 `.personal/logs/`는 입력이나
 산출물로 사용하지 않는다.
 
 ## 입력과 산출물

@@ -5,7 +5,7 @@
 | 항목          | 내용                                                         |
 |---------------|--------------------------------------------------------------|
 | 문서 상태     | 초안                                                         |
-| 최종 수정일   | 2026-08-21                                                   |
+| 최종 수정일   | 2026-08-23                                                   |
 | 서비스 식별자 | `AGENT_CONTEXT`                                              |
 | 담당 범위     | AI 에이전트 제텔카스텐을 위한 공유 컨텍스트 그래프와 MCP 기반 조회·활용·시각화 |
 | 주요 출처     | 사용자 요청, `reference.md`                                  |
@@ -127,7 +127,7 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | 동적 연결과 기억 진화      | 새 컨텍스트를 기존 컨텍스트와 연결하고, 새 정보로 갱신되는 파생 속성과 원천 기록을 구분한다.          | 초안      | A-MEM                         |
 | 직접 검색과 연상 검색 결합 | 단순 사실 조회와 그래프 관계를 따르는 다중 홉 탐색을 함께 사용할 수 있는 검색 경계를 둔다.            | 초안      | HippoRAG 2                    |
 | 국소 검색과 전역 요약 분리 | 특정 컨텍스트를 찾는 검색과 전체 그래프의 주제·집단을 요약하는 검색을 서로 다른 사용 사례로 취급한다. | 검토 필요 | GraphRAG                      |
-| 그래프 효과의 통제 검증    | 그래프 구조의 효과를 가정하지 않고 동일한 표현·검색·평가 조건의 비그래프 기준선과 비교한다.           | 검토 필요 | Does Memory Need Graphs?      |
+| 그래프 효과의 통제 검증    | 비그래프 기준선을 먼저 구성하고 동일한 입력·표현·검색 예산과 평가 조건에서 그래프 기능을 단계별로 추가해 효과를 비교한다. | 확정      | 사용자 채택, Does Memory Need Graphs? |
 | 사건과 논리 관계 중심 조직 | 상호작용을 사건 컨텍스트로 묶고 사건 사이 시간·인과·부분·의미 관계를 최소 관계 후보로 실험한다.          | 확정      | 사용자 채택, CompassMem, Associa |
 | 관리와 검색의 명시적 분리  | 컨텍스트의 추가·갱신·폐기·유지 판단과 검색 후보 선택을 서로 검증 가능한 단계로 구분한다.              | 검토 필요 | Memory-R1                     |
 | 근거와 해석의 구분         | 원천 사실과 관찰·경험·의견 성격의 파생 정보를 구분하고 의견이나 해석에 근거와 신뢰 상태를 연결한다.    | 확정      | 사용자 채택, HINDSIGHT       |
@@ -193,7 +193,7 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `NFR-AGENT_CONTEXT-002` | 추적성      | 컨텍스트는 출처, 시간 유효성과 변경 이력을 추적할 수 있어야 한다.                      | 추적 메타데이터와 보존 범위는 후속 기획에서 정의한다.      | 중       | 검토 필요 | 설계 판단, 관련 연구 | -         |
 | `NFR-AGENT_CONTEXT-003` | 설명 가능성 | 검색 결과는 선택된 컨텍스트의 출처와 파생·관계 경로를 식별할 수 있어야 한다.           | 내부 추론 전체가 아닌 저장된 근거 범위에서 추적한다.       | 중       | 초안      | 설계 판단, 관련 연구 | -         |
 | `NFR-AGENT_CONTEXT-004` | 검증 가능성 | 검색 품질은 사실 검색, 연상 검색과 전역 요약 사용 사례를 구분해 검증할 수 있어야 한다. | 데이터셋, 지표와 합격 기준은 후속 기획에서 정의한다.       | 중       | 검토 필요 | HippoRAG 2, GraphRAG | -         |
-| `NFR-AGENT_CONTEXT-005` | 검증 가능성 | 그래프 기반 방식은 동일한 입력·표현·검색 예산과 평가 조건을 적용한 비그래프 기준선과 비교할 수 있어야 한다. | 비교 대상, 반복 횟수와 통계적 합격 기준은 후속 기획에서 정의한다. | 상 | 검토 필요 | Does Memory Need Graphs? | - |
+| `NFR-AGENT_CONTEXT-005` | 검증 가능성 | 그래프 기반 방식은 동일한 입력·표현·검색 예산과 평가 조건을 적용한 비그래프 기준선과 비교할 수 있어야 한다. | 비그래프 기준선을 먼저 구성하고 그래프 기능을 단계별로 추가해 비교하며, 비교 대상 기능, 반복 횟수와 통계적 합격 기준은 후속 기획에서 정의한다. | 상 | 확정 | 사용자 채택, Does Memory Need Graphs? | - |
 | `NFR-AGENT_CONTEXT-006` | 효율성      | 검색은 요청별 컨텍스트 예산 안에서 결과를 구성하고 사용량·지연 시간과 검색 품질을 함께 측정할 수 있어야 한다. | 예산 단위, 기본값과 서비스 수준 목표는 후속 기획에서 정의한다. | 중 | 검토 필요 | HINDSIGHT | - |
 | `NFR-AGENT_CONTEXT-007` | 신뢰성      | 상충하거나 오래되었거나 품질이 낮은 컨텍스트가 후속 검색과 갱신에서 반복 강화되는 위험을 검증할 수 있어야 한다. | 충돌 탐지, 품질 표지와 자동 차단 정책은 후속 기획에서 정의한다. | 상 | 검토 필요 | Memory-R1, Experience-Following 연구 | - |
 | `NFR-AGENT_CONTEXT-008` | 검증 가능성 | 장기 컨텍스트 품질은 온라인 갱신, 재생, 전이, 복구와 망각 상황을 구분해 검증할 수 있어야 한다. | 평가 데이터셋, 시나리오와 합격 기준은 후속 기획에서 정의한다. | 중 | 검토 필요 | AgentMemoryBench | - |
@@ -327,6 +327,7 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `TBD-AGENT_CONTEXT-033` | 서비스 비전과 핵심 접근 | 궁극적인 목적은 AI 에이전트를 위한 제텔카스텐 시스템 구축이며, 공유 컨텍스트 그래프를 이를 실현하기 위한 현재의 핵심 접근 방식으로 사용한다. | 서비스 전체 | 확정 | - |
 | `TBD-AGENT_CONTEXT-036` | 사건 중심 최소 관계 후보 | 상호작용을 사건 컨텍스트로 묶고 사건 사이의 시간·인과·부분·의미 관계를 최소 관계 후보로 실험한다. 구체적인 사건 경계와 관계 스키마는 후속 기획에서 정의한다. | `FR-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-014` | 확정 | - |
 | `TBD-AGENT_CONTEXT-037` | 근거와 해석 구분 | 원천 사실과 관찰·경험·의견 성격의 파생 정보를 구분하고 의견이나 해석에는 근거와 신뢰 상태를 연결한다. 구체적인 분류와 신뢰 정책은 후속 기획에서 정의한다. | `FR-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-016`, `NFR-AGENT_CONTEXT-007` | 확정 | - |
+| `TBD-AGENT_CONTEXT-038` | 그래프 효과 통제 검증 | 비그래프 기준선을 먼저 구성하고 동일한 입력·표현·검색 예산과 평가 조건에서 그래프 기능을 단계별로 추가해 효과와 운영 비용을 비교한다. 구체적인 비교 대상 기능, 통제 조건, 반복 횟수와 채택 기준은 후속 기획에서 정의한다. | `NFR-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-013` | 확정 | - |
 
 ## 미정 사항
 
@@ -340,7 +341,7 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `TBD-AGENT_CONTEXT-010` | 배포와 운영   | 비지속 요청-응답과 호환되는 MCP transport 및 protocol revision, 배포 단위, 관측성과 복구 정책을 정의한다. | `FR-AGENT_CONTEXT-002`, `FR-AGENT_CONTEXT-028`, `NFR-AGENT_CONTEXT-012`, `NFR-AGENT_CONTEXT-013` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-011` | 파생 정책     | 요약·성찰·구조화 정보의 생성 주체, 생성 조건, 갱신과 폐기 정책을 정의한다.         | `FR-AGENT_CONTEXT-004`, `FR-AGENT_CONTEXT-008`, `NFR-AGENT_CONTEXT-003` | 미확정 | -         |
 | `TBD-AGENT_CONTEXT-012` | 품질 평가     | 사실·연상·전역 검색별 데이터셋, 지표와 합격 기준을 정의한다.                       | `NFR-AGENT_CONTEXT-004`                                                 | 미확정 | -         |
-| `TBD-AGENT_CONTEXT-013` | 그래프 효과   | 비그래프 기준선과 비교할 그래프 기능, 통제 조건과 채택 기준을 정의한다.             | `FR-AGENT_CONTEXT-003`, `FR-AGENT_CONTEXT-007`, `NFR-AGENT_CONTEXT-005` | 미확정 | -         |
+| `TBD-AGENT_CONTEXT-013` | 그래프 효과   | 채택된 통제 비교 방향에 따라 비그래프 기준선의 구성, 단계별로 추가할 그래프 기능, 통제 조건, 반복 횟수와 채택 기준을 정의한다. | `FR-AGENT_CONTEXT-003`, `FR-AGENT_CONTEXT-007`, `NFR-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-038` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-014` | 사건 모델     | 채택된 최소 후보인 시간·인과·부분·의미 관계의 정의·방향·제약과 사건 분할·중첩·병합 기준을 정의한다. | `FR-AGENT_CONTEXT-003`, `FR-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-036` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-015` | 관리 연산     | 컨텍스트 추가·갱신·대체·폐기·유지 연산의 판단 주체, 허용 조건과 감사 범위를 정의한다. | `FR-AGENT_CONTEXT-006`, `FR-AGENT_CONTEXT-010`, `FR-AGENT_CONTEXT-023`, `FR-AGENT_CONTEXT-025`, `FR-AGENT_CONTEXT-026`, `NFR-AGENT_CONTEXT-007` | 미확정 | - |
 | `TBD-AGENT_CONTEXT-016` | 근거 상태     | 채택된 원천 사실과 관찰·경험·의견 성격의 파생 정보 구분에 적용할 분류 규칙, 의견·해석의 근거 연결 스키마, 신뢰 상태 값·계산 방식, 상충 처리와 갱신 권한을 정의한다. | `FR-AGENT_CONTEXT-004`, `FR-AGENT_CONTEXT-011`, `NFR-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-037` | 미확정 | - |
@@ -402,7 +403,7 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `NFR-AGENT_CONTEXT-002` | 설계 판단, Zep Temporal Knowledge Graph | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-034`                          |
 | `NFR-AGENT_CONTEXT-003` | 설계 판단, 관련 연구                    | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-026`, `TBD-AGENT_CONTEXT-034` |
 | `NFR-AGENT_CONTEXT-004` | HippoRAG 2, GraphRAG                    | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-034`                                                   |
-| `NFR-AGENT_CONTEXT-005` | Does Memory Need Graphs?                | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-013`, `TBD-AGENT_CONTEXT-034`                          |
+| `NFR-AGENT_CONTEXT-005` | 사용자 채택, Does Memory Need Graphs?   | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-013`, `TBD-AGENT_CONTEXT-034`, `TBD-AGENT_CONTEXT-038` |
 | `NFR-AGENT_CONTEXT-006` | HINDSIGHT                               | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-017`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-026`, `TBD-AGENT_CONTEXT-034` |
 | `NFR-AGENT_CONTEXT-007` | Memory-R1, Experience-Following 연구    | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-016`, `TBD-AGENT_CONTEXT-034` |
 | `NFR-AGENT_CONTEXT-008` | AgentMemoryBench                        | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-018`, `TBD-AGENT_CONTEXT-034`                          |

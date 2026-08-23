@@ -16,7 +16,7 @@
 
 ## 공통 미정 사항
 
-- MCP primitive, transport, protocol revision과 작업 컨텍스트 흐름 응답 스키마
+- MCP transport, protocol revision과 작업 컨텍스트 흐름 응답 본문
 - 웹 관리 화면 흐름과 관계 관리 정책
 - 인증 주체·OAuth 매핑·서버 검증 상태, 세부 인가, 배포와 운영 모델
 - 컨텍스트의 연결 원칙, 지식 성장·재구성·재활용 정책과 비전 충족 기준

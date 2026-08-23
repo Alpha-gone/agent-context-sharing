@@ -368,11 +368,11 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 |-------------------------|-----------------------------------------|----------------------------------------------------------------------------------------------------|
 | `FR-AGENT_CONTEXT-001`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-034` |
 | `FR-AGENT_CONTEXT-002`  | 사용자 요청, MCP 공식 아키텍처          | `TBD-AGENT_CONTEXT-001`, `TBD-AGENT_CONTEXT-004`, `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-010`, `TBD-AGENT_CONTEXT-027` |
-| `FR-AGENT_CONTEXT-003`  | 사용자 요청, Apache AGE 공식 개요       | `TBD-AGENT_CONTEXT-002`, `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-009`                          |
-| `FR-AGENT_CONTEXT-004`  | Generative Agents, HippoRAG 2           | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-034` |
+| `FR-AGENT_CONTEXT-003`  | 사용자 요청, Apache AGE 공식 개요       | `TBD-AGENT_CONTEXT-002`, `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-013`, `TBD-AGENT_CONTEXT-014` |
+| `FR-AGENT_CONTEXT-004`  | Generative Agents, HippoRAG 2           | `TBD-AGENT_CONTEXT-003`, `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-016`, `TBD-AGENT_CONTEXT-034` |
 | `FR-AGENT_CONTEXT-005`  | A-MEM                                   | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-034`                                                   |
-| `FR-AGENT_CONTEXT-006`  | Zep Temporal Knowledge Graph            | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-034`                          |
-| `FR-AGENT_CONTEXT-007`  | HippoRAG 2                              | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-034`                          |
+| `FR-AGENT_CONTEXT-006`  | Zep Temporal Knowledge Graph            | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-034` |
+| `FR-AGENT_CONTEXT-007`  | HippoRAG 2                              | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-013`, `TBD-AGENT_CONTEXT-017`, `TBD-AGENT_CONTEXT-034` |
 | `FR-AGENT_CONTEXT-008`  | GraphRAG                                | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-034` |
 | `FR-AGENT_CONTEXT-009`  | 사용자 채택, CompassMem, Associa        | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-014`, `TBD-AGENT_CONTEXT-034`, `TBD-AGENT_CONTEXT-036` |
 | `FR-AGENT_CONTEXT-010`  | Memory-R1                               | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-034`                          |
@@ -401,14 +401,14 @@ MCP 인증은 `tools`, `resources`, `prompts` 같은 애플리케이션 primitiv
 | `FR-AGENT_CONTEXT-033`  | 사용자 요청                             | `TBD-AGENT_CONTEXT-005`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-028`, `TBD-AGENT_CONTEXT-035` |
 | `NFR-AGENT_CONTEXT-001` | 사용자 요청, Apache AGE 공식 개요       | `TBD-AGENT_CONTEXT-002`, `TBD-AGENT_CONTEXT-006`                                                   |
 | `NFR-AGENT_CONTEXT-002` | 설계 판단, Zep Temporal Knowledge Graph | `TBD-AGENT_CONTEXT-006`, `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-034`                          |
-| `NFR-AGENT_CONTEXT-003` | 설계 판단, 관련 연구                    | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-026`, `TBD-AGENT_CONTEXT-034` |
-| `NFR-AGENT_CONTEXT-004` | HippoRAG 2, GraphRAG                    | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-034`                                                   |
+| `NFR-AGENT_CONTEXT-003` | 설계 판단, 관련 연구                    | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-011`, `TBD-AGENT_CONTEXT-019`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-026`, `TBD-AGENT_CONTEXT-034` |
+| `NFR-AGENT_CONTEXT-004` | HippoRAG 2, GraphRAG                    | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-018`, `TBD-AGENT_CONTEXT-034`                          |
 | `NFR-AGENT_CONTEXT-005` | 사용자 채택, Does Memory Need Graphs?   | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-013`, `TBD-AGENT_CONTEXT-034`, `TBD-AGENT_CONTEXT-038` |
 | `NFR-AGENT_CONTEXT-006` | HINDSIGHT                               | `TBD-AGENT_CONTEXT-009`, `TBD-AGENT_CONTEXT-017`, `TBD-AGENT_CONTEXT-024`, `TBD-AGENT_CONTEXT-026`, `TBD-AGENT_CONTEXT-034` |
-| `NFR-AGENT_CONTEXT-007` | Memory-R1, Experience-Following 연구    | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-016`, `TBD-AGENT_CONTEXT-034` |
+| `NFR-AGENT_CONTEXT-007` | Memory-R1, Experience-Following 연구    | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-016`, `TBD-AGENT_CONTEXT-034`, `TBD-AGENT_CONTEXT-037` |
 | `NFR-AGENT_CONTEXT-008` | AgentMemoryBench                        | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-018`, `TBD-AGENT_CONTEXT-034`                          |
 | `NFR-AGENT_CONTEXT-009` | 사용자 요청, 설계 판단                  | `TBD-AGENT_CONTEXT-012`, `TBD-AGENT_CONTEXT-018`, `TBD-AGENT_CONTEXT-020`, `TBD-AGENT_CONTEXT-034` |
 | `NFR-AGENT_CONTEXT-010` | 사용자 요청, 설계 판단                  | `TBD-AGENT_CONTEXT-007`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-021`, `TBD-AGENT_CONTEXT-023`, `TBD-AGENT_CONTEXT-028`, `TBD-AGENT_CONTEXT-035` |
 | `NFR-AGENT_CONTEXT-011` | 사용자 요청, 설계 판단                  | `TBD-AGENT_CONTEXT-008`, `TBD-AGENT_CONTEXT-015`, `TBD-AGENT_CONTEXT-022`                          |
-| `NFR-AGENT_CONTEXT-012` | 사용자 요청, MCP 2026-07-28             | `TBD-AGENT_CONTEXT-004`, `TBD-AGENT_CONTEXT-010`                                                   |
-| `NFR-AGENT_CONTEXT-013` | MCP 2026-07-28 인증, RFC 6750, RFC 6819 | `TBD-AGENT_CONTEXT-029`, `TBD-AGENT_CONTEXT-031`, `TBD-AGENT_CONTEXT-032` |
+| `NFR-AGENT_CONTEXT-012` | 사용자 요청, MCP 2026-07-28             | `TBD-AGENT_CONTEXT-004`, `TBD-AGENT_CONTEXT-010`, `TBD-AGENT_CONTEXT-032`                          |
+| `NFR-AGENT_CONTEXT-013` | MCP 2026-07-28 인증, RFC 6750, RFC 6819 | `TBD-AGENT_CONTEXT-010`, `TBD-AGENT_CONTEXT-029`, `TBD-AGENT_CONTEXT-031`, `TBD-AGENT_CONTEXT-032` |

@@ -1,0 +1,22 @@
+# 개발용 데이터베이스. 운영 배포 구성은 이 파일이 다루지 않는다.
+services:
+  db:
+    build: .
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agent_context}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent_context}
+      POSTGRES_DB: ${POSTGRES_DB:-agent_context}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # PostgreSQL 18부터 공식 이미지가 /var/lib/postgresql 아래 판별 하위 디렉터리에
+      # 데이터를 두므로 /var/lib/postgresql/data가 아니라 상위를 마운트한다.
+      - db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_context} -d ${POSTGRES_DB:-agent_context}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  db_data:

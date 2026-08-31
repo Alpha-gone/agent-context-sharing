@@ -133,15 +133,19 @@ CREATE TABLE IF NOT EXISTS public.operation_log (
         (result = 'rejected') OR (reject_reason IS NULL))
 );
 
--- 「감사 기록」의 대상 다섯 종. 공통 다섯 열 외에는 대상에 따라 비어 있을 수 있다.
+-- 「감사 기록」의 대상 여섯 종. 공통 다섯 열 외에는 대상에 따라 비어 있을 수 있다.
+-- 복구 요청과 운영자 복구를 나누는 이유는 요청과 처리가 다른 시점의 다른 행위이고,
+-- 대기 중인 요청을 두 대상의 차이로 계산하기 때문이다.
 CREATE TABLE IF NOT EXISTS public.web_audit_log (
     audit_id             uuid        PRIMARY KEY,
     target_kind          text        NOT NULL CHECK (target_kind IN (
                                          'grant', 'ownership_transfer', 'team',
-                                         'web_delete', 'operator_restore')),
+                                         'web_delete', 'restore_request',
+                                         'operator_restore')),
     action               text        NOT NULL CHECK (action IN (
                                          'grant', 'revoke', 'transfer',
-                                         'add', 'remove', 'delete', 'restore')),
+                                         'add', 'remove', 'delete', 'restore',
+                                         'request')),
     actor_account_id     uuid        NOT NULL,
     occurred_at          timestamptz NOT NULL,
     graph_id             uuid,

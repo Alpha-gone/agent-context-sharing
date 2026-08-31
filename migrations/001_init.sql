@@ -49,6 +49,16 @@ END $$;
 -- 첫 항목이 ag_catalog이기 때문이다. 명시하지 않으면 테이블이 AGE의 카탈로그
 -- 스키마에 만들어진다.
 
+-- 「계정 속성」의 4개 열. login_id의 형식은 「입력 검증 세부」가 정한다.
+-- deleted_at을 두지 않는 이유는 「계정 소멸」이 소멸 경로를 두지 않기로 확정해
+-- 표시할 상태가 없기 때문이다.
+CREATE TABLE IF NOT EXISTS public.account (
+    account_id    uuid        PRIMARY KEY,
+    login_id      text        NOT NULL CHECK (login_id ~ '^[a-z0-9_]{3,32}$'),
+    password_hash text        NOT NULL CHECK (password_hash <> ''),
+    created_at    timestamptz NOT NULL
+);
+
 -- 「컨텍스트 그래프 속성」의 9개 열
 CREATE TABLE IF NOT EXISTS public.context_graph (
     graph_id         uuid        PRIMARY KEY,
@@ -76,8 +86,10 @@ CREATE TABLE IF NOT EXISTS public.team (
     created_at         timestamptz NOT NULL
 );
 
--- 외래 키를 두지 않는다. 계정은 이 시스템에 테이블이 없고, 「폐기와 사용자 직접 삭제」가
--- 영구 삭제를 하지 않기로 확정해 참조 무결성 제약이 걸릴 삭제 경로가 없다.
+-- 외래 키를 두지 않는다. 「폐기와 사용자 직접 삭제」가 영구 삭제를 하지 않기로 했고
+-- 「계정 소멸」이 계정을 없애는 경로를 두지 않기로 확정해, 참조 무결성 제약이 걸릴
+-- 삭제 경로가 애초에 없다. graph_grant.subject_id는 계정과 팀을 함께 가리키므로
+-- 한쪽 테이블로 외래 키를 걸 수도 없다.
 CREATE TABLE IF NOT EXISTS public.team_member (
     team_id    uuid NOT NULL,
     account_id uuid NOT NULL,
@@ -159,7 +171,13 @@ CREATE TABLE IF NOT EXISTS public.revoked_token (
     expires_at timestamptz NOT NULL
 );
 
--- 5. 인덱스. 「인덱스」의 8건이다.
+-- 5. 인덱스. 「인덱스」의 9건이다.
+
+-- 로그인 조회와 중복 등록 거부. 「로그인 아이디의 유일성」이 유일성을 기능의 전제로
+-- 확정했고, 접근 계층의 검사만으로는 같은 아이디를 동시에 등록하는 두 요청을 막지
+-- 못하므로 유일 인덱스로 데이터베이스가 거절하게 한다.
+CREATE UNIQUE INDEX IF NOT EXISTS account_login_id_idx
+    ON public.account (login_id);
 
 -- 그래프 목록의 기본 정렬과 커서 페이지 처리
 CREATE INDEX IF NOT EXISTS context_graph_active_activity_idx

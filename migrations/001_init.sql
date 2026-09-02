@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS public.revoked_token (
     expires_at timestamptz NOT NULL
 );
 
--- 5. 인덱스. 「인덱스」의 9건이다.
+-- 5. 인덱스. 「인덱스」의 10건이다.
 
 -- 로그인 조회와 중복 등록 거부. 「로그인 아이디의 유일성」이 유일성을 기능의 전제로
 -- 확정했고, 접근 계층의 검사만으로는 같은 아이디를 동시에 등록하는 두 요청을 막지
@@ -224,3 +224,12 @@ CREATE INDEX IF NOT EXISTS context_graph_id_idx
 CREATE INDEX IF NOT EXISTS context_body_fts_idx
     ON "{{.GraphName}}"."Context"
     USING gin (to_tsvector('simple', properties ->> 'body'::text));
+
+-- 원천 중복 판정. 「생성과 수정 검증」이 같은 그래프에서 source_ref가 같은 원천을
+-- 중복으로 확정했고, 접근 계층의 조회만으로는 동시 요청을 막지 못한다.
+-- source_ref는 원천에만 있으므로 layer로 거른 부분 인덱스를 쓴다.
+CREATE UNIQUE INDEX IF NOT EXISTS context_source_ref_idx
+    ON "{{.GraphName}}"."Context" (
+        (properties ->> 'graph_id'::text),
+        (properties ->> 'source_ref_locator'::text))
+    WHERE (properties ->> 'layer'::text) = 'source';

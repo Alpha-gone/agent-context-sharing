@@ -79,11 +79,15 @@ CREATE TABLE IF NOT EXISTS public.graph_grant (
     PRIMARY KEY (graph_id, subject_type, subject_id)
 );
 
+-- 「권한과 팀 관리 절차」가 팀 삭제를 소프트 삭제로 확정했다. 삭제된 팀의
+-- graph_grant 행은 남지만 유효 등급 계산이 deleted_at을 함께 보므로 등급이
+-- 적용되지 않는다.
 CREATE TABLE IF NOT EXISTS public.team (
     team_id            uuid        PRIMARY KEY,
     name               text        NOT NULL CHECK (name <> ''),
     manager_account_id uuid        NOT NULL,
-    created_at         timestamptz NOT NULL
+    created_at         timestamptz NOT NULL,
+    deleted_at         timestamptz
 );
 
 -- 외래 키를 두지 않는다. 「폐기와 사용자 직접 삭제」가 영구 삭제를 하지 않기로 했고

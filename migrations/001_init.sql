@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS public.context_graph (
     created_by       uuid        NOT NULL,
     created_at       timestamptz NOT NULL,
     last_activity_at timestamptz NOT NULL,
+    grace_started_at timestamptz,
     version          integer     NOT NULL DEFAULT 1 CHECK (version >= 1),
     deleted_at       timestamptz
 );
@@ -109,15 +110,19 @@ CREATE TABLE IF NOT EXISTS public.context_embedding (
     indexed_at timestamptz NOT NULL
 );
 
--- 「색인 작업 큐」의 7개 열
+-- 「색인 작업 큐」의 9개 열. 컨텍스트마다 한 행만 두고 등록을 upsert로 처리하므로
+-- context_id에 유일 인덱스를 건다. 작업자는 next_attempt_at이 지난 행을
+-- FOR UPDATE SKIP LOCKED로 확보하며 처리 중을 나타내는 상태를 두지 않는다.
 CREATE TABLE IF NOT EXISTS public.index_task (
-    task_id     uuid        PRIMARY KEY,
-    context_id  uuid        NOT NULL,
-    graph_id    uuid        NOT NULL,
-    attempts    integer     NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-    state       text        NOT NULL CHECK (state IN ('pending', 'failed')),
-    last_error  text,
-    enqueued_at timestamptz NOT NULL
+    task_id         uuid        PRIMARY KEY,
+    context_id      uuid        NOT NULL,
+    graph_id        uuid        NOT NULL,
+    attempts        integer     NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    state           text        NOT NULL CHECK (state IN ('pending', 'failed')),
+    last_error      text,
+    enqueued_at     timestamptz NOT NULL,
+    next_attempt_at timestamptz NOT NULL,
+    correlation_id  text
 );
 
 -- 「기록 항목」의 7개 항목을 편 열
@@ -179,7 +184,23 @@ CREATE TABLE IF NOT EXISTS public.revoked_token (
     expires_at timestamptz NOT NULL
 );
 
--- 5. 인덱스. 「인덱스」의 10건이다.
+-- 「인가 코드 흐름」의 10개 열. 코드 원문을 저장하지 않고 해시를 기본 키로 둔다.
+-- consumed_at을 두고 행을 지우지 않는 이유는 재사용과 없는 코드를 구분하고 폐기할
+-- 토큰을 찾기 위해서다. code_challenge_method는 S256만 받으므로 열로 두지 않는다.
+CREATE TABLE IF NOT EXISTS public.authorization_code (
+    code_hash       text        PRIMARY KEY,
+    client_id       text        NOT NULL,
+    account_id      uuid        NOT NULL,
+    redirect_uri    text        NOT NULL,
+    code_challenge  text        NOT NULL,
+    resource        text        NOT NULL,
+    issued_at       timestamptz NOT NULL,
+    expires_at      timestamptz NOT NULL,
+    consumed_at     timestamptz,
+    issued_token_id text
+);
+
+-- 5. 인덱스. 「인덱스」의 12건이다.
 
 -- 로그인 조회와 중복 등록 거부. 「로그인 아이디의 유일성」이 유일성을 기능의 전제로
 -- 확정했고, 접근 계층의 검사만으로는 같은 아이디를 동시에 등록하는 두 요청을 막지
@@ -208,12 +229,20 @@ CREATE INDEX IF NOT EXISTS context_embedding_graph_idx
 -- 방식을 정한 뒤 별도 마이그레이션으로 더한다.
 
 -- 색인 작업자의 대기 작업 조회
-CREATE INDEX IF NOT EXISTS index_task_state_enqueued_idx
-    ON public.index_task (state, enqueued_at);
+CREATE INDEX IF NOT EXISTS index_task_state_next_attempt_idx
+    ON public.index_task (state, next_attempt_at);
+
+-- 컨텍스트당 한 작업과 등록 upsert의 충돌 대상
+CREATE UNIQUE INDEX IF NOT EXISTS index_task_context_idx
+    ON public.index_task (context_id);
 
 -- 복구 판정과 보존 기간 정리
 CREATE INDEX IF NOT EXISTS operation_log_context_applied_idx
     ON public.operation_log (context_id, applied_at);
+
+-- 만료된 인가 코드의 주기 정리
+CREATE INDEX IF NOT EXISTS authorization_code_expires_idx
+    ON public.authorization_code (expires_at);
 
 -- 격리 필터와 탐색 시작점 탐색, 키워드 채널
 -- AGE의 label 테이블은 일반 PostgreSQL 테이블이므로 property를 꺼내는 표현식에

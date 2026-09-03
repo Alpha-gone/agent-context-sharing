@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
@@ -93,6 +94,41 @@ func NewPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("풀 생성: %w", err)
 	}
 	return pool, nil
+}
+
+// AdvisoryLockKey는 마이그레이션 실행기가 쓰는 자문 잠금의 키다.
+//
+// 값 자체에 의미는 없고 같은 데이터베이스를 쓰는 다른 잠금과 겹치지 않는 것만 중요하다.
+// SDD.md의 「주기 작업」이 쓸 잠금은 다른 값을 써야 한다.
+const AdvisoryLockKey int64 = 4182026001
+
+// WithLock은 자문 잠금을 잡은 채 fn을 실행하고 끝나면 놓는다.
+//
+// SDD.md의 「기동과 종료」가 확정한 대로 여러 인스턴스가 동시에 기동해도 한 번만
+// 적용되게 한다. 이미 다른 실행기가 잡고 있으면 놓을 때까지 기다리므로, 호출자는
+// 적용 이력 조회를 fn 안에서 해야 기다린 뒤 앞선 실행기의 결과를 본다.
+//
+// 자문 잠금은 세션 단위라 잡은 연결에서 놓아야 한다. pgxpool은 반납한 연결의 세션
+// 상태를 초기화하지 않으므로 놓지 않으면 잠금이 풀에 남는다. fn이 오류를 돌려주거나
+// ctx가 취소되어도 놓으며, 해제에 실패하면 그 오류를 fn의 오류와 함께 돌려준다.
+func WithLock(ctx context.Context, pool *pgxpool.Pool, fn func(context.Context) error) (err error) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("잠금용 연결 획득: %w", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, AdvisoryLockKey); err != nil {
+		return fmt.Errorf("자문 잠금 획득: %w", err)
+	}
+	defer func() {
+		// 취소된 뒤에도 놓아야 하므로 취소를 떼어낸 컨텍스트를 쓴다.
+		if _, unlockErr := conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, AdvisoryLockKey); unlockErr != nil {
+			err = errors.Join(err, fmt.Errorf("자문 잠금 해제: %w", unlockErr))
+		}
+	}()
+
+	return fn(ctx)
 }
 
 // Load는 파일 시스템에서 마이그레이션을 읽어 구성 값을 치환하고 버전 순으로 돌려준다.

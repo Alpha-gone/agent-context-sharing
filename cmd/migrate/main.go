@@ -15,6 +15,8 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"agent_context_sharing/internal/migrate"
 	"agent_context_sharing/migrations"
 )
@@ -54,6 +56,15 @@ func run(ctx context.Context, command string) error {
 	}
 	defer pool.Close()
 
+	// 이력 확인부터 적용까지를 자문 잠금 안에서 한다. 여러 인스턴스가 동시에 기동하면
+	// 이력을 함께 읽고 같은 파일을 함께 적용하려 들기 때문이다. 기다린 쪽은 잠금을 얻은
+	// 뒤에 이력을 읽으므로 앞선 실행기가 적용한 결과를 본다.
+	return migrate.WithLock(ctx, pool, func(ctx context.Context) error {
+		return runLocked(ctx, pool, command, migrations)
+	})
+}
+
+func runLocked(ctx context.Context, pool *pgxpool.Pool, command string, migrations []migrate.Migration) error {
 	if err := migrate.EnsureHistory(ctx, pool); err != nil {
 		return err
 	}

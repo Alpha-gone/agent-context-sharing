@@ -24,6 +24,7 @@
 - 계정 소멸 경로. 탈퇴와 그에 따른 등급 회수 (`TBD-AGENT_CONTEXT-049`)
 - 운영자 역할 분리. 검증 단계에서는 인증된 모든 계정이 운영자 자격을 갖는다 (`TBD-AGENT_CONTEXT-052`)
 - Client ID Metadata Documents 지원 여부. 사전 등록을 확정했고 명세는 이 방식을 SHOULD로 권고한다 (`TBD-AGENT_CONTEXT-060`)
+- 한국어 형태소 분석. 키워드 채널이 `simple` 구성을 쓰며 채널 기여를 측정한 뒤 판단한다 (`TBD-AGENT_CONTEXT-061`)
 - 응답 직렬화 형식 (MCP `tools` 응답 규약을 따르며 세부는 구현에서 정한다)
 - Row Level Security 채택과 Apache AGE 정점의 파티셔닝 가능 여부 (검증 후 판단)
 - 벡터 인덱스 방식과 저장 계층의 허용 범위 (배포 구성)

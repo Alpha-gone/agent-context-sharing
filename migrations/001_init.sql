@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS public.context_graph (
     created_at       timestamptz NOT NULL,
     last_activity_at timestamptz NOT NULL,
     grace_started_at timestamptz,
+    stored_chars     bigint      NOT NULL DEFAULT 0 CHECK (stored_chars >= 0),
     version          integer     NOT NULL DEFAULT 1 CHECK (version >= 1),
     deleted_at       timestamptz
 );
@@ -187,6 +188,15 @@ CREATE TABLE IF NOT EXISTS public.revoked_token (
 -- 「인가 코드 흐름」의 10개 열. 코드 원문을 저장하지 않고 해시를 기본 키로 둔다.
 -- consumed_at을 두고 행을 지우지 않는 이유는 재사용과 없는 코드를 구분하고 폐기할
 -- 토큰을 찾기 위해서다. code_challenge_method는 S256만 받으므로 열로 두지 않는다.
+-- 「계정 플랜 값」의 1분 고정 창 카운터. 한도를 켠 계정만 행을 가지므로 기본
+-- 배포에서는 비어 있다. 지난 창의 행은 「주기 작업」이 지운다.
+CREATE TABLE IF NOT EXISTS public.request_rate (
+    account_id        uuid        NOT NULL,
+    window_started_at timestamptz NOT NULL,
+    count             integer     NOT NULL DEFAULT 0 CHECK (count >= 0),
+    PRIMARY KEY (account_id, window_started_at)
+);
+
 CREATE TABLE IF NOT EXISTS public.authorization_code (
     code_hash       text        PRIMARY KEY,
     client_id       text        NOT NULL,
@@ -200,7 +210,7 @@ CREATE TABLE IF NOT EXISTS public.authorization_code (
     issued_token_id text
 );
 
--- 5. 인덱스. 「인덱스」의 12건이다.
+-- 5. 인덱스. 「인덱스」의 13건이다.
 
 -- 로그인 조회와 중복 등록 거부. 「로그인 아이디의 유일성」이 유일성을 기능의 전제로
 -- 확정했고, 접근 계층의 검사만으로는 같은 아이디를 동시에 등록하는 두 요청을 막지
@@ -244,12 +254,21 @@ CREATE INDEX IF NOT EXISTS operation_log_context_applied_idx
 CREATE INDEX IF NOT EXISTS authorization_code_expires_idx
     ON public.authorization_code (expires_at);
 
+-- 지난 창의 주기 정리
+CREATE INDEX IF NOT EXISTS request_rate_window_idx
+    ON public.request_rate (window_started_at);
+
 -- 격리 필터와 탐색 시작점 탐색, 키워드 채널
 -- AGE의 label 테이블은 일반 PostgreSQL 테이블이므로 property를 꺼내는 표현식에
 -- 인덱스를 걸 수 있다.
 CREATE INDEX IF NOT EXISTS context_graph_id_idx
     ON "{{.GraphName}}"."Context" ((properties -> 'graph_id'::text));
 
+-- 키워드 채널. 「채널 구현」이 텍스트 검색 구성을 simple로 확정했다. PostgreSQL이
+-- 기본 제공하는 구성 중 한국어를 다루는 것이 없고 형태소 분석을 붙이려면 확장
+-- 의존이 하나 늘기 때문이다. simple은 어간 추출을 하지 않아 조사가 붙은 표기가
+-- 일치하지 않으며, 형태소 분석 도입은 TBD-AGENT_CONTEXT-061이 소유한다.
+-- 질의도 같은 구성을 써야 하므로 plainto_tsquery('simple', ...)로 짝을 맞춘다.
 CREATE INDEX IF NOT EXISTS context_body_fts_idx
     ON "{{.GraphName}}"."Context"
     USING gin (to_tsvector('simple', properties ->> 'body'::text));

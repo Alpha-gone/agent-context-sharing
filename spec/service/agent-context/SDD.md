@@ -5,7 +5,7 @@
 | 항목          | 내용                                                                       |
 |---------------|----------------------------------------------------------------------------|
 | 문서 상태     | 확정                                                                       |
-| 최종 수정일   | 2026-08-31                                                                 |
+| 최종 수정일   | 2026-09-05                                                                 |
 | 서비스 식별자 | `AGENT_CONTEXT`                                                            |
 | 담당 범위     | 확정된 요구사항의 아키텍처, 구성 요소, 인터페이스, 데이터 모델과 처리 흐름 |
 | 주요 출처     | `SRS.md`, `reference.md`, 채택된 제안                                      |
@@ -480,8 +480,8 @@ discovery 문서를 루트에 두는 이유는 MCP 엔드포인트가 `/mcp` 한
 | 누적 한도 셋의 현재 값을 집계 대신 누적해 둔 값에서 읽는다                                   | `FR-AGENT_CONTEXT-118`, `FR-AGENT_CONTEXT-119`  |
 | 요청 빈도를 1분 고정 창으로 세고 한도가 없는 계정은 카운터를 만들지 않는다                   | `FR-AGENT_CONTEXT-117`, `NFR-AGENT_CONTEXT-012` |
 | 네 채널의 순위 기준과 후보 상한을 확정하고 상한을 배포 구성으로 둔다                         | `FR-AGENT_CONTEXT-086`, `FR-AGENT_CONTEXT-113`  |
-| 키워드 채널의 텍스트 검색 구성을 `simple`로 두고 한계를 명시한다                             | `FR-AGENT_CONTEXT-085`                          |
-| MCP 경로 표면을 단일 엔드포인트와 discovery 둘, 인가 넷, 화면 아홉으로 확정한다              | `FR-AGENT_CONTEXT-095`, `FR-AGENT_CONTEXT-149`  |
+| 키워드 채널의 텍스트 검색 구성을 `simple`로 두고 한계를 명시한다                             | `FR-AGENT_CONTEXT-048`                          |
+| 경로 표면을 MCP 단일 엔드포인트, discovery 둘, 인가 여섯, 화면 여섯, 상태 점검 둘로 확정한다 | `FR-AGENT_CONTEXT-095`, `FR-AGENT_CONTEXT-149`  |
 
 ## 주요 처리 흐름과 상태
 
@@ -719,7 +719,7 @@ sequenceDiagram
 | 접근 가능 계정 판정의 방아쇠에 팀 구성원 제거를 포함한다                            | `FR-AGENT_CONTEXT-132`                                                 |
 | 격리 수준을 Read Committed로 두고 소멸을 세는 두 판정만 그래프 행을 잠근다          | `FR-AGENT_CONTEXT-032`, `FR-AGENT_CONTEXT-041`                         |
 | 여러 그래프를 잠그는 연산의 잠금 순서를 `graph_id` 오름차순으로 고정한다            | `FR-AGENT_CONTEXT-132`                                                 |
-| 유예 시작 시각을 `context_graph.grace_started_at`에 두고 자동 삭제 판정에 함께 쓴다 | `FR-AGENT_CONTEXT-032`, `FR-AGENT_CONTEXT-016`                         |
+| 유예 시작 시각을 `context_graph.grace_started_at`에 두고 자동 삭제 판정에 함께 쓴다 | `FR-AGENT_CONTEXT-032`, `FR-AGENT_CONTEXT-108`                         |
 | `last_activity_at`과 `stored_chars`를 저장 트랜잭션의 한 갱신으로 처리한다          | `FR-AGENT_CONTEXT-049`, `FR-AGENT_CONTEXT-118`                         |
 
 ## 인터페이스와 API 계약
@@ -1060,7 +1060,7 @@ SSE를 열지 않는 근거는 `SRS.md`의 「transport와 프로토콜」이다
 | 운영자 복구 화면을 여섯 번째로 두고 등급 대신 자격을 본다                      | `FR-AGENT_CONTEXT-135`, `FR-AGENT_CONTEXT-136`                                                |
 | `body` 상한을 데이터베이스가 아니라 접근 계층이 강제한다                       | `FR-AGENT_CONTEXT-139`                                                                        |
 | 전송 계층 검증 여섯을 1단계로 묶고 도메인 오류 코드와 층을 나눈다              | `FR-AGENT_CONTEXT-149`, `FR-AGENT_CONTEXT-057`                                                |
-| `tools/list`로 연산 13종을 내보내고 응답을 단일 JSON 객체로 둔다               | `FR-AGENT_CONTEXT-095`, `FR-AGENT_CONTEXT-100`                                                |
+| `tools/list`로 연산 13종을 내보내고 응답을 단일 JSON 객체로 둔다               | `FR-AGENT_CONTEXT-056`, `FR-AGENT_CONTEXT-095`                                                |
 | `x-mcp-header`를 쓰지 않는다                                                   | `FR-AGENT_CONTEXT-095`                                                                        |
 | 두 메타데이터 문서의 필드를 확정하고 401에 위치를 싣는다                       | `FR-AGENT_CONTEXT-090`, `FR-AGENT_CONTEXT-149`                                                |
 | 감사 기록 화면에 시각과 식별자를 담은 커서 페이지 처리를 둔다                  | `FR-AGENT_CONTEXT-047`, `FR-AGENT_CONTEXT-109`                                                |
@@ -1117,7 +1117,7 @@ AGE 그래프는 하나만 만든다. 이름은 배포 구성으로 두되 인�
 
 관리 연산 기록과 감사 기록을 관계형 테이블에 두는 것은 이 문서의 설계 결정이다. `SRS.md`의 「감사 범위」와 「기록 보존」이 저장 형식을 상세 설계로 넘겼다. 두 기록 모두 기간 기준 조회와 보존 기간 경과분의 정리가 필요하고 그래프 탐색 대상이 아니므로, 「질의 경계」가 SQL로 확정한 쪽에 둔다. 그래프에 두면 탐색 질의가 기록까지 지나가게 되어 홉 거리가 어긋난다.
 
-두 기록을 한 테이블로 합치지 않는 이유는 보존 기간이 다르기 때문이다. `SRS.md`가 적용된 연산은 대상 보관 기간 이상, 거부된 연산은 6개월, 웹 감사 기록은 대상 보관 기간으로 확정했다. 정리 주기가 다른 것을 한 테이블에 두면 정리 질의가 매번 종류를 구분해야 한다. `operation_log`는 적용과 거부를 `적용 결과` 열로 구분하되 정리 질의가 그 열을 조건으로 쓴다.
+두 기록을 한 테이블로 합치지 않는 이유는 보존 기간이 다르기 때문이다. `SRS.md`가 적용된 연산은 대상 보관 기간 이상, 거부된 연산은 6개월, 웹 감사 기록은 대상 보관 기간으로 확정했다. 정리 주기가 다른 것을 한 테이블에 두면 정리 질의가 매번 종류를 구분해야 한다. `operation_log`는 적용과 거부를 `result` 열로 구분하되 정리 질의가 그 열을 조건으로 쓴다.
 
 ### 테이블 열 정의
 
@@ -1382,7 +1382,7 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 | `Context` 정점의 원천 `source_ref` | `graph_id`와 `source_ref_locator`의 부분 유일 인덱스 | 원천 중복 판정                             |
 | `index_task`                       | `state`와 `next_attempt_at`                          | 색인 작업자의 대기 작업 조회               |
 | `index_task`                       | `context_id` 유일 인덱스                             | 컨텍스트당 한 작업과 등록 upsert           |
-| `operation_log`                    | `context_id`, `적용 시각`                            | 복구 판정과 보존 기간 정리                 |
+| `operation_log`                    | `context_id`, `applied_at`                           | 복구 판정과 보존 기간 정리                 |
 | `authorization_code`               | `expires_at`                                         | 만료된 코드의 주기 정리                    |
 | `request_rate`                     | `window_started_at`                                  | 지난 창의 주기 정리                        |
 
@@ -1456,8 +1456,8 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 | 접근 계층을 Go 패키지 경계로 강제하고 응답 재검사를 저장소에 둔다         | `FR-AGENT_CONTEXT-101`                                                                          |
 | 임베딩만 파티셔닝으로 계층화하고 정점 계층화는 검증에 남긴다              | `FR-AGENT_CONTEXT-123`, `SUG-AGENT_CONTEXT-11`, `SUG-AGENT_CONTEXT-13`                          |
 | PostgreSQL 13~18, Apache AGE 1.8.0 이상, pgvector 0.7.0 이상을 요구한다   | `NFR-AGENT_CONTEXT-001`                                                                         |
-| 남은 일곱 테이블의 열을 확정하고 열거형 값을 영문 식별자로 통일한다       | `FR-AGENT_CONTEXT-039`, `FR-AGENT_CONTEXT-071`, `FR-AGENT_CONTEXT-109`, `FR-AGENT_CONTEXT-093`  |
-| 웹 감사 기록 다섯 대상을 한 테이블에 담고 대상별 열을 선택적으로 채운다   | `FR-AGENT_CONTEXT-109`, `FR-AGENT_CONTEXT-120`                                                  |
+| 남은 아홉 테이블의 열을 확정하고 열거형 값을 영문 식별자로 통일한다       | `FR-AGENT_CONTEXT-039`, `FR-AGENT_CONTEXT-071`, `FR-AGENT_CONTEXT-109`, `FR-AGENT_CONTEXT-093`  |
+| 웹 감사 기록 여섯 대상을 한 테이블에 담고 대상별 열을 선택적으로 채운다   | `FR-AGENT_CONTEXT-109`, `FR-AGENT_CONTEXT-120`                                                  |
 | 서명 키에 상태 열을 두어 서명용 키와 검증 전용 키를 구분한다              | `FR-AGENT_CONTEXT-093`                                                                          |
 | 번호를 붙인 마이그레이션과 적용 이력 테이블로 스키마를 적용한다           | `NFR-AGENT_CONTEXT-005`, `NFR-AGENT_CONTEXT-012`                                                |
 | 마이그레이션 실행기를 11개 패키지 밖에 두고 `store`를 거치지 않는다       | `FR-AGENT_CONTEXT-101`                                                                          |
@@ -1610,7 +1610,7 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 
 ### 복구
 
-복구 경로는 셋이며 대상과 주체가 다르다.
+복구 경로는 셋이며 대상과 주체가 다르다. 복구 요청은 경로가 아니라 운영자 복구의 전제이며, 요청자와 처리자가 다름을 드러내려고 표에 함께 적는다.
 
 | 경로        | 대상                                              | 주체                    | 판정                                |
 |-------------|---------------------------------------------------|-------------------------|-------------------------------------|
@@ -1659,8 +1659,8 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 | 파생·사건의 출처 구분을 저장하지 않고 응답 구성 시 근거에서 계산한다  | `FR-AGENT_CONTEXT-124`, `FR-AGENT_CONTEXT-125`                         |
 | 여러 원천에 닿으면 출처 구분을 모두 전달하고 하나로 줄이지 않는다     | `FR-AGENT_CONTEXT-125`                                                 |
 | 사후 탐지 탐색에 최대 홉 수를 적용하지 않고 MCP에 노출하지 않는다     | `FR-AGENT_CONTEXT-126`                                                 |
-| 운영자 복구를 요청 기록 없이는 시작할 수 없게 한다                    | `FR-AGENT_CONTEXT-016`, `FR-AGENT_CONTEXT-017`                         |
-| 인가 서버 장애 시 JWKS 캐시로 검증을 계속한다                         | `FR-AGENT_CONTEXT-015`, `FR-AGENT_CONTEXT-093`                         |
+| 운영자 복구를 요청 기록 없이는 시작할 수 없게 한다                    | `FR-AGENT_CONTEXT-108`, `FR-AGENT_CONTEXT-137`                         |
+| 인가 서버 장애 시 JWKS 캐시로 검증을 계속한다                         | `FR-AGENT_CONTEXT-093`, `FR-AGENT_CONTEXT-094`                         |
 | 일부 채널 실패는 부분 상태로, 전체 실패는 `internal`로 다룬다         | `FR-AGENT_CONTEXT-066`                                                 |
 | 세션 쿠키를 접근 토큰과 같은 경로로 검증하고 `aud`만 다르게 둔다      | `FR-AGENT_CONTEXT-133`, `FR-AGENT_CONTEXT-134`                         |
 | 복구 요청과 처리를 별도 감사 대상으로 나눈다                          | `FR-AGENT_CONTEXT-137`                                                 |
@@ -2090,9 +2090,9 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 | `FR-AGENT_CONTEXT-012`  | 컨텍스트 조회    | 「연산 계약」                            | `context_flow_get`의 열람자 등급과 읽기 전용 트랜잭션      | 열람자 계정으로 호출해 성공하는지 확인                                                     | 반영 |
 | `FR-AGENT_CONTEXT-013`  | 업무 연속성      | 「작업 컨텍스트 흐름 조회」              | 흐름 응답의 구성과 메타데이터                              | 에이전트가 후속 작업에 쓸 근거 경로가 담기는지 확인                                        | 반영 |
 | `FR-AGENT_CONTEXT-014`  | 시각화           | 「화면 배치」                            | 그래프 상세의 시각화 영역                                  | 선택한 노드의 속성과 근거 경로가 시각화를 가리지 않는지 확인                               | 반영 |
-| `FR-AGENT_CONTEXT-015`  | 공동 접근        | 「장애 시의 동작」                       | 인가 서버 분리 시의 JWKS 캐시 검증                         | 인가 서버를 멈추고 유효 토큰 요청이 처리되는지 확인                                        | 반영 |
-| `FR-AGENT_CONTEXT-016`  | 컨텍스트 공유    | 「복구」                                 | 복구 경로 세 종의 대상과 주체                              | 다른 작업자의 기여가 격리 밖으로 새지 않는지 확인                                          | 반영 |
-| `FR-AGENT_CONTEXT-017`  | 협업             | 「복구」                                 | 운영자 복구의 요청·처리 분리                               | 요청 기록 없이 처리 경로가 열리지 않는지 확인                                              | 반영 |
+| `FR-AGENT_CONTEXT-015`  | 공동 접근        | 「등급 검사」                            | 한 그래프에 여러 계정·팀이 등급을 갖는 유효 등급 계산      | 같은 그래프에 등급을 가진 여러 계정이 모두 접근하는지 확인                                 | 반영 |
+| `FR-AGENT_CONTEXT-016`  | 컨텍스트 공유    | 「등급 검사」, 「격리 강제의 구현」      | 요청 시점 유효 등급 판정과 `graph_id` 대조                 | 등급을 가진 계정이 다른 계정의 기여를 조회하고, 등급이 없으면 `not_found`가 되는지 확인    | 반영 |
+| `FR-AGENT_CONTEXT-017`  | 협업             | 「작업 컨텍스트 흐름 조회」              | 기여 계정을 가리지 않는 그래프 단위 채널 실행              | 다른 계정이 기여한 컨텍스트가 흐름 응답에 실리는지 확인                                    | 반영 |
 | `FR-AGENT_CONTEXT-018`  | 컨텍스트 흐름    | 「작업 컨텍스트 흐름 조회」              | `scope`에 따른 진입점 선택                                 | `global`이 속성 필터로 전역 요약을 찾는지 확인                                             | 반영 |
 | `FR-AGENT_CONTEXT-019`  | 그래프 목록      | 「페이지 처리」                          | `graph_list`의 커서와 정렬 키                              | 같은 `last_activity_at` 행이 건너뛰거나 중복되지 않는지 확인                               | 반영 |
 | `FR-AGENT_CONTEXT-020`  | 그래프 생성      | 「트랜잭션 경계」                        | `graph_create`의 행 생성과 소유자 부여 묶음                | 생성 실패 시 접근할 수 없는 그래프가 남지 않는지 확인                                      | 반영 |
@@ -2102,7 +2102,7 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 | `FR-AGENT_CONTEXT-024`  | 노드 조회        | 「연산 계약」                            | `node_get`의 열람자 등급과 읽기 전용                       | `hops`가 0일 때 시작 노드만 반환되는지 확인                                                | 반영 |
 | `FR-AGENT_CONTEXT-025`  | 노드 수정        | 「트랜잭션 경계」                        | `node_update`의 버전 검사와 조건부 색인 등록               | `body`가 바뀌지 않으면 색인 작업이 등록되지 않는지 확인                                    | 반영 |
 | `FR-AGENT_CONTEXT-026`  | 삭제 경계        | 「요청 처리 순서」                       | 4단계의 채널 경계 검사                                     | 삭제·권한 요청이 파라미터와 무관하게 `not_supported`인지 확인                              | 반영 |
-| `FR-AGENT_CONTEXT-027`  | 토큰 발급        | 「토큰 갱신」                            | 갱신 조건과 발급 실패 처리                                 | 최초 인증에서 12시간 초과 시 갱신되지 않는지 확인                                          | 반영 |
+| `FR-AGENT_CONTEXT-027`  | 토큰 발급        | 「인가 코드 흐름」, 「인가 서버」        | 인가 코드 교환에 따른 접근 토큰 발급                       | 유효한 코드와 `code_verifier`로만 토큰이 발급되는지 확인                                   | 반영 |
 | `FR-AGENT_CONTEXT-028`  | 요청 인증        | 「토큰 검증」                            | 검증 항목과 단일 실패 응답                                 | 실패 사유가 구분되어 노출되지 않는지 확인                                                  | 반영 |
 | `FR-AGENT_CONTEXT-029`  | 토큰 만료        | 「토큰 갱신」                            | `exp` 기준 만료 판정                                       | 서버 시계로 만료가 판정되는지 확인                                                         | 반영 |
 | `FR-AGENT_CONTEXT-030`  | 토큰 자동 갱신   | 「토큰 갱신」                            | 10초 구간의 자동 갱신과 헤더 전달                          | 갱신 토큰이 응답 본문에 담기지 않는지 확인                                                 | 반영 |
@@ -2183,7 +2183,7 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 | `FR-AGENT_CONTEXT-105`  | 웹 화면 구성     | 「화면 배치」                            | 화면 여섯 종의 영역 구성                                   | 각 화면이 확정된 접근 등급으로 제한되는지 확인                                             | 반영 |
 | `FR-AGENT_CONTEXT-106`  | 권한 화면        | 「화면 배치」                            | 등급 행의 직접·상속 구분과 회수 가능 여부                  | 마지막 소유자에게 회수 수단이 제공되지 않는지 확인                                         | 반영 |
 | `FR-AGENT_CONTEXT-107`  | 삭제 확인        | 「화면 배치」                            | 삭제 화면의 연쇄 영향 집계와 확인 입력                     | 그래프 삭제에만 이름 입력이 요구되는지 확인                                                | 반영 |
-| `FR-AGENT_CONTEXT-108`  | 운영자 복구      | 「백업과 복구」                          | 임베딩의 재생성 가능 복구 순서                             | 임베딩 없이 열어도 세 채널이 동작하는지 확인                                               | 반영 |
+| `FR-AGENT_CONTEXT-108`  | 운영자 복구      | 「복구」                                 | 자동 삭제 그래프의 요청 기반 복구와 내용 미열람            | 요청 기록이 없으면 처리 경로가 열리지 않고 운영자가 컨텍스트를 읽지 않는지 확인            | 반영 |
 | `FR-AGENT_CONTEXT-109`  | 웹 감사 기록     | 「감사 기록의 조회」, 「테이블 열 정의」 | `web_audit_log`의 여섯 대상과 합친 조회                    | 여섯 대상이 모두 기록되고 화면에서 함께 보이는지 확인                                      | 반영 |
 | `FR-AGENT_CONTEXT-110`  | 시각화 제공      | 「시각 표현 규칙」                       | 계층 색과 연결선 종류                                      | 전체 보기와 국소 보기가 같은 규칙을 쓰는지 확인                                            | 반영 |
 | `FR-AGENT_CONTEXT-111`  | 시각화 표시      | 「시각 표현 규칙」                       | 상태 표식과 근거 경로 강조                                 | `disputed`가 색이 아닌 표식으로 구분되는지 확인                                            | 반영 |

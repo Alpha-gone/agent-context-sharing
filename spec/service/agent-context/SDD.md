@@ -1447,7 +1447,7 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 | 컨텍스트와 참조·관계를 AGE 그래프에, 나머지를 일반 테이블에 둔다          | `FR-AGENT_CONTEXT-100`, `FR-AGENT_CONTEXT-102`, `FR-AGENT_CONTEXT-104`, `NFR-AGENT_CONTEXT-001` |
 | 모든 개체의 식별자를 UUIDv7로 통일한다                                    | `FR-AGENT_CONTEXT-035`, `FR-AGENT_CONTEXT-049`                                                  |
 | `graph_grant`에 직접 부여만 담고 유효 등급은 조인으로 계산한다            | `FR-AGENT_CONTEXT-039`, `FR-AGENT_CONTEXT-040`                                                  |
-| 관리 연산 기록과 웹 감사 기록을 관계형 테이블 세 개로 나눈다              | `FR-AGENT_CONTEXT-071`, `FR-AGENT_CONTEXT-120`                                                  |
+| 관리 연산 기록과 웹 감사 기록을 관계형 테이블 두 개로 나눈다              | `FR-AGENT_CONTEXT-071`, `FR-AGENT_CONTEXT-120`                                                  |
 | 참조 간선에는 `graph_id`만, 관계 간선에는 「관계 속성」 전체를 둔다       | `FR-AGENT_CONTEXT-003`, `FR-AGENT_CONTEXT-073`, `FR-AGENT_CONTEXT-102`, `FR-AGENT_CONTEXT-103`  |
 | 계층별 필수 속성과 원천 불변성을 접근 계층이 강제한다                     | `FR-AGENT_CONTEXT-034`, `FR-AGENT_CONTEXT-036`                                                  |
 | `source_ref`를 두 property로 평탄화하고 입력과 응답에서는 하나로 유지한다 | `FR-AGENT_CONTEXT-023`, `NFR-AGENT_CONTEXT-002`                                                 |

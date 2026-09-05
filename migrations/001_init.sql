@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS public.account (
     created_at    timestamptz NOT NULL
 );
 
--- 「컨텍스트 그래프 속성」의 9개 열
+-- 「컨텍스트 그래프 속성」의 10개 열
 CREATE TABLE IF NOT EXISTS public.context_graph (
     graph_id         uuid        PRIMARY KEY,
     name             text        NOT NULL CHECK (name <> ''),

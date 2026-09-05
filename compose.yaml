@@ -1,4 +1,4 @@
-# 개발용 데이터베이스. 운영 배포 구성은 이 파일이 다루지 않는다.
+# 개발용 데이터베이스와 임베딩 제공자. 운영 배포 구성은 이 파일이 다루지 않는다.
 services:
   db:
     build: .
@@ -18,5 +18,24 @@ services:
       timeout: 5s
       retries: 20
 
+  # 임베딩 제공자. SRS의 「임베딩 모델」이 제공자를 배포 구성으로 두었고 개발 계획
+  # 0단계가 자체 호스팅을 골랐다. 색인의 본문 임베딩과 검색의 질의 임베딩이 모두
+  # 이 서비스를 거치며, 자체 호스팅이라 두 값이 격리 경계를 나가지 않는다.
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+# 모델은 기동할 때 자동으로 내려받지 않는다. 기동 경로에 네트워크 의존을 만들지
+# 않기 위해서이며, 아래를 한 번 실행해 준비한다.
+#   docker compose exec ollama ollama pull bge-m3
 volumes:
   db_data:
+  ollama_data:

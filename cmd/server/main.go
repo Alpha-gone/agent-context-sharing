@@ -40,8 +40,8 @@ func run() error {
 	}
 	defer database.Close()
 	app := newApplication(database, slog.Default(), transportSecurity{
-		directTLS:           cfg.TLSMode == config.TLSModeDirect,
-		trustForwardedProto: cfg.TrustForwardedProto,
+		directTLS:      cfg.TLSMode == config.TLSModeDirect,
+		trustedProxies: cfg.TrustedProxies,
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: app.handler()}
 

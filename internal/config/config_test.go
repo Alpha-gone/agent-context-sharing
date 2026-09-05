@@ -23,16 +23,26 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		"수신 주소 누락":     func(values map[string]string) { values["HTTP_ADDR"] = "" },
 		"그래프 이름 형식 오류": func(values map[string]string) { values["AGE_GRAPH_NAME"] = "bad-name" },
 		"벡터 차원 오류":     func(values map[string]string) { values["EMBEDDING_DIMENSION"] = "0" },
-		"직접 TLS의 전달 헤더 신뢰": func(values map[string]string) {
+		"직접 TLS의 신뢰 프록시 지정": func(values map[string]string) {
 			values["TLS_TERMINATION"] = "direct"
-			values["TRUST_FORWARDED_PROTO"] = "true"
+			values["TLS_CERT_FILE"] = "/run/secrets/server.crt"
+			values["TLS_KEY_FILE"] = "/run/secrets/server.key"
 		},
 		"직접 TLS의 인증서 누락": func(values map[string]string) {
 			values["TLS_TERMINATION"] = "direct"
-			values["TRUST_FORWARDED_PROTO"] = "false"
+			values["TRUSTED_PROXY_CIDRS"] = ""
 		},
-		"프록시 TLS의 전달 헤더 미신뢰": func(values map[string]string) {
-			values["TRUST_FORWARDED_PROTO"] = "false"
+		"프록시 TLS의 신뢰 대역 누락": func(values map[string]string) {
+			values["TRUSTED_PROXY_CIDRS"] = ""
+		},
+		"신뢰 대역 형식 오류": func(values map[string]string) {
+			values["TRUSTED_PROXY_CIDRS"] = "proxy.internal"
+		},
+		"신뢰 대역의 호스트 비트 잔존": func(values map[string]string) {
+			values["TRUSTED_PROXY_CIDRS"] = "10.0.0.1/8"
+		},
+		"신뢰 대역 중복": func(values map[string]string) {
+			values["TRUSTED_PROXY_CIDRS"] = "10.0.0.0/8,10.0.0.0/8"
 		},
 	}
 	for name, mutate := range tests {
@@ -50,11 +60,34 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 func TestLoadDirectTLS(t *testing.T) {
 	values := validValues()
 	values["TLS_TERMINATION"] = "direct"
-	values["TRUST_FORWARDED_PROTO"] = "false"
+	values["TRUSTED_PROXY_CIDRS"] = ""
 	values["TLS_CERT_FILE"] = "/run/secrets/server.crt"
 	values["TLS_KEY_FILE"] = "/run/secrets/server.key"
-	if _, err := Load(func(key string) string { return values[key] }); err != nil {
+	cfg, err := Load(func(key string) string { return values[key] })
+	if err != nil {
 		t.Fatalf("직접 TLS 구성 읽기: %v", err)
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("직접 TLS에 신뢰 프록시가 남았다: %v", cfg.TrustedProxies)
+	}
+}
+
+// TestLoadTrustedProxies는 대역과 단일 주소가 모두 비교 가능한 접두로 읽히는지 확인한다.
+func TestLoadTrustedProxies(t *testing.T) {
+	values := validValues()
+	values["TRUSTED_PROXY_CIDRS"] = "10.0.0.0/8, 192.168.1.10, ::1"
+	cfg, err := Load(func(key string) string { return values[key] })
+	if err != nil {
+		t.Fatalf("신뢰 프록시 구성 읽기: %v", err)
+	}
+	want := []string{"10.0.0.0/8", "192.168.1.10/32", "::1/128"}
+	if len(cfg.TrustedProxies) != len(want) {
+		t.Fatalf("신뢰 프록시 개수 = %d, want %d", len(cfg.TrustedProxies), len(want))
+	}
+	for index, prefix := range cfg.TrustedProxies {
+		if prefix.String() != want[index] {
+			t.Fatalf("신뢰 프록시[%d] = %s, want %s", index, prefix, want[index])
+		}
 	}
 }
 
@@ -71,7 +104,7 @@ func validValues() map[string]string {
 		"OAUTH_CLIENT_IDS":      "agent-context-dev",
 		"OAUTH_REDIRECT_URIS":   "http://127.0.0.1/callback",
 		"TLS_TERMINATION":       "proxy",
-		"TRUST_FORWARDED_PROTO": "true",
+		"TRUSTED_PROXY_CIDRS":   "10.0.0.0/8",
 		"TLS_CERT_FILE":         "",
 		"TLS_KEY_FILE":          "",
 	}

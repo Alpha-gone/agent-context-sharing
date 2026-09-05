@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -23,8 +26,9 @@ type readiness interface {
 type transportSecurity struct {
 	// directTLS 필드는 애플리케이션이 TLS 수신기를 직접 열었는지 나타낸다.
 	directTLS bool
-	// trustForwardedProto 필드는 신뢰된 역방향 프록시의 프로토콜 헤더만 TLS 판정에 쓸지 나타낸다.
-	trustForwardedProto bool
+	// trustedProxies 필드에는 전달 헤더를 신뢰할 역방향 프록시의 주소 대역을 둔다.
+	// 비어 있으면 어떤 상대의 전달 헤더도 TLS 판정에 쓰지 않는다.
+	trustedProxies []netip.Prefix
 }
 
 // application은 1단계 HTTP 상태 경로와 요청 로그를 관리한다.
@@ -69,12 +73,47 @@ func (app *application) requireTLS(next http.Handler) http.Handler {
 	})
 }
 
-// isTLSRequest는 직접 TLS 연결 또는 신뢰된 프록시의 HTTPS 전달 헤더만 수락한다.
+// isTLSRequest는 직접 TLS 연결 또는 신뢰된 프록시가 전달한 HTTPS 표시만 수락한다.
+//
+// 프록시 배치에서 전달 헤더는 누구나 붙일 수 있으므로 헤더만으로 판정하지 않는다.
+// 요청을 보낸 상대가 신뢰 대역 안에 있을 때에만 그 헤더를 읽으며, 대역 밖에서 온
+// 요청은 헤더가 있어도 평문으로 다뤄 FR-AGENT_CONTEXT-140의 거부 대상이 된다.
 func (app *application) isTLSRequest(request *http.Request) bool {
 	if app.transport.directTLS {
 		return request.TLS != nil
 	}
-	return app.transport.trustForwardedProto && strings.EqualFold(strings.TrimSpace(request.Header.Get("X-Forwarded-Proto")), "https")
+	peer, ok := remoteAddr(request.RemoteAddr)
+	if !ok || !app.isTrustedProxy(peer) {
+		return false
+	}
+	// 값이 하나일 때만 읽는다. 프록시가 헤더를 덮어쓰지 않고 덧붙이도록 설정되면 원
+	// 요청자가 넣은 값이 앞에 남아, 신뢰된 프록시를 거친 요청에서도 위조가 통과한다.
+	forwarded := request.Header.Values("X-Forwarded-Proto")
+	if len(forwarded) != 1 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(forwarded[0]), "https")
+}
+
+// isTrustedProxy는 요청을 보낸 상대가 전달 헤더를 신뢰할 대역에 속하는지 확인한다.
+func (app *application) isTrustedProxy(peer netip.Addr) bool {
+	return slices.ContainsFunc(app.transport.trustedProxies, func(prefix netip.Prefix) bool {
+		return prefix.Contains(peer)
+	})
+}
+
+// remoteAddr는 http.Request.RemoteAddr의 host:port 표기에서 비교 가능한 주소를 뽑는다.
+// IPv4-mapped IPv6로 들어온 상대도 구성에 적은 IPv4 대역과 맞도록 편다.
+func remoteAddr(value string) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		host = value
+	}
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return address.Unmap(), true
 }
 
 // health는 프로세스가 HTTP 요청에 응답하는지만 확인한다.

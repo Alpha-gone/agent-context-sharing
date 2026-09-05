@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"slices"
@@ -47,8 +48,9 @@ type Config struct {
 	OAuthRedirectURIs []*url.URL
 	// TLSMode 필드에는 TLS 종단 배치를 둔다.
 	TLSMode TLSMode
-	// TrustForwardedProto 필드는 역방향 프록시가 전달한 프로토콜 헤더를 신뢰할지 나타낸다.
-	TrustForwardedProto bool
+	// TrustedProxies 필드에는 전달 헤더를 신뢰할 역방향 프록시의 주소 대역을 둔다.
+	// 비어 있으면 어떤 상대의 전달 헤더도 신뢰하지 않는다.
+	TrustedProxies []netip.Prefix
 	// TLSCertFile 필드에는 애플리케이션이 직접 TLS를 종단할 때 쓸 인증서 파일 경로를 둔다.
 	TLSCertFile string
 	// TLSKeyFile 필드에는 애플리케이션이 직접 TLS를 종단할 때 쓸 개인 키 파일 경로를 둔다.
@@ -113,22 +115,22 @@ func Load(env Environment) (Config, error) {
 	}
 	cfg.OAuthRedirectURIs = redirects
 
-	trustForwardedProto, err := strconv.ParseBool(strings.TrimSpace(env("TRUST_FORWARDED_PROTO")))
+	trustedProxies, err := parsePrefixes("TRUSTED_PROXY_CIDRS", env("TRUSTED_PROXY_CIDRS"))
 	if err != nil {
-		return Config{}, fmt.Errorf("TRUST_FORWARDED_PROTO 해석: %w", err)
+		return Config{}, err
 	}
-	cfg.TrustForwardedProto = trustForwardedProto
+	cfg.TrustedProxies = trustedProxies
 	switch cfg.TLSMode {
 	case TLSModeDirect:
-		if cfg.TrustForwardedProto {
-			return Config{}, fmt.Errorf("TLS_TERMINATION이 direct일 때 TRUST_FORWARDED_PROTO는 false여야 한다")
+		if len(cfg.TrustedProxies) > 0 {
+			return Config{}, fmt.Errorf("TLS_TERMINATION이 direct일 때 TRUSTED_PROXY_CIDRS는 비어 있어야 한다")
 		}
 		if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
 			return Config{}, fmt.Errorf("TLS_TERMINATION이 direct일 때 TLS_CERT_FILE과 TLS_KEY_FILE이 필요하다")
 		}
 	case TLSModeProxy:
-		if !cfg.TrustForwardedProto {
-			return Config{}, fmt.Errorf("TLS_TERMINATION이 proxy일 때 TRUST_FORWARDED_PROTO는 true여야 한다")
+		if len(cfg.TrustedProxies) == 0 {
+			return Config{}, fmt.Errorf("TLS_TERMINATION이 proxy일 때 TRUSTED_PROXY_CIDRS가 필요하다")
 		}
 		if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
 			return Config{}, fmt.Errorf("TLS_TERMINATION이 proxy일 때 TLS_CERT_FILE과 TLS_KEY_FILE은 비어 있어야 한다")
@@ -199,6 +201,47 @@ func parseList(name, raw string) ([]string, error) {
 		return nil, fmt.Errorf("%s가 비어 있다", name)
 	}
 	return values, nil
+}
+
+// parsePrefixes는 전달 헤더를 신뢰할 주소 대역 목록을 해석한다. 빈 값은 신뢰할 상대가
+// 없다는 뜻이므로 오류가 아니라 빈 목록으로 다룬다.
+func parsePrefixes(name, raw string) ([]netip.Prefix, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	values, err := parseList(name, raw)
+	if err != nil {
+		return nil, err
+	}
+	prefixes := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := parsePrefix(name, value)
+		if err != nil {
+			return nil, err
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes, nil
+}
+
+// parsePrefix는 대역 또는 단일 주소 하나를 정규화된 접두로 해석한다. 호스트 비트가 남은
+// 대역은 거부한다. 조용히 정규화하면 운영자가 의도한 범위와 실제 신뢰 범위가 달라진다.
+func parsePrefix(name, value string) (netip.Prefix, error) {
+	if address, err := netip.ParseAddr(value); err == nil {
+		unmapped := address.Unmap()
+		return netip.PrefixFrom(unmapped, unmapped.BitLen()), nil
+	}
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("%s의 %q가 주소 또는 CIDR 대역이 아니다", name, value)
+	}
+	if prefix.Addr().Is4In6() {
+		return netip.Prefix{}, fmt.Errorf("%s의 %q는 IPv4 대역으로 적어야 한다", name, value)
+	}
+	if prefix.Masked() != prefix {
+		return netip.Prefix{}, fmt.Errorf("%s의 %q에 호스트 비트가 남아 있다. %s로 적는다", name, value, prefix.Masked())
+	}
+	return prefix, nil
 }
 
 // parseURLs는 쉼표로 나눈 HTTP URL 목록을 해석한다.

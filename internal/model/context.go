@@ -274,10 +274,13 @@ func ValidateEvidenceInvalidation(previous, next Context) error {
 	return nil
 }
 
-// ValidateDerivedReferences는 파생이 하나 이상 100개 이하의 UUIDv7 근거를 갖는지 확인한다.
+// ValidateDerivedReferences는 파생이 UUIDv7 근거를 하나 이상 갖는지 확인한다.
+//
+// 상한은 보지 않는다. 「입력 검증」이 개수 상한을 연산 표면의 파라미터 검증으로 두어
+// `mcp`에 맡겼고, 여기에서는 `SRS.md`가 필수 속성으로 둔 "1개 이상"만 강제한다.
 func ValidateDerivedReferences(referenceIDs []ID) error {
-	if len(referenceIDs) == 0 || len(referenceIDs) > 100 {
-		return fmt.Errorf("파생 근거는 1개 이상 100개 이하여야 한다")
+	if len(referenceIDs) == 0 {
+		return fmt.Errorf("파생 근거는 1개 이상이어야 한다")
 	}
 	for _, referenceID := range referenceIDs {
 		if !referenceID.IsV7() {
@@ -404,10 +407,12 @@ func (attributes DerivedAttributes) validate() error {
 	return nil
 }
 
-// validate는 사건의 구성원 수와 UTC 시간 범위를 확인한다.
+// validate는 사건의 구성원 존재와 UTC 시간 범위를 확인한다.
+//
+// 구성원 수의 상한은 「입력 검증」이 `mcp`에 맡겼으므로 여기에서는 보지 않는다.
 func (attributes EventAttributes) validate() error {
-	if len(attributes.MemberIDs) == 0 || len(attributes.MemberIDs) > 1000 {
-		return fmt.Errorf("사건 구성원은 1개 이상 1000개 이하여야 한다")
+	if len(attributes.MemberIDs) == 0 {
+		return fmt.Errorf("사건 구성원은 1개 이상이어야 한다")
 	}
 	for _, memberID := range attributes.MemberIDs {
 		if !memberID.IsV7() {

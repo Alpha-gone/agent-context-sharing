@@ -135,15 +135,31 @@ func TestGraphValidate(t *testing.T) {
 	}
 }
 
-// TestValidateDerivedReferencesLimit은 파생 근거가 명세 상한을 넘으면 거부되는지 확인한다.
-func TestValidateDerivedReferencesLimit(t *testing.T) {
+// TestValidateDerivedReferencesRequiresAtLeastOne은 근거 없는 파생이 거부되고 상한은 이
+// 계층이 보지 않는지 확인한다. 「입력 검증」이 개수 상한을 mcp에 맡겼으므로 상한을 넘는
+// 목록도 여기에서는 통과해야 하며, 그래야 같은 값이 두 곳에 박히지 않는다.
+func TestValidateDerivedReferencesRequiresAtLeastOne(t *testing.T) {
 	now := time.Date(2026, time.September, 5, 14, 0, 0, 0, time.UTC)
+	if err := ValidateDerivedReferences(nil); err == nil {
+		t.Fatal("근거 없는 파생이 허용됐다")
+	}
 	references := make([]ID, 101)
 	for index := range references {
 		references[index] = newTestID(t, now)
 	}
-	if err := ValidateDerivedReferences(references); err == nil {
-		t.Fatal("101개 파생 근거가 허용됐다")
+	if err := ValidateDerivedReferences(references); err != nil {
+		t.Fatalf("상한을 model이 보고 있다: %v", err)
+	}
+}
+
+// TestEventMembersRequireAtLeastOne은 구성원 없는 사건이 거부되는지 확인한다. 구성원 수의
+// 상한은 「입력 검증」이 mcp에 맡겼으므로 이 계층이 보지 않는다.
+func TestEventMembersRequireAtLeastOne(t *testing.T) {
+	now := time.Date(2026, time.September, 5, 14, 0, 0, 0, time.UTC)
+	event := eventContext(t, now, now.Add(-time.Minute))
+	event.Event.MemberIDs = nil
+	if err := event.Validate(); err == nil {
+		t.Fatal("구성원 없는 사건이 허용됐다")
 	}
 }
 

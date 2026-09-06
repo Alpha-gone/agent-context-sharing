@@ -55,11 +55,21 @@ func newApplication(database readiness, logger *slog.Logger, transport transport
 }
 
 // handler는 1단계에서 정한 상태 경로와 모든 요청의 안전한 구조화 로그를 등록한다.
+//
+// 경로 표면을 두 층으로 나눈다. 상태 확인 두 경로만 TLS 판정 앞에 두고 나머지는 전부
+// 뒤에 둔다. `SRS.md`의 「transport와 프로토콜」이 `FR-AGENT_CONTEXT-140`에 이 예외를
+// 두었으며, 프로브는 프록시를 거치지 않고 오므로 판정을 지나면 항상 실패한다.
+//
+// 등록되지 않은 경로도 판정 뒤에 둔다. 평문 요청에 어떤 경로가 있는지 알리지 않는다.
 func (app *application) handler() http.Handler {
+	// 업무 경로는 이후 단계에서 이 mux에 등록하며 모두 TLS 판정을 지난다.
+	gated := http.NewServeMux()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", app.health)
 	mux.HandleFunc("GET /readyz", app.ready)
-	return app.logRequests(app.requireTLS(mux))
+	mux.Handle("/", app.requireTLS(gated))
+	return app.logRequests(mux)
 }
 
 // requireTLS는 배포가 정한 신뢰 경계에서 확인되지 않은 평문 요청을 처리하지 않는다.

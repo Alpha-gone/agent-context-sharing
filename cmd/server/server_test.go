@@ -14,6 +14,32 @@ import (
 	"testing"
 )
 
+// gatedPath는 TLS 판정 뒤에 있는 경로다. 업무 경로는 아직 등록되지 않았으므로 이 경로로
+// 온 요청은 판정에 막히면 400, 판정을 지나면 등록되지 않아 404가 된다. 게이트 통과 여부를
+// 이 두 상태로 구분한다.
+const gatedPath = "/graphs"
+
+// TestStatusPathsBypassTLSGate는 신뢰 대역 밖에서 전달 헤더 없이 온 평문 요청에도 상태
+// 확인 경로가 응답하는지 확인한다. FR-AGENT_CONTEXT-140의 예외이며, 프로브는 프록시를
+// 거치지 않고 오므로 이 예외가 없으면 생존 확인이 항상 실패한다.
+func TestStatusPathsBypassTLSGate(t *testing.T) {
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
+
+	health := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request.RemoteAddr = "203.0.113.9:54321"
+	app.handler().ServeHTTP(health, request)
+	if health.Code != http.StatusOK {
+		t.Fatalf("평문 healthz 상태 = %d, want 200", health.Code)
+	}
+
+	ready := httptest.NewRecorder()
+	app.handler().ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if ready.Code != http.StatusOK {
+		t.Fatalf("평문 readyz 상태 = %d, want 200", ready.Code)
+	}
+}
+
 // TestHealthAndReadySeparateFailures는 생존 확인과 데이터베이스 준비 확인의 실패를 구분한다.
 func TestHealthAndReadySeparateFailures(t *testing.T) {
 	database := &fakeReadiness{pingError: errors.New("데이터베이스 중단")}
@@ -21,13 +47,13 @@ func TestHealthAndReadySeparateFailures(t *testing.T) {
 	handler := app.handler()
 
 	health := httptest.NewRecorder()
-	handler.ServeHTTP(health, secureRequest(http.MethodGet, "/healthz", nil))
+	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if health.Code != http.StatusOK {
 		t.Fatalf("healthz 상태 = %d, want 200", health.Code)
 	}
 
 	ready := httptest.NewRecorder()
-	handler.ServeHTTP(ready, secureRequest(http.MethodGet, "/readyz", nil))
+	handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if ready.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz 상태 = %d, want 503", ready.Code)
 	}
@@ -48,7 +74,7 @@ func TestShutdownStopsReadinessAndClosesDatabase(t *testing.T) {
 		t.Fatal("데이터베이스 풀이 닫히지 않았다")
 	}
 	ready := httptest.NewRecorder()
-	app.handler().ServeHTTP(ready, secureRequest(http.MethodGet, "/readyz", nil))
+	app.handler().ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if ready.Code != http.StatusServiceUnavailable {
 		t.Fatalf("종료 뒤 readyz 상태 = %d, want 503", ready.Code)
 	}
@@ -58,9 +84,9 @@ func TestShutdownStopsReadinessAndClosesDatabase(t *testing.T) {
 func TestTransportSecurityRejectsPlaintext(t *testing.T) {
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
 	response := httptest.NewRecorder()
-	app.handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	app.handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, gatedPath, nil))
 	if response.Code != http.StatusBadRequest {
-		t.Fatalf("평문 healthz 상태 = %d, want 400", response.Code)
+		t.Fatalf("평문 요청 상태 = %d, want 400", response.Code)
 	}
 }
 
@@ -69,7 +95,7 @@ func TestTransportSecurityRejectsPlaintext(t *testing.T) {
 // 앱 포트에 닿는 누구든 FR-AGENT_CONTEXT-140의 평문 거부를 지나간다.
 func TestTransportSecurityRejectsForgedForwardedProto(t *testing.T) {
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
-	request := secureRequest(http.MethodGet, "/healthz", nil)
+	request := secureRequest(http.MethodGet, gatedPath, nil)
 	request.RemoteAddr = "203.0.113.9:54321"
 	response := httptest.NewRecorder()
 	app.handler().ServeHTTP(response, request)
@@ -83,7 +109,7 @@ func TestTransportSecurityRejectsForgedForwardedProto(t *testing.T) {
 // 요청자가 넣은 값이 앞에 남아 위조가 신뢰 대역 검사를 지나간다.
 func TestTransportSecurityRejectsAppendedForwardedProto(t *testing.T) {
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
-	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request := httptest.NewRequest(http.MethodGet, gatedPath, nil)
 	request.Header.Add("X-Forwarded-Proto", "https")
 	request.Header.Add("X-Forwarded-Proto", "http")
 	response := httptest.NewRecorder()
@@ -99,13 +125,13 @@ func TestTransportSecurityAcceptsTrustedProxy(t *testing.T) {
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
 
 	forwarded := httptest.NewRecorder()
-	app.handler().ServeHTTP(forwarded, secureRequest(http.MethodGet, "/healthz", nil))
-	if forwarded.Code != http.StatusOK {
-		t.Fatalf("신뢰 프록시 healthz 상태 = %d, want 200", forwarded.Code)
+	app.handler().ServeHTTP(forwarded, secureRequest(http.MethodGet, gatedPath, nil))
+	if forwarded.Code != http.StatusNotFound {
+		t.Fatalf("신뢰 프록시 요청 상태 = %d, want 404", forwarded.Code)
 	}
 
 	plain := httptest.NewRecorder()
-	app.handler().ServeHTTP(plain, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	app.handler().ServeHTTP(plain, httptest.NewRequest(http.MethodGet, gatedPath, nil))
 	if plain.Code != http.StatusBadRequest {
 		t.Fatalf("전달 헤더 없는 신뢰 프록시 상태 = %d, want 400", plain.Code)
 	}
@@ -115,12 +141,12 @@ func TestTransportSecurityAcceptsTrustedProxy(t *testing.T) {
 // IPv4 대역과 맞는지 확인한다.
 func TestTransportSecurityMapsIPv4InIPv6(t *testing.T) {
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
-	request := secureRequest(http.MethodGet, "/healthz", nil)
+	request := secureRequest(http.MethodGet, gatedPath, nil)
 	request.RemoteAddr = "[::ffff:192.0.2.1]:54321"
 	response := httptest.NewRecorder()
 	app.handler().ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("IPv4-mapped 신뢰 프록시 상태 = %d, want 200", response.Code)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("IPv4-mapped 신뢰 프록시 상태 = %d, want 404", response.Code)
 	}
 }
 
@@ -129,7 +155,7 @@ func TestTransportSecurityMapsIPv4InIPv6(t *testing.T) {
 func TestTransportSecurityIgnoresForwardedProtoOnDirectTLS(t *testing.T) {
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), transportSecurity{directTLS: true})
 	response := httptest.NewRecorder()
-	app.handler().ServeHTTP(response, secureRequest(http.MethodGet, "/healthz", nil))
+	app.handler().ServeHTTP(response, secureRequest(http.MethodGet, gatedPath, nil))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("직접 TLS의 전달 헤더 상태 = %d, want 400", response.Code)
 	}
@@ -138,12 +164,12 @@ func TestTransportSecurityIgnoresForwardedProtoOnDirectTLS(t *testing.T) {
 // TestTransportSecurityAcceptsDirectTLS는 직접 TLS 종단에서 실제 TLS 연결만 수락하는지 확인한다.
 func TestTransportSecurityAcceptsDirectTLS(t *testing.T) {
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), transportSecurity{directTLS: true})
-	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request := httptest.NewRequest(http.MethodGet, gatedPath, nil)
 	request.TLS = new(tls.ConnectionState{})
 	response := httptest.NewRecorder()
 	app.handler().ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("직접 TLS healthz 상태 = %d, want 200", response.Code)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("직접 TLS 요청 상태 = %d, want 404", response.Code)
 	}
 }
 
@@ -151,7 +177,7 @@ func TestTransportSecurityAcceptsDirectTLS(t *testing.T) {
 func TestRequestLogExcludesSensitiveValues(t *testing.T) {
 	var output bytes.Buffer
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(&output, nil)), proxyTransport())
-	request := secureRequest(http.MethodGet, "/healthz?access_token=secret-token", strings.NewReader("secret-body"))
+	request := httptest.NewRequest(http.MethodGet, "/healthz?access_token=secret-token", strings.NewReader("secret-body"))
 	response := httptest.NewRecorder()
 	app.handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {

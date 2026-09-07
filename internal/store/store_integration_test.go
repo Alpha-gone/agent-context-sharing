@@ -48,6 +48,9 @@ func TestStoreIntegration(t *testing.T) {
 	if _, err := store.Graph(t.Context(), newTestID(t)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("없는 그래프 조회가 not found로 변환되지 않았다: %v", err)
 	}
+	if _, err := store.UpdateGraph(t.Context(), newTestID(t), 1, "없는 그래프", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("없는 그래프 갱신이 not found로 변환되지 않았다: %v", err)
+	}
 	grantAccount(t, store, graphID, actorID, model.GraphGradeViewer)
 
 	source := testSourceContext(t, graphID, actorID, "https://example.test/source")

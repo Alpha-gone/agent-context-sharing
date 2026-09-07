@@ -268,7 +268,7 @@ func (s *Store) versionConflict(ctx context.Context, tx pgx.Tx, graphID model.ID
 	if err == nil {
 		return VersionConflictError{Current: current}
 	}
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	return fmt.Errorf("현재 그래프 판 번호 조회: %w", err)

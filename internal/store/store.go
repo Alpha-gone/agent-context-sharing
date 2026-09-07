@@ -26,7 +26,7 @@ func (error VersionConflictError) Error() string {
 }
 
 // graphNamePattern은 AGE 그래프 이름을 SQL 식별자로 안전하게 사용할 수 있는지 확인한다.
-var graphNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+var graphNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // Store는 애플리케이션이 소유하는 단일 데이터 접근 계층이다.
 type Store struct {

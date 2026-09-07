@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ func TestStoreIntegration(t *testing.T) {
 	defer store.Close()
 
 	actorID := newTestID(t)
+	createTestAccount(t, store, actorID)
 	graphID := newTestID(t)
 	now := time.Now().UTC()
 	graph := model.Graph{
@@ -43,6 +45,7 @@ func TestStoreIntegration(t *testing.T) {
 	if _, err := store.CreateGraph(t.Context(), graph); err != nil {
 		t.Fatalf("그래프 생성: %v", err)
 	}
+	grantAccount(t, store, graphID, actorID, model.GraphGradeViewer)
 
 	source := testSourceContext(t, graphID, actorID, "https://example.test/source")
 	createdSource, err := store.CreateContext(t.Context(), graphID, source, nil)
@@ -59,12 +62,16 @@ func TestStoreIntegration(t *testing.T) {
 	}
 
 	foreignGraphID := newTestID(t)
+	foreignActorID := newTestID(t)
+	createTestAccount(t, store, foreignActorID)
 	foreignGraph := graph
 	foreignGraph.ID = foreignGraphID
 	foreignGraph.Name = "foreign graph"
+	foreignGraph.CreatedBy = foreignActorID
 	if _, err := store.CreateGraph(t.Context(), foreignGraph); err != nil {
 		t.Fatalf("다른 그래프 생성: %v", err)
 	}
+	grantAccount(t, store, foreignGraphID, foreignActorID, model.GraphGradeOwner)
 	if _, err := store.Context(t.Context(), foreignGraphID, createdSource.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("다른 그래프 정점이 not found로 격리되지 않았다: %v", err)
 	}
@@ -112,6 +119,56 @@ func TestStoreIntegration(t *testing.T) {
 	if len(foreignRelations) != 0 {
 		t.Fatalf("다른 그래프의 관계가 반환됐다: %#v", foreignRelations)
 	}
+	teamGraphID := newTestID(t)
+	teamGraph := graph
+	teamGraph.ID = teamGraphID
+	teamGraph.Name = "team alpha"
+	teamGraph.LastActivityAt = now.Add(time.Second)
+	if _, err := store.CreateGraph(t.Context(), teamGraph); err != nil {
+		t.Fatalf("팀 그래프 생성: %v", err)
+	}
+	teamID := newTestID(t)
+	createTestTeam(t, store, teamID, actorID, false)
+	grantTeam(t, store, teamGraphID, teamID, model.GraphGradeOwner)
+	addTestTeamMember(t, store, teamID, actorID)
+	grantTeam(t, store, graphID, teamID, model.GraphGradeOwner)
+
+	deletedTeamGraphID := newTestID(t)
+	deletedTeamGraph := graph
+	deletedTeamGraph.ID = deletedTeamGraphID
+	deletedTeamGraph.Name = "deleted team graph"
+	if _, err := store.CreateGraph(t.Context(), deletedTeamGraph); err != nil {
+		t.Fatalf("삭제된 팀 그래프 생성: %v", err)
+	}
+	deletedTeamID := newTestID(t)
+	createTestTeam(t, store, deletedTeamID, actorID, true)
+	grantTeam(t, store, deletedTeamGraphID, deletedTeamID, model.GraphGradeOwner)
+	addTestTeamMember(t, store, deletedTeamID, actorID)
+
+	listedGraphs, nextGraphCursor, err := store.ListGraphs(t.Context(), actorID, model.GraphListFilter{}, "", 10)
+	if err != nil {
+		t.Fatalf("계정 범위 그래프 목록 조회: %v", err)
+	}
+	if nextGraphCursor != "" || len(listedGraphs) != 2 {
+		t.Fatalf("계정 범위 그래프 목록이 예상과 다르다: %#v, 다음 커서 %q", listedGraphs, nextGraphCursor)
+	}
+	grades := make(map[model.ID]model.GraphGrade, len(listedGraphs))
+	for _, listedGraph := range listedGraphs {
+		grades[listedGraph.ID] = listedGraph.Grade
+	}
+	if grades[graphID] != model.GraphGradeOwner || grades[teamGraphID] != model.GraphGradeOwner {
+		t.Fatalf("직접 부여와 팀 상속의 최고 등급이 반환되지 않았다: %#v", grades)
+	}
+	filteredGraphs, _, err := store.ListGraphs(t.Context(), actorID, model.GraphListFilter{
+		Name:   "TEAM",
+		Grades: []model.GraphGrade{model.GraphGradeOwner},
+	}, "", 10)
+	if err != nil {
+		t.Fatalf("이름·등급 필터 그래프 목록 조회: %v", err)
+	}
+	if len(filteredGraphs) != 1 || filteredGraphs[0].ID != teamGraphID {
+		t.Fatalf("이름·등급 필터가 예상과 다르다: %#v", filteredGraphs)
+	}
 	updated := createdDerived
 	updated.Body = "갱신된 파생 본문"
 	updated.Version++
@@ -142,6 +199,67 @@ func TestStoreIntegration(t *testing.T) {
 	}
 	if successes != 1 || conflicts != 1 {
 		t.Fatalf("동시 갱신 결과가 성공 1건과 충돌 1건이 아니다: 성공 %d, 충돌 %d", successes, conflicts)
+	}
+}
+
+// createTestAccount는 권한 목록 통합 테스트에 필요한 계정 행을 만든다.
+func createTestAccount(t *testing.T, store *Store, accountID model.ID) {
+	t.Helper()
+	loginID := "test_" + strings.ReplaceAll(accountID.String(), "-", "")[5:]
+	_, err := store.pool.Exec(t.Context(), `
+		INSERT INTO public.account (account_id, login_id, password_hash, created_at)
+		VALUES ($1, $2, 'test-password-hash', $3)`,
+		accountID.String(), loginID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("테스트 계정 생성: %v", err)
+	}
+}
+
+// grantAccount는 계정 직접 부여를 만든다.
+func grantAccount(t *testing.T, store *Store, graphID, accountID model.ID, grade model.GraphGrade) {
+	t.Helper()
+	_, err := store.pool.Exec(t.Context(), `
+		INSERT INTO public.graph_grant (graph_id, subject_type, subject_id, grade)
+		VALUES ($1, 'account', $2, $3)`, graphID.String(), accountID.String(), string(grade))
+	if err != nil {
+		t.Fatalf("계정 등급 부여: %v", err)
+	}
+}
+
+// createTestTeam은 활성 또는 삭제된 팀을 만든다.
+func createTestTeam(t *testing.T, store *Store, teamID, managerID model.ID, deleted bool) {
+	t.Helper()
+	var deletedAt any
+	if deleted {
+		deletedAt = time.Now().UTC()
+	}
+	_, err := store.pool.Exec(t.Context(), `
+		INSERT INTO public.team (team_id, name, manager_account_id, created_at, deleted_at)
+		VALUES ($1, $2, $3, $4, $5)`,
+		teamID.String(), "team_"+teamID.String()[:8], managerID.String(), time.Now().UTC(), deletedAt)
+	if err != nil {
+		t.Fatalf("테스트 팀 생성: %v", err)
+	}
+}
+
+// grantTeam은 팀 상속 등급을 만든다.
+func grantTeam(t *testing.T, store *Store, graphID, teamID model.ID, grade model.GraphGrade) {
+	t.Helper()
+	_, err := store.pool.Exec(t.Context(), `
+		INSERT INTO public.graph_grant (graph_id, subject_type, subject_id, grade)
+		VALUES ($1, 'team', $2, $3)`, graphID.String(), teamID.String(), string(grade))
+	if err != nil {
+		t.Fatalf("팀 등급 부여: %v", err)
+	}
+}
+
+// addTestTeamMember는 계정을 팀에 넣는다.
+func addTestTeamMember(t *testing.T, store *Store, teamID, accountID model.ID) {
+	t.Helper()
+	_, err := store.pool.Exec(t.Context(), `
+		INSERT INTO public.team_member (team_id, account_id) VALUES ($1, $2)`, teamID.String(), accountID.String())
+	if err != nil {
+		t.Fatalf("테스트 팀 구성원 추가: %v", err)
 	}
 }
 

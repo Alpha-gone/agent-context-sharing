@@ -46,6 +46,9 @@ func (s *Store) Graph(ctx context.Context, graphID model.ID) (model.Graph, error
 		WHERE graph_id = $1`, graphID.String())
 	graph, err := scanGraph(row)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Graph{}, ErrNotFound
+		}
 		return model.Graph{}, fmt.Errorf("그래프 조회: %w", err)
 	}
 	return graph, nil

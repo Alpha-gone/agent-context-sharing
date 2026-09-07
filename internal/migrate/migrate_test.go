@@ -58,6 +58,29 @@ func lockHeld(t *testing.T, pool *pgxpool.Pool) bool {
 	return count > 0
 }
 
+// TestGraphNameBoundary는 마이그레이션이 config, store와 같은 AGE 그래프 이름 경계를
+// 쓰는지 확인한다. 이 패키지의 테스트는 외부 패키지라 정규식 변수를 직접 볼 수 없으므로
+// 공개 검증 함수의 수용·거부 결과로 같은 경계를 확인한다. 세 패키지가 어긋나면 한 계층만
+// 통과하고 다른 계층에서 기동이 실패하므로 표본에 밑줄 시작 이름을 반드시 남긴다.
+func TestGraphNameBoundary(t *testing.T) {
+	tests := []struct {
+		name  string
+		valid bool
+	}{
+		{name: "agent_context", valid: true},
+		{name: "_agent_context", valid: true},
+		{name: "1agent_context", valid: false},
+		{name: "agent-context", valid: false},
+		{name: "AgentContext", valid: false},
+	}
+	for _, test := range tests {
+		cfg := migrate.Config{GraphName: test.name, VectorType: "vector", VectorDim: 1024}
+		if got := cfg.Validate() == nil; got != test.valid {
+			t.Errorf("그래프 이름 %q 허용 결과 = %t, want %t", test.name, got, test.valid)
+		}
+	}
+}
+
 // TestWithLockIsExclusive는 잠금이 실제로 배타적인지 확인한다.
 //
 // 하나가 잠근 동안 다른 하나가 진입하지 못하고, 앞이 끝난 뒤에 진입해 완료되며,

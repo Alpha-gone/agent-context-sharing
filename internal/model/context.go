@@ -191,6 +191,50 @@ type Graph struct {
 	GraceStartedAt *time.Time
 }
 
+// GraphGrade는 계정이 그래프에 대해 가진 유효 권한 등급이다.
+type GraphGrade string
+
+const (
+	// GraphGradeOwner는 권한 관리와 소프트 삭제를 수행할 수 있는 최고 등급이다.
+	GraphGradeOwner GraphGrade = "owner"
+	// GraphGradeEditor는 그래프와 컨텍스트를 수정할 수 있는 등급이다.
+	GraphGradeEditor GraphGrade = "editor"
+	// GraphGradeViewer는 그래프와 컨텍스트를 조회할 수 있는 등급이다.
+	GraphGradeViewer GraphGrade = "viewer"
+)
+
+// Valid는 권한 등급이 서비스에서 허용하는 값인지 확인한다.
+func (grade GraphGrade) Valid() bool {
+	switch grade {
+	case GraphGradeOwner, GraphGradeEditor, GraphGradeViewer:
+		return true
+	default:
+		return false
+	}
+}
+
+// GraphListFilter는 그래프 목록에 적용할 이름과 등급 조건이다.
+type GraphListFilter struct {
+	// Name 필드는 대소문자를 구분하지 않는 리터럴 부분 일치 조건이다.
+	Name string
+	// Grades 필드는 반환할 요청 계정의 유효 등급 목록이다.
+	Grades []GraphGrade
+}
+
+// GraphListItem은 요청 계정에 노출 가능한 그래프 목록 항목이다.
+type GraphListItem struct {
+	// ID 필드는 그래프의 전역 UUIDv7 식별자다.
+	ID ID
+	// Name 필드는 그래프의 표시 이름이다.
+	Name string
+	// Description 필드는 그래프를 설명하는 선택 속성이다.
+	Description string
+	// LastActivityAt 필드는 컨텍스트가 마지막으로 추가·수정된 UTC 시각이다.
+	LastActivityAt time.Time
+	// Grade 필드는 요청 계정의 직접·팀 상속을 합산한 최고 유효 등급이다.
+	Grade GraphGrade
+}
+
 // Validate는 계층별 필수 속성, 시간 표현과 상태 조합을 저장 방식과 무관하게 검증한다.
 func (c Context) Validate() error {
 	if err := validateCommon(c); err != nil {

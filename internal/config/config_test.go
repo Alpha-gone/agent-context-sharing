@@ -91,6 +91,19 @@ func TestLoadTrustedProxies(t *testing.T) {
 	}
 }
 
+// sharedGraphNamePattern은 config, migrate와 store가 함께 쓰기로 한 AGE 그래프 이름 경계다.
+// 세 패키지가 각자 이 리터럴과의 일치를 확인하므로, 한 곳만 바꾸면 그 패키지의 테스트가
+// 깨져 값이 갈라지는 것을 막는다. 값을 바꿀 때는 세 곳을 함께 고친다.
+const sharedGraphNamePattern = `^[a-z_][a-z0-9_]*$`
+
+// TestGraphNamePattern은 구성 검증의 그래프 이름 경계가 약속된 정규식과 같은지 확인한다.
+// 이름 값의 수용·거부 사례는 TestLoad와 TestLoadRejectsInvalidValues가 이미 다룬다.
+func TestGraphNamePattern(t *testing.T) {
+	if got := graphNamePattern.String(); got != sharedGraphNamePattern {
+		t.Fatalf("config의 그래프 이름 정규식 = %s, want %s", got, sharedGraphNamePattern)
+	}
+}
+
 // validValues는 각 테스트가 독립적으로 바꿀 수 있는 유효한 배포 구성을 만든다.
 func validValues() map[string]string {
 	return map[string]string{

@@ -9,7 +9,8 @@
 - 더 가까운 하위 문서가 로컬 세부 규칙을 정하지만, 하위 문서는 이 루트 DOX 계약을 약화할 수 없다.
 - 이 저장소는 프로젝트의 스펙 명세와 그 구현을 함께 담는다. 스펙은 `spec/`에 Markdown으로 정의하고, 구현은 `cmd/`, `internal/`, `migrations/`와 루트의 개발 환경 구성 파일에 둔다.
 - 구현은 스펙을 따른다. 설계와 어긋나는 구현이 필요하면 `spec/service/agent-context/SDD.md`를 먼저 고친다.
-- 모든 작업 간 용어는 `$(project_root)/spec/DICTIONARY.md`를 확인하여 사용한다. 해당 파일에 등록되지 않은 용어라면 `dictionary` 스킬을 사용하여 업데이트한다.
+- 작업별 세부 절차와 검증 기준은 프로젝트에 복제하지 않고 에이전트 루트에서 로드되는 전역 스킬을 사용한다.
+- 모든 작업 간 용어는 `$(project_root)/spec/DICTIONARY.md`를 확인하여 사용한다. 해당 파일에 등록되지 않은 용어라면 `project-glossary` 스킬을 사용하여 업데이트한다.
 - 전문적이고 공식적인 말투를 사용한다.
 
 ## Read Before Editing
@@ -105,6 +106,5 @@
 
 ## Child DOX Index
 
-- `.agents/skills/AGENTS.md`: 프로젝트 로컬 스킬의 작성·실행·검증 계약을 정의한다.
 - `spec/AGENTS.md`: 명세 문서와 용어 정리집의 로컬 작업 계약을 정의한다.
 - `migrations/AGENTS.md`: 데이터베이스 마이그레이션 파일의 작성과 적용 계약을 정의한다.

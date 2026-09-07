@@ -1,4 +1,0 @@
-interface:
-  display_name: "서비스 요구사항 설계"
-  short_description: "서비스별 요구사항과 추적 가능한 보조 문서를 관리합니다."
-  default_prompt: "$service-design을 사용해 서비스 요구사항 명세를 작성하거나 갱신해 주세요."

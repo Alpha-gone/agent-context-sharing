@@ -1,4 +1,0 @@
-interface:
-  display_name: "프로젝트 용어 정리"
-  short_description: "서비스 용어와 기획 용어를 구분해 표준화합니다."
-  default_prompt: "$dictionary를 사용해 프로젝트 용어 정리집을 현재 저장소 기준으로 갱신해 주세요."

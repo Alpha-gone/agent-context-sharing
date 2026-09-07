@@ -1,4 +1,0 @@
-interface:
-  display_name: "이슈 기반 명세 반영"
-  short_description: "확정된 GitHub 이슈 범위를 명세에 추적 가능하게 반영합니다."
-  default_prompt: "$issue-based-spec을 사용해 기존 GitHub 이슈의 확정 범위를 서비스 명세에 반영해 주세요."

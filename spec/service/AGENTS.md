@@ -29,9 +29,9 @@
 
 - 서비스 문서를 수정하기 전에 루트, `spec/`, `spec/service/`와 대상 서비스의 DOX 체인을 읽는다.
 - 새 서비스 추가나 서비스 역할 변경 시 `README.md`를 함께 갱신한다.
-- 상세 설계는 요구사항과 주요 미정 사항이 충분히 확정된 뒤 `detailed-design` 스킬로 작성한다.
-- 새 용어는 `spec/DICTIONARY.md`에서 확인하고 등록되지 않았으면 `dictionary` 스킬로 갱신한다.
-- 관계 시각화가 문장이나 표보다 이해를 개선할 때만 `diagram-creator`를 사용한다.
+- 상세 설계는 요구사항과 주요 미정 사항이 충분히 확정된 뒤 `service-design` 스킬로 작성한다.
+- 새 용어는 `spec/DICTIONARY.md`에서 확인하고 등록되지 않았으면 `project-glossary` 스킬로 갱신한다.
+- 관계 시각화가 문장이나 표보다 이해를 개선할 때만 `service-design` 스킬로 작성한다.
 
 ## 검증
 

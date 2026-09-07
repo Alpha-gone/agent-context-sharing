@@ -1,4 +1,0 @@
-interface:
-  display_name: "프로젝트 이력 작성"
-  short_description: "서비스 요청 기록을 공개 가능한 날짜별 이력으로 정리합니다."
-  default_prompt: "$history-creator를 사용해 서비스 기록에서 프로젝트 이력을 작성해 주세요."

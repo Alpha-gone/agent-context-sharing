@@ -582,6 +582,17 @@ TEST_DATABASE_URL=<테스트 데이터베이스 접속 정보>
 TEST_DATABASE_REQUIRED=1
 ```
 
+로컬에서도 `.env`를 현재 셸에 내보내면 실제 AGE 통합 테스트를 강제할 수 있다.
+
+```shell
+set -a
+. ./.env
+set +a
+TEST_DATABASE_URL="${TEST_DATABASE_URL:-$DATABASE_URL}" \
+TEST_DATABASE_REQUIRED=1 \
+go test ./...
+```
+
 마이그레이션 검증은 빈 개발 볼륨에서 시작한다.
 
 ```shell

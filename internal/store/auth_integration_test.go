@@ -59,6 +59,32 @@ func TestUpdatePasswordHashIfMatchesIntegration(t *testing.T) {
 	}
 }
 
+// TestSigningKeyIntegration은 JWT 헤더의 kid로 검증 키 하나만 읽는 경로를 확인한다.
+func TestSigningKeyIntegration(t *testing.T) {
+	store := newIntegrationStore(t)
+	key := SigningKey{
+		ID:         "key-" + newTestID(t).String(),
+		Algorithm:  "ES256",
+		PublicKey:  "test-public-key",
+		PrivateKey: "test-private-key",
+		State:      "active",
+		CreatedAt:  time.Now().UTC(),
+	}
+	if err := store.CreateSigningKey(t.Context(), key); err != nil {
+		t.Fatalf("서명 키 생성: %v", err)
+	}
+	stored, err := store.SigningKey(t.Context(), key.ID)
+	if err != nil {
+		t.Fatalf("서명 키 조회: %v", err)
+	}
+	if stored.ID != key.ID || stored.PublicKey != key.PublicKey {
+		t.Fatalf("조회한 서명 키 = %+v, want ID %q와 공개 키 %q", stored, key.ID, key.PublicKey)
+	}
+	if _, err := store.SigningKey(t.Context(), "missing-"+key.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("없는 서명 키 조회 = %v, want ErrNotFound", err)
+	}
+}
+
 // TestPermissionIntegration은 유효 등급과 소유 그래프 수 질의를 실제 데이터베이스에서
 // 확인한다. 두 질의는 메모리 대역으로 대체할 수 없어 여기에서만 검증된다.
 func TestPermissionIntegration(t *testing.T) {

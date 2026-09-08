@@ -174,6 +174,14 @@ func (s *Store) ActiveSigningKey(ctx context.Context) (SigningKey, error) {
 	return s.signingKey(ctx, `SELECT key_id, algorithm, public_key, private_key, state, created_at FROM public.signing_key WHERE state = 'active' ORDER BY created_at DESC LIMIT 1`)
 }
 
+// SigningKey는 JWT 헤더의 kid에 맞는 검증 키 하나를 읽는다.
+func (s *Store) SigningKey(ctx context.Context, keyID string) (SigningKey, error) {
+	if keyID == "" {
+		return SigningKey{}, ErrNotFound
+	}
+	return s.signingKey(ctx, `SELECT key_id, algorithm, public_key, private_key, state, created_at FROM public.signing_key WHERE key_id = $1`, keyID)
+}
+
 // SigningKeys는 JWKS 공개와 이전 토큰 검증에 필요한 모든 키를 읽는다.
 func (s *Store) SigningKeys(ctx context.Context) ([]SigningKey, error) {
 	rows, err := s.pool.Query(ctx, `SELECT key_id, algorithm, public_key, private_key, state, created_at FROM public.signing_key ORDER BY created_at DESC`)
@@ -224,9 +232,9 @@ func (s *Store) RotateSigningKey(ctx context.Context, key SigningKey) error {
 	return nil
 }
 
-func (s *Store) signingKey(ctx context.Context, query string) (SigningKey, error) {
+func (s *Store) signingKey(ctx context.Context, query string, args ...any) (SigningKey, error) {
 	var key SigningKey
-	err := s.pool.QueryRow(ctx, query).Scan(&key.ID, &key.Algorithm, &key.PublicKey, &key.PrivateKey, &key.State, &key.CreatedAt)
+	err := s.pool.QueryRow(ctx, query, args...).Scan(&key.ID, &key.Algorithm, &key.PublicKey, &key.PrivateKey, &key.State, &key.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SigningKey{}, ErrNotFound
 	}

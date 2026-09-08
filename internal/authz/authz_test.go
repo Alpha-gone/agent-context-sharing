@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -87,6 +90,35 @@ func TestTokenAudienceSeparation(t *testing.T) {
 	}
 	if _, _, err := service.Verify(t.Context(), token.Raw, "https://service.test/mcp"); err == nil {
 		t.Fatal("웹 세션의 MCP 교차 사용이 허용됐다")
+	}
+}
+
+func TestVerifyRejectsTokenWithUnknownKeyID(t *testing.T) {
+	backend := newMemoryStore()
+	service := testService(t, backend)
+	accountID, err := model.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := service.activeKey(t.Context())
+	if err != nil {
+		t.Fatalf("서명 키 준비: %v", err)
+	}
+	var private jose.JSONWebKey
+	if err := json.Unmarshal([]byte(key.PrivateKey), &private); err != nil {
+		t.Fatalf("개인 키 해석: %v", err)
+	}
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: private.Key}, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", "unknown-key"))
+	if err != nil {
+		t.Fatalf("JWT 서명기 생성: %v", err)
+	}
+	now := time.Now().UTC()
+	raw, err := jwt.Signed(signer).Claims(tokenClaims{Claims: jwt.Claims{Issuer: service.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{"web"}, IssuedAt: jwt.NewNumericDate(now), Expiry: jwt.NewNumericDate(now.Add(time.Hour)), ID: "unknown-key-token"}, AuthenticatedAt: now.Unix()}).Serialize()
+	if err != nil {
+		t.Fatalf("알 수 없는 kid 토큰 발급: %v", err)
+	}
+	if _, _, err := service.Verify(t.Context(), raw, "web"); err == nil {
+		t.Fatal("알 수 없는 kid 토큰이 다른 공개 키로 검증됐다")
 	}
 }
 
@@ -269,6 +301,16 @@ func (s *memoryStore) ActiveSigningKey(_ context.Context) (store.SigningKey, err
 		return store.SigningKey{}, store.ErrNotFound
 	}
 	return s.keys[0], nil
+}
+func (s *memoryStore) SigningKey(_ context.Context, keyID string) (store.SigningKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, key := range s.keys {
+		if key.ID == keyID {
+			return key, nil
+		}
+	}
+	return store.SigningKey{}, store.ErrNotFound
 }
 func (s *memoryStore) SigningKeys(_ context.Context) ([]store.SigningKey, error) {
 	s.mu.Lock()

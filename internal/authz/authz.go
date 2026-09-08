@@ -63,6 +63,7 @@ type authStore interface {
 	RevokeToken(context.Context, string, time.Time) error
 	IsTokenRevoked(context.Context, string, time.Time) (bool, error)
 	ActiveSigningKey(context.Context) (store.SigningKey, error)
+	SigningKey(context.Context, string) (store.SigningKey, error)
 	SigningKeys(context.Context) ([]store.SigningKey, error)
 	CreateSigningKey(context.Context, store.SigningKey) error
 	RotateSigningKey(context.Context, store.SigningKey) error
@@ -231,23 +232,19 @@ func (s *Service) Verify(ctx context.Context, raw, audience string) (model.ID, T
 	if err != nil {
 		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
 	}
-	keys, err := s.store.SigningKeys(ctx)
+	if len(parsed.Headers) != 1 || parsed.Headers[0].KeyID == "" {
+		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
+	}
+	key, err := s.store.SigningKey(ctx, parsed.Headers[0].KeyID)
 	if err != nil {
 		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
 	}
-	var claims tokenClaims
-	verified := false
-	for _, item := range keys {
-		var public jose.JSONWebKey
-		if json.Unmarshal([]byte(item.PublicKey), &public) != nil {
-			continue
-		}
-		if parsed.Claims(public.Key, &claims) == nil {
-			verified = true
-			break
-		}
+	var public jose.JSONWebKey
+	if err := json.Unmarshal([]byte(key.PublicKey), &public); err != nil {
+		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
 	}
-	if !verified || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil {
+	var claims tokenClaims
+	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil {
 		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
 	}
 	id, err := model.ParseID(claims.Subject)

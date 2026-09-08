@@ -122,6 +122,72 @@ func TestVerifyRejectsTokenWithUnknownKeyID(t *testing.T) {
 	}
 }
 
+func TestRenewRequiresVerifiedUnexpiredToken(t *testing.T) {
+	service := testService(t, newMemoryStore())
+	accountID, err := model.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherAccountID, err := model.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	expiredToken := signedRenewalToken(t, service, accountID, now.Add(-time.Second), now.Add(-time.Hour), "")
+	expiredToken.ExpiresAt = now.Add(5 * time.Second)
+	tests := []struct {
+		name        string
+		accountID   model.ID
+		token       Token
+		wantRenewed bool
+	}{
+		{name: "valid near expiry", accountID: accountID, token: signedRenewalToken(t, service, accountID, now.Add(5*time.Second), now.Add(-time.Hour), ""), wantRenewed: true},
+		{name: "expired signed claim", accountID: accountID, token: expiredToken},
+		{name: "unknown kid", accountID: accountID, token: signedRenewalToken(t, service, accountID, now.Add(5*time.Second), now.Add(-time.Hour), "unknown-key")},
+		{name: "other account", accountID: otherAccountID, token: signedRenewalToken(t, service, accountID, now.Add(5*time.Second), now.Add(-time.Hour), "")},
+		{name: "future authentication", accountID: accountID, token: signedRenewalToken(t, service, accountID, now.Add(5*time.Second), now.Add(time.Hour), "")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, renewed, err := service.Renew(t.Context(), test.accountID, test.token)
+			if err != nil {
+				t.Fatalf("토큰 갱신: %v", err)
+			}
+			if renewed != test.wantRenewed {
+				t.Fatalf("갱신 여부 = %t, want %t", renewed, test.wantRenewed)
+			}
+		})
+	}
+}
+
+func signedRenewalToken(t *testing.T, service *Service, accountID model.ID, expiresAt, authenticatedAt time.Time, keyID string) Token {
+	t.Helper()
+	key, err := service.activeKey(t.Context())
+	if err != nil {
+		t.Fatalf("서명 키 준비: %v", err)
+	}
+	var private jose.JSONWebKey
+	if err := json.Unmarshal([]byte(key.PrivateKey), &private); err != nil {
+		t.Fatalf("개인 키 해석: %v", err)
+	}
+	if keyID == "" {
+		keyID = key.ID
+	}
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: private.Key}, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", keyID))
+	if err != nil {
+		t.Fatalf("JWT 서명기 생성: %v", err)
+	}
+	issuedAt := time.Now().UTC()
+	if !expiresAt.After(issuedAt) {
+		issuedAt = expiresAt.Add(-time.Hour)
+	}
+	raw, err := jwt.Signed(signer).Claims(tokenClaims{Claims: jwt.Claims{Issuer: service.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{service.config.Resource}, IssuedAt: jwt.NewNumericDate(issuedAt), Expiry: jwt.NewNumericDate(expiresAt), ID: "renewal-token"}, AuthenticatedAt: authenticatedAt.Unix()}).Serialize()
+	if err != nil {
+		t.Fatalf("갱신 검사 토큰 발급: %v", err)
+	}
+	return Token{Raw: raw, ID: "renewal-token", ExpiresAt: expiresAt}
+}
+
 func TestValidateAuthorizeRequestAllowsLoopbackDynamicPort(t *testing.T) {
 	service := testService(t, newMemoryStore())
 	err := service.ValidateAuthorizeRequest(AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1:49152/callback", CodeChallenge: "challenge", CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})

@@ -228,61 +228,60 @@ func (s *Service) WebSession(ctx context.Context, accountID model.ID, audience s
 
 // Verify는 기대 audience, 서명, 필수 클레임, 만료와 폐기 목록을 한 경로에서 확인한다.
 func (s *Service) Verify(ctx context.Context, raw, audience string) (model.ID, Token, error) {
-	parsed, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
+	claims, err := s.verifiedClaims(ctx, raw, audience)
 	if err != nil {
-		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
-	}
-	if len(parsed.Headers) != 1 || parsed.Headers[0].KeyID == "" {
-		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
-	}
-	key, err := s.store.SigningKey(ctx, parsed.Headers[0].KeyID)
-	if err != nil {
-		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
-	}
-	var public jose.JSONWebKey
-	if err := json.Unmarshal([]byte(key.PublicKey), &public); err != nil {
-		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
-	}
-	var claims tokenClaims
-	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil {
-		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
+		return model.ID{}, Token{}, err
 	}
 	id, err := model.ParseID(claims.Subject)
 	if err != nil {
 		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
 	}
+	return id, Token{Raw: raw, ID: claims.ID, ExpiresAt: claims.Expiry.Time()}, nil
+}
+
+func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (tokenClaims, error) {
+	parsed, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
+	if err != nil {
+		return tokenClaims{}, fmt.Errorf("unauthenticated")
+	}
+	if len(parsed.Headers) != 1 || parsed.Headers[0].KeyID == "" {
+		return tokenClaims{}, fmt.Errorf("unauthenticated")
+	}
+	key, err := s.store.SigningKey(ctx, parsed.Headers[0].KeyID)
+	if err != nil {
+		return tokenClaims{}, fmt.Errorf("unauthenticated")
+	}
+	var public jose.JSONWebKey
+	if err := json.Unmarshal([]byte(key.PublicKey), &public); err != nil {
+		return tokenClaims{}, fmt.Errorf("unauthenticated")
+	}
+	var claims tokenClaims
+	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil {
+		return tokenClaims{}, fmt.Errorf("unauthenticated")
+	}
 	revoked, err := s.store.IsTokenRevoked(ctx, claims.ID, time.Now().UTC())
 	if err != nil || revoked {
-		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
+		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
-	expires := claims.Expiry.Time()
-	return id, Token{Raw: raw, ID: claims.ID, ExpiresAt: expires}, nil
+	return claims, nil
 }
 
 // Renew은 남은 수명이 10초 이하이면서 최초 인증 뒤 12시간 안일 때만 새 MCP 토큰을 발급한다.
 func (s *Service) Renew(ctx context.Context, accountID model.ID, token Token) (Token, bool, error) {
-	if time.Until(token.ExpiresAt) > 10*time.Second {
+	claims, err := s.verifiedClaims(ctx, token.Raw, s.config.Resource)
+	if err != nil || claims.Subject != accountID.String() {
 		return Token{}, false, nil
 	}
-	parsed, err := jwt.ParseSigned(token.Raw, []jose.SignatureAlgorithm{jose.ES256})
-	if err != nil {
+	now := time.Now().UTC()
+	expiresAt := claims.Expiry.Time()
+	if !expiresAt.After(now) || expiresAt.Sub(now) > 10*time.Second {
 		return Token{}, false, nil
 	}
-	var claims tokenClaims
-	keys, err := s.store.SigningKeys(ctx)
-	if err != nil {
-		return Token{}, false, err
-	}
-	for _, item := range keys {
-		var public jose.JSONWebKey
-		if json.Unmarshal([]byte(item.PublicKey), &public) == nil && parsed.Claims(public.Key, &claims) == nil {
-			break
-		}
-	}
-	if claims.AuthenticatedAt == 0 || time.Since(time.Unix(claims.AuthenticatedAt, 0)) > webSessionLifetime {
+	authenticatedAt := time.Unix(claims.AuthenticatedAt, 0).UTC()
+	if claims.AuthenticatedAt == 0 || authenticatedAt.After(now) || now.Sub(authenticatedAt) > webSessionLifetime {
 		return Token{}, false, nil
 	}
-	renewed, err := s.issue(ctx, accountID, s.config.Resource, time.Now().UTC(), time.Unix(claims.AuthenticatedAt, 0).UTC())
+	renewed, err := s.issue(ctx, accountID, s.config.Resource, now, authenticatedAt)
 	return renewed, err == nil, err
 }
 

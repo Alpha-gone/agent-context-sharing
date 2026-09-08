@@ -47,10 +47,10 @@ func (s *Store) OwnedGraphCount(ctx context.Context, accountID model.ID) (int, e
 		WITH owned AS (
 			SELECT graph_id FROM public.graph_grant WHERE subject_type = 'account' AND subject_id = $1 AND grade = 'owner'
 			UNION
-			SELECT grant.graph_id FROM public.graph_grant AS grant
-			JOIN public.team_member AS member ON member.team_id = grant.subject_id
+			SELECT team_grant.graph_id FROM public.graph_grant AS team_grant
+			JOIN public.team_member AS member ON member.team_id = team_grant.subject_id
 			JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL
-			WHERE grant.subject_type = 'team' AND member.account_id = $1 AND grant.grade = 'owner'
+			WHERE team_grant.subject_type = 'team' AND member.account_id = $1 AND team_grant.grade = 'owner'
 		)
 		SELECT count(*) FROM owned JOIN public.context_graph AS graph USING (graph_id) WHERE graph.deleted_at IS NULL`, accountID.String()).Scan(&count)
 	if err != nil {

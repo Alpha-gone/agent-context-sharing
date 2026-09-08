@@ -92,16 +92,22 @@ func (s *Store) CreateAuthorizationCode(ctx context.Context, code AuthorizationC
 }
 
 // ConsumeAuthorizationCode는 아직 소비되지 않고 만료되지 않은 코드만 한 문장으로 소비한다.
+// issued_token_id는 첫 소비 시점에 비어 있으므로 nullable로 받는다.
 func (s *Store) ConsumeAuthorizationCode(ctx context.Context, hash string, now time.Time) (AuthorizationCode, error) {
 	var code AuthorizationCode
 	var accountID string
-	err := s.pool.QueryRow(ctx, `UPDATE public.authorization_code SET consumed_at = $2 WHERE code_hash = $1 AND consumed_at IS NULL AND expires_at > $2 RETURNING code_hash, client_id, account_id, redirect_uri, code_challenge, resource, issued_at, expires_at, consumed_at, issued_token_id`, hash, now).Scan(&code.Hash, &code.ClientID, &accountID, &code.RedirectURI, &code.CodeChallenge, &code.Resource, &code.IssuedAt, &code.ExpiresAt, &code.ConsumedAt, &code.IssuedTokenID)
+	var issuedTokenID *string
+	err := s.pool.QueryRow(ctx, `UPDATE public.authorization_code SET consumed_at = $2 WHERE code_hash = $1 AND consumed_at IS NULL AND expires_at > $2 RETURNING code_hash, client_id, account_id, redirect_uri, code_challenge, resource, issued_at, expires_at, consumed_at, issued_token_id`, hash, now).Scan(&code.Hash, &code.ClientID, &accountID, &code.RedirectURI, &code.CodeChallenge, &code.Resource, &code.IssuedAt, &code.ExpiresAt, &code.ConsumedAt, &issuedTokenID)
 	if err == nil {
 		var parseErr error
 		code.AccountID, parseErr = model.ParseID(accountID)
 		if parseErr != nil {
 			return AuthorizationCode{}, fmt.Errorf("저장된 인가 코드 계정 식별자: %w", parseErr)
 		}
+		if issuedTokenID != nil {
+			code.IssuedTokenID = *issuedTokenID
+		}
+		code.IssuedAt, code.ExpiresAt = code.IssuedAt.UTC(), code.ExpiresAt.UTC()
 		return code, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {

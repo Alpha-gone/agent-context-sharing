@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestAuthorizationCodeSingleUseRevokesIssuedToken(t *testing.T) {
@@ -96,6 +98,72 @@ func TestValidateAuthorizeRequestAllowsLoopbackDynamicPort(t *testing.T) {
 	}
 }
 
+func TestRegisterValidatesPasswordLengthAndAuthenticatesLongUnicodePassword(t *testing.T) {
+	tests := []struct {
+		name     string
+		loginID  string
+		password string
+		valid    bool
+	}{
+		{name: "seven characters", loginID: "shortpwd", password: strings.Repeat("a", 7)},
+		{name: "minimum length", loginID: "minpwd", password: strings.Repeat("a", 8), valid: true},
+		{name: "maximum Unicode length", loginID: "unicodepwd", password: strings.Repeat("한", 128), valid: true},
+		{name: "over maximum length", loginID: "longpwd", password: strings.Repeat("a", 129)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := testService(t, newMemoryStore())
+			id, err := service.Register(t.Context(), test.loginID, test.password)
+			if !test.valid {
+				if err == nil {
+					t.Fatal("허용되지 않는 비밀번호가 등록됐다")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("계정 등록: %v", err)
+			}
+			authenticatedID, err := service.Authenticate(t.Context(), test.loginID, test.password)
+			if err != nil || authenticatedID != id {
+				t.Fatalf("등록한 비밀번호 인증 = %s, %v; want %s, nil", authenticatedID, err, id)
+			}
+		})
+	}
+}
+
+func TestAuthenticateRehashesLegacyDirectBcryptHash(t *testing.T) {
+	backend := newMemoryStore()
+	service := testService(t, backend)
+	password := "legacy password"
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("기존 bcrypt 해시 생성: %v", err)
+	}
+	id, err := model.NewID()
+	if err != nil {
+		t.Fatalf("계정 식별자 생성: %v", err)
+	}
+	if err := backend.CreateAccount(t.Context(), store.Account{ID: id, LoginID: "legacy", PasswordHash: string(hash), CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("기존 계정 저장: %v", err)
+	}
+	authenticatedID, err := service.Authenticate(t.Context(), "legacy", password)
+	if err != nil || authenticatedID != id {
+		t.Fatalf("기존 bcrypt 해시 인증 = %s, %v; want %s, nil", authenticatedID, err, id)
+	}
+	account, err := backend.AccountByLoginID(t.Context(), "legacy")
+	if err != nil {
+		t.Fatalf("재해시한 계정 조회: %v", err)
+	}
+	currentHash, rehashed := strings.CutPrefix(account.PasswordHash, passwordHashPrefix)
+	if !rehashed {
+		t.Fatalf("기존 해시가 현재 형식으로 바뀌지 않았다: %q", account.PasswordHash)
+	}
+	material := passwordMaterial(password)
+	if err := bcrypt.CompareHashAndPassword([]byte(currentHash), material[:]); err != nil {
+		t.Fatalf("재해시한 비밀번호 대조: %v", err)
+	}
+}
+
 func testService(t *testing.T, backend *memoryStore) *Service {
 	t.Helper()
 	redirect, err := url.Parse("http://127.0.0.1/callback")
@@ -137,6 +205,19 @@ func (s *memoryStore) AccountByLoginID(_ context.Context, loginID string) (store
 		return store.Account{}, store.ErrNotFound
 	}
 	return account, nil
+}
+func (s *memoryStore) UpdatePasswordHashIfMatches(_ context.Context, accountID model.ID, oldHash, newHash string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for loginID, account := range s.accounts {
+		if account.ID != accountID || account.PasswordHash != oldHash {
+			continue
+		}
+		account.PasswordHash = newHash
+		s.accounts[loginID] = account
+		return true, nil
+	}
+	return false, nil
 }
 func (s *memoryStore) CreateAuthorizationCode(_ context.Context, code store.AuthorizationCode) error {
 	s.mu.Lock()

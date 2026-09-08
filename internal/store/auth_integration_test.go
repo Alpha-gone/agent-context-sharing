@@ -3,11 +3,61 @@ package store
 import (
 	"errors"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"agent_context_sharing/internal/model"
 )
+
+// TestUpdatePasswordHashIfMatchesIntegration은 재해시가 읽은 기존 값과 같을 때만
+// 반영돼 동시에 성공한 로그인 요청이 이미 바뀐 해시를 덮어쓰지 않음을 확인한다.
+func TestUpdatePasswordHashIfMatchesIntegration(t *testing.T) {
+	store := newIntegrationStore(t)
+	accountID := newTestID(t)
+	loginID := "rehash_" + strings.ReplaceAll(accountID.String(), "-", "")[:8]
+	oldHash := "legacy-" + accountID.String()
+	newHash := "bcrypt-sha256-v1-" + accountID.String()
+	if err := store.CreateAccount(t.Context(), Account{ID: accountID, LoginID: loginID, PasswordHash: oldHash, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("재해시 대상 계정 생성: %v", err)
+	}
+
+	type updateResult struct {
+		updated bool
+		err     error
+	}
+	results := make(chan updateResult, 2)
+	var waitGroup sync.WaitGroup
+	for range 2 {
+		waitGroup.Go(func() {
+			updated, err := store.UpdatePasswordHashIfMatches(t.Context(), accountID, oldHash, newHash)
+			results <- updateResult{updated: updated, err: err}
+		})
+	}
+	waitGroup.Wait()
+	close(results)
+
+	updatedCount := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("기존 해시 조건부 갱신: %v", result.err)
+		}
+		if result.updated {
+			updatedCount++
+		}
+	}
+	if updatedCount != 1 {
+		t.Fatalf("동시 조건부 갱신 성공 수 = %d, want 1", updatedCount)
+	}
+	account, err := store.AccountByLoginID(t.Context(), loginID)
+	if err != nil {
+		t.Fatalf("재해시 대상 계정 조회: %v", err)
+	}
+	if account.PasswordHash != newHash {
+		t.Fatalf("갱신한 비밀번호 해시 = %q, want %q", account.PasswordHash, newHash)
+	}
+}
 
 // TestPermissionIntegration은 유효 등급과 소유 그래프 수 질의를 실제 데이터베이스에서
 // 확인한다. 두 질의는 메모리 대역으로 대체할 수 없어 여기에서만 검증된다.

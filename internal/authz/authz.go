@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
@@ -29,6 +30,9 @@ const (
 	accessTokenLifetime       = time.Hour
 	webSessionLifetime        = 12 * time.Hour
 	authorizationCodeLifetime = time.Minute
+	minPasswordRunes          = 8
+	maxPasswordRunes          = 128
+	passwordHashPrefix        = "bcrypt-sha256-v1:"
 )
 
 var loginIDPattern = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
@@ -52,6 +56,7 @@ type Service struct {
 type authStore interface {
 	CreateAccount(context.Context, store.Account) error
 	AccountByLoginID(context.Context, string) (store.Account, error)
+	UpdatePasswordHashIfMatches(context.Context, model.ID, string, string) (bool, error)
 	CreateAuthorizationCode(context.Context, store.AuthorizationCode) error
 	ConsumeAuthorizationCode(context.Context, string, time.Time) (store.AuthorizationCode, error)
 	SetAuthorizationCodeTokenID(context.Context, string, string) error
@@ -84,12 +89,12 @@ func New(source authStore, config Config) (*Service, error) {
 	return &Service{store: source, config: config}, nil
 }
 
-// Register는 형식이 맞는 로그인 아이디와 bcrypt 해시를 가진 새 계정을 만든다.
+// Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.
 func (s *Service) Register(ctx context.Context, loginID, password string) (model.ID, error) {
-	if !loginIDPattern.MatchString(loginID) || password == "" {
+	if !loginIDPattern.MatchString(loginID) || !validPassword(password) {
 		return model.ID{}, fmt.Errorf("로그인 아이디 또는 비밀번호가 올바르지 않다")
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), s.config.BcryptCost)
+	hash, err := hashPassword(password, s.config.BcryptCost)
 	if err != nil {
 		return model.ID{}, fmt.Errorf("비밀번호 해시 생성: %w", err)
 	}
@@ -97,23 +102,60 @@ func (s *Service) Register(ctx context.Context, loginID, password string) (model
 	if err != nil {
 		return model.ID{}, fmt.Errorf("계정 식별자 생성: %w", err)
 	}
-	err = s.store.CreateAccount(ctx, store.Account{ID: id, LoginID: loginID, PasswordHash: string(hash), CreatedAt: time.Now().UTC()})
+	err = s.store.CreateAccount(ctx, store.Account{ID: id, LoginID: loginID, PasswordHash: hash, CreatedAt: time.Now().UTC()})
 	if err != nil {
 		return model.ID{}, err
 	}
 	return id, nil
 }
 
-// Authenticate는 저장된 bcrypt 해시와 제시한 비밀번호를 대조한다.
+// Authenticate는 저장된 bcrypt 해시와 제시한 비밀번호를 대조하고, 기존 직접 bcrypt
+// 해시는 성공한 로그인에서 현재 형식으로 바꾼다.
 func (s *Service) Authenticate(ctx context.Context, loginID, password string) (model.ID, error) {
 	account, err := s.store.AccountByLoginID(ctx, loginID)
 	if err != nil {
 		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(password)); err != nil {
+	legacy, err := comparePassword(account.PasswordHash, password)
+	if err != nil {
 		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
 	}
+	if legacy {
+		hash, err := hashPassword(password, s.config.BcryptCost)
+		if err != nil {
+			return model.ID{}, fmt.Errorf("비밀번호 해시 생성: %w", err)
+		}
+		if _, err := s.store.UpdatePasswordHashIfMatches(ctx, account.ID, account.PasswordHash, hash); err != nil {
+			return model.ID{}, fmt.Errorf("비밀번호 해시 갱신: %w", err)
+		}
+	}
 	return account.ID, nil
+}
+
+func validPassword(password string) bool {
+	length := utf8.RuneCountInString(password)
+	return minPasswordRunes <= length && length <= maxPasswordRunes
+}
+
+func hashPassword(password string, cost int) (string, error) {
+	material := passwordMaterial(password)
+	hash, err := bcrypt.GenerateFromPassword(material[:], cost)
+	if err != nil {
+		return "", err
+	}
+	return passwordHashPrefix + string(hash), nil
+}
+
+func comparePassword(stored, password string) (bool, error) {
+	if hash, prehashed := strings.CutPrefix(stored, passwordHashPrefix); prehashed {
+		material := passwordMaterial(password)
+		return false, bcrypt.CompareHashAndPassword([]byte(hash), material[:])
+	}
+	return true, bcrypt.CompareHashAndPassword([]byte(stored), []byte(password))
+}
+
+func passwordMaterial(password string) [sha256.Size]byte {
+	return sha256.Sum256([]byte(password))
 }
 
 // ValidateAuthorizeRequest는 사전 등록 클라이언트, 완전 일치 redirect_uri, PKCE와 리소스를 확인한다.

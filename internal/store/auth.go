@@ -82,6 +82,19 @@ func (s *Store) AccountByLoginID(ctx context.Context, loginID string) (Account, 
 	return account, nil
 }
 
+// UpdatePasswordHashIfMatches는 읽은 기존 해시가 아직 같을 때만 비밀번호 해시를 바꾼다.
+// false, nil은 다른 로그인 요청 또는 이후 비밀번호 변경이 먼저 반영됐음을 뜻한다.
+func (s *Store) UpdatePasswordHashIfMatches(ctx context.Context, accountID model.ID, oldHash, newHash string) (bool, error) {
+	if !accountID.IsV7() || oldHash == "" || newHash == "" {
+		return false, fmt.Errorf("비밀번호 해시 갱신 인자가 올바르지 않다")
+	}
+	result, err := s.pool.Exec(ctx, `UPDATE public.account SET password_hash = $3 WHERE account_id = $1 AND password_hash = $2`, accountID.String(), oldHash, newHash)
+	if err != nil {
+		return false, fmt.Errorf("비밀번호 해시 갱신: %w", err)
+	}
+	return result.RowsAffected() == 1, nil
+}
+
 // CreateAuthorizationCode는 인가 코드 해시만 저장한다.
 func (s *Store) CreateAuthorizationCode(ctx context.Context, code AuthorizationCode) error {
 	_, err := s.pool.Exec(ctx, `INSERT INTO public.authorization_code (code_hash, client_id, account_id, redirect_uri, code_challenge, resource, issued_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, code.Hash, code.ClientID, code.AccountID.String(), code.RedirectURI, code.CodeChallenge, code.Resource, code.IssuedAt, code.ExpiresAt)

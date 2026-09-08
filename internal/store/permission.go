@@ -8,7 +8,10 @@ import (
 )
 
 // EffectiveGrade는 직접 부여와 활성 팀의 상속 부여를 한 질의로 합쳐 최고 등급을 계산한다.
-// 부여가 하나도 없으면 집계가 NULL을 돌려주므로 등급을 nullable로 받아 부재와 구분한다.
+// 소프트 삭제한 그래프는 소유자가 웹에서 복구할 수 있도록 여기서 제외하지 않는다. 자동
+// 삭제 그래프에는 접근 가능한 계정이 없으므로 유효 등급도 남지 않는다. 삭제 상태에 따른
+// 화면과 연산의 가용성은 이 계산과 별도로 각 조회·처리 경로가 판정한다. 부여가 하나도
+// 없으면 집계가 NULL을 돌려주므로 등급을 nullable로 받아 부재와 구분한다.
 func (s *Store) EffectiveGrade(ctx context.Context, graphID, accountID model.ID) (model.GraphGrade, bool, error) {
 	var grade *string
 	err := s.pool.QueryRow(ctx, `

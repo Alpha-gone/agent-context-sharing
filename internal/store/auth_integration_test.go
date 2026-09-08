@@ -30,6 +30,24 @@ func TestPermissionIntegration(t *testing.T) {
 	grantAccount(t, store, directGraphID, accountID, model.GraphGradeViewer)
 	assertGrade(t, store, directGraphID, accountID, model.GraphGradeViewer)
 
+	// 소유자의 웹 직접 삭제 그래프는 복구 화면에서 같은 소유자가 되살릴 수 있어야 하므로,
+	// deleted_at이 있어도 유효 등급 계산에서 제외하지 않는다. 삭제 상태의 화면·연산
+	// 가용성은 이 계산과 별도로 판정하며, 목록은 삭제 그래프를 보이지 않게 한다.
+	deletedGraphID := createTestGraph(t, store, accountID)
+	grantAccount(t, store, deletedGraphID, accountID, model.GraphGradeOwner)
+	deletedAt := time.Now().UTC()
+	if _, err := store.pool.Exec(t.Context(), `UPDATE public.context_graph SET deleted_at = $1 WHERE graph_id = $2`, deletedAt, deletedGraphID.String()); err != nil {
+		t.Fatalf("소프트 삭제 그래프 표시: %v", err)
+	}
+	assertGrade(t, store, deletedGraphID, accountID, model.GraphGradeOwner)
+	listed, _, err := store.ListGraphs(t.Context(), accountID, model.GraphListFilter{}, "", 10)
+	if err != nil {
+		t.Fatalf("그래프 목록 조회: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != directGraphID {
+		t.Fatalf("소프트 삭제 그래프가 목록에 노출됐다: %#v", listed)
+	}
+
 	// 직접 부여와 팀 상속이 겹치면 「상속 규칙」대로 더 높은 등급을 쓴다.
 	teamID := newTestID(t)
 	createTestTeam(t, store, teamID, accountID, false)

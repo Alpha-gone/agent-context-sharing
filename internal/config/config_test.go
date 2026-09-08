@@ -116,6 +116,7 @@ func validValues() map[string]string {
 		"EMBEDDING_DIMENSION":   "1024",
 		"OAUTH_CLIENT_IDS":      "agent-context-dev",
 		"OAUTH_REDIRECT_URIS":   "http://127.0.0.1/callback",
+		"BCRYPT_COST":           "12",
 		"TLS_TERMINATION":       "proxy",
 		"TRUSTED_PROXY_CIDRS":   "10.0.0.0/8",
 		"TLS_CERT_FILE":         "",

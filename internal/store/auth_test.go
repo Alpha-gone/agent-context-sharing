@@ -16,8 +16,8 @@ func TestAuthStoreRejectsInvalidInputs(t *testing.T) {
 	}{
 		{name: "빈 로그인 아이디", err: func() error { _, err := store.AccountByLoginID(t.Context(), ""); return err }()},
 		{name: "불완전한 인가 코드", err: store.CreateAuthorizationCode(t.Context(), AuthorizationCode{})},
-		{name: "빈 인가 코드 해시", err: func() error { _, err := store.ConsumeAuthorizationCode(t.Context(), "", now); return err }()},
-		{name: "빈 발급 토큰", err: store.SetAuthorizationCodeToken(t.Context(), "code", "", now)},
+		{name: "빈 인가 코드 해시", err: func() error { _, err := store.ConsumeAuthorizationCode(t.Context(), "", "token", now, now); return err }()},
+		{name: "빈 발급 토큰", err: func() error { _, err := store.ConsumeAuthorizationCode(t.Context(), "code", "", now, now); return err }()},
 		{name: "빈 폐기 토큰", err: store.RevokeToken(t.Context(), "", now)},
 		{name: "빈 폐기 조회 토큰", err: func() error { _, err := store.IsTokenRevoked(t.Context(), "", now); return err }()},
 		{name: "불완전한 서명 키 생성", err: store.CreateSigningKey(t.Context(), SigningKey{})},

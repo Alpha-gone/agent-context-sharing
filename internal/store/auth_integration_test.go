@@ -16,7 +16,9 @@ import (
 func TestUpdatePasswordHashIfMatchesIntegration(t *testing.T) {
 	store := newIntegrationStore(t)
 	accountID := newTestID(t)
-	loginID := "rehash_" + strings.ReplaceAll(accountID.String(), "-", "")[:8]
+	// 앞 8자리는 UUIDv7 시간 상위 비트뿐이라 65초 안의 재실행이 충돌한다. 임의 비트가 남는
+	// 뒷부분을 써서 login_id 32자 상한 안에서 실행마다 다른 값을 만든다.
+	loginID := "rehash_" + strings.ReplaceAll(accountID.String(), "-", "")[7:]
 	oldHash := "legacy-" + accountID.String()
 	newHash := "bcrypt-sha256-v1-" + accountID.String()
 	if err := store.CreateAccount(t.Context(), Account{ID: accountID, LoginID: loginID, PasswordHash: oldHash, CreatedAt: time.Now().UTC()}); err != nil {
@@ -279,26 +281,22 @@ func TestAuthorizationCodeIntegration(t *testing.T) {
 		t.Fatalf("인가 코드 저장: %v", err)
 	}
 
-	// 첫 소비는 issued_token_id가 비어 있는 상태에서 일어난다.
-	consumed, err := store.ConsumeAuthorizationCode(t.Context(), code.Hash, time.Now().UTC())
+	tokenID := "token-" + newTestID(t).String()
+	tokenExpiresAt := time.Now().UTC().Add(time.Hour)
+	// 첫 소비는 발급 토큰 정보와 한 문장에서 기록한다.
+	consumed, err := store.ConsumeAuthorizationCode(t.Context(), code.Hash, tokenID, time.Now().UTC(), tokenExpiresAt)
 	if err != nil {
 		t.Fatalf("첫 인가 코드 소비: %v", err)
 	}
 	if consumed.ClientID != code.ClientID || consumed.AccountID != accountID || consumed.CodeChallenge != code.CodeChallenge {
 		t.Fatalf("소비한 인가 코드의 교환 정보가 다르다: %+v", consumed)
 	}
-	if consumed.IssuedTokenID != "" {
-		t.Fatalf("첫 소비에서 발급 토큰 식별자가 비어 있지 않다: %q", consumed.IssuedTokenID)
-	}
-
-	tokenID := "token-" + newTestID(t).String()
-	tokenExpiresAt := time.Now().UTC().Add(time.Hour)
-	if err := store.SetAuthorizationCodeToken(t.Context(), code.Hash, tokenID, tokenExpiresAt); err != nil {
-		t.Fatalf("발급 토큰 기록: %v", err)
+	if consumed.IssuedTokenID != tokenID || consumed.IssuedTokenExpiresAt == nil || !consumed.IssuedTokenExpiresAt.Equal(tokenExpiresAt) {
+		t.Fatalf("첫 소비의 발급 토큰 기록 = %+v, want %q와 %s", consumed, tokenID, tokenExpiresAt)
 	}
 
 	// 재사용은 폐기할 토큰 식별자를 담아 거절한다.
-	_, err = store.ConsumeAuthorizationCode(t.Context(), code.Hash, time.Now().UTC())
+	_, err = store.ConsumeAuthorizationCode(t.Context(), code.Hash, "other-"+newTestID(t).String(), time.Now().UTC(), tokenExpiresAt)
 	used, ok := errors.AsType[CodeUsedError](err)
 	if !ok {
 		t.Fatalf("인가 코드 재사용 오류 = %v", err)
@@ -311,7 +309,7 @@ func TestAuthorizationCodeIntegration(t *testing.T) {
 	}
 
 	// 없는 코드는 재사용과 구분한다.
-	if _, err := store.ConsumeAuthorizationCode(t.Context(), "hash-"+newTestID(t).String(), time.Now().UTC()); !errors.Is(err, ErrNotFound) {
+	if _, err := store.ConsumeAuthorizationCode(t.Context(), "hash-"+newTestID(t).String(), "token-"+newTestID(t).String(), time.Now().UTC(), tokenExpiresAt); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("없는 인가 코드 소비 = %v, want ErrNotFound", err)
 	}
 }

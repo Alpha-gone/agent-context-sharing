@@ -112,69 +112,111 @@ func (s *Store) CreateAuthorizationCode(ctx context.Context, code AuthorizationC
 	return nil
 }
 
-// ConsumeAuthorizationCode는 아직 소비되지 않고 만료되지 않은 코드만 한 문장으로 소비한다.
-// issued_token_id는 첫 소비 시점에 비어 있으므로 nullable로 받는다.
-func (s *Store) ConsumeAuthorizationCode(ctx context.Context, hash string, now time.Time) (AuthorizationCode, error) {
+// AuthorizationCodeForExchange는 아직 소비되지 않고 만료되지 않은 인가 코드를 읽는다.
+// 이미 소비된 코드는 발급 토큰을 폐기할 수 있도록 CodeUsedError로 구분한다.
+func (s *Store) AuthorizationCodeForExchange(ctx context.Context, hash string, now time.Time) (AuthorizationCode, error) {
 	if hash == "" || now.IsZero() {
-		return AuthorizationCode{}, fmt.Errorf("인가 코드 소비 인자가 올바르지 않다")
+		return AuthorizationCode{}, fmt.Errorf("인가 코드 조회 인자가 올바르지 않다")
 	}
-	var code AuthorizationCode
-	var accountID string
-	var issuedTokenID *string
-	var issuedTokenExpiresAt *time.Time
-	err := s.pool.QueryRow(ctx, `UPDATE public.authorization_code SET consumed_at = $2 WHERE code_hash = $1 AND consumed_at IS NULL AND expires_at > $2 RETURNING code_hash, client_id, account_id, redirect_uri, code_challenge, resource, issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at`, hash, now).Scan(&code.Hash, &code.ClientID, &accountID, &code.RedirectURI, &code.CodeChallenge, &code.Resource, &code.IssuedAt, &code.ExpiresAt, &code.ConsumedAt, &issuedTokenID, &issuedTokenExpiresAt)
-	if err == nil {
-		var parseErr error
-		code.AccountID, parseErr = model.ParseID(accountID)
-		if parseErr != nil {
-			return AuthorizationCode{}, fmt.Errorf("저장된 인가 코드 계정 식별자: %w", parseErr)
-		}
-		if issuedTokenID != nil {
-			code.IssuedTokenID = *issuedTokenID
-		}
-		if issuedTokenExpiresAt != nil {
-			expiresAt := issuedTokenExpiresAt.UTC()
-			code.IssuedTokenExpiresAt = &expiresAt
-		}
-		code.IssuedAt, code.ExpiresAt = code.IssuedAt.UTC(), code.ExpiresAt.UTC()
-		return code, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return AuthorizationCode{}, fmt.Errorf("인가 코드 소비: %w", err)
-	}
-	var tokenID *string
-	var issuedAt time.Time
-	var tokenExpiresAt *time.Time
-	err = s.pool.QueryRow(ctx, `SELECT issued_token_id, issued_at, issued_token_expires_at FROM public.authorization_code WHERE code_hash = $1`, hash).Scan(&tokenID, &issuedAt, &tokenExpiresAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	code, err := s.authorizationCode(ctx, `
+		SELECT code_hash, client_id, account_id, redirect_uri, code_challenge, resource,
+		       issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at
+		FROM public.authorization_code
+		WHERE code_hash = $1`, hash)
+	if errors.Is(err, ErrNotFound) {
 		return AuthorizationCode{}, ErrNotFound
 	}
 	if err != nil {
-		return AuthorizationCode{}, fmt.Errorf("인가 코드 재사용 조회: %w", err)
+		return AuthorizationCode{}, err
 	}
-	if tokenID != nil {
-		used := CodeUsedError{TokenID: *tokenID, IssuedAt: issuedAt.UTC()}
-		if tokenExpiresAt != nil {
-			used.TokenExpiresAt = tokenExpiresAt.UTC()
-		}
-		return AuthorizationCode{}, used
+	if !code.ExpiresAt.After(now) {
+		return AuthorizationCode{}, ErrNotFound
+	}
+	if code.ConsumedAt != nil {
+		return AuthorizationCode{}, codeUsedError(code)
+	}
+	return code, nil
+}
+
+// ConsumeAuthorizationCode는 아직 소비되지 않고 만료되지 않은 코드만 조건부 갱신으로
+// 소비하며, 그 교환에서 발급한 토큰 식별자와 만료 시각을 같은 문장에서 기록한다.
+func (s *Store) ConsumeAuthorizationCode(ctx context.Context, hash, tokenID string, now, tokenExpiresAt time.Time) (AuthorizationCode, error) {
+	if hash == "" || tokenID == "" || now.IsZero() || tokenExpiresAt.IsZero() {
+		return AuthorizationCode{}, fmt.Errorf("인가 코드 소비 인자가 올바르지 않다")
+	}
+	code, err := s.authorizationCode(ctx, `
+		UPDATE public.authorization_code
+		SET consumed_at = $3, issued_token_id = $2, issued_token_expires_at = $4
+		WHERE code_hash = $1 AND consumed_at IS NULL AND expires_at > $3
+		RETURNING code_hash, client_id, account_id, redirect_uri, code_challenge, resource,
+		          issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at`, hash, tokenID, now, tokenExpiresAt)
+	if err == nil {
+		return code, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return AuthorizationCode{}, err
+	}
+	code, err = s.authorizationCode(ctx, `
+		SELECT code_hash, client_id, account_id, redirect_uri, code_challenge, resource,
+		       issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at
+		FROM public.authorization_code
+		WHERE code_hash = $1`, hash)
+	if errors.Is(err, ErrNotFound) {
+		return AuthorizationCode{}, ErrNotFound
+	}
+	if err != nil {
+		return AuthorizationCode{}, err
+	}
+	if !code.ExpiresAt.After(now) {
+		return AuthorizationCode{}, ErrNotFound
+	}
+	if code.ConsumedAt != nil {
+		return AuthorizationCode{}, codeUsedError(code)
 	}
 	return AuthorizationCode{}, ErrNotFound
 }
 
-// SetAuthorizationCodeToken은 한 번 소비된 코드가 발급한 토큰과 정확한 만료 시각을 남긴다.
-func (s *Store) SetAuthorizationCodeToken(ctx context.Context, hash, tokenID string, expiresAt time.Time) error {
-	if hash == "" || tokenID == "" || expiresAt.IsZero() {
-		return fmt.Errorf("인가 코드 토큰 기록 인자가 올바르지 않다")
+func (s *Store) authorizationCode(ctx context.Context, query string, args ...any) (AuthorizationCode, error) {
+	var code AuthorizationCode
+	var accountID string
+	var issuedTokenID *string
+	var issuedTokenExpiresAt *time.Time
+	err := s.pool.QueryRow(ctx, query, args...).Scan(
+		&code.Hash, &code.ClientID, &accountID, &code.RedirectURI, &code.CodeChallenge, &code.Resource,
+		&code.IssuedAt, &code.ExpiresAt, &code.ConsumedAt, &issuedTokenID, &issuedTokenExpiresAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AuthorizationCode{}, ErrNotFound
 	}
-	result, err := s.pool.Exec(ctx, `UPDATE public.authorization_code SET issued_token_id = $2, issued_token_expires_at = $3 WHERE code_hash = $1 AND consumed_at IS NOT NULL`, hash, tokenID, expiresAt)
 	if err != nil {
-		return fmt.Errorf("인가 코드 토큰 기록: %w", err)
+		return AuthorizationCode{}, fmt.Errorf("인가 코드 조회: %w", err)
 	}
-	if result.RowsAffected() == 0 {
-		return ErrNotFound
+	parsed, err := model.ParseID(accountID)
+	if err != nil {
+		return AuthorizationCode{}, fmt.Errorf("저장된 인가 코드 계정 식별자: %w", err)
 	}
-	return nil
+	code.AccountID = parsed
+	code.IssuedAt, code.ExpiresAt = code.IssuedAt.UTC(), code.ExpiresAt.UTC()
+	if code.ConsumedAt != nil {
+		consumedAt := code.ConsumedAt.UTC()
+		code.ConsumedAt = &consumedAt
+	}
+	if issuedTokenID != nil {
+		code.IssuedTokenID = *issuedTokenID
+	}
+	if issuedTokenExpiresAt != nil {
+		expiresAt := issuedTokenExpiresAt.UTC()
+		code.IssuedTokenExpiresAt = &expiresAt
+	}
+	return code, nil
+}
+
+func codeUsedError(code AuthorizationCode) CodeUsedError {
+	used := CodeUsedError{TokenID: code.IssuedTokenID, IssuedAt: code.IssuedAt}
+	if code.IssuedTokenExpiresAt != nil {
+		used.TokenExpiresAt = *code.IssuedTokenExpiresAt
+	}
+	return used
 }
 
 // RevokeToken은 만료 시각까지 토큰 식별자를 폐기 목록에 둔다.

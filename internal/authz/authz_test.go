@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -60,27 +61,6 @@ func TestExchangeRejectsAuthorizationCodeForOtherResource(t *testing.T) {
 	}
 }
 
-func TestExchangeRevokesTokenWhenAuthorizationCodeRecordFails(t *testing.T) {
-	backend := newMemoryStore()
-	backend.setAuthorizationCodeTokenErr = errors.New("기록 실패")
-	service := testService(t, backend)
-	accountID, err := service.Register(t.Context(), "recordfail", "correct horse battery staple")
-	if err != nil {
-		t.Fatalf("계정 등록: %v", err)
-	}
-	verifier := "record-failure-verifier"
-	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: service.config.Resource})
-	if err != nil {
-		t.Fatalf("인가 코드 발급: %v", err)
-	}
-	if _, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier); err == nil {
-		t.Fatal("토큰 기록 실패가 성공으로 처리됐다")
-	}
-	if len(backend.revoked) != 1 {
-		t.Fatalf("기록 실패 뒤 폐기 토큰 수 = %d, want 1", len(backend.revoked))
-	}
-}
-
 func TestAuthenticateUsesPasswordMismatchForMissingLoginID(t *testing.T) {
 	service := testService(t, newMemoryStore())
 	if _, err := service.Authenticate(t.Context(), "missing", "wrong password"); !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
@@ -118,6 +98,74 @@ func TestAuthorizationCodeConcurrentExchangeAllowsOne(t *testing.T) {
 	}
 	if successes != 1 {
 		t.Fatalf("동시 인가 코드 교환 성공 수 = %d, want 1", successes)
+	}
+}
+
+// TestAuthorizationCodeConcurrentExchangeIntegration은 실제 PostgreSQL 조건부 갱신에서
+// 같은 인가 코드의 동시 교환 하나만 성공하고, 재사용 요청이 발급 토큰을 폐기하는지 확인한다.
+func TestAuthorizationCodeConcurrentExchangeIntegration(t *testing.T) {
+	database := newAuthorizationCodeIntegrationStore(t)
+	key, err := newSigningKey()
+	if err != nil {
+		t.Fatalf("통합 검사 서명 키 생성: %v", err)
+	}
+	if err := database.RotateSigningKey(t.Context(), key); err != nil {
+		t.Fatalf("통합 검사 활성 서명 키 준비: %v", err)
+	}
+	service := testService(t, database)
+	accountID, err := service.Register(t.Context(), "oauth_"+newIntegrationLoginSuffix(t), "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("통합 검사 계정 등록: %v", err)
+	}
+	verifier := "concurrent-postgresql-pkce-verifier"
+	request := AuthorizeRequest{
+		ClientID:            "test-client",
+		RedirectURI:         "http://127.0.0.1/callback",
+		CodeChallenge:       digest(verifier),
+		CodeChallengeMethod: "S256",
+		Resource:            service.config.Resource,
+	}
+	for range 10 {
+		code, err := service.Authorize(t.Context(), accountID, request)
+		if err != nil {
+			t.Fatalf("인가 코드 발급: %v", err)
+		}
+		type exchangeResult struct {
+			token Token
+			err   error
+		}
+		results := make(chan exchangeResult, 2)
+		var waitGroup sync.WaitGroup
+		for range 2 {
+			waitGroup.Go(func() {
+				token, err := service.Exchange(t.Context(), code, request.ClientID, request.RedirectURI, verifier)
+				results <- exchangeResult{token: token, err: err}
+			})
+		}
+		waitGroup.Wait()
+		close(results)
+
+		var issued Token
+		successes := 0
+		var exchangeErrors []error
+		for result := range results {
+			if result.err != nil {
+				exchangeErrors = append(exchangeErrors, result.err)
+				continue
+			}
+			successes++
+			issued = result.token
+		}
+		if successes != 1 {
+			t.Fatalf("동시 인가 코드 교환 성공 수 = %d, want 1; 오류 = %v", successes, exchangeErrors)
+		}
+		revoked, err := database.IsTokenRevoked(t.Context(), issued.ID, time.Now().UTC())
+		if err != nil {
+			t.Fatalf("동시 교환 뒤 폐기 목록 조회: %v", err)
+		}
+		if !revoked {
+			t.Fatal("동시 교환의 발급 토큰이 재사용 요청으로 폐기되지 않았다")
+		}
 	}
 }
 
@@ -353,7 +401,7 @@ func TestAuthenticateRehashesLegacyDirectBcryptHash(t *testing.T) {
 	}
 }
 
-func testService(t *testing.T, backend *memoryStore) *Service {
+func testService(t *testing.T, backend authStore) *Service {
 	t.Helper()
 	redirect, err := url.Parse("http://127.0.0.1/callback")
 	if err != nil {
@@ -366,14 +414,43 @@ func testService(t *testing.T, backend *memoryStore) *Service {
 	return service
 }
 
+func newAuthorizationCodeIntegrationStore(t *testing.T) *store.Store {
+	t.Helper()
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
+			t.Fatal("TEST_DATABASE_REQUIRED가 설정됐지만 TEST_DATABASE_URL이 비어 있다")
+		}
+		t.Skip("TEST_DATABASE_URL이 없어 인가 코드 통합 테스트를 건너뛴다")
+	}
+	graphName := os.Getenv("AGE_GRAPH_NAME")
+	if graphName == "" {
+		graphName = "agent_context"
+	}
+	database, err := store.New(t.Context(), databaseURL, graphName)
+	if err != nil {
+		t.Fatalf("통합 검사 저장소 준비: %v", err)
+	}
+	t.Cleanup(database.Close)
+	return database
+}
+
+func newIntegrationLoginSuffix(t *testing.T) string {
+	t.Helper()
+	id, err := model.NewID()
+	if err != nil {
+		t.Fatalf("통합 검사 계정 식별자 생성: %v", err)
+	}
+	return strings.ReplaceAll(id.String(), "-", "")[:12]
+}
+
 type memoryStore struct {
-	mu                           sync.Mutex
-	accounts                     map[string]store.Account
-	codes                        map[string]store.AuthorizationCode
-	revoked                      map[string]time.Time
-	keys                         []store.SigningKey
-	setAuthorizationCodeTokenErr error
-	activeKeyConflict            *store.SigningKey
+	mu                sync.Mutex
+	accounts          map[string]store.Account
+	codes             map[string]store.AuthorizationCode
+	revoked           map[string]time.Time
+	keys              []store.SigningKey
+	activeKeyConflict *store.SigningKey
 }
 
 func newMemoryStore() *memoryStore {
@@ -416,7 +493,26 @@ func (s *memoryStore) CreateAuthorizationCode(_ context.Context, code store.Auth
 	s.codes[code.Hash] = code
 	return nil
 }
-func (s *memoryStore) ConsumeAuthorizationCode(_ context.Context, hash string, now time.Time) (store.AuthorizationCode, error) {
+func (s *memoryStore) AuthorizationCodeForExchange(_ context.Context, hash string, now time.Time) (store.AuthorizationCode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	code, ok := s.codes[hash]
+	if !ok {
+		return store.AuthorizationCode{}, store.ErrNotFound
+	}
+	if code.ConsumedAt != nil {
+		used := store.CodeUsedError{TokenID: code.IssuedTokenID, IssuedAt: code.IssuedAt}
+		if code.IssuedTokenExpiresAt != nil {
+			used.TokenExpiresAt = code.IssuedTokenExpiresAt.UTC()
+		}
+		return store.AuthorizationCode{}, used
+	}
+	if !code.ExpiresAt.After(now) {
+		return store.AuthorizationCode{}, store.ErrNotFound
+	}
+	return code, nil
+}
+func (s *memoryStore) ConsumeAuthorizationCode(_ context.Context, hash, tokenID string, now, tokenExpiresAt time.Time) (store.AuthorizationCode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	code, ok := s.codes[hash]
@@ -434,20 +530,10 @@ func (s *memoryStore) ConsumeAuthorizationCode(_ context.Context, hash string, n
 		return store.AuthorizationCode{}, store.ErrNotFound
 	}
 	code.ConsumedAt = &now
+	code.IssuedTokenID = tokenID
+	code.IssuedTokenExpiresAt = &tokenExpiresAt
 	s.codes[hash] = code
 	return code, nil
-}
-func (s *memoryStore) SetAuthorizationCodeToken(_ context.Context, hash, tokenID string, expiresAt time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.setAuthorizationCodeTokenErr != nil {
-		return s.setAuthorizationCodeTokenErr
-	}
-	code := s.codes[hash]
-	code.IssuedTokenID = tokenID
-	code.IssuedTokenExpiresAt = &expiresAt
-	s.codes[hash] = code
-	return nil
 }
 func (s *memoryStore) RevokeToken(_ context.Context, tokenID string, expiresAt time.Time) error {
 	s.mu.Lock()

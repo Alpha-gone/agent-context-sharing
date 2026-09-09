@@ -79,6 +79,7 @@
 ## 구현 코드와 개발 환경
 
 - 무엇을 만들지는 `spec/service/agent-context/SDD.md`가 소유한다. 이 절은 그것을 저장소에 어떻게 두는지만 정한다.
+- Go 1.27.1 검증 도구가 기본 셸의 `PATH`에 없으면 IntelliJ IDEA에 설치·등록된 프로젝트 Go SDK를 사용한다. IntelliJ IDEA의 Go SDK를 선택한 실행 구성 또는 해당 SDK를 사용하는 IDE 통합 터미널에서 `go version`, `go test`, `go build`, `go vet`, `gofmt`를 실행하며, 기본 셸에서 `go`를 찾지 못한 것만으로 Go 미설치나 검증 불가로 판단하지 않는다.
 - 패키지 배치는 `SDD.md`의 「패키지 경계」를 따른다. 그 표에 없는 코드는 마이그레이션 실행기처럼 애플리케이션 밖의 도구뿐이며, 도구는 `cmd/`와 `internal/`에 둔다.
 - 배포 구성 값은 환경 변수로 받고 목록을 `.env.example`에 유지한다. `SDD.md`의 「배포 구성」에 없는 값을 새로 열지 않는다.
 - `Dockerfile`과 `compose.yaml`은 개발 환경만 다룬다. 운영 배포 형상은 이 저장소가 아직 소유하지 않는다.

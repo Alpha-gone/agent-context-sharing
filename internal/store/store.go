@@ -14,6 +14,9 @@ import (
 // ErrNotFound는 지정한 그래프 안에서 대상을 찾지 못했음을 나타낸다.
 var ErrNotFound = errors.New("대상을 찾지 못했다")
 
+// ErrActiveSigningKeyExists는 이미 활성 서명 키가 있을 때 새 활성 키를 만들려 했음을 나타낸다.
+var ErrActiveSigningKeyExists = errors.New("활성 서명 키가 이미 있다")
+
 // VersionConflictError는 낙관적 잠금 비교에 실패했을 때 현재 판 번호를 담는다.
 type VersionConflictError struct {
 	// Current 필드는 저장된 대상의 현재 판 번호다.

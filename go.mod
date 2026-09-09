@@ -2,7 +2,11 @@ module agent_context_sharing
 
 go 1.27.1
 
-require github.com/jackc/pgx/v5 v5.10.0
+require (
+	github.com/go-jose/go-jose/v4 v4.1.1
+	github.com/jackc/pgx/v5 v5.10.0
+	golang.org/x/crypto v0.41.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

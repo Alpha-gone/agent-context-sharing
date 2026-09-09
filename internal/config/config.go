@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"agent_context_sharing/internal/plan"
 )
 
 // Environment는 구성 값을 읽는 환경 변수 경계다. 테스트는 이 함수를 대체해 외부 환경에
@@ -46,6 +48,10 @@ type Config struct {
 	OAuthClientIDs []string
 	// OAuthRedirectURIs 필드에는 허용된 OAuth 콜백 주소를 둔다.
 	OAuthRedirectURIs []*url.URL
+	// BcryptCost 필드에는 새 계정 비밀번호 해시에 쓸 비용 계수를 둔다.
+	BcryptCost int
+	// AccountPlans 필드에는 계정별로 배정한 플랜 값을 둔다.
+	AccountPlans plan.AccountPlans
 	// TLSMode 필드에는 TLS 종단 배치를 둔다.
 	TLSMode TLSMode
 	// TrustedProxies 필드에는 전달 헤더를 신뢰할 역방향 프록시의 주소 대역을 둔다.
@@ -114,6 +120,16 @@ func Load(env Environment) (Config, error) {
 		return Config{}, err
 	}
 	cfg.OAuthRedirectURIs = redirects
+	bcryptCost, err := strconv.Atoi(strings.TrimSpace(env("BCRYPT_COST")))
+	if err != nil || bcryptCost < 4 || bcryptCost > 31 {
+		return Config{}, fmt.Errorf("BCRYPT_COST가 4에서 31 사이의 정수가 아니다")
+	}
+	cfg.BcryptCost = bcryptCost
+	accountPlans, err := plan.ParseAccountPlans(strings.TrimSpace(env("ACCOUNT_PLAN_LIMITS")))
+	if err != nil {
+		return Config{}, fmt.Errorf("ACCOUNT_PLAN_LIMITS: %w", err)
+	}
+	cfg.AccountPlans = accountPlans
 
 	trustedProxies, err := parsePrefixes("TRUSTED_PROXY_CIDRS", env("TRUSTED_PROXY_CIDRS"))
 	if err != nil {

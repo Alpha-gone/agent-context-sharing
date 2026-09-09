@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"testing"
+
+	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/plan"
+)
 
 // TestLoad은 유효한 개발 구성이 형식화된 값으로 읽히는지 확인한다.
 func TestLoad(t *testing.T) {
@@ -14,6 +19,29 @@ func TestLoad(t *testing.T) {
 	}
 	if len(cfg.OAuthClientIDs) != 1 || len(cfg.OAuthRedirectURIs) != 1 {
 		t.Fatalf("OAuth 목록이 다르다: %+v", cfg)
+	}
+}
+
+func TestLoadAccountPlanLimits(t *testing.T) {
+	accountID, err := model.NewID()
+	if err != nil {
+		t.Fatalf("UUIDv7 생성: %v", err)
+	}
+	values := validValues()
+	values["ACCOUNT_PLAN_LIMITS"] = `{"` + accountID.String() + `":{"max_hops":6,"writes_per_minute":20}}`
+	cfg, err := Load(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("플랜 구성 읽기: %v", err)
+	}
+	if got := cfg.AccountPlans.For(accountID); got.MaxHops != 6 || got.WritesPerMinute != 20 {
+		t.Fatalf("계정 플랜 = %+v", got)
+	}
+	other, err := model.NewID()
+	if err != nil {
+		t.Fatalf("UUIDv7 생성: %v", err)
+	}
+	if got := cfg.AccountPlans.For(other); got != plan.Default() {
+		t.Fatalf("기본 플랜 = %+v, want %+v", got, plan.Default())
 	}
 }
 
@@ -43,6 +71,9 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		},
 		"신뢰 대역 중복": func(values map[string]string) {
 			values["TRUSTED_PROXY_CIDRS"] = "10.0.0.0/8,10.0.0.0/8"
+		},
+		"플랜 구성 키 오류": func(values map[string]string) {
+			values["ACCOUNT_PLAN_LIMITS"] = `{"0198e7c0-0000-7000-8000-000000000001":{"unknown":1}}`
 		},
 	}
 	for name, mutate := range tests {
@@ -117,6 +148,7 @@ func validValues() map[string]string {
 		"OAUTH_CLIENT_IDS":      "agent-context-dev",
 		"OAUTH_REDIRECT_URIS":   "http://127.0.0.1/callback",
 		"BCRYPT_COST":           "12",
+		"ACCOUNT_PLAN_LIMITS":   "",
 		"TLS_TERMINATION":       "proxy",
 		"TRUSTED_PROXY_CIDRS":   "10.0.0.0/8",
 		"TLS_CERT_FILE":         "",

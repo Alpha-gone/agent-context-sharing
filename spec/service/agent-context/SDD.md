@@ -233,7 +233,7 @@ JWKS와 폐기 목록을 데이터베이스에 두는 것은 이 문서의 설�
 | `authz`  | 계정 등록과 자격 증명 검증, 인가 코드 흐름, 토큰 발급·검증, JWKS 공개, 폐기 목록 | `store`                  |
 | `mcp`    | 연산 13종의 파라미터 해석, 오류 사상, 응답 구성                                  | 아래 전부                |
 | `web`    | 화면 여섯 종의 처리와 렌더링                                                     | 아래 전부                |
-| `config` | 배포 구성 값의 읽기와 검증                                                       | 없음                     |
+| `config` | 배포 구성 값의 읽기와 검증                                                       | `plan`                   |
 
 `model`이 아무것에도 의존하지 않는 이유는 「컨텍스트 모델」이 논리 모델을 그래프 구조와 무관하게 정의했기 때문이다. 타입과 검증 규칙이 저장 방식을 몰라야 `TBD-AGENT_CONTEXT-038`의 비그래프 기준선을 같은 타입으로 구성할 수 있다.
 
@@ -251,6 +251,7 @@ flowchart TB
     Store[store]
     Plan[plan]
     Model[model]
+    Config[config]
 
     Mcp --> Search
     Mcp --> Perm
@@ -267,6 +268,7 @@ flowchart TB
     Audit --> Plan
     Index --> Store
     Authz --> Store
+    Config --> Plan
     Store --> Model
 ```
 
@@ -401,6 +403,25 @@ ES256을 고르는 이유는 공개하는 JWKS 때문이다. `/jwks.json`이 공
 ### 계정 플랜 값
 
 `plan`이 「플랜이 정하는 항목」의 14개 항목과 기본값을 갖는다. 배포 구성이 값을 주면 덮어쓰고 주지 않으면 기본값을 쓴다. 목록에 없는 값은 이 패키지가 알지 못하므로 플랜으로 바뀔 수 없다.
+
+배포 구성 `ACCOUNT_PLAN_LIMITS`는 계정 UUIDv7를 키로 하고 플랜 값을 값으로 하는 JSON 객체다. 계정 값은 아래 구성 키의 부분 객체이며, 없는 키는 `Default()`의 값을 유지한다. `0`은 한도가 없거나 기간을 적용하지 않음을 명시하는 값으로 쓸 수 있다. 페이지 크기 기본값은 양수여야 하고, 상한이 `0`이 아닐 때 기본값보다 작을 수 없다. 계정 식별자는 `model`의 UUIDv7 판정을 그대로 쓴다. 「플랜이 정하는 항목」이 기록 보존을 대상 보관 기간 이상으로 정했으므로 `audit_retention_days`는 `retention_days`보다 작을 수 없고, 대상 보관이 무기한이면 기록 보존도 무기한이어야 한다. `config`가 이 값을 읽어 `plan`의 계정별 값 집합으로 해석하므로 잘못된 UUID, JSON, 음수 값, 잘못된 페이지 크기, 기록 보존 하한 위반과 목록 밖 키는 기동 전에 거부한다.
+
+| 구성 키                      | `Limits` 필드                   |
+|------------------------------|---------------------------------|
+| `max_hops`                   | `MaxHops`                       |
+| `max_hop_nodes`              | `MaxHopNodes`                   |
+| `graph_page`                 | `GraphPage`                     |
+| `context_budget`             | `ContextBudget`                 |
+| `graphs_per_account`         | `GraphsPerAccount`              |
+| `stored_characters_per_graph`| `StoredCharactersPerGraph`      |
+| `retention_days`             | `RetentionDays`                 |
+| `grace_days`                 | `GraceDays`                     |
+| `audit_retention_days`       | `AuditRetentionDays`            |
+| `tier_move_after_days`       | `TierMoveAfterDays`             |
+| `rejected_operation_days`    | `RejectedOperationDays`         |
+| `writes_per_minute`          | `WritesPerMinute`               |
+| `proposal_retention_days`    | `ProposalRetentionDays`         |
+| `relation_page`              | `RelationPage`                  |
 
 한도 검사는 두 단계로 나눈다.
 
@@ -1881,7 +1902,7 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 | 색인 작업자 배치                           | 「배치 조합」            |
 | 인가 서버 배치                             | 「배치 조합」            |
 | 저장 계층과 이동 기준                      | 「저장 계층화」          |
-| 계정 플랜 항목의 값                        | 「계정 플랜 값」         |
+| 계정 플랜 항목의 값 (`ACCOUNT_PLAN_LIMITS`) | 「계정 플랜 값」         |
 | 비밀번호 해시 비용 계수                    | 「인가 서버」            |
 | 등록 클라이언트와 `redirect_uri` 허용 목록 | 「인가 코드 흐름」       |
 | 임베딩 제공자 접속 정보                    | 「임베딩 모델」          |

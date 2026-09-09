@@ -67,7 +67,7 @@ func TestSigningKeyIntegration(t *testing.T) {
 		Algorithm:  "ES256",
 		PublicKey:  "test-public-key",
 		PrivateKey: "test-private-key",
-		State:      "active",
+		State:      "retired",
 		CreatedAt:  time.Now().UTC(),
 	}
 	if err := store.CreateSigningKey(t.Context(), key); err != nil {
@@ -82,6 +82,110 @@ func TestSigningKeyIntegration(t *testing.T) {
 	}
 	if _, err := store.SigningKey(t.Context(), "missing-"+key.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("없는 서명 키 조회 = %v, want ErrNotFound", err)
+	}
+	if _, err := store.ActiveSigningKey(t.Context()); errors.Is(err, ErrNotFound) {
+		active := key
+		active.ID = "active-" + newTestID(t).String()
+		active.State = "active"
+		if err := store.CreateSigningKey(t.Context(), active); err != nil {
+			t.Fatalf("초기 활성 서명 키 생성: %v", err)
+		}
+	}
+	duplicate := key
+	duplicate.ID = "duplicate-active-" + newTestID(t).String()
+	duplicate.State = "active"
+	if err := store.CreateSigningKey(t.Context(), duplicate); !errors.Is(err, ErrActiveSigningKeyExists) {
+		t.Fatalf("두 번째 활성 서명 키 생성 = %v, want ErrActiveSigningKeyExists", err)
+	}
+}
+
+// TestRotateSigningKeyIntegration은 동시에 시작한 회전 중 하나만 활성 키를 만들고,
+// 충돌한 요청은 저장 실패가 아닌 활성 키 경합으로 구분하는지 확인한다.
+func TestRotateSigningKeyIntegration(t *testing.T) {
+	store := newIntegrationStore(t)
+	if _, err := store.ActiveSigningKey(t.Context()); errors.Is(err, ErrNotFound) {
+		key := SigningKey{
+			ID:         "active-" + newTestID(t).String(),
+			Algorithm:  "ES256",
+			PublicKey:  "test-public-key",
+			PrivateKey: "test-private-key",
+			State:      "active",
+			CreatedAt:  time.Now().UTC(),
+		}
+		if err := store.CreateSigningKey(t.Context(), key); err != nil {
+			t.Fatalf("초기 활성 서명 키 생성: %v", err)
+		}
+	} else if err != nil {
+		t.Fatalf("활성 서명 키 조회: %v", err)
+	}
+
+	connection, err := store.pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatalf("서명 키 잠금 연결 확보: %v", err)
+	}
+	defer connection.Release()
+	transaction, err := connection.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("서명 키 잠금 트랜잭션 시작: %v", err)
+	}
+	defer transaction.Rollback(t.Context())
+	if _, err := transaction.Exec(t.Context(), `LOCK TABLE public.signing_key IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("서명 키 테이블 잠금: %v", err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var waitGroup sync.WaitGroup
+	for range 2 {
+		key := SigningKey{
+			ID:         "rotate-" + newTestID(t).String(),
+			Algorithm:  "ES256",
+			PublicKey:  "test-public-key",
+			PrivateKey: "test-private-key",
+			State:      "active",
+			CreatedAt:  time.Now().UTC(),
+		}
+		waitGroup.Go(func() {
+			<-start
+			results <- store.RotateSigningKey(t.Context(), key)
+		})
+	}
+	close(start)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		var waiting int
+		err := transaction.QueryRow(t.Context(), `SELECT count(*) FROM pg_locks WHERE relation = 'public.signing_key'::regclass AND mode = 'RowExclusiveLock' AND NOT granted`).Scan(&waiting)
+		if err != nil {
+			t.Fatalf("대기 중인 서명 키 회전 조회: %v", err)
+		}
+		if waiting == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("대기 중인 서명 키 회전 수 = %d, want 2", waiting)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := transaction.Commit(t.Context()); err != nil {
+		t.Fatalf("서명 키 테이블 잠금 해제: %v", err)
+	}
+
+	waitGroup.Wait()
+	close(results)
+	succeeded, conflicted := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrActiveSigningKeyExists):
+			conflicted++
+		default:
+			t.Fatalf("동시 서명 키 회전 = %v", err)
+		}
+	}
+	if succeeded != 1 || conflicted != 1 {
+		t.Fatalf("동시 서명 키 회전 성공=%d, 경합=%d, want 각각 1", succeeded, conflicted)
 	}
 }
 
@@ -188,8 +292,9 @@ func TestAuthorizationCodeIntegration(t *testing.T) {
 	}
 
 	tokenID := "token-" + newTestID(t).String()
-	if err := store.SetAuthorizationCodeTokenID(t.Context(), code.Hash, tokenID); err != nil {
-		t.Fatalf("발급 토큰 식별자 기록: %v", err)
+	tokenExpiresAt := time.Now().UTC().Add(time.Hour)
+	if err := store.SetAuthorizationCodeToken(t.Context(), code.Hash, tokenID, tokenExpiresAt); err != nil {
+		t.Fatalf("발급 토큰 기록: %v", err)
 	}
 
 	// 재사용은 폐기할 토큰 식별자를 담아 거절한다.
@@ -200,6 +305,9 @@ func TestAuthorizationCodeIntegration(t *testing.T) {
 	}
 	if used.TokenID != tokenID {
 		t.Fatalf("재사용 오류의 토큰 식별자 = %q, want %q", used.TokenID, tokenID)
+	}
+	if !used.TokenExpiresAt.Equal(tokenExpiresAt) {
+		t.Fatalf("재사용 오류의 토큰 만료 시각 = %s, want %s", used.TokenExpiresAt, tokenExpiresAt)
 	}
 
 	// 없는 코드는 재사용과 구분한다.

@@ -42,6 +42,52 @@ func TestAuthorizationCodeSingleUseRevokesIssuedToken(t *testing.T) {
 	}
 }
 
+func TestExchangeRejectsAuthorizationCodeForOtherResource(t *testing.T) {
+	backend := newMemoryStore()
+	service := testService(t, backend)
+	accountID, err := model.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := "resource-change-verifier"
+	code := "resource-change-code"
+	now := time.Now().UTC()
+	if err := backend.CreateAuthorizationCode(t.Context(), store.AuthorizationCode{Hash: digest(code), ClientID: "test-client", AccountID: accountID, RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digestPKCE(verifier), Resource: "https://other.test/mcp", IssuedAt: now, ExpiresAt: now.Add(authorizationCodeLifetime)}); err != nil {
+		t.Fatalf("인가 코드 저장: %v", err)
+	}
+	if _, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier); err == nil {
+		t.Fatal("다른 resource의 인가 코드가 교환됐다")
+	}
+}
+
+func TestExchangeRevokesTokenWhenAuthorizationCodeRecordFails(t *testing.T) {
+	backend := newMemoryStore()
+	backend.setAuthorizationCodeTokenErr = errors.New("기록 실패")
+	service := testService(t, backend)
+	accountID, err := service.Register(t.Context(), "recordfail", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("계정 등록: %v", err)
+	}
+	verifier := "record-failure-verifier"
+	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digestPKCE(verifier), CodeChallengeMethod: "S256", Resource: service.config.Resource})
+	if err != nil {
+		t.Fatalf("인가 코드 발급: %v", err)
+	}
+	if _, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier); err == nil {
+		t.Fatal("토큰 기록 실패가 성공으로 처리됐다")
+	}
+	if len(backend.revoked) != 1 {
+		t.Fatalf("기록 실패 뒤 폐기 토큰 수 = %d, want 1", len(backend.revoked))
+	}
+}
+
+func TestAuthenticateUsesPasswordMismatchForMissingLoginID(t *testing.T) {
+	service := testService(t, newMemoryStore())
+	if _, err := service.Authenticate(t.Context(), "missing", "wrong password"); !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+		t.Fatalf("없는 로그인 아이디 인증 = %v, want bcrypt 불일치", err)
+	}
+}
+
 func TestAuthorizationCodeConcurrentExchangeAllowsOne(t *testing.T) {
 	backend := newMemoryStore()
 	service := testService(t, backend)
@@ -119,6 +165,51 @@ func TestVerifyRejectsTokenWithUnknownKeyID(t *testing.T) {
 	}
 	if _, _, err := service.Verify(t.Context(), raw, "web"); err == nil {
 		t.Fatal("알 수 없는 kid 토큰이 다른 공개 키로 검증됐다")
+	}
+}
+
+func TestVerifyRequiresExpirationClaim(t *testing.T) {
+	service := testService(t, newMemoryStore())
+	accountID, err := model.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := service.activeKey(t.Context())
+	if err != nil {
+		t.Fatalf("서명 키 준비: %v", err)
+	}
+	var private jose.JSONWebKey
+	if err := json.Unmarshal([]byte(key.PrivateKey), &private); err != nil {
+		t.Fatalf("개인 키 해석: %v", err)
+	}
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: private.Key}, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", key.ID))
+	if err != nil {
+		t.Fatalf("JWT 서명기 생성: %v", err)
+	}
+	now := time.Now().UTC()
+	raw, err := jwt.Signed(signer).Claims(tokenClaims{Claims: jwt.Claims{Issuer: service.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{service.config.Resource}, IssuedAt: jwt.NewNumericDate(now), ID: "without-exp"}, AuthenticatedAt: now.Unix()}).Serialize()
+	if err != nil {
+		t.Fatalf("만료 없는 JWT 발급: %v", err)
+	}
+	if _, _, err := service.Verify(t.Context(), raw, service.config.Resource); err == nil {
+		t.Fatal("exp 없는 토큰이 검증됐다")
+	}
+}
+
+func TestActiveKeyUsesExistingKeyAfterConcurrentCreation(t *testing.T) {
+	backend := newMemoryStore()
+	existing, err := newSigningKey()
+	if err != nil {
+		t.Fatalf("기존 서명 키 생성: %v", err)
+	}
+	backend.activeKeyConflict = &existing
+	service := testService(t, backend)
+	key, err := service.activeKey(t.Context())
+	if err != nil {
+		t.Fatalf("경쟁 뒤 활성 서명 키 조회: %v", err)
+	}
+	if key.ID != existing.ID {
+		t.Fatalf("경쟁 뒤 활성 서명 키 = %q, want %q", key.ID, existing.ID)
 	}
 }
 
@@ -276,11 +367,13 @@ func testService(t *testing.T, backend *memoryStore) *Service {
 }
 
 type memoryStore struct {
-	mu       sync.Mutex
-	accounts map[string]store.Account
-	codes    map[string]store.AuthorizationCode
-	revoked  map[string]time.Time
-	keys     []store.SigningKey
+	mu                           sync.Mutex
+	accounts                     map[string]store.Account
+	codes                        map[string]store.AuthorizationCode
+	revoked                      map[string]time.Time
+	keys                         []store.SigningKey
+	setAuthorizationCodeTokenErr error
+	activeKeyConflict            *store.SigningKey
 }
 
 func newMemoryStore() *memoryStore {
@@ -331,7 +424,11 @@ func (s *memoryStore) ConsumeAuthorizationCode(_ context.Context, hash string, n
 		return store.AuthorizationCode{}, store.ErrNotFound
 	}
 	if code.ConsumedAt != nil {
-		return store.AuthorizationCode{}, store.CodeUsedError{TokenID: code.IssuedTokenID, IssuedAt: code.IssuedAt}
+		used := store.CodeUsedError{TokenID: code.IssuedTokenID, IssuedAt: code.IssuedAt}
+		if code.IssuedTokenExpiresAt != nil {
+			used.TokenExpiresAt = code.IssuedTokenExpiresAt.UTC()
+		}
+		return store.AuthorizationCode{}, used
 	}
 	if !code.ExpiresAt.After(now) {
 		return store.AuthorizationCode{}, store.ErrNotFound
@@ -340,11 +437,15 @@ func (s *memoryStore) ConsumeAuthorizationCode(_ context.Context, hash string, n
 	s.codes[hash] = code
 	return code, nil
 }
-func (s *memoryStore) SetAuthorizationCodeTokenID(_ context.Context, hash, tokenID string) error {
+func (s *memoryStore) SetAuthorizationCodeToken(_ context.Context, hash, tokenID string, expiresAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.setAuthorizationCodeTokenErr != nil {
+		return s.setAuthorizationCodeTokenErr
+	}
 	code := s.codes[hash]
 	code.IssuedTokenID = tokenID
+	code.IssuedTokenExpiresAt = &expiresAt
 	s.codes[hash] = code
 	return nil
 }
@@ -363,10 +464,12 @@ func (s *memoryStore) IsTokenRevoked(_ context.Context, tokenID string, now time
 func (s *memoryStore) ActiveSigningKey(_ context.Context) (store.SigningKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.keys) == 0 {
-		return store.SigningKey{}, store.ErrNotFound
+	for _, key := range s.keys {
+		if key.State == "active" {
+			return key, nil
+		}
 	}
-	return s.keys[0], nil
+	return store.SigningKey{}, store.ErrNotFound
 }
 func (s *memoryStore) SigningKey(_ context.Context, keyID string) (store.SigningKey, error) {
 	s.mu.Lock()
@@ -386,6 +489,11 @@ func (s *memoryStore) SigningKeys(_ context.Context) ([]store.SigningKey, error)
 func (s *memoryStore) CreateSigningKey(_ context.Context, key store.SigningKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activeKeyConflict != nil && key.State == "active" {
+		s.keys = append([]store.SigningKey{*s.activeKeyConflict}, s.keys...)
+		s.activeKeyConflict = nil
+		return store.ErrActiveSigningKeyExists
+	}
 	s.keys = append([]store.SigningKey{key}, s.keys...)
 	return nil
 }

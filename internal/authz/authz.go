@@ -48,8 +48,9 @@ type Config struct {
 
 // Service는 데이터 접근 계층 위에서 인증·인가 계약을 수행한다.
 type Service struct {
-	store  authStore
-	config Config
+	store             authStore
+	config            Config
+	dummyPasswordHash string
 }
 
 // authStore는 인가 서버가 데이터베이스 접근 계층에 요구하는 최소 계약이다.
@@ -59,7 +60,7 @@ type authStore interface {
 	UpdatePasswordHashIfMatches(context.Context, model.ID, string, string) (bool, error)
 	CreateAuthorizationCode(context.Context, store.AuthorizationCode) error
 	ConsumeAuthorizationCode(context.Context, string, time.Time) (store.AuthorizationCode, error)
-	SetAuthorizationCodeTokenID(context.Context, string, string) error
+	SetAuthorizationCodeToken(context.Context, string, string, time.Time) error
 	RevokeToken(context.Context, string, time.Time) error
 	IsTokenRevoked(context.Context, string, time.Time) (bool, error)
 	ActiveSigningKey(context.Context) (store.SigningKey, error)
@@ -87,7 +88,11 @@ func New(source authStore, config Config) (*Service, error) {
 	if len(config.Clients) == 0 || len(config.RedirectURIs) == 0 {
 		return nil, fmt.Errorf("등록 OAuth 클라이언트와 redirect_uri가 필요하다")
 	}
-	return &Service{store: source, config: config}, nil
+	dummyPasswordHash, err := hashPassword("", config.BcryptCost)
+	if err != nil {
+		return nil, fmt.Errorf("더미 비밀번호 해시 생성: %w", err)
+	}
+	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash}, nil
 }
 
 // Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.
@@ -114,6 +119,10 @@ func (s *Service) Register(ctx context.Context, loginID, password string) (model
 // 해시는 성공한 로그인에서 현재 형식으로 바꾼다.
 func (s *Service) Authenticate(ctx context.Context, loginID, password string) (model.ID, error) {
 	account, err := s.store.AccountByLoginID(ctx, loginID)
+	if errors.Is(err, store.ErrNotFound) {
+		_, err := comparePassword(s.dummyPasswordHash, password)
+		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
+	}
 	if err != nil {
 		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
 	}
@@ -202,20 +211,28 @@ func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, ver
 	now := time.Now().UTC()
 	stored, err := s.store.ConsumeAuthorizationCode(ctx, digest(code), now)
 	if err != nil {
-		var used store.CodeUsedError
-		if errors.As(err, &used) && used.TokenID != "" {
-			_ = s.store.RevokeToken(ctx, used.TokenID, used.IssuedAt.Add(accessTokenLifetime))
+		if used, ok := errors.AsType[store.CodeUsedError](err); ok && used.TokenID != "" {
+			expiresAt := used.TokenExpiresAt
+			if expiresAt.IsZero() {
+				expiresAt = used.IssuedAt.Add(accessTokenLifetime + authorizationCodeLifetime)
+			}
+			if revokeErr := s.store.RevokeToken(ctx, used.TokenID, expiresAt); revokeErr != nil {
+				return Token{}, fmt.Errorf("invalid_grant: %w", errors.Join(err, revokeErr))
+			}
 		}
 		return Token{}, fmt.Errorf("invalid_grant: %w", err)
 	}
-	if stored.ClientID != clientID || stored.RedirectURI != redirectURI || digestPKCE(verifier) != stored.CodeChallenge {
+	if stored.ClientID != clientID || stored.RedirectURI != redirectURI || stored.Resource != s.config.Resource || digestPKCE(verifier) != stored.CodeChallenge {
 		return Token{}, fmt.Errorf("invalid_grant")
 	}
 	token, err := s.issue(ctx, stored.AccountID, s.config.Resource, now, now)
 	if err != nil {
 		return Token{}, err
 	}
-	if err := s.store.SetAuthorizationCodeTokenID(ctx, stored.Hash, token.ID); err != nil {
+	if err := s.store.SetAuthorizationCodeToken(ctx, stored.Hash, token.ID, token.ExpiresAt); err != nil {
+		if revokeErr := s.store.RevokeToken(ctx, token.ID, token.ExpiresAt); revokeErr != nil {
+			return Token{}, fmt.Errorf("인가 코드 토큰 기록과 토큰 폐기: %w", errors.Join(err, revokeErr))
+		}
 		return Token{}, err
 	}
 	return token, nil
@@ -256,7 +273,7 @@ func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (tok
 		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
 	var claims tokenClaims
-	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil {
+	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil {
 		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
 	revoked, err := s.store.IsTokenRevoked(ctx, claims.ID, time.Now().UTC())
@@ -361,7 +378,10 @@ func (s *Service) activeKey(ctx context.Context) (store.SigningKey, error) {
 		return store.SigningKey{}, err
 	}
 	if err := s.store.CreateSigningKey(ctx, key); err != nil {
-		return store.SigningKey{}, err
+		if !errors.Is(err, store.ErrActiveSigningKeyExists) {
+			return store.SigningKey{}, err
+		}
+		return s.store.ActiveSigningKey(ctx)
 	}
 	return key, nil
 }

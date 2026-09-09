@@ -67,6 +67,9 @@ func (s *Store) CreateAccount(ctx context.Context, account Account) error {
 
 // AccountByLoginID는 자격 증명 대조를 위해 계정을 읽는다.
 func (s *Store) AccountByLoginID(ctx context.Context, loginID string) (Account, error) {
+	if loginID == "" {
+		return Account{}, fmt.Errorf("계정 조회 인자가 올바르지 않다")
+	}
 	var account Account
 	var id string
 	err := s.pool.QueryRow(ctx, `SELECT account_id, login_id, password_hash, created_at FROM public.account WHERE login_id = $1`, loginID).Scan(&id, &account.LoginID, &account.PasswordHash, &account.CreatedAt)
@@ -99,6 +102,9 @@ func (s *Store) UpdatePasswordHashIfMatches(ctx context.Context, accountID model
 
 // CreateAuthorizationCode는 인가 코드 해시만 저장한다.
 func (s *Store) CreateAuthorizationCode(ctx context.Context, code AuthorizationCode) error {
+	if !validAuthorizationCode(code) {
+		return fmt.Errorf("인가 코드 생성 인자가 올바르지 않다")
+	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO public.authorization_code (code_hash, client_id, account_id, redirect_uri, code_challenge, resource, issued_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, code.Hash, code.ClientID, code.AccountID.String(), code.RedirectURI, code.CodeChallenge, code.Resource, code.IssuedAt, code.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("인가 코드 저장: %w", err)
@@ -109,6 +115,9 @@ func (s *Store) CreateAuthorizationCode(ctx context.Context, code AuthorizationC
 // ConsumeAuthorizationCode는 아직 소비되지 않고 만료되지 않은 코드만 한 문장으로 소비한다.
 // issued_token_id는 첫 소비 시점에 비어 있으므로 nullable로 받는다.
 func (s *Store) ConsumeAuthorizationCode(ctx context.Context, hash string, now time.Time) (AuthorizationCode, error) {
+	if hash == "" || now.IsZero() {
+		return AuthorizationCode{}, fmt.Errorf("인가 코드 소비 인자가 올바르지 않다")
+	}
 	var code AuthorizationCode
 	var accountID string
 	var issuedTokenID *string
@@ -155,6 +164,9 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, hash string, now t
 
 // SetAuthorizationCodeToken은 한 번 소비된 코드가 발급한 토큰과 정확한 만료 시각을 남긴다.
 func (s *Store) SetAuthorizationCodeToken(ctx context.Context, hash, tokenID string, expiresAt time.Time) error {
+	if hash == "" || tokenID == "" || expiresAt.IsZero() {
+		return fmt.Errorf("인가 코드 토큰 기록 인자가 올바르지 않다")
+	}
 	result, err := s.pool.Exec(ctx, `UPDATE public.authorization_code SET issued_token_id = $2, issued_token_expires_at = $3 WHERE code_hash = $1 AND consumed_at IS NOT NULL`, hash, tokenID, expiresAt)
 	if err != nil {
 		return fmt.Errorf("인가 코드 토큰 기록: %w", err)
@@ -167,6 +179,9 @@ func (s *Store) SetAuthorizationCodeToken(ctx context.Context, hash, tokenID str
 
 // RevokeToken은 만료 시각까지 토큰 식별자를 폐기 목록에 둔다.
 func (s *Store) RevokeToken(ctx context.Context, tokenID string, expiresAt time.Time) error {
+	if tokenID == "" || expiresAt.IsZero() {
+		return fmt.Errorf("토큰 폐기 인자가 올바르지 않다")
+	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO public.revoked_token (token_id, expires_at) VALUES ($1,$2) ON CONFLICT (token_id) DO UPDATE SET expires_at = EXCLUDED.expires_at`, tokenID, expiresAt)
 	if err != nil {
 		return fmt.Errorf("토큰 폐기: %w", err)
@@ -176,6 +191,9 @@ func (s *Store) RevokeToken(ctx context.Context, tokenID string, expiresAt time.
 
 // IsTokenRevoked는 아직 만료되지 않은 폐기 목록 항목을 확인한다.
 func (s *Store) IsTokenRevoked(ctx context.Context, tokenID string, now time.Time) (bool, error) {
+	if tokenID == "" || now.IsZero() {
+		return false, fmt.Errorf("토큰 폐기 조회 인자가 올바르지 않다")
+	}
 	var found bool
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.revoked_token WHERE token_id = $1 AND expires_at > $2)`, tokenID, now).Scan(&found)
 	if err != nil {
@@ -221,6 +239,9 @@ func (s *Store) SigningKeys(ctx context.Context) ([]SigningKey, error) {
 
 // CreateSigningKey는 새 키를 활성 또는 은퇴 상태로 저장한다.
 func (s *Store) CreateSigningKey(ctx context.Context, key SigningKey) error {
+	if !validSigningKey(key) {
+		return fmt.Errorf("서명 키 생성 인자가 올바르지 않다")
+	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO public.signing_key (key_id, algorithm, public_key, private_key, state, created_at) VALUES ($1,$2,$3,$4,$5,$6)`, key.ID, key.Algorithm, key.PublicKey, key.PrivateKey, key.State, key.CreatedAt)
 	if isUniqueViolation(err) && key.State == "active" {
 		return ErrActiveSigningKeyExists
@@ -233,6 +254,9 @@ func (s *Store) CreateSigningKey(ctx context.Context, key SigningKey) error {
 
 // RotateSigningKey는 현재 활성 키를 은퇴시키고 새 키를 하나의 트랜잭션에서 활성화한다.
 func (s *Store) RotateSigningKey(ctx context.Context, key SigningKey) error {
+	if !validSigningKey(key) || key.State != "active" {
+		return fmt.Errorf("서명 키 회전 인자가 올바르지 않다")
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("서명 키 회전 트랜잭션 시작: %w", err)
@@ -264,4 +288,12 @@ func (s *Store) signingKey(ctx context.Context, query string, args ...any) (Sign
 	}
 	key.CreatedAt = key.CreatedAt.UTC()
 	return key, nil
+}
+
+func validAuthorizationCode(code AuthorizationCode) bool {
+	return code.Hash != "" && code.ClientID != "" && code.AccountID.IsV7() && code.RedirectURI != "" && code.CodeChallenge != "" && code.Resource != "" && !code.IssuedAt.IsZero() && !code.ExpiresAt.IsZero() && code.ExpiresAt.After(code.IssuedAt)
+}
+
+func validSigningKey(key SigningKey) bool {
+	return key.ID != "" && key.Algorithm != "" && key.PublicKey != "" && key.PrivateKey != "" && (key.State == "active" || key.State == "retired") && !key.CreatedAt.IsZero()
 }

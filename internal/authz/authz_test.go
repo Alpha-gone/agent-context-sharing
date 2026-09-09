@@ -25,7 +25,7 @@ func TestAuthorizationCodeSingleUseRevokesIssuedToken(t *testing.T) {
 		t.Fatalf("계정 등록: %v", err)
 	}
 	verifier := "high-entropy-pkce-verifier"
-	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digestPKCE(verifier), CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
+	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
 	if err != nil {
 		t.Fatalf("인가 코드 발급: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestExchangeRejectsAuthorizationCodeForOtherResource(t *testing.T) {
 	verifier := "resource-change-verifier"
 	code := "resource-change-code"
 	now := time.Now().UTC()
-	if err := backend.CreateAuthorizationCode(t.Context(), store.AuthorizationCode{Hash: digest(code), ClientID: "test-client", AccountID: accountID, RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digestPKCE(verifier), Resource: "https://other.test/mcp", IssuedAt: now, ExpiresAt: now.Add(authorizationCodeLifetime)}); err != nil {
+	if err := backend.CreateAuthorizationCode(t.Context(), store.AuthorizationCode{Hash: digest(code), ClientID: "test-client", AccountID: accountID, RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), Resource: "https://other.test/mcp", IssuedAt: now, ExpiresAt: now.Add(authorizationCodeLifetime)}); err != nil {
 		t.Fatalf("인가 코드 저장: %v", err)
 	}
 	if _, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier); err == nil {
@@ -69,7 +69,7 @@ func TestExchangeRevokesTokenWhenAuthorizationCodeRecordFails(t *testing.T) {
 		t.Fatalf("계정 등록: %v", err)
 	}
 	verifier := "record-failure-verifier"
-	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digestPKCE(verifier), CodeChallengeMethod: "S256", Resource: service.config.Resource})
+	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: service.config.Resource})
 	if err != nil {
 		t.Fatalf("인가 코드 발급: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestAuthorizationCodeConcurrentExchangeAllowsOne(t *testing.T) {
 		t.Fatalf("계정 등록: %v", err)
 	}
 	verifier := "concurrent-pkce-verifier"
-	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digestPKCE(verifier), CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
+	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
 	if err != nil {
 		t.Fatalf("인가 코드 발급: %v", err)
 	}

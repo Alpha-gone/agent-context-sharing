@@ -56,7 +56,7 @@ func CheckRequest(name string, value, allowed int64) error {
 // CheckIncrease는 값을 늘리는 요청만 누적 한도로 막는다. 이미 초과한 상태의 읽기와
 // 축소는 허용해 플랜 하향이 기존 데이터를 삭제하지 않게 한다.
 func CheckIncrease(name string, current, delta, allowed int64) error {
-	if allowed > 0 && delta > 0 && current >= allowed {
+	if allowed > 0 && delta > 0 && delta > allowed-current {
 		return LimitError{Name: name, Current: current, Allowed: allowed}
 	}
 	return nil

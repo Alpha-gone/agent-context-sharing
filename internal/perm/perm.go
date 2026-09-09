@@ -19,6 +19,12 @@ type DeniedError struct{ Required model.GraphGrade }
 // Error는 권한 부족을 사람이 읽을 수 있는 형태로 만든다.
 func (error DeniedError) Error() string { return "그래프 권한이 부족하다" }
 
+// NotFoundError는 그래프가 없거나 요청 계정에 유효 등급이 없음을 나타낸다.
+type NotFoundError struct{}
+
+// Error는 존재를 드러내지 않는 그래프 부재 오류를 만든다.
+func (NotFoundError) Error() string { return "그래프를 찾을 수 없다" }
+
 // Require는 대상 그래프가 없거나 접근 불가이면 존재를 드러내지 않고 not found로 처리하고,
 // 유효 등급이 모자랄 때만 필요한 등급을 반환한다.
 func Require(ctx context.Context, source GradeStore, graphID, accountID model.ID, required model.GraphGrade) error {
@@ -30,7 +36,7 @@ func Require(ctx context.Context, source GradeStore, graphID, accountID model.ID
 		return err
 	}
 	if !found {
-		return fmt.Errorf("그래프를 찾을 수 없다")
+		return NotFoundError{}
 	}
 	if rank(actual) < rank(required) {
 		return DeniedError{Required: required}

@@ -222,7 +222,7 @@ func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, ver
 		}
 		return Token{}, fmt.Errorf("invalid_grant: %w", err)
 	}
-	if stored.ClientID != clientID || stored.RedirectURI != redirectURI || stored.Resource != s.config.Resource || digestPKCE(verifier) != stored.CodeChallenge {
+	if stored.ClientID != clientID || stored.RedirectURI != redirectURI || stored.Resource != s.config.Resource || digest(verifier) != stored.CodeChallenge {
 		return Token{}, fmt.Errorf("invalid_grant")
 	}
 	token, err := s.issue(ctx, stored.AccountID, s.config.Resource, now, now)
@@ -240,7 +240,8 @@ func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, ver
 
 // WebSession은 웹 채널 전용 audience와 12시간 수명을 가진 서명 쿠키 값을 발급한다.
 func (s *Service) WebSession(ctx context.Context, accountID model.ID, audience string) (Token, error) {
-	return s.issue(ctx, accountID, audience, time.Now().UTC(), time.Now().UTC())
+	now := time.Now().UTC()
+	return s.issue(ctx, accountID, audience, now, now)
 }
 
 // Verify는 기대 audience, 서명, 필수 클레임, 만료와 폐기 목록을 한 경로에서 확인한다.
@@ -427,4 +428,3 @@ func digest(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
-func digestPKCE(verifier string) string { return digest(verifier) }

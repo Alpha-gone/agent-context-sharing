@@ -59,8 +59,8 @@ type authStore interface {
 	AccountByLoginID(context.Context, string) (store.Account, error)
 	UpdatePasswordHashIfMatches(context.Context, model.ID, string, string) (bool, error)
 	CreateAuthorizationCode(context.Context, store.AuthorizationCode) error
-	ConsumeAuthorizationCode(context.Context, string, time.Time) (store.AuthorizationCode, error)
-	SetAuthorizationCodeToken(context.Context, string, string, time.Time) error
+	AuthorizationCodeForExchange(context.Context, string, time.Time) (store.AuthorizationCode, error)
+	ConsumeAuthorizationCode(context.Context, string, string, time.Time, time.Time) (store.AuthorizationCode, error)
 	RevokeToken(context.Context, string, time.Time) error
 	IsTokenRevoked(context.Context, string, time.Time) (bool, error)
 	ActiveSigningKey(context.Context) (store.SigningKey, error)
@@ -209,18 +209,10 @@ func (s *Service) Authorize(ctx context.Context, accountID model.ID, request Aut
 // Exchange는 코드를 조건부로 한 번 소비하고 PKCE를 검증한 뒤 MCP 접근 토큰을 발급한다.
 func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, verifier string) (Token, error) {
 	now := time.Now().UTC()
-	stored, err := s.store.ConsumeAuthorizationCode(ctx, digest(code), now)
+	hash := digest(code)
+	stored, err := s.store.AuthorizationCodeForExchange(ctx, hash, now)
 	if err != nil {
-		if used, ok := errors.AsType[store.CodeUsedError](err); ok && used.TokenID != "" {
-			expiresAt := used.TokenExpiresAt
-			if expiresAt.IsZero() {
-				expiresAt = used.IssuedAt.Add(accessTokenLifetime + authorizationCodeLifetime)
-			}
-			if revokeErr := s.store.RevokeToken(ctx, used.TokenID, expiresAt); revokeErr != nil {
-				return Token{}, fmt.Errorf("invalid_grant: %w", errors.Join(err, revokeErr))
-			}
-		}
-		return Token{}, fmt.Errorf("invalid_grant: %w", err)
+		return Token{}, s.invalidGrant(ctx, err)
 	}
 	if stored.ClientID != clientID || stored.RedirectURI != redirectURI || stored.Resource != s.config.Resource || digest(verifier) != stored.CodeChallenge {
 		return Token{}, fmt.Errorf("invalid_grant")
@@ -229,13 +221,23 @@ func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, ver
 	if err != nil {
 		return Token{}, err
 	}
-	if err := s.store.SetAuthorizationCodeToken(ctx, stored.Hash, token.ID, token.ExpiresAt); err != nil {
-		if revokeErr := s.store.RevokeToken(ctx, token.ID, token.ExpiresAt); revokeErr != nil {
-			return Token{}, fmt.Errorf("인가 코드 토큰 기록과 토큰 폐기: %w", errors.Join(err, revokeErr))
-		}
-		return Token{}, err
+	if _, err := s.store.ConsumeAuthorizationCode(ctx, hash, token.ID, now, token.ExpiresAt); err != nil {
+		return Token{}, s.invalidGrant(ctx, err)
 	}
 	return token, nil
+}
+
+func (s *Service) invalidGrant(ctx context.Context, err error) error {
+	if used, ok := errors.AsType[store.CodeUsedError](err); ok && used.TokenID != "" {
+		expiresAt := used.TokenExpiresAt
+		if expiresAt.IsZero() {
+			expiresAt = used.IssuedAt.Add(accessTokenLifetime + authorizationCodeLifetime)
+		}
+		if revokeErr := s.store.RevokeToken(ctx, used.TokenID, expiresAt); revokeErr != nil {
+			return fmt.Errorf("invalid_grant: %w", errors.Join(err, revokeErr))
+		}
+	}
+	return fmt.Errorf("invalid_grant: %w", err)
 }
 
 // WebSession은 웹 채널 전용 audience와 12시간 수명을 가진 서명 쿠키 값을 발급한다.

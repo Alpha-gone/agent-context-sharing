@@ -17,7 +17,7 @@ func TestLoad(t *testing.T) {
 	if cfg.HTTPAddr != ":8080" || cfg.EmbeddingDimension != 1024 {
 		t.Fatalf("핵심 구성 값이 다르다: %+v", cfg)
 	}
-	if len(cfg.OAuthClientIDs) != 1 || len(cfg.OAuthRedirectURIs) != 1 {
+	if len(cfg.OAuthClientIDs) != 1 || len(cfg.OAuthRedirectURIs) != 1 || cfg.ResourceServerURL.String() != "https://service.test/mcp" || cfg.AuthorizationServerURL.String() != "https://issuer.test" || len(cfg.MCPAllowedOrigins) != 1 {
 		t.Fatalf("OAuth 목록이 다르다: %+v", cfg)
 	}
 }
@@ -75,6 +75,9 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		"플랜 구성 키 오류": func(values map[string]string) {
 			values["ACCOUNT_PLAN_LIMITS"] = `{"0198e7c0-0000-7000-8000-000000000001":{"unknown":1}}`
 		},
+		"보호 리소스 경로 오류":    func(values map[string]string) { values["RESOURCE_SERVER_URL"] = "https://service.test/other" },
+		"인가 서버 origin 오류": func(values map[string]string) { values["AUTHORIZATION_SERVER_URL"] = "https://issuer.test/oauth" },
+		"허용 Origin 경로 오류": func(values map[string]string) { values["MCP_ALLOWED_ORIGINS"] = "https://client.test/callback" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -138,20 +141,23 @@ func TestGraphNamePattern(t *testing.T) {
 // validValues는 각 테스트가 독립적으로 바꿀 수 있는 유효한 배포 구성을 만든다.
 func validValues() map[string]string {
 	return map[string]string{
-		"HTTP_ADDR":             ":8080",
-		"DATABASE_URL":          "postgres://user:pass@localhost:5432/app",
-		"AGE_GRAPH_NAME":        "agent_context",
-		"EMBEDDING_BASE_URL":    "http://localhost:11434",
-		"EMBEDDING_MODEL":       "bge-m3",
-		"EMBEDDING_VECTOR_TYPE": "vector",
-		"EMBEDDING_DIMENSION":   "1024",
-		"OAUTH_CLIENT_IDS":      "agent-context-dev",
-		"OAUTH_REDIRECT_URIS":   "http://127.0.0.1/callback",
-		"BCRYPT_COST":           "12",
-		"ACCOUNT_PLAN_LIMITS":   "",
-		"TLS_TERMINATION":       "proxy",
-		"TRUSTED_PROXY_CIDRS":   "10.0.0.0/8",
-		"TLS_CERT_FILE":         "",
-		"TLS_KEY_FILE":          "",
+		"HTTP_ADDR":                ":8080",
+		"DATABASE_URL":             "postgres://user:pass@localhost:5432/app",
+		"AGE_GRAPH_NAME":           "agent_context",
+		"EMBEDDING_BASE_URL":       "http://localhost:11434",
+		"EMBEDDING_MODEL":          "bge-m3",
+		"EMBEDDING_VECTOR_TYPE":    "vector",
+		"EMBEDDING_DIMENSION":      "1024",
+		"OAUTH_CLIENT_IDS":         "agent-context-dev",
+		"OAUTH_REDIRECT_URIS":      "http://127.0.0.1/callback",
+		"RESOURCE_SERVER_URL":      "https://service.test/mcp",
+		"AUTHORIZATION_SERVER_URL": "https://issuer.test",
+		"MCP_ALLOWED_ORIGINS":      "https://client.test",
+		"BCRYPT_COST":              "12",
+		"ACCOUNT_PLAN_LIMITS":      "",
+		"TLS_TERMINATION":          "proxy",
+		"TRUSTED_PROXY_CIDRS":      "10.0.0.0/8",
+		"TLS_CERT_FILE":            "",
+		"TLS_KEY_FILE":             "",
 	}
 }

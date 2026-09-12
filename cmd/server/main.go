@@ -12,7 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/config"
+	"agent_context_sharing/internal/mcp"
+	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
 )
 
@@ -39,10 +42,31 @@ func run() error {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
 	defer database.Close()
+	authorization, err := authz.New(database, authz.Config{
+		Issuer:       cfg.AuthorizationServerURL.String(),
+		Resource:     cfg.ResourceServerURL.String(),
+		Clients:      cfg.OAuthClientIDs,
+		RedirectURIs: cfg.OAuthRedirectURIs,
+		BcryptCost:   cfg.BcryptCost,
+	})
+	if err != nil {
+		return fmt.Errorf("인가 서버 준비: %w", err)
+	}
+	resourceServer, err := mcp.New(mcp.Config{
+		ResourceURL:            cfg.ResourceServerURL,
+		AuthorizationServerURL: cfg.AuthorizationServerURL,
+		AllowedOrigins:         cfg.MCPAllowedOrigins,
+	}, func(ctx context.Context, raw, audience string) (model.ID, error) {
+		accountID, _, err := authorization.Verify(ctx, raw, audience)
+		return accountID, err
+	}, mcp.NewHandler(database, cfg.AccountPlans, slog.Default()))
+	if err != nil {
+		return fmt.Errorf("MCP 리소스 서버 준비: %w", err)
+	}
 	app := newApplication(database, slog.Default(), transportSecurity{
 		directTLS:      cfg.TLSMode == config.TLSModeDirect,
 		trustedProxies: cfg.TrustedProxies,
-	})
+	}, resourceServer)
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: app.handler()}
 
 	stopSignals := make(chan os.Signal, 1)

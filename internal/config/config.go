@@ -48,6 +48,12 @@ type Config struct {
 	OAuthClientIDs []string
 	// OAuthRedirectURIs 필드에는 허용된 OAuth 콜백 주소를 둔다.
 	OAuthRedirectURIs []*url.URL
+	// ResourceServerURL 필드에는 보호 리소스 서버의 고정 MCP 엔드포인트 주소를 둔다.
+	ResourceServerURL *url.URL
+	// AuthorizationServerURL 필드에는 인가 서버의 고정 issuer 주소를 둔다.
+	AuthorizationServerURL *url.URL
+	// MCPAllowedOrigins 필드에는 MCP 요청 Origin으로 허용할 웹 출처를 둔다.
+	MCPAllowedOrigins []*url.URL
 	// BcryptCost 필드에는 새 계정 비밀번호 해시에 쓸 비용 계수를 둔다.
 	BcryptCost int
 	// AccountPlans 필드에는 계정별로 배정한 플랜 값을 둔다.
@@ -120,6 +126,21 @@ func Load(env Environment) (Config, error) {
 		return Config{}, err
 	}
 	cfg.OAuthRedirectURIs = redirects
+	resourceServerURL, err := parseResourceServerURL(env("RESOURCE_SERVER_URL"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ResourceServerURL = resourceServerURL
+	authorizationServerURL, err := parseOriginURL("AUTHORIZATION_SERVER_URL", env("AUTHORIZATION_SERVER_URL"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.AuthorizationServerURL = authorizationServerURL
+	allowedOrigins, err := parseOriginURLs("MCP_ALLOWED_ORIGINS", env("MCP_ALLOWED_ORIGINS"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.MCPAllowedOrigins = allowedOrigins
 	bcryptCost, err := strconv.Atoi(strings.TrimSpace(env("BCRYPT_COST")))
 	if err != nil || bcryptCost < 4 || bcryptCost > 31 {
 		return Config{}, fmt.Errorf("BCRYPT_COST가 4에서 31 사이의 정수가 아니다")
@@ -200,6 +221,28 @@ func parseHTTPURL(name, raw string) (*url.URL, error) {
 	return parsed, nil
 }
 
+func parseResourceServerURL(raw string) (*url.URL, error) {
+	parsed, err := parseHTTPURL("RESOURCE_SERVER_URL", raw)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Path != "/mcp" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+		return nil, fmt.Errorf("RESOURCE_SERVER_URL은 query, fragment, 사용자 정보 없이 /mcp 경로여야 한다")
+	}
+	return parsed, nil
+}
+
+func parseOriginURL(name, raw string) (*url.URL, error) {
+	parsed, err := parseHTTPURL(name, raw)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+		return nil, fmt.Errorf("%s는 경로, query, fragment, 사용자 정보 없는 origin이어야 한다", name)
+	}
+	return parsed, nil
+}
+
 // parseList는 쉼표로 나눈 중복 없는 구성 값을 해석한다.
 func parseList(name, raw string) ([]string, error) {
 	var values []string
@@ -269,6 +312,22 @@ func parseURLs(name, raw string) ([]*url.URL, error) {
 	urls := make([]*url.URL, 0, len(values))
 	for _, value := range values {
 		parsed, err := parseHTTPURL(name, value)
+		if err != nil {
+			return nil, err
+		}
+		urls = append(urls, parsed)
+	}
+	return urls, nil
+}
+
+func parseOriginURLs(name, raw string) ([]*url.URL, error) {
+	values, err := parseList(name, raw)
+	if err != nil {
+		return nil, err
+	}
+	urls := make([]*url.URL, 0, len(values))
+	for _, value := range values {
+		parsed, err := parseOriginURL(name, value)
 		if err != nil {
 			return nil, err
 		}

@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"agent_context_sharing/internal/mcp"
 	"agent_context_sharing/internal/model"
 )
 
@@ -36,6 +37,7 @@ type application struct {
 	database  readiness
 	logger    *slog.Logger
 	transport transportSecurity
+	mcp       *mcp.Server
 	accepting atomic.Bool
 }
 
@@ -45,11 +47,11 @@ type statusResponse struct {
 }
 
 // newApplication은 데이터베이스 준비 확인, 구조화 로그와 TLS 신뢰 경계를 주입해 상태 경로를 만든다.
-func newApplication(database readiness, logger *slog.Logger, transport transportSecurity) *application {
+func newApplication(database readiness, logger *slog.Logger, transport transportSecurity, resourceServer *mcp.Server) *application {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	app := &application{database: database, logger: logger, transport: transport}
+	app := &application{database: database, logger: logger, transport: transport, mcp: resourceServer}
 	app.accepting.Store(true)
 	return app
 }
@@ -64,6 +66,11 @@ func newApplication(database readiness, logger *slog.Logger, transport transport
 func (app *application) handler() http.Handler {
 	// 업무 경로는 이후 단계에서 이 mux에 등록하며 모두 TLS 판정을 지난다.
 	gated := http.NewServeMux()
+	if app.mcp != nil {
+		gated.Handle("POST /mcp", app.mcp)
+		gated.HandleFunc("GET /.well-known/oauth-protected-resource", app.mcp.ProtectedResourceMetadata)
+		gated.HandleFunc("GET /.well-known/oauth-authorization-server", app.mcp.AuthorizationServerMetadata)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", app.health)

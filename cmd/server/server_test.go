@@ -23,7 +23,7 @@ const gatedPath = "/graphs"
 // 확인 경로가 응답하는지 확인한다. FR-AGENT_CONTEXT-140의 예외이며, 프로브는 프록시를
 // 거치지 않고 오므로 이 예외가 없으면 생존 확인이 항상 실패한다.
 func TestStatusPathsBypassTLSGate(t *testing.T) {
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
 
 	health := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -43,7 +43,7 @@ func TestStatusPathsBypassTLSGate(t *testing.T) {
 // TestHealthAndReadySeparateFailures는 생존 확인과 데이터베이스 준비 확인의 실패를 구분한다.
 func TestHealthAndReadySeparateFailures(t *testing.T) {
 	database := &fakeReadiness{pingError: errors.New("데이터베이스 중단")}
-	app := newApplication(database, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
+	app := newApplication(database, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
 	handler := app.handler()
 
 	health := httptest.NewRecorder()
@@ -65,7 +65,7 @@ func TestHealthAndReadySeparateFailures(t *testing.T) {
 // TestShutdownStopsReadinessAndClosesDatabase는 종료가 준비 상태를 먼저 내리고 풀을 닫는지 확인한다.
 func TestShutdownStopsReadinessAndClosesDatabase(t *testing.T) {
 	database := &fakeReadiness{}
-	app := newApplication(database, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
+	app := newApplication(database, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
 	server := &http.Server{Handler: app.handler()}
 	if err := app.shutdown(t.Context(), server); err != nil {
 		t.Fatalf("정상 종료: %v", err)
@@ -82,7 +82,7 @@ func TestShutdownStopsReadinessAndClosesDatabase(t *testing.T) {
 
 // TestTransportSecurityRejectsPlaintext는 프록시 종단에서 신뢰된 HTTPS 전달 헤더가 없는 요청을 거부하는지 확인한다.
 func TestTransportSecurityRejectsPlaintext(t *testing.T) {
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
 	response := httptest.NewRecorder()
 	app.handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, gatedPath, nil))
 	if response.Code != http.StatusBadRequest {
@@ -94,7 +94,7 @@ func TestTransportSecurityRejectsPlaintext(t *testing.T) {
 // 헤더를 붙여도 거부되는지 확인한다. 헤더는 누구나 붙일 수 있으므로 이 검사가 없으면
 // 앱 포트에 닿는 누구든 FR-AGENT_CONTEXT-140의 평문 거부를 지나간다.
 func TestTransportSecurityRejectsForgedForwardedProto(t *testing.T) {
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
 	request := secureRequest(http.MethodGet, gatedPath, nil)
 	request.RemoteAddr = "203.0.113.9:54321"
 	response := httptest.NewRecorder()
@@ -108,7 +108,7 @@ func TestTransportSecurityRejectsForgedForwardedProto(t *testing.T) {
 // 전달 헤더가 여럿이면 거부하는지 확인한다. 프록시가 헤더를 덮어쓰지 않고 덧붙이면 원
 // 요청자가 넣은 값이 앞에 남아 위조가 신뢰 대역 검사를 지나간다.
 func TestTransportSecurityRejectsAppendedForwardedProto(t *testing.T) {
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
 	request := httptest.NewRequest(http.MethodGet, gatedPath, nil)
 	request.Header.Add("X-Forwarded-Proto", "https")
 	request.Header.Add("X-Forwarded-Proto", "http")
@@ -122,7 +122,7 @@ func TestTransportSecurityRejectsAppendedForwardedProto(t *testing.T) {
 // TestTransportSecurityAcceptsTrustedProxy는 신뢰 대역 안 프록시가 전달한 HTTPS 요청만
 // 통과하고 같은 프록시라도 전달 헤더가 없으면 평문으로 다루는지 확인한다.
 func TestTransportSecurityAcceptsTrustedProxy(t *testing.T) {
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
 
 	forwarded := httptest.NewRecorder()
 	app.handler().ServeHTTP(forwarded, secureRequest(http.MethodGet, gatedPath, nil))
@@ -140,7 +140,7 @@ func TestTransportSecurityAcceptsTrustedProxy(t *testing.T) {
 // TestTransportSecurityMapsIPv4InIPv6는 IPv4-mapped IPv6로 들어온 프록시가 구성에 적은
 // IPv4 대역과 맞는지 확인한다.
 func TestTransportSecurityMapsIPv4InIPv6(t *testing.T) {
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
 	request := secureRequest(http.MethodGet, gatedPath, nil)
 	request.RemoteAddr = "[::ffff:192.0.2.1]:54321"
 	response := httptest.NewRecorder()
@@ -153,7 +153,7 @@ func TestTransportSecurityMapsIPv4InIPv6(t *testing.T) {
 // TestTransportSecurityIgnoresForwardedProtoOnDirectTLS는 직접 TLS 종단에서 전달 헤더가
 // 판정에 영향을 주지 않는지 확인한다.
 func TestTransportSecurityIgnoresForwardedProtoOnDirectTLS(t *testing.T) {
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), transportSecurity{directTLS: true})
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), transportSecurity{directTLS: true}, nil)
 	response := httptest.NewRecorder()
 	app.handler().ServeHTTP(response, secureRequest(http.MethodGet, gatedPath, nil))
 	if response.Code != http.StatusBadRequest {
@@ -163,7 +163,7 @@ func TestTransportSecurityIgnoresForwardedProtoOnDirectTLS(t *testing.T) {
 
 // TestTransportSecurityAcceptsDirectTLS는 직접 TLS 종단에서 실제 TLS 연결만 수락하는지 확인한다.
 func TestTransportSecurityAcceptsDirectTLS(t *testing.T) {
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), transportSecurity{directTLS: true})
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), transportSecurity{directTLS: true}, nil)
 	request := httptest.NewRequest(http.MethodGet, gatedPath, nil)
 	request.TLS = new(tls.ConnectionState{})
 	response := httptest.NewRecorder()
@@ -176,7 +176,7 @@ func TestTransportSecurityAcceptsDirectTLS(t *testing.T) {
 // TestRequestLogExcludesSensitiveValues는 구조화 로그가 경로를 남겨도 쿼리와 본문을 남기지 않는지 확인한다.
 func TestRequestLogExcludesSensitiveValues(t *testing.T) {
 	var output bytes.Buffer
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(&output, nil)), proxyTransport())
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(&output, nil)), proxyTransport(), nil)
 	request := httptest.NewRequest(http.MethodGet, "/healthz?access_token=secret-token", strings.NewReader("secret-body"))
 	response := httptest.NewRecorder()
 	app.handler().ServeHTTP(response, request)

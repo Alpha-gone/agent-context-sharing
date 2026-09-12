@@ -269,17 +269,25 @@ plan · perm · audit · authz · index
 
 MCP 2026-07-28 전송 계약과 그래프·컨텍스트 관리 연산을 구현한다.
 
+### 현재 진행 상황
+
+2026-09-12 기준으로 `/mcp` POST 경로와 보호 리소스·인가 서버 discovery 문서를 서버 조립 경로에 연결했다. 리소스 서버 URL, 인가 서버 URL과 허용 Origin은 요청 `Host`가 아닌 배포 구성으로 고정해 토큰 `aud`, JWT `iss`와 metadata 문서가 프록시 또는 조작된 헤더에 따라 바뀌지 않게 했다. 전송 계층은 `Origin`→메서드→필수 MCP 헤더→헤더·본문 대조→protocol revision→RPC 메서드 순서로 검증하고, `tools/call`의 `Mcp-Name`도 본문과 대조한다. 토큰이 없거나 `Basic`처럼 Bearer 형식이 아닌 인증 헤더가 오면 `401` 및 보호 리소스 메타데이터를 가리키는 `WWW-Authenticate`를 반환하고, Bearer 형식으로 제시된 토큰의 검증 실패는 `unauthenticated` 도구 결과로 처리한다. `tools/list`는 인증을 거쳐 최상위 `tools` 필드에 13개 도구의 이름·설명·완전한 `inputSchema`를 반환한다. `tools/call`은 웹 전용 삭제·권한·팀 관리 요청을 입력 검증보다 먼저 `not_supported`와 대체 채널로 처리하고, 나머지 요청은 입력 형식·길이·개수 상한을 다시 검증한 뒤 호출 처리기로 분배한다.
+
+그래프·노드 CRUD 처리기, 권한·플랜 검사, 관리 연산 기록과 수명주기 상태 전이는 아직 구현하지 않았다. 따라서 현재 `tools/call`은 입력 검증 뒤 아직 연결되지 않은 CRUD 처리기에 `internal`을 반환하며, 웹 대체 채널을 안내하지 않는다. CRUD 처리기를 연결하면 이 임시 응답 경로를 제거한다.
+
 ### 작업
 
-- [ ] 표준 라이브러리 `net/http.ServeMux`로 `/mcp` POST 경로를 구현한다.
-- [ ] `Origin`, HTTP 메서드, MCP 헤더와 본문 일치 여부를 정해진 순서로 검증한다.
-- [ ] 지원하지 않는 protocol revision과 RPC 메서드의 전송 계층 오류를 구현한다.
-- [ ] 보호 리소스와 인가 서버 메타데이터 문서를 구현한다.
-- [ ] `tools/list`에서 연산 13종의 설명과 `inputSchema`를 제공한다.
-- [ ] `tools/call`의 파라미터 검증과 호출 분배를 구현한다.
-  - [ ] `body`·`work_context` 길이와 `derived_from`·`member_refs` 개수 상한을 여기에서 검증한다.
-- [ ] 전송 계층 오류와 도메인 오류 9종을 분리한다.
-- [ ] 도메인 오류를 판별 가능한 Go 오류 타입에서 MCP 코드로 사상한다.
+- [x] 표준 라이브러리 `net/http.ServeMux`로 `/mcp` POST 경로를 구현한다.
+- [x] `Origin`, HTTP 메서드, MCP 헤더와 본문 일치 여부를 정해진 순서로 검증한다.
+- [x] 지원하지 않는 protocol revision과 RPC 메서드의 전송 계층 오류를 구현한다.
+- [x] 보호 리소스와 인가 서버 메타데이터 문서를 구현한다.
+- [x] `tools/list`에서 연산 13종의 설명과 `inputSchema`를 제공한다.
+- [x] `tools/call`의 파라미터 검증과 호출 분배를 구현한다.
+  - [x] `body`·`work_context` 길이와 `derived_from`·`member_refs` 개수 상한을 여기에서 검증한다.
+  - [x] `occurred_at`, `valid_from`, `valid_to`, `start`, `end`, `as_of`의 RFC 3339 `date-time` 형식을 서버에서 검증한다.
+- [x] MCP에 노출하지 않는 현재 명시 이름(`graph_delete`, `graph_grant`, `team_create`)을 파라미터 검증 전에 `not_supported`와 웹 대체 채널로 처리한다. 이름 패턴으로 미등록 요청을 추측하지 않는다.
+- [x] 전송 계층 오류와 도메인 오류 9종을 분리한다.
+- [x] 도메인 오류를 판별 가능한 Go 오류 타입에서 MCP 코드로 사상한다.
 - [ ] `graph_list`, `graph_create`, `graph_get`, `graph_update`를 구현한다.
 - [ ] `node_create`, `node_get`, `node_update`, `node_discard`, `node_restore`를 구현한다.
 - [ ] 소프트 삭제된 그래프와 컨텍스트의 연산 가용성을 각 조회·처리 경로에서 판정한다.

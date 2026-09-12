@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestHandlerIntegration(t *testing.T) {
 	ownerID, viewerID := newHandlerID(t), newHandlerID(t)
 	createHandlerAccount(t, database, ownerID)
 	createHandlerAccount(t, database, viewerID)
-	call := NewHandler(database, plan.AccountPlans{})
+	call := NewHandler(database, plan.AccountPlans{}, nil)
 
 	created, err := call(t.Context(), ownerID, "graph_create", map[string]any{"name": "handler 통합 그래프"})
 	if err != nil {
@@ -88,6 +89,14 @@ func TestHandlerIntegration(t *testing.T) {
 		t.Fatalf("원천 생성: %v", err)
 	}
 	sourceID := structured(t, createdSource)["context_id"].(string)
+	sourceValue := structured(t, createdSource)
+	sourceRef, ok := sourceValue["source_ref"].(map[string]any)
+	if !ok || sourceRef["channel"] != "api" || sourceRef["locator"] != locator {
+		t.Fatalf("원천 응답에 source_ref가 없다: %#v", sourceValue["source_ref"])
+	}
+	if sourceValue["occurred_at"] == nil || sourceValue["origin_kind"] != "external_content" {
+		t.Fatalf("원천 응답에 계층별 속성이 없다: occurred_at=%#v origin_kind=%#v", sourceValue["occurred_at"], sourceValue["origin_kind"])
+	}
 	duplicated, err := call(t.Context(), ownerID, "node_create", sourceArguments())
 	if err != nil {
 		t.Fatalf("중복 원천 생성: %v", err)
@@ -111,12 +120,43 @@ func TestHandlerIntegration(t *testing.T) {
 	}
 	derivedValue := structured(t, createdDerived)
 	derivedID := derivedValue["context_id"].(string)
+	// 절단은 오류가 아니라 성공 응답의 부분 상태이며, SRS의 「정상 응답의 부분 상태」가
+	// 표시 이름을 result_truncated로, 홉 조회가 함께 실을 값을 잘린 홉 경계로 확정했다.
+	narrowPlans, err := plan.ParseAccountPlans(fmt.Sprintf(`{%q:{"max_hop_nodes":1}}`, ownerID.String()))
+	if err != nil {
+		t.Fatalf("홉 노드 상한 플랜 해석: %v", err)
+	}
+	narrowed, err := NewHandler(database, narrowPlans, nil)(t.Context(), ownerID, "node_get", map[string]any{
+		"graph_id": graphID, "context_id": sourceID, "hops": float64(1),
+	})
+	if err != nil {
+		t.Fatalf("절단 조회: %v", err)
+	}
+	truncation, ok := structured(t, narrowed)["result_truncated"].(map[string]any)
+	if !ok {
+		t.Fatalf("절단이 result_truncated로 표시되지 않았다: %#v", structured(t, narrowed))
+	}
+	if truncation["truncated_hop"] != 1 {
+		t.Fatalf("잘린 홉 경계 = %#v, want 1", truncation["truncated_hop"])
+	}
+
 	fetched, err := call(t.Context(), viewerID, "node_get", map[string]any{"graph_id": graphID, "context_id": derivedID, "hops": float64(0)})
 	if err != nil {
 		t.Fatalf("노드 조회: %v", err)
 	}
-	if contexts := structured(t, fetched)["contexts"].([]any); len(contexts) != 1 {
-		t.Fatalf("0홉 조회가 단일 노드를 반환하지 않았다: %d", len(contexts))
+	contexts, ok := structured(t, fetched)["contexts"].([]any)
+	if !ok || len(contexts) != 1 {
+		t.Fatalf("0홉 조회가 단일 노드를 반환하지 않았다: %#v", structured(t, fetched)["contexts"])
+	}
+	derivedView, ok := contexts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("노드 조회의 컨텍스트 항목이 객체가 아니다: %#v", contexts[0])
+	}
+	if derivedFrom, ok := derivedView["derived_from"].([]string); !ok || len(derivedFrom) != 1 || derivedFrom[0] != sourceID {
+		t.Fatalf("파생 응답에 derived_from이 없다: %#v", derivedView["derived_from"])
+	}
+	if derivedView["derivation_kind"] != "proposition" || derivedView["evidence_state"] != "observation" || derivedView["evidence_invalidated"] != false {
+		t.Fatalf("파생 응답에 계층별 속성이 없다: %#v", derivedView)
 	}
 	updated, err := call(t.Context(), ownerID, "node_update", map[string]any{
 		"graph_id": graphID, "context_id": derivedID, "expected_version": float64(1), "created_by_agent": ownerID.String(), "body": "갱신된 파생 본문",
@@ -145,6 +185,24 @@ func TestHandlerIntegration(t *testing.T) {
 	if _, stillDeleted := structured(t, restored)["deleted_at"]; stillDeleted {
 		t.Fatal("복구한 파생에 deleted_at이 남아 있다")
 	}
+	occurredAt, ok := sourceValue["occurred_at"].(time.Time)
+	if !ok {
+		t.Fatalf("원천 발생 시각이 time.Time이 아니다: %#v", sourceValue["occurred_at"])
+	}
+	createdEvent, err := call(t.Context(), ownerID, "node_create", map[string]any{
+		"graph_id": graphID, "layer": "event", "body": "사건 본문", "created_by_agent": ownerID.String(),
+		"member_refs": []any{sourceID}, "start": occurredAt.Add(-time.Minute).Format(time.RFC3339), "end": occurredAt.Add(time.Minute).Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("사건 생성: %v", err)
+	}
+	eventValue := structured(t, createdEvent)
+	if members, ok := eventValue["member_refs"].([]string); !ok || len(members) != 1 || members[0] != sourceID {
+		t.Fatalf("사건 응답에 member_refs가 없다: %#v", eventValue["member_refs"])
+	}
+	if eventValue["event_start"] == nil || eventValue["event_end"] == nil {
+		t.Fatalf("사건 응답에 시간 범위가 없다: %#v", eventValue)
+	}
 	if _, callErr := call(t.Context(), ownerID, "node_restore", map[string]any{"graph_id": graphID, "context_id": derivedID, "created_by_agent": ownerID.String()}); !hasCode(callErr, "invalid_argument") {
 		t.Fatalf("활성 노드 복구가 invalid_argument로 처리되지 않았다: %v", callErr)
 	}
@@ -162,6 +220,21 @@ func TestHandlerIntegration(t *testing.T) {
 	domain, ok := errors.AsType[*Error](restoreRejected)
 	if !ok || domain.Code != "not_supported" || domain.Data["alternative_channel"] != "web" {
 		t.Fatalf("웹 삭제분 복구가 웹 대체 채널로 안내되지 않았다: %v", restoreRejected)
+	}
+	// 「감사 범위」가 거부된 연산도 기록 대상으로 확정했으므로 채널 경계 거부도 남아야 한다.
+	if reasons := rejectedReasons(t, pool, webDeletedID); !slices.Contains(reasons, "not_supported") {
+		t.Fatalf("웹 삭제분 복구 거부가 기록되지 않았다: %v", reasons)
+	}
+	if _, err := call(t.Context(), ownerID, "node_discard", map[string]any{"graph_id": graphID, "context_id": sourceID, "created_by_agent": ownerID.String()}); err != nil {
+		t.Fatalf("근거 원천 폐기: %v", err)
+	}
+	invalidatedView, err := call(t.Context(), ownerID, "node_get", map[string]any{"graph_id": graphID, "context_id": derivedID, "hops": float64(0)})
+	if err != nil {
+		t.Fatalf("무효 표시 확인 조회: %v", err)
+	}
+	invalidated, ok := structured(t, invalidatedView)["contexts"].([]any)[0].(map[string]any)
+	if !ok || invalidated["evidence_invalidated"] != true {
+		t.Fatalf("근거 폐기 뒤 파생의 무효 표시가 응답에 없다: %#v", invalidated)
 	}
 }
 
@@ -221,4 +294,29 @@ func structured(t *testing.T, toolResult ToolResult) map[string]any {
 func hasCode(callErr error, code string) bool {
 	domain, ok := errors.AsType[*Error](callErr)
 	return ok && domain.Code == code
+}
+
+// rejectedReasons는 한 컨텍스트에 남은 거부 기록의 사유를 모은다.
+func rejectedReasons(t *testing.T, pool *pgx.Conn, contextID string) []string {
+	t.Helper()
+	rows, err := pool.Query(t.Context(),
+		`SELECT reject_reason FROM public.operation_log WHERE context_id = $1 AND result = 'rejected'`, contextID)
+	if err != nil {
+		t.Fatalf("거부 기록 조회: %v", err)
+	}
+	defer rows.Close()
+	reasons := make([]string, 0)
+	for rows.Next() {
+		var reason *string
+		if err := rows.Scan(&reason); err != nil {
+			t.Fatalf("거부 기록 행 해석: %v", err)
+		}
+		if reason != nil {
+			reasons = append(reasons, *reason)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("거부 기록 행 읽기: %v", err)
+	}
+	return reasons
 }

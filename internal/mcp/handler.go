@@ -5,6 +5,8 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"time"
 
 	"agent_context_sharing/internal/model"
@@ -33,12 +35,18 @@ type Operations interface {
 }
 
 // NewHandler는 전송 계층이 검증한 tools/call을 핵심 그래프·노드 연산으로 분배한다.
-func NewHandler(operations Operations, accountPlans plan.AccountPlans) CallFunc {
+//
+// logger는 거부 기록 실패처럼 연산을 되돌리지는 않지만 감사 근거에 구멍을 내는 사건을
+// 남기는 데만 쓴다. nil이면 기본 로거를 쓴다.
+func NewHandler(operations Operations, accountPlans plan.AccountPlans, logger *slog.Logger) CallFunc {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return func(ctx context.Context, accountID model.ID, name string, arguments map[string]any) (ToolResult, error) {
 		if operations == nil {
 			return ToolResult{}, fmt.Errorf("MCP 처리 접근 계층이 없다")
 		}
-		handler := handler{operations: operations, limits: accountPlans.For(accountID)}
+		handler := handler{operations: operations, limits: accountPlans.For(accountID), logger: logger}
 		return handler.call(ctx, accountID, name, arguments)
 	}
 }
@@ -46,6 +54,7 @@ func NewHandler(operations Operations, accountPlans plan.AccountPlans) CallFunc 
 type handler struct {
 	operations Operations
 	limits     plan.Limits
+	logger     *slog.Logger
 }
 
 func (h handler) call(ctx context.Context, accountID model.ID, name string, arguments map[string]any) (ToolResult, error) {
@@ -110,19 +119,16 @@ func (h handler) createGraph(ctx context.Context, accountID model.ID, arguments 
 
 func (h handler) getGraph(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID := argumentID(arguments, "graph_id")
-	if err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeViewer); err != nil {
-		return ToolResult{}, err
-	}
-	graph, err := h.operations.Graph(ctx, graphID)
+	graph, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeViewer)
 	if err != nil {
-		return ToolResult{}, mapError(err)
+		return ToolResult{}, err
 	}
 	return result(graphValue(graph)), nil
 }
 
 func (h handler) updateGraph(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID := argumentID(arguments, "graph_id")
-	if err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
+	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
 		return ToolResult{}, err
 	}
 	graph, err := h.operations.UpdateGraph(ctx, graphID, int64(arguments["expected_version"].(float64)), arguments["name"].(string), optionalString(arguments, "description"))
@@ -134,7 +140,8 @@ func (h handler) updateGraph(ctx context.Context, accountID model.ID, arguments 
 
 func (h handler) createNode(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID := argumentID(arguments, "graph_id")
-	if err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
+	graph, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor)
+	if err != nil {
 		return ToolResult{}, err
 	}
 	contextID, err := model.NewID()
@@ -157,7 +164,7 @@ func (h handler) createNode(ctx context.Context, accountID model.ID, arguments m
 	if err := h.checkWrite(ctx, accountID); err != nil {
 		return ToolResult{}, err
 	}
-	if err := h.checkStoredCharacters(ctx, graphID, int64(len([]rune(value.Body)))); err != nil {
+	if err := h.checkStoredCharacters(graph, int64(len([]rune(value.Body)))); err != nil {
 		return ToolResult{}, err
 	}
 	operation := operationRecord(store.OperationAdd, graphID, contextID, accountID, agentID, arguments)
@@ -171,7 +178,7 @@ func (h handler) createNode(ctx context.Context, accountID model.ID, arguments m
 
 func (h handler) getNode(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID := argumentID(arguments, "graph_id")
-	if err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeViewer); err != nil {
+	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeViewer); err != nil {
 		return ToolResult{}, err
 	}
 	if err := plan.CheckRequest("max_hops", int64(arguments["hops"].(float64)), int64(h.limits.MaxHops)); err != nil {
@@ -188,16 +195,17 @@ func (h handler) getNode(ctx context.Context, accountID model.ID, arguments map[
 	}
 	references, relations := hopEdges(hops.Edges)
 	response := map[string]any{"contexts": contexts, "references": references, "relations": relations}
+	// 절단은 오류가 아니라 「정상 응답의 부분 상태」의 표시이므로 확정된 이름으로 싣는다.
 	if hops.Truncated {
-		response["truncated"] = true
-		response["truncated_hop"] = hops.Boundary
+		response["result_truncated"] = map[string]any{"truncated_hop": hops.Boundary}
 	}
 	return result(response), nil
 }
 
 func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID := argumentID(arguments, "graph_id")
-	if err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
+	graph, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor)
+	if err != nil {
 		return ToolResult{}, err
 	}
 	contextID := argumentID(arguments, "context_id")
@@ -218,7 +226,7 @@ func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments m
 	if err := h.checkWrite(ctx, accountID); err != nil {
 		return ToolResult{}, err
 	}
-	if err := h.checkStoredCharacters(ctx, graphID, int64(len([]rune(next.Body))-len([]rune(previous.Body)))); err != nil {
+	if err := h.checkStoredCharacters(graph, int64(len([]rune(next.Body))-len([]rune(previous.Body)))); err != nil {
 		return ToolResult{}, err
 	}
 	agentID := argumentID(arguments, "created_by_agent")
@@ -234,7 +242,7 @@ func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments m
 
 func (h handler) discardNode(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID, contextID := argumentID(arguments, "graph_id"), argumentID(arguments, "context_id")
-	if err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
+	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
 		return ToolResult{}, err
 	}
 	previous, err := h.operations.Context(ctx, graphID, contextID)
@@ -261,7 +269,7 @@ func (h handler) discardNode(ctx context.Context, accountID model.ID, arguments 
 
 func (h handler) restoreNode(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID, contextID := argumentID(arguments, "graph_id"), argumentID(arguments, "context_id")
-	if err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
+	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
 		return ToolResult{}, err
 	}
 	previous, err := h.operations.Context(ctx, graphID, contextID)
@@ -280,7 +288,9 @@ func (h handler) restoreNode(ctx context.Context, accountID model.ID, arguments 
 		return ToolResult{}, mapError(err)
 	}
 	if !wasDiscarded {
-		return ToolResult{}, &Error{Code: "not_supported", Data: map[string]any{"alternative_channel": "web"}}
+		rejected := &Error{Code: "not_supported", Data: map[string]any{"alternative_channel": "web"}}
+		h.recordRejected(ctx, operation, rejected)
+		return ToolResult{}, rejected
 	}
 	if err := h.checkWrite(ctx, accountID); err != nil {
 		return ToolResult{}, err
@@ -293,18 +303,20 @@ func (h handler) restoreNode(ctx context.Context, accountID model.ID, arguments 
 	return result(contextValue(stored)), nil
 }
 
-func (h handler) requireActiveGraph(ctx context.Context, graphID, accountID model.ID, required model.GraphGrade) error {
+// requireActiveGraph는 등급을 대조하고 소프트 삭제된 그래프를 거른 뒤 읽은 그래프 행을
+// 돌려준다. 호출자가 같은 행을 다시 읽지 않게 하려는 것이다.
+func (h handler) requireActiveGraph(ctx context.Context, graphID, accountID model.ID, required model.GraphGrade) (model.Graph, error) {
 	if err := perm.Require(ctx, h.operations, graphID, accountID, required); err != nil {
-		return mapError(err)
+		return model.Graph{}, mapError(err)
 	}
 	graph, err := h.operations.Graph(ctx, graphID)
 	if err != nil {
-		return mapError(err)
+		return model.Graph{}, mapError(err)
 	}
 	if graph.DeletedAt != nil {
-		return &Error{Code: "not_found"}
+		return model.Graph{}, &Error{Code: "not_found"}
 	}
-	return nil
+	return graph, nil
 }
 
 func (h handler) checkGraphCount(ctx context.Context, accountID model.ID) error {
@@ -332,13 +344,9 @@ func (h handler) checkWrite(ctx context.Context, accountID model.ID) error {
 	return &Error{Code: "limit_exceeded", Data: map[string]any{"limit": "writes_per_minute", "current": count, "allowed": h.limits.WritesPerMinute}}
 }
 
-func (h handler) checkStoredCharacters(ctx context.Context, graphID model.ID, delta int64) error {
+func (h handler) checkStoredCharacters(graph model.Graph, delta int64) error {
 	if h.limits.StoredCharactersPerGraph == 0 {
 		return nil
-	}
-	graph, err := h.operations.Graph(ctx, graphID)
-	if err != nil {
-		return mapError(err)
 	}
 	if err := plan.CheckIncrease("stored_characters_per_graph", graph.StoredChars, delta, h.limits.StoredCharactersPerGraph); err != nil {
 		return limitError(err)
@@ -346,8 +354,17 @@ func (h handler) checkStoredCharacters(ctx context.Context, graphID model.ID, de
 	return nil
 }
 
+// recordRejected는 거부된 관리 연산을 되돌려진 트랜잭션 밖에 남긴다. 기록이 실패해도
+// 이미 확정된 거부를 되돌리지 않지만, 조용히 지나가면 감사 근거의 구멍이 드러나지 않으므로
+// 로그를 남긴다. `SDD.md`의 「관측성」이 판단 입력을 operation_log 밖으로 복제하지 못하게
+// 했으므로 식별자와 분류만 남기고 본문과 판단 입력은 넣지 않는다.
 func (h handler) recordRejected(ctx context.Context, operation store.OperationRecord, cause error) {
-	_ = h.operations.RecordRejectedOperation(ctx, operation, rejectReason(cause))
+	reason := rejectReason(cause)
+	if err := h.operations.RecordRejectedOperation(ctx, operation, reason); err != nil {
+		h.logger.ErrorContext(ctx, "거부된 관리 연산 기록 실패",
+			"graph_id", operation.GraphID.String(), "context_id", operation.ContextID.String(),
+			"operation_kind", string(operation.Kind), "reject_reason", reason, "error", err.Error())
+	}
 }
 
 func operationRecord(kind store.OperationKind, graphID, contextID, accountID, agentID model.ID, arguments map[string]any) store.OperationRecord {
@@ -356,6 +373,9 @@ func operationRecord(kind store.OperationKind, graphID, contextID, accountID, ag
 }
 
 func rejectReason(cause error) string {
+	if domain, ok := errors.AsType[*Error](cause); ok && validDomainCode(domain.Code) {
+		return domain.Code
+	}
 	switch {
 	case errors.Is(cause, store.ErrNotFound):
 		return "not_found"
@@ -389,7 +409,17 @@ func mapError(err error) error {
 	return &Error{Code: "internal"}
 }
 
-func invalidArgument(error) error { return &Error{Code: "invalid_argument"} }
+// invalidArgument는 `SDD.md`의 「오류 부가 정보」대로 검증이 지목한 필드를 함께 싣는다.
+// 필드를 특정할 수 없는 검증만 코드만 돌려준다.
+func invalidArgument(err error) error {
+	if field, ok := errors.AsType[*argumentError](err); ok && field.Field != "" {
+		return &Error{Code: "invalid_argument", Data: map[string]any{"field": field.Field}}
+	}
+	if field, ok := errors.AsType[model.FieldError](err); ok && field.Field != "" {
+		return &Error{Code: "invalid_argument", Data: map[string]any{"field": field.Field}}
+	}
+	return &Error{Code: "invalid_argument"}
+}
 
 func limitError(err error) error {
 	limit, ok := errors.AsType[plan.LimitError](err)
@@ -459,11 +489,49 @@ func graphValue(graph model.Graph) map[string]any {
 }
 
 func contextValue(value model.Context) map[string]any {
-	result := map[string]any{"context_id": value.ID.String(), "graph_id": value.GraphID.String(), "layer": value.Layer, "body": value.Body, "recorded_at": value.RecordedAt, "created_by": value.CreatedBy.String(), "created_by_agent": value.CreatedByAgent.String(), "version": value.Version}
+	result := map[string]any{"context_id": value.ID.String(), "graph_id": value.GraphID.String(), "layer": string(value.Layer), "body": value.Body, "recorded_at": value.RecordedAt, "created_by": value.CreatedBy.String(), "created_by_agent": value.CreatedByAgent.String(), "version": value.Version}
+	switch value.Layer {
+	case model.LayerSource:
+		result["source_ref"] = map[string]any{"channel": string(value.Source.Reference.Channel), "locator": value.Source.Reference.Locator}
+		result["occurred_at"] = value.Source.OccurredAt
+		result["origin_kind"] = string(value.Source.OriginKind)
+	case model.LayerDerived:
+		result["derived_from"] = idStrings(value.Derived.DerivedFrom)
+		result["derivation_kind"] = string(value.Derived.Kind)
+		if value.Derived.SummaryScope != "" {
+			result["summary_scope"] = string(value.Derived.SummaryScope)
+		}
+		result["evidence_state"] = string(value.Derived.EvidenceState)
+		if value.Derived.ConfidenceState != "" {
+			result["confidence_state"] = string(value.Derived.ConfidenceState)
+		}
+		if value.Derived.ValidFrom != nil {
+			result["valid_from"] = *value.Derived.ValidFrom
+		}
+		if value.Derived.ValidTo != nil {
+			result["valid_to"] = *value.Derived.ValidTo
+		}
+		result["evidence_invalidated"] = value.Derived.EvidenceInvalidated
+	case model.LayerEvent:
+		result["member_refs"] = idStrings(value.Event.MemberIDs)
+		result["event_start"] = value.Event.Start
+		if value.Event.End != nil {
+			result["event_end"] = *value.Event.End
+		}
+	}
 	if value.DeletedAt != nil {
 		result["deleted_at"] = *value.DeletedAt
 	}
 	return result
+}
+
+// idStrings는 식별자 목록을 응답 직렬화용 문자열로 바꾼다.
+func idStrings(ids []model.ID) []string {
+	values := make([]string, 0, len(ids))
+	for _, id := range ids {
+		values = append(values, id.String())
+	}
+	return values
 }
 
 func newContext(graphID, contextID, accountID, agentID model.ID, arguments map[string]any) (model.Context, []model.ID, error) {
@@ -489,16 +557,27 @@ func newContext(graphID, contextID, accountID, agentID model.ID, arguments map[s
 		}
 		value.Event = &model.EventAttributes{MemberIDs: argumentIDs(arguments, "member_refs"), Start: start, End: optionalTime(arguments, "end")}
 	default:
-		return model.Context{}, nil, fmt.Errorf("컨텍스트 계층이 올바르지 않다")
+		return model.Context{}, nil, &argumentError{Field: "layer"}
 	}
 	return value, nil, nil
 }
 
 func updatedContext(previous model.Context, arguments map[string]any) (model.Context, error) {
 	if previous.Layer == model.LayerSource {
-		return model.Context{}, fmt.Errorf("원천은 갱신할 수 없다")
+		return model.Context{}, &argumentError{Field: "layer"}
 	}
+	// 계층 속성은 포인터이므로 얕은 복사만 하면 next를 고칠 때 previous도 함께 바뀌고
+	// model.ValidateUpdate의 불변 검사가 같은 값을 양쪽에서 읽어 항상 통과한다.
 	next := previous
+	switch previous.Layer {
+	case model.LayerDerived:
+		derived := *previous.Derived
+		next.Derived = &derived
+	case model.LayerEvent:
+		event := *previous.Event
+		event.MemberIDs = slices.Clone(previous.Event.MemberIDs)
+		next.Event = &event
+	}
 	next.Version++
 	changed := false
 	if body, ok := arguments["body"].(string); ok {
@@ -511,29 +590,29 @@ func updatedContext(previous model.Context, arguments map[string]any) (model.Con
 			next.Derived.ConfidenceState = model.ConfidenceState(confidence)
 			changed = true
 		}
-		if value, ok := arguments["valid_from"]; ok {
-			next.Derived.ValidFrom = optionalTime(map[string]any{"value": value}, "value")
+		if _, ok := arguments["valid_from"]; ok {
+			next.Derived.ValidFrom = optionalTime(arguments, "valid_from")
 			changed = true
 		}
-		if value, ok := arguments["valid_to"]; ok {
-			next.Derived.ValidTo = optionalTime(map[string]any{"value": value}, "value")
+		if _, ok := arguments["valid_to"]; ok {
+			next.Derived.ValidTo = optionalTime(arguments, "valid_to")
 			changed = true
 		}
 	case model.LayerEvent:
-		if members, ok := arguments["member_refs"]; ok {
-			next.Event.MemberIDs = argumentIDs(map[string]any{"value": members}, "value")
+		if _, ok := arguments["member_refs"]; ok {
+			next.Event.MemberIDs = argumentIDs(arguments, "member_refs")
 			changed = true
 		}
-		if value, ok := arguments["start"]; ok {
-			start, err := requiredTime(map[string]any{"value": value}, "value")
+		if _, ok := arguments["start"]; ok {
+			start, err := requiredTime(arguments, "start")
 			if err != nil {
 				return model.Context{}, err
 			}
 			next.Event.Start = start
 			changed = true
 		}
-		if value, ok := arguments["end"]; ok {
-			next.Event.End = optionalTime(map[string]any{"value": value}, "value")
+		if _, ok := arguments["end"]; ok {
+			next.Event.End = optionalTime(arguments, "end")
 			changed = true
 		}
 	}
@@ -546,11 +625,11 @@ func updatedContext(previous model.Context, arguments map[string]any) (model.Con
 func requiredTime(arguments map[string]any, name string) (time.Time, error) {
 	text, ok := arguments[name].(string)
 	if !ok {
-		return time.Time{}, fmt.Errorf("%s 시각이 필요하다", name)
+		return time.Time{}, &argumentError{Field: name}
 	}
 	value, err := time.Parse(time.RFC3339, text)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("%s 시각이 올바르지 않다", name)
+		return time.Time{}, &argumentError{Field: name}
 	}
 	return value.UTC(), nil
 }

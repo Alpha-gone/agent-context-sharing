@@ -117,10 +117,10 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if err := tx.Commit(ctx); err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 커밋: %w", err)
 	}
-	if value.Layer == model.LayerEvent {
+	if value.Layer != model.LayerSource {
 		stored, err := s.context(ctx, s.pool, graphID, value.ID)
 		if err != nil {
-			return model.Context{}, fmt.Errorf("갱신한 사건 조립: %w", err)
+			return model.Context{}, fmt.Errorf("갱신한 컨텍스트 조립: %w", err)
 		}
 		return stored, nil
 	}
@@ -198,6 +198,12 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 커밋: %w", err)
+	}
+	if previous.Layer != model.LayerSource {
+		stored, err = s.context(ctx, s.pool, graphID, contextID)
+		if err != nil {
+			return model.Context{}, fmt.Errorf("상태 전이한 컨텍스트 조립: %w", err)
+		}
 	}
 	return stored, nil
 }
@@ -306,10 +312,10 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	if err := tx.Commit(ctx); err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 생성 커밋: %w", err)
 	}
-	if value.Layer == model.LayerEvent {
+	if value.Layer != model.LayerSource {
 		stored, err = s.context(ctx, s.pool, graphID, value.ID)
 		if err != nil {
-			return model.Context{}, fmt.Errorf("생성한 사건 조립: %w", err)
+			return model.Context{}, fmt.Errorf("생성한 컨텍스트 조립: %w", err)
 		}
 	}
 	return stored, nil
@@ -400,18 +406,56 @@ func (s *Store) context(ctx context.Context, queryer cypherQueryer, graphID, con
 	query := "MATCH (node:Context) WHERE node.context_id = " + cypherString(contextID.String()) +
 		" AND node.graph_id = " + cypherString(graphID.String()) + " RETURN node"
 	stored, err := s.contextFromCypher(ctx, queryer, graphID, query)
-	if err != nil || stored.Layer != model.LayerEvent {
+	if err != nil {
 		return stored, err
 	}
-	memberIDs, err := s.eventMemberIDs(ctx, queryer, graphID, contextID)
-	if err != nil {
-		return model.Context{}, err
-	}
-	stored.Event.MemberIDs = memberIDs
-	if err := stored.Validate(); err != nil {
-		return model.Context{}, fmt.Errorf("저장된 사건 컨텍스트 검증: %w", err)
+	switch stored.Layer {
+	case model.LayerDerived:
+		referenceIDs, err := s.derivedFromIDs(ctx, queryer, graphID, contextID)
+		if err != nil {
+			return model.Context{}, err
+		}
+		stored.Derived.DerivedFrom = referenceIDs
+	case model.LayerEvent:
+		memberIDs, err := s.eventMemberIDs(ctx, queryer, graphID, contextID)
+		if err != nil {
+			return model.Context{}, err
+		}
+		stored.Event.MemberIDs = memberIDs
+		if err := stored.Validate(); err != nil {
+			return model.Context{}, fmt.Errorf("저장된 사건 컨텍스트 검증: %w", err)
+		}
 	}
 	return stored, nil
+}
+
+// derivedFromIDs는 DERIVED_FROM 간선에서 파생의 근거 식별자를 다시 조립한다.
+func (s *Store) derivedFromIDs(ctx context.Context, queryer cypherQueryer, graphID, derivedID model.ID) ([]model.ID, error) {
+	query := "MATCH (derived:Context)-[edge:DERIVED_FROM]->(evidence:Context) WHERE derived.context_id = " + cypherString(derivedID.String()) +
+		" AND derived.graph_id = " + cypherString(graphID.String()) +
+		" AND edge.graph_id = " + cypherString(graphID.String()) +
+		" AND evidence.graph_id = " + cypherString(graphID.String()) + " RETURN evidence"
+	rows, err := queryer.Query(ctx, s.cypherSQL(query, "evidence agtype"))
+	if err != nil {
+		return nil, fmt.Errorf("파생 근거 조회: %w", err)
+	}
+	defer rows.Close()
+	referenceIDs := make([]model.ID, 0)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("파생 근거 행 해석: %w", err)
+		}
+		evidence, err := parseContext(raw, graphID)
+		if err != nil {
+			return nil, err
+		}
+		referenceIDs = append(referenceIDs, evidence.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("파생 근거 행 읽기: %w", err)
+	}
+	return referenceIDs, nil
 }
 
 // eventMemberIDs는 HAS_MEMBER 간선에서 사건 구성원 식별자를 다시 조립한다.

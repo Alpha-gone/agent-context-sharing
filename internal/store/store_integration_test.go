@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -410,4 +411,78 @@ func testEventContext(t *testing.T, graphID, actorID, memberID model.ID) model.C
 			End:       end,
 		},
 	}
+}
+
+// TestHopEdgeOrderIsDeterministic은 홉 응답의 참조·관계 순서가 양 끝 context_id
+// 오름차순으로 고정되고 같은 요청이 같은 순서를 주는지 확인한다. 순서를 고정하지
+// 않으면 SRS의 「정렬」이 근거로 든 반복 측정과 통제 비교가 성립하지 않는다.
+func TestHopEdgeOrderIsDeterministic(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
+			t.Fatal("TEST_DATABASE_REQUIRED가 설정됐지만 TEST_DATABASE_URL이 비어 있다")
+		}
+		t.Skip("TEST_DATABASE_URL이 없어 AGE 통합 테스트를 건너뛴다")
+	}
+	graphName := os.Getenv("AGE_GRAPH_NAME")
+	if graphName == "" {
+		graphName = "agent_context"
+	}
+	store, err := New(t.Context(), databaseURL, graphName)
+	if err != nil {
+		t.Fatalf("저장소 준비: %v", err)
+	}
+	defer store.Close()
+
+	actorID := newTestID(t)
+	createTestAccount(t, store, actorID)
+	graphID := newTestID(t)
+	now := time.Now().UTC()
+	if _, err := store.CreateGraph(t.Context(), model.Graph{
+		ID: graphID, Name: "hop order", CreatedBy: actorID, CreatedAt: now, LastActivityAt: now, Version: 1,
+	}); err != nil {
+		t.Fatalf("그래프 생성: %v", err)
+	}
+	source, err := store.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "api://hop-order"), nil)
+	if err != nil {
+		t.Fatalf("원천 생성: %v", err)
+	}
+	// 간선이 하나면 맵 순회 순서가 드러나지 않으므로 여럿을 만든다.
+	for range 5 {
+		if _, err := store.CreateContext(t.Context(), graphID, testDerivedContext(t, graphID, actorID), []model.ID{source.ID}); err != nil {
+			t.Fatalf("파생 생성: %v", err)
+		}
+	}
+
+	first, err := store.HopContexts(t.Context(), graphID, source.ID, 1, "in", []string{"derived_from"}, 10)
+	if err != nil {
+		t.Fatalf("홉 조회: %v", err)
+	}
+	if len(first.Edges) != 5 {
+		t.Fatalf("참조 간선 수 = %d, want 5", len(first.Edges))
+	}
+	if !slices.IsSortedFunc(first.Edges, compareHopEdges) {
+		t.Fatalf("참조 간선이 양 끝 context_id 오름차순이 아니다: %s", formatHopEdges(first.Edges))
+	}
+	for range 4 {
+		repeated, err := store.HopContexts(t.Context(), graphID, source.ID, 1, "in", []string{"derived_from"}, 10)
+		if err != nil {
+			t.Fatalf("홉 재조회: %v", err)
+		}
+		if !slices.Equal(repeated.Edges, first.Edges) {
+			t.Fatalf("같은 요청이 다른 간선 순서를 돌려줬다: %s != %s", formatHopEdges(repeated.Edges), formatHopEdges(first.Edges))
+		}
+		if !slices.EqualFunc(repeated.Contexts, first.Contexts, func(left, right model.Context) bool { return left.ID == right.ID }) {
+			t.Fatal("같은 요청이 다른 컨텍스트 순서를 돌려줬다")
+		}
+	}
+}
+
+// formatHopEdges는 실패 메시지에 식별자를 바이트가 아니라 읽을 수 있는 형태로 남긴다.
+func formatHopEdges(edges []HopEdge) string {
+	values := make([]string, 0, len(edges))
+	for _, edge := range edges {
+		values = append(values, edge.FromID.String()+"->"+edge.ToID.String()+":"+edge.Kind)
+	}
+	return "[" + strings.Join(values, " ") + "]"
 }

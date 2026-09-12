@@ -117,6 +117,9 @@ type DerivedAttributes struct {
 	Kind DerivationKind
 	// SummaryScope 필드는 요약 파생일 때만 다루는 범위다.
 	SummaryScope SummaryScope
+	// DerivedFrom 필드는 근거가 된 원천 또는 파생 컨텍스트 식별자다.
+	// DERIVED_FROM 간선에서 다시 조립한 응답용 값이다.
+	DerivedFrom []ID
 	// EvidenceState 필드는 생성 뒤 바꿀 수 없는 근거 성격이다.
 	EvidenceState EvidenceState
 	// ConfidenceState 필드는 의견 파생일 때만 지정하는 신뢰 상태다.
@@ -243,21 +246,21 @@ func (c Context) Validate() error {
 	switch c.Layer {
 	case LayerSource:
 		if c.Source == nil || c.Derived != nil || c.Event != nil {
-			return fmt.Errorf("원천은 source 속성만 가져야 한다")
+			return fieldErrorf("layer", "원천은 source 속성만 가져야 한다")
 		}
 		return c.Source.validate()
 	case LayerDerived:
 		if c.Derived == nil || c.Source != nil || c.Event != nil {
-			return fmt.Errorf("파생은 derived 속성만 가져야 한다")
+			return fieldErrorf("layer", "파생은 derived 속성만 가져야 한다")
 		}
 		return c.Derived.validate()
 	case LayerEvent:
 		if c.Event == nil || c.Source != nil || c.Derived != nil {
-			return fmt.Errorf("사건은 event 속성만 가져야 한다")
+			return fieldErrorf("layer", "사건은 event 속성만 가져야 한다")
 		}
 		return c.Event.validate()
 	default:
-		return fmt.Errorf("알 수 없는 컨텍스트 계층 %q", c.Layer)
+		return fieldErrorf("layer", "알 수 없는 컨텍스트 계층 %q", c.Layer)
 	}
 }
 
@@ -270,23 +273,23 @@ func ValidateUpdate(previous, next Context) error {
 		return fmt.Errorf("다음 컨텍스트: %w", err)
 	}
 	if previous.ID != next.ID || previous.GraphID != next.GraphID || previous.Layer != next.Layer || previous.RecordedAt != next.RecordedAt || previous.CreatedBy != next.CreatedBy || previous.CreatedByAgent != next.CreatedByAgent {
-		return fmt.Errorf("공통 식별자와 생성 메타데이터는 바꿀 수 없다")
+		return fieldErrorf("context_id", "공통 식별자와 생성 메타데이터는 바꿀 수 없다")
 	}
 	switch previous.Layer {
 	case LayerSource:
 		if previous.Body != next.Body || *previous.Source != *next.Source || next.Version != 1 {
-			return fmt.Errorf("원천은 deleted_at 표시 외에 바꿀 수 없고 판 번호는 1이다")
+			return fieldErrorf("layer", "원천은 deleted_at 표시 외에 바꿀 수 없고 판 번호는 1이다")
 		}
 	case LayerDerived:
 		if previous.Derived.Kind != next.Derived.Kind || previous.Derived.SummaryScope != next.Derived.SummaryScope || previous.Derived.EvidenceState != next.Derived.EvidenceState || previous.Derived.EvidenceInvalidated != next.Derived.EvidenceInvalidated {
-			return fmt.Errorf("파생의 종류, 요약 범위와 근거 상태는 바꿀 수 없다")
+			return fieldErrorf("derivation_kind", "파생의 종류, 요약 범위와 근거 상태는 바꿀 수 없다")
 		}
 		if next.Version != previous.Version+1 {
-			return fmt.Errorf("파생 갱신은 판 번호를 하나 증가시켜야 한다")
+			return fieldErrorf("expected_version", "파생 갱신은 판 번호를 하나 증가시켜야 한다")
 		}
 	case LayerEvent:
 		if next.Version != previous.Version+1 {
-			return fmt.Errorf("사건 갱신은 판 번호를 하나 증가시켜야 한다")
+			return fieldErrorf("expected_version", "사건 갱신은 판 번호를 하나 증가시켜야 한다")
 		}
 	}
 	return nil
@@ -301,19 +304,19 @@ func ValidateEvidenceInvalidation(previous, next Context) error {
 		return fmt.Errorf("다음 컨텍스트: %w", err)
 	}
 	if previous.Layer != LayerDerived || next.Layer != LayerDerived {
-		return fmt.Errorf("근거 무효 표시는 파생 컨텍스트에만 적용한다")
+		return fieldErrorf("layer", "근거 무효 표시는 파생 컨텍스트에만 적용한다")
 	}
 	if previous.ID != next.ID || previous.GraphID != next.GraphID || previous.RecordedAt != next.RecordedAt || previous.CreatedBy != next.CreatedBy || previous.CreatedByAgent != next.CreatedByAgent || previous.Body != next.Body || !sameOptionalTime(previous.DeletedAt, next.DeletedAt) {
-		return fmt.Errorf("근거 무효 표시는 공통 속성을 바꿀 수 없다")
+		return fieldErrorf("context_id", "근거 무효 표시는 공통 속성을 바꿀 수 없다")
 	}
 	if previous.Derived.Kind != next.Derived.Kind || previous.Derived.SummaryScope != next.Derived.SummaryScope || previous.Derived.EvidenceState != next.Derived.EvidenceState || previous.Derived.ConfidenceState != next.Derived.ConfidenceState || !sameOptionalTime(previous.Derived.ValidFrom, next.Derived.ValidFrom) || !sameOptionalTime(previous.Derived.ValidTo, next.Derived.ValidTo) {
-		return fmt.Errorf("근거 무효 표시는 파생의 다른 속성을 바꿀 수 없다")
+		return fieldErrorf("evidence_invalidated", "근거 무효 표시는 파생의 다른 속성을 바꿀 수 없다")
 	}
 	if previous.Derived.EvidenceInvalidated || !next.Derived.EvidenceInvalidated {
-		return fmt.Errorf("근거 무효 표시는 false에서 true로만 바꿀 수 있다")
+		return fieldErrorf("evidence_invalidated", "근거 무효 표시는 false에서 true로만 바꿀 수 있다")
 	}
 	if next.Version != previous.Version+1 {
-		return fmt.Errorf("근거 무효 표시는 판 번호를 하나 증가시켜야 한다")
+		return fieldErrorf("version", "근거 무효 표시는 판 번호를 하나 증가시켜야 한다")
 	}
 	return nil
 }
@@ -324,11 +327,11 @@ func ValidateEvidenceInvalidation(previous, next Context) error {
 // `mcp`에 맡겼고, 여기에서는 `SRS.md`가 필수 속성으로 둔 "1개 이상"만 강제한다.
 func ValidateDerivedReferences(referenceIDs []ID) error {
 	if len(referenceIDs) == 0 {
-		return fmt.Errorf("파생 근거는 1개 이상이어야 한다")
+		return fieldErrorf("derived_from", "파생 근거는 1개 이상이어야 한다")
 	}
 	for _, referenceID := range referenceIDs {
 		if !referenceID.IsV7() {
-			return fmt.Errorf("파생 근거 식별자는 UUIDv7이어야 한다")
+			return fieldErrorf("derived_from", "파생 근거 식별자는 UUIDv7이어야 한다")
 		}
 	}
 	return nil
@@ -340,20 +343,20 @@ func ValidateEventMembers(event Context, members []Context) error {
 		return err
 	}
 	if event.Layer != LayerEvent || event.Event == nil {
-		return fmt.Errorf("사건 구성원 검증에는 사건 컨텍스트가 필요하다")
+		return fieldErrorf("layer", "사건 구성원 검증에는 사건 컨텍스트가 필요하다")
 	}
 	if len(members) != len(event.Event.MemberIDs) {
-		return fmt.Errorf("사건 구성원과 member_refs 개수가 다르다")
+		return fieldErrorf("member_refs", "사건 구성원과 member_refs 개수가 다르다")
 	}
 	for index, member := range members {
 		if err := member.Validate(); err != nil {
 			return fmt.Errorf("사건 구성원 검증: %w", err)
 		}
 		if member.GraphID != event.GraphID || member.ID != event.Event.MemberIDs[index] || (member.Layer != LayerSource && member.Layer != LayerDerived) {
-			return fmt.Errorf("사건 구성원은 member_refs와 같은 원천 또는 파생이어야 한다")
+			return fieldErrorf("member_refs", "사건 구성원은 member_refs와 같은 원천 또는 파생이어야 한다")
 		}
 		if member.Layer == LayerSource && !contains(*event.Event, member.Source.OccurredAt) {
-			return fmt.Errorf("원천 구성원 발생 시각이 사건 시간 범위 밖이다")
+			return fieldErrorf("member_refs", "원천 구성원 발생 시각이 사건 시간 범위 밖이다")
 		}
 	}
 	return nil
@@ -362,22 +365,22 @@ func ValidateEventMembers(event Context, members []Context) error {
 // Validate는 그래프 식별자, 시간과 판 번호의 기본 제약을 확인한다.
 func (g Graph) Validate() error {
 	if !g.ID.IsV7() || !g.CreatedBy.IsV7() {
-		return fmt.Errorf("그래프와 생성 계정은 UUIDv7이어야 한다")
+		return fieldErrorf("graph_id", "그래프와 생성 계정은 UUIDv7이어야 한다")
 	}
 	if g.Name == "" {
-		return fmt.Errorf("그래프 이름이 비어 있다")
+		return fieldErrorf("name", "그래프 이름이 비어 있다")
 	}
 	if !isUTC(g.CreatedAt) || !isUTC(g.LastActivityAt) {
-		return fmt.Errorf("그래프 시각은 UTC여야 한다")
+		return fieldErrorf("created_at", "그래프 시각은 UTC여야 한다")
 	}
 	if g.StoredChars < 0 {
-		return fmt.Errorf("그래프 저장 문자 수는 음수일 수 없다")
+		return fieldErrorf("stored_chars", "그래프 저장 문자 수는 음수일 수 없다")
 	}
 	if !optionalUTC(g.DeletedAt) || !optionalUTC(g.GraceStartedAt) {
-		return fmt.Errorf("그래프 선택 시각은 UTC여야 한다")
+		return fieldErrorf("deleted_at", "그래프 선택 시각은 UTC여야 한다")
 	}
 	if g.Version < 1 {
-		return fmt.Errorf("그래프 판 번호는 1 이상이어야 한다")
+		return fieldErrorf("expected_version", "그래프 판 번호는 1 이상이어야 한다")
 	}
 	return nil
 }
@@ -385,19 +388,19 @@ func (g Graph) Validate() error {
 // validateCommon은 모든 계층이 공유하는 필수 속성과 불변 원천의 초기 판 번호를 확인한다.
 func validateCommon(context Context) error {
 	if !context.ID.IsV7() || !context.GraphID.IsV7() || !context.CreatedBy.IsV7() || !context.CreatedByAgent.IsV7() {
-		return fmt.Errorf("컨텍스트, 그래프, 계정과 에이전트 식별자는 UUIDv7이어야 한다")
+		return fieldErrorf("context_id", "컨텍스트, 그래프, 계정과 에이전트 식별자는 UUIDv7이어야 한다")
 	}
 	if !isUTC(context.RecordedAt) {
-		return fmt.Errorf("기록 시각은 UTC여야 한다")
+		return fieldErrorf("recorded_at", "기록 시각은 UTC여야 한다")
 	}
 	if context.Version < 1 {
-		return fmt.Errorf("컨텍스트 판 번호는 1 이상이어야 한다")
+		return fieldErrorf("version", "컨텍스트 판 번호는 1 이상이어야 한다")
 	}
 	if context.Layer == LayerSource && context.Version != 1 {
-		return fmt.Errorf("원천 컨텍스트 판 번호는 1로 고정된다")
+		return fieldErrorf("version", "원천 컨텍스트 판 번호는 1로 고정된다")
 	}
 	if !optionalUTC(context.DeletedAt) {
-		return fmt.Errorf("컨텍스트 폐기 시각은 UTC여야 한다")
+		return fieldErrorf("deleted_at", "컨텍스트 폐기 시각은 UTC여야 한다")
 	}
 	return nil
 }
@@ -405,17 +408,17 @@ func validateCommon(context Context) error {
 // validate는 원천의 출처 참조, 발생 시각과 출처 구분을 확인한다.
 func (attributes SourceAttributes) validate() error {
 	if !slices.Contains([]SourceChannel{SourceChannelConversation, SourceChannelFile, SourceChannelWeb, SourceChannelAPI, SourceChannelOther}, attributes.Reference.Channel) {
-		return fmt.Errorf("원천 수집 경로 %q가 허용된 값이 아니다", attributes.Reference.Channel)
+		return fieldErrorf("source_channel", "원천 수집 경로 %q가 허용된 값이 아니다", attributes.Reference.Channel)
 	}
 	locator, err := url.Parse(attributes.Reference.Locator)
 	if err != nil || locator.Scheme == "" {
-		return fmt.Errorf("원천 위치가 scheme을 가진 URI가 아니다")
+		return fieldErrorf("locator", "원천 위치가 scheme을 가진 URI가 아니다")
 	}
 	if !isUTC(attributes.OccurredAt) {
-		return fmt.Errorf("원천 발생 시각은 UTC여야 한다")
+		return fieldErrorf("occurred_at", "원천 발생 시각은 UTC여야 한다")
 	}
 	if !slices.Contains([]OriginKind{OriginKindUserUtterance, OriginKindAgentOutput, OriginKindExternalContent}, attributes.OriginKind) {
-		return fmt.Errorf("원천 출처 구분 %q가 허용된 값이 아니다", attributes.OriginKind)
+		return fieldErrorf("origin_kind", "원천 출처 구분 %q가 허용된 값이 아니다", attributes.OriginKind)
 	}
 	return nil
 }
@@ -423,30 +426,30 @@ func (attributes SourceAttributes) validate() error {
 // validate는 파생의 정체성, 의견의 신뢰 상태와 유효 시간 범위를 확인한다.
 func (attributes DerivedAttributes) validate() error {
 	if !slices.Contains([]DerivationKind{DerivationKindProposition, DerivationKindSummary, DerivationKindReflection}, attributes.Kind) {
-		return fmt.Errorf("파생 종류 %q가 허용된 값이 아니다", attributes.Kind)
+		return fieldErrorf("derivation_kind", "파생 종류 %q가 허용된 값이 아니다", attributes.Kind)
 	}
 	if attributes.Kind == DerivationKindSummary {
 		if !slices.Contains([]SummaryScope{SummaryScopeLocal, SummaryScopeGlobal}, attributes.SummaryScope) {
-			return fmt.Errorf("요약 파생에는 local 또는 global summary_scope가 필요하다")
+			return fieldErrorf("summary_scope", "요약 파생에는 local 또는 global summary_scope가 필요하다")
 		}
 	} else if attributes.SummaryScope != "" {
-		return fmt.Errorf("요약이 아닌 파생에는 summary_scope를 둘 수 없다")
+		return fieldErrorf("summary_scope", "요약이 아닌 파생에는 summary_scope를 둘 수 없다")
 	}
 	if !slices.Contains([]EvidenceState{EvidenceStateObservation, EvidenceStateExperience, EvidenceStateOpinion}, attributes.EvidenceState) {
-		return fmt.Errorf("근거 상태 %q가 허용된 값이 아니다", attributes.EvidenceState)
+		return fieldErrorf("evidence_state", "근거 상태 %q가 허용된 값이 아니다", attributes.EvidenceState)
 	}
 	if attributes.EvidenceState == EvidenceStateOpinion {
 		if !slices.Contains([]ConfidenceState{ConfidenceStateSupported, ConfidenceStateUncertain, ConfidenceStateDisputed}, attributes.ConfidenceState) {
-			return fmt.Errorf("의견 파생에는 유효한 신뢰 상태가 필요하다")
+			return fieldErrorf("confidence_state", "의견 파생에는 유효한 신뢰 상태가 필요하다")
 		}
 	} else if attributes.ConfidenceState != "" {
-		return fmt.Errorf("의견이 아닌 파생에는 신뢰 상태를 둘 수 없다")
+		return fieldErrorf("confidence_state", "의견이 아닌 파생에는 신뢰 상태를 둘 수 없다")
 	}
 	if attributes.ValidFrom != nil && !isUTC(*attributes.ValidFrom) || attributes.ValidTo != nil && !isUTC(*attributes.ValidTo) {
-		return fmt.Errorf("파생 유효 시각은 UTC여야 한다")
+		return fieldErrorf("valid_from", "파생 유효 시각은 UTC여야 한다")
 	}
 	if attributes.ValidFrom != nil && attributes.ValidTo != nil && attributes.ValidTo.Before(*attributes.ValidFrom) {
-		return fmt.Errorf("파생 유효 종료 시각이 시작 시각보다 빠르다")
+		return fieldErrorf("valid_to", "파생 유효 종료 시각이 시작 시각보다 빠르다")
 	}
 	return nil
 }
@@ -456,18 +459,18 @@ func (attributes DerivedAttributes) validate() error {
 // 구성원 수의 상한은 「입력 검증」이 `mcp`에 맡겼으므로 여기에서는 보지 않는다.
 func (attributes EventAttributes) validate() error {
 	if len(attributes.MemberIDs) == 0 {
-		return fmt.Errorf("사건 구성원은 1개 이상이어야 한다")
+		return fieldErrorf("member_refs", "사건 구성원은 1개 이상이어야 한다")
 	}
 	for _, memberID := range attributes.MemberIDs {
 		if !memberID.IsV7() {
-			return fmt.Errorf("사건 구성원 식별자는 UUIDv7이어야 한다")
+			return fieldErrorf("member_refs", "사건 구성원 식별자는 UUIDv7이어야 한다")
 		}
 	}
 	if !isUTC(attributes.Start) || attributes.End != nil && !isUTC(*attributes.End) {
-		return fmt.Errorf("사건 시간 범위는 UTC여야 한다")
+		return fieldErrorf("start", "사건 시간 범위는 UTC여야 한다")
 	}
 	if attributes.End != nil && attributes.End.Before(attributes.Start) {
-		return fmt.Errorf("사건 종료 시각이 시작 시각보다 빠르다")
+		return fieldErrorf("end", "사건 종료 시각이 시작 시각보다 빠르다")
 	}
 	return nil
 }

@@ -107,6 +107,7 @@ var toolSchemas = map[string]map[string]argumentRule{
 		"graph_id":         required(idString),
 		"context_id":       required(idString),
 		"expected_version": required(positiveInteger),
+		"created_by_agent": required(idString),
 		"body":             optional(textRange(1, maxBodyRunes)),
 		"confidence_state": optional(oneOf("supported", "uncertain", "disputed")),
 		"valid_from":       optional(dateTimeString),
@@ -115,8 +116,16 @@ var toolSchemas = map[string]map[string]argumentRule{
 		"start":            optional(dateTimeString),
 		"end":              optional(dateTimeString),
 	},
-	"node_discard": contextIDRules(),
-	"node_restore": contextIDRules(),
+	"node_discard": {
+		"graph_id":         required(idString),
+		"context_id":       required(idString),
+		"created_by_agent": required(idString),
+	},
+	"node_restore": {
+		"graph_id":         required(idString),
+		"context_id":       required(idString),
+		"created_by_agent": required(idString),
+	},
 	"context_flow_get": {
 		"graph_id":     required(idString),
 		"work_context": required(nonBlankText(maxBodyRunes)),
@@ -281,6 +290,10 @@ func contextIDSchema() map[string]any {
 	return schema(map[string]any{"graph_id": idSchema(), "context_id": idSchema()}, "graph_id", "context_id")
 }
 
+func nodeLifecycleSchema() map[string]any {
+	return schema(map[string]any{"graph_id": idSchema(), "context_id": idSchema(), "created_by_agent": idSchema()}, "graph_id", "context_id", "created_by_agent")
+}
+
 func graphListSchema() map[string]any {
 	return schema(map[string]any{
 		"name_filter":  stringSchema(map[string]any{"maxLength": maxNameRunes}),
@@ -312,7 +325,7 @@ func nodeGetSchema() map[string]any {
 }
 
 func nodeUpdateSchema() map[string]any {
-	return schema(map[string]any{"graph_id": idSchema(), "context_id": idSchema(), "expected_version": integerSchema(1), "body": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes}), "confidence_state": enumSchema("supported", "uncertain", "disputed"), "valid_from": dateTimeSchema(), "valid_to": dateTimeSchema(), "member_refs": arraySchema(idSchema(), 1, maxMembers), "start": dateTimeSchema(), "end": dateTimeSchema()}, "graph_id", "context_id", "expected_version")
+	return schema(map[string]any{"graph_id": idSchema(), "context_id": idSchema(), "expected_version": integerSchema(1), "created_by_agent": idSchema(), "body": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes}), "confidence_state": enumSchema("supported", "uncertain", "disputed"), "valid_from": dateTimeSchema(), "valid_to": dateTimeSchema(), "member_refs": arraySchema(idSchema(), 1, maxMembers), "start": dateTimeSchema(), "end": dateTimeSchema()}, "graph_id", "context_id", "expected_version", "created_by_agent")
 }
 
 func contextFlowSchema() map[string]any {

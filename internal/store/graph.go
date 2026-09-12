@@ -34,6 +34,42 @@ func (s *Store) CreateGraph(ctx context.Context, graph model.Graph) (model.Graph
 	return stored, nil
 }
 
+// CreateGraphWithOwner는 그래프 생성과 생성 계정의 소유자 등급 부여를 한 트랜잭션에 묶는다.
+func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph) (model.Graph, error) {
+	if err := graph.Validate(); err != nil {
+		return model.Graph{}, fmt.Errorf("그래프 검증: %w", err)
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return model.Graph{}, fmt.Errorf("그래프 생성 트랜잭션 시작: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	row := tx.QueryRow(ctx, `
+		INSERT INTO public.context_graph (
+			graph_id, name, description, created_by, created_at, last_activity_at,
+			grace_started_at, stored_chars, version, deleted_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING graph_id, name, description, created_by, created_at, last_activity_at,
+		          grace_started_at, stored_chars, version, deleted_at`,
+		graph.ID.String(), graph.Name, nullableString(graph.Description), graph.CreatedBy.String(),
+		graph.CreatedAt, graph.LastActivityAt, graph.GraceStartedAt, graph.StoredChars, graph.Version,
+		graph.DeletedAt,
+	)
+	stored, err := scanGraph(row)
+	if err != nil {
+		return model.Graph{}, fmt.Errorf("그래프 생성: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO public.graph_grant (graph_id, subject_type, subject_id, grade)
+		VALUES ($1, 'account', $2, 'owner')`, graph.ID.String(), graph.CreatedBy.String()); err != nil {
+		return model.Graph{}, fmt.Errorf("그래프 소유자 등급 부여: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.Graph{}, fmt.Errorf("그래프 생성 커밋: %w", err)
+	}
+	return stored, nil
+}
+
 // Graph는 graph_id에 해당하는 그래프 메타데이터를 읽는다.
 func (s *Store) Graph(ctx context.Context, graphID model.ID) (model.Graph, error) {
 	if !graphID.IsV7() {

@@ -475,9 +475,9 @@ MCP primitive는 `tools`만 사용한다. 모든 연산이 그래프 선택, 홉
 | `graph_update`     | `FR-AGENT_CONTEXT-022`                         | `graph_id`, `expected_version`, `name`, `description`                          |
 | `node_create`      | `FR-AGENT_CONTEXT-023`                         | `graph_id`, `layer`, `body`와 계층별 속성                                      |
 | `node_get`         | `FR-AGENT_CONTEXT-024`                         | `graph_id`, `context_id`, `hops`, `direction`, `traversal_filter`              |
-| `node_update`      | `FR-AGENT_CONTEXT-025`                         | `graph_id`, `context_id`, `expected_version`와 수정 필드                       |
-| `node_discard`     | `FR-AGENT_CONTEXT-069`                         | `graph_id`, `context_id`                                                       |
-| `node_restore`     | `FR-AGENT_CONTEXT-069`                         | `graph_id`, `context_id`                                                       |
+| `node_update`      | `FR-AGENT_CONTEXT-025`                         | `graph_id`, `context_id`, `expected_version`, `created_by_agent`와 수정 필드  |
+| `node_discard`     | `FR-AGENT_CONTEXT-069`                         | `graph_id`, `context_id`, `created_by_agent`                                  |
+| `node_restore`     | `FR-AGENT_CONTEXT-069`                         | `graph_id`, `context_id`, `created_by_agent`                                  |
 | `context_flow_get` | `FR-AGENT_CONTEXT-012`, `FR-AGENT_CONTEXT-018` | `graph_id`, `work_context`, `as_of`, `scope`, `budget`                         |
 | `relation_list`    | `FR-AGENT_CONTEXT-075`                         | `graph_id`, `context_id`, `state_filter`, `type_filter`, `cursor`, `page_size` |
 | `relation_confirm` | `FR-AGENT_CONTEXT-074`, `FR-AGENT_CONTEXT-075` | `graph_id`, `relation_type`, `from_context_id`, `to_context_id`                |

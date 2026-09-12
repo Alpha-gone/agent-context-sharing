@@ -234,6 +234,7 @@ func TestValidateToolCallRejectsInvalidDateTimes(t *testing.T) {
 			"graph_id":         graphID,
 			"context_id":       contextID,
 			"expected_version": float64(1),
+			"created_by_agent": agentID,
 			field:              "banana",
 		}
 	}

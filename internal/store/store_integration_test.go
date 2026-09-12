@@ -58,6 +58,9 @@ func TestStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("원천 생성: %v", err)
 	}
+	if count := indexTaskCount(t, store, createdSource.ID); count != 1 {
+		t.Fatalf("원천 생성이 색인 작업을 한 행 등록하지 않았다: %d", count)
+	}
 	duplicate := testSourceContext(t, graphID, actorID, source.Source.Reference.Locator)
 	duplicateSource, err := store.CreateContext(t.Context(), graphID, duplicate, nil)
 	if err != nil {
@@ -65,6 +68,9 @@ func TestStoreIntegration(t *testing.T) {
 	}
 	if duplicateSource.ID != createdSource.ID {
 		t.Fatalf("같은 source_ref가 기존 원천을 반환하지 않았다: %s != %s", duplicateSource.ID, createdSource.ID)
+	}
+	if count := indexTaskCount(t, store, createdSource.ID); count != 1 {
+		t.Fatalf("원천 중복 응답이 색인 작업을 다시 등록했다: %d", count)
 	}
 
 	foreignGraphID := newTestID(t)
@@ -86,6 +92,45 @@ func TestStoreIntegration(t *testing.T) {
 	createdDerived, err := store.CreateContext(t.Context(), graphID, derived, []model.ID{createdSource.ID})
 	if err != nil {
 		t.Fatalf("파생 생성: %v", err)
+	}
+	if count := indexTaskCount(t, store, createdDerived.ID); count != 1 {
+		t.Fatalf("파생 생성이 색인 작업을 한 행 등록하지 않았다: %d", count)
+	}
+	hops, err := store.HopContexts(t.Context(), graphID, createdSource.ID, 1, "in", []string{"derived_from"}, 10)
+	if err != nil {
+		t.Fatalf("참조 홉 조회: %v", err)
+	}
+	if len(hops.Contexts) != 2 || len(hops.Edges) != 1 || hops.Contexts[0].ID != createdSource.ID {
+		t.Fatalf("참조 홉 조회 결과가 예상과 다르다: %#v", hops)
+	}
+	operation := OperationRecord{
+		Kind: OperationDiscard, GraphID: graphID, ContextID: createdSource.ID, TargetVersion: 1,
+		JudgmentInput: "integration discard", AccountID: actorID, AgentID: actorID,
+	}
+	discarded, err := store.DiscardContext(t.Context(), graphID, createdSource.ID, &operation)
+	if err != nil {
+		t.Fatalf("컨텍스트 폐기: %v", err)
+	}
+	if discarded.DeletedAt == nil {
+		t.Fatal("폐기한 컨텍스트에 deleted_at이 없다")
+	}
+	if found, err := store.HasAppliedDiscard(t.Context(), graphID, createdSource.ID); err != nil || !found {
+		t.Fatalf("적용된 폐기 기록을 찾지 못했다: found=%t err=%v", found, err)
+	}
+	invalidated, err := store.Context(t.Context(), graphID, createdDerived.ID)
+	if err != nil {
+		t.Fatalf("근거 폐기 뒤 파생 조회: %v", err)
+	}
+	if invalidated.Derived == nil || !invalidated.Derived.EvidenceInvalidated || invalidated.Version != createdDerived.Version+1 {
+		t.Fatalf("근거 폐기가 파생에 무효 표시를 전파하지 않았다: %#v", invalidated.Derived)
+	}
+	operation.Kind = OperationUpdate
+	restored, err := store.RestoreContext(t.Context(), graphID, createdSource.ID, &operation)
+	if err != nil {
+		t.Fatalf("컨텍스트 복구: %v", err)
+	}
+	if restored.DeletedAt != nil {
+		t.Fatal("복구한 컨텍스트에 deleted_at이 남아 있다")
 	}
 	firstEvent := testEventContext(t, graphID, actorID, createdSource.ID)
 	createdFirstEvent, err := store.CreateContext(t.Context(), graphID, firstEvent, nil)
@@ -124,6 +169,14 @@ func TestStoreIntegration(t *testing.T) {
 	}
 	if len(foreignRelations) != 0 {
 		t.Fatalf("다른 그래프의 관계가 반환됐다: %#v", foreignRelations)
+	}
+	truncated, err := store.HopContexts(t.Context(), graphID, createdSource.ID, 2, "", nil, 1)
+	if err != nil {
+		t.Fatalf("홉 조회 절단: %v", err)
+	}
+	if len(truncated.Contexts) != 1 || !truncated.Truncated || truncated.Boundary != 1 {
+		t.Fatalf("노드 상한 초과 시 절단 상태가 예상과 다르다: contexts=%d truncated=%t boundary=%d",
+			len(truncated.Contexts), truncated.Truncated, truncated.Boundary)
 	}
 	teamGraphID := newTestID(t)
 	teamGraph := graph
@@ -175,7 +228,11 @@ func TestStoreIntegration(t *testing.T) {
 	if len(filteredGraphs) != 1 || filteredGraphs[0].ID != teamGraphID {
 		t.Fatalf("이름·등급 필터가 예상과 다르다: %#v", filteredGraphs)
 	}
-	updated := createdDerived
+	currentDerived, err := store.Context(t.Context(), graphID, createdDerived.ID)
+	if err != nil {
+		t.Fatalf("갱신 전 파생 조회: %v", err)
+	}
+	updated := currentDerived
 	updated.Body = "갱신된 파생 본문"
 	updated.Version++
 
@@ -183,7 +240,7 @@ func TestStoreIntegration(t *testing.T) {
 	var waitGroup sync.WaitGroup
 	for range 2 {
 		waitGroup.Go(func() {
-			_, err := store.UpdateContext(t.Context(), graphID, createdDerived.Version, updated)
+			_, err := store.UpdateContext(t.Context(), graphID, currentDerived.Version, updated)
 			results <- err
 		})
 	}
@@ -206,6 +263,19 @@ func TestStoreIntegration(t *testing.T) {
 	if successes != 1 || conflicts != 1 {
 		t.Fatalf("동시 갱신 결과가 성공 1건과 충돌 1건이 아니다: 성공 %d, 충돌 %d", successes, conflicts)
 	}
+	if count := indexTaskCount(t, store, createdDerived.ID); count != 1 {
+		t.Fatalf("본문 갱신이 색인 작업을 컨텍스트당 한 행으로 유지하지 않았다: %d", count)
+	}
+}
+
+// indexTaskCount는 컨텍스트에 남은 색인 작업 행 수를 센다.
+func indexTaskCount(t *testing.T, store *Store, contextID model.ID) int {
+	t.Helper()
+	var count int
+	if err := store.pool.QueryRow(t.Context(), `SELECT count(*) FROM public.index_task WHERE context_id = $1`, contextID.String()).Scan(&count); err != nil {
+		t.Fatalf("색인 작업 행 수 조회: %v", err)
+	}
+	return count
 }
 
 // createTestAccount는 권한 목록 통합 테스트에 필요한 계정 행을 만든다.

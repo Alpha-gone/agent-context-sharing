@@ -59,7 +59,7 @@ func run() error {
 	}, func(ctx context.Context, raw, audience string) (model.ID, error) {
 		accountID, _, err := authorization.Verify(ctx, raw, audience)
 		return accountID, err
-	}, nil)
+	}, mcp.NewHandler(database, cfg.AccountPlans))
 	if err != nil {
 		return fmt.Errorf("MCP 리소스 서버 준비: %w", err)
 	}

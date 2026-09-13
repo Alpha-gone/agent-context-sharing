@@ -684,3 +684,110 @@ func isUniqueViolation(err error) bool {
 	pgError, ok := errors.AsType[*pgconn.PgError](err)
 	return ok && pgError.Code == "23505"
 }
+
+// ContextsByIDs는 여러 컨텍스트를 세 질의로 조립해 요청 순서대로 돌려준다.
+//
+// 후보마다 Context를 부르면 식별자 수만큼 왕복이 늘고, 결과 행을 연 채 부르면 같은 풀에서
+// 연결을 하나 더 잡아 동시 요청이 서로의 연결을 기다린다. 검색 채널은 이 함수를 쓴다.
+func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs []model.ID) ([]model.Context, error) {
+	if !graphID.IsV7() {
+		return nil, fmt.Errorf("그래프 식별자는 UUIDv7이어야 한다")
+	}
+	if len(contextIDs) == 0 {
+		return nil, nil
+	}
+	identifiers := make([]string, 0, len(contextIDs))
+	for _, contextID := range contextIDs {
+		if !contextID.IsV7() {
+			return nil, fmt.Errorf("컨텍스트 식별자는 UUIDv7이어야 한다")
+		}
+		identifiers = append(identifiers, cypherString(contextID.String()))
+	}
+	list := "[" + strings.Join(identifiers, ", ") + "]"
+
+	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) +
+		" AND node.context_id IN " + list + " RETURN node ORDER BY node.context_id"
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"))
+	if err != nil {
+		return nil, fmt.Errorf("컨텍스트 묶음 조회: %w", err)
+	}
+	byID := make(map[model.ID]model.Context, len(contextIDs))
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("컨텍스트 묶음 행 해석: %w", err)
+		}
+		value, err := parseContext(raw, graphID)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		byID[value.ID] = value
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("컨텍스트 묶음 행 읽기: %w", err)
+	}
+
+	references, err := s.edgeTargetsBySource(ctx, graphID, "DERIVED_FROM", list)
+	if err != nil {
+		return nil, err
+	}
+	members, err := s.edgeTargetsBySource(ctx, graphID, "HAS_MEMBER", list)
+	if err != nil {
+		return nil, err
+	}
+	ordered := make([]model.Context, 0, len(contextIDs))
+	for _, contextID := range contextIDs {
+		value, found := byID[contextID]
+		if !found {
+			return nil, ErrNotFound
+		}
+		switch value.Layer {
+		case model.LayerDerived:
+			value.Derived.DerivedFrom = references[contextID]
+		case model.LayerEvent:
+			value.Event.MemberIDs = members[contextID]
+			if err := value.Validate(); err != nil {
+				return nil, fmt.Errorf("저장된 사건 컨텍스트 검증: %w", err)
+			}
+		}
+		ordered = append(ordered, value)
+	}
+	return ordered, nil
+}
+
+// edgeTargetsBySource는 지정한 label의 간선을 시작 정점별로 모은다.
+func (s *Store) edgeTargetsBySource(ctx context.Context, graphID model.ID, label, sourceList string) (map[model.ID][]model.ID, error) {
+	query := "MATCH (source:Context)-[edge:" + label + "]->(target:Context) WHERE source.graph_id = " + cypherString(graphID.String()) +
+		" AND source.context_id IN " + sourceList +
+		" AND edge.graph_id = " + cypherString(graphID.String()) +
+		" AND target.graph_id = " + cypherString(graphID.String()) +
+		" RETURN source.context_id, target.context_id ORDER BY source.context_id, target.context_id"
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "source agtype, target agtype"))
+	if err != nil {
+		return nil, fmt.Errorf("%s 간선 묶음 조회: %w", label, err)
+	}
+	defer rows.Close()
+	targets := make(map[model.ID][]model.ID)
+	for rows.Next() {
+		var rawSource, rawTarget string
+		if err := rows.Scan(&rawSource, &rawTarget); err != nil {
+			return nil, fmt.Errorf("%s 간선 행 해석: %w", label, err)
+		}
+		sourceID, err := parseAnchorID(rawSource)
+		if err != nil {
+			return nil, err
+		}
+		targetID, err := parseAnchorID(rawTarget)
+		if err != nil {
+			return nil, err
+		}
+		targets[sourceID] = append(targets[sourceID], targetID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s 간선 행 읽기: %w", label, err)
+	}
+	return targets, nil
+}

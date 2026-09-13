@@ -25,9 +25,14 @@ type Operations interface {
 	Context(context.Context, model.ID, model.ID) (model.Context, error)
 	HopContexts(context.Context, model.ID, model.ID, int, string, []string, int) (store.HopResult, error)
 	CreateContextWithOperation(context.Context, model.ID, model.Context, []model.ID, *store.OperationRecord) (model.Context, error)
+	CreateSupersedingContextWithOperation(context.Context, model.ID, model.Context, []model.ID, model.ID, *store.OperationRecord) (model.Context, error)
 	UpdateContextWithOperation(context.Context, model.ID, int64, model.Context, *store.OperationRecord) (model.Context, error)
 	DiscardContext(context.Context, model.ID, model.ID, *store.OperationRecord) (model.Context, error)
 	RestoreContext(context.Context, model.ID, model.ID, *store.OperationRecord) (model.Context, error)
+	KeepContext(context.Context, model.ID, model.ID, int64, *store.OperationRecord) (model.Context, error)
+	ListContextRelations(context.Context, model.ID, model.ID, []model.RelationState, []model.RelationType, string, int) ([]model.Relation, string, error)
+	ConfirmRelation(context.Context, model.ID, model.Relation, *store.OperationRecord) (model.Relation, error)
+	DiscardRelation(context.Context, model.ID, model.ID, *store.OperationRecord) (model.Relation, error)
 	HasAppliedDiscard(context.Context, model.ID, model.ID) (bool, error)
 	RecordRejectedOperation(context.Context, store.OperationRecord, string) error
 	OwnedGraphCount(context.Context, model.ID) (int, error)
@@ -77,6 +82,12 @@ func (h handler) call(ctx context.Context, accountID model.ID, name string, argu
 		return h.discardNode(ctx, accountID, arguments)
 	case "node_restore":
 		return h.restoreNode(ctx, accountID, arguments)
+	case "relation_list":
+		return h.listRelations(ctx, accountID, arguments)
+	case "relation_confirm":
+		return h.confirmRelation(ctx, accountID, arguments)
+	case "relation_discard":
+		return h.discardRelation(ctx, accountID, arguments)
 	default:
 		return ToolResult{}, &Error{Code: "not_supported"}
 	}
@@ -168,9 +179,18 @@ func (h handler) createNode(ctx context.Context, accountID model.ID, arguments m
 		return ToolResult{}, err
 	}
 	operation := operationRecord(store.OperationAdd, graphID, contextID, accountID, agentID, arguments)
-	stored, err := h.operations.CreateContextWithOperation(ctx, graphID, value, references, &operation)
+	var stored model.Context
+	if supersededID, ok := optionalID(arguments, "supersedes_context_id"); ok {
+		if value.Layer != model.LayerDerived {
+			return ToolResult{}, &Error{Code: "invalid_argument", Data: map[string]any{"field": "supersedes_context_id"}}
+		}
+		operation.Kind = store.OperationSupersede
+		stored, err = h.operations.CreateSupersedingContextWithOperation(ctx, graphID, value, references, supersededID, &operation)
+	} else {
+		stored, err = h.operations.CreateContextWithOperation(ctx, graphID, value, references, &operation)
+	}
 	if err != nil {
-		h.recordRejected(ctx, operation, err)
+		h.recordRejectedCreation(ctx, operation, err)
 		return ToolResult{}, mapError(err)
 	}
 	return result(contextValue(stored)), nil
@@ -216,6 +236,23 @@ func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments m
 	if previous.DeletedAt != nil {
 		return ToolResult{}, &Error{Code: "not_found"}
 	}
+	if optionalString(arguments, "management_action") == "keep" {
+		if hasUpdateFields(arguments) {
+			return ToolResult{}, &Error{Code: "invalid_argument", Data: map[string]any{"field": "management_action"}}
+		}
+		if err := h.checkWrite(ctx, accountID); err != nil {
+			return ToolResult{}, err
+		}
+		agentID := argumentID(arguments, "created_by_agent")
+		operation := operationRecord(store.OperationKeep, graphID, contextID, accountID, agentID, arguments)
+		operation.TargetVersion = previous.Version
+		stored, err := h.operations.KeepContext(ctx, graphID, contextID, int64(arguments["expected_version"].(float64)), &operation)
+		if err != nil {
+			h.recordRejected(ctx, operation, err)
+			return ToolResult{}, mapError(err)
+		}
+		return result(contextValue(stored)), nil
+	}
 	next, err := updatedContext(previous, arguments)
 	if err != nil {
 		return ToolResult{}, invalidArgument(err)
@@ -238,6 +275,78 @@ func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments m
 		return ToolResult{}, mapError(err)
 	}
 	return result(contextValue(stored)), nil
+}
+
+func (h handler) listRelations(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
+	graphID, contextID := argumentID(arguments, "graph_id"), argumentID(arguments, "context_id")
+	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeViewer); err != nil {
+		return ToolResult{}, err
+	}
+	contextValue, err := h.operations.Context(ctx, graphID, contextID)
+	if err != nil {
+		return ToolResult{}, mapError(err)
+	}
+	if contextValue.DeletedAt != nil {
+		return ToolResult{}, &Error{Code: "not_found"}
+	}
+	pageSize := h.limits.GraphPage.Default
+	if value, ok := arguments["page_size"]; ok {
+		pageSize = int(value.(float64))
+	}
+	if err := plan.CheckRequest("graph_page", int64(pageSize), int64(h.limits.GraphPage.Maximum)); err != nil {
+		return ToolResult{}, limitError(err)
+	}
+	relations, cursor, err := h.operations.ListContextRelations(ctx, graphID, contextID, relationStates(arguments["state_filter"]), relationTypes(arguments["type_filter"]), optionalString(arguments, "cursor"), pageSize)
+	if err != nil {
+		return ToolResult{}, mapError(err)
+	}
+	values := make([]any, 0, len(relations))
+	for _, relation := range relations {
+		values = append(values, relationValue(relation))
+	}
+	return result(map[string]any{"relations": values, "next_cursor": cursor}), nil
+}
+
+func (h handler) confirmRelation(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
+	graphID := argumentID(arguments, "graph_id")
+	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
+		return ToolResult{}, err
+	}
+	if err := h.checkWrite(ctx, accountID); err != nil {
+		return ToolResult{}, err
+	}
+	relationID, err := model.NewID()
+	if err != nil {
+		return ToolResult{}, fmt.Errorf("관계 식별자 생성: %w", err)
+	}
+	agentID := argumentID(arguments, "created_by_agent")
+	now := time.Now().UTC()
+	relation := model.Relation{ID: relationID, GraphID: graphID, Type: model.RelationType(arguments["relation_type"].(string)), FromContextID: argumentID(arguments, "from_context_id"), ToContextID: argumentID(arguments, "to_context_id"), State: model.RelationStateConfirmed, ProposedBy: model.ProposalSourceAgent, ProposedAt: now, ConfirmedBy: accountID, ConfirmedByAgent: agentID, ConfirmedAt: &now}
+	operation := relationOperationRecord(store.OperationAdd, graphID, relationID, accountID, agentID, arguments)
+	stored, err := h.operations.ConfirmRelation(ctx, graphID, relation, &operation)
+	if err != nil {
+		h.recordRejectedCreation(ctx, operation, err)
+		return ToolResult{}, mapError(err)
+	}
+	return result(relationValue(stored)), nil
+}
+
+func (h handler) discardRelation(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
+	graphID, relationID := argumentID(arguments, "graph_id"), argumentID(arguments, "relation_id")
+	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
+		return ToolResult{}, err
+	}
+	if err := h.checkWrite(ctx, accountID); err != nil {
+		return ToolResult{}, err
+	}
+	agentID := argumentID(arguments, "created_by_agent")
+	operation := relationOperationRecord(store.OperationDiscard, graphID, relationID, accountID, agentID, arguments)
+	stored, err := h.operations.DiscardRelation(ctx, graphID, relationID, &operation)
+	if err != nil {
+		h.recordRejected(ctx, operation, err)
+		return ToolResult{}, mapError(err)
+	}
+	return result(relationValue(stored)), nil
 }
 
 func (h handler) discardNode(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
@@ -367,9 +476,39 @@ func (h handler) recordRejected(ctx context.Context, operation store.OperationRe
 	}
 }
 
+// recordRejectedCreation은 대상이 아직 만들어지지 않은 연산의 거부를 기록한다.
+// 요청 처리가 미리 배정한 식별자는 저장되지 않았으므로 대상으로 남기지 않는다. 무엇을
+// 만들려 했는지는 판단 입력의 인자가 말해 준다. 근거는 `SRS.md`의 「기록 항목」이다.
+func (h handler) recordRejectedCreation(ctx context.Context, operation store.OperationRecord, cause error) {
+	operation.ContextID = model.ID{}
+	operation.RelationID = model.ID{}
+	operation.TargetVersion = 0
+	h.recordRejected(ctx, operation, cause)
+}
+
 func operationRecord(kind store.OperationKind, graphID, contextID, accountID, agentID model.ID, arguments map[string]any) store.OperationRecord {
+	return store.OperationRecord{
+		Kind: kind, GraphID: graphID, ContextID: contextID, TargetVersion: 1,
+		JudgmentInput: judgmentInput(arguments), AccountID: accountID, AgentID: agentID,
+	}
+}
+
+// relationOperationRecord는 대상이 사건 관계인 기록을 만든다. 「기록 항목」이 두 대상을
+// 섞지 않기로 했으므로 컨텍스트 식별자를 비우고, 관계에는 판이 없어 판 번호도 두지 않는다.
+func relationOperationRecord(kind store.OperationKind, graphID, relationID, accountID, agentID model.ID, arguments map[string]any) store.OperationRecord {
+	return store.OperationRecord{
+		Kind: kind, GraphID: graphID, RelationID: relationID,
+		JudgmentInput: judgmentInput(arguments), AccountID: accountID, AgentID: agentID,
+	}
+}
+
+// judgmentInput은 요청이 보낸 판단 입력을 쓰고, 없으면 검증을 마친 인자 묶음을 남긴다.
+func judgmentInput(arguments map[string]any) string {
+	if given := optionalString(arguments, "judgment_input"); given != "" {
+		return given
+	}
 	encoded, _ := json.Marshal(arguments)
-	return store.OperationRecord{Kind: kind, GraphID: graphID, ContextID: contextID, TargetVersion: 1, JudgmentInput: string(encoded), AccountID: accountID, AgentID: agentID}
+	return string(encoded)
 }
 
 func rejectReason(cause error) string {
@@ -396,6 +535,12 @@ func mapError(err error) error {
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		return &Error{Code: "not_found"}
+	}
+	if errors.Is(err, store.ErrInvalidState) {
+		return invalidArgument(err)
+	}
+	if errors.Is(err, store.ErrInvalidRelation) {
+		return invalidArgument(err)
 	}
 	if denied, ok := errors.AsType[perm.DeniedError](err); ok {
 		return &Error{Code: "permission_denied", Data: map[string]any{"required_grade": denied.Required}}
@@ -444,6 +589,24 @@ func argumentID(arguments map[string]any, name string) model.ID {
 	return id
 }
 
+func optionalID(arguments map[string]any, name string) (model.ID, bool) {
+	value, ok := arguments[name].(string)
+	if !ok {
+		return model.ID{}, false
+	}
+	id, err := model.ParseID(value)
+	return id, err == nil
+}
+
+func hasUpdateFields(arguments map[string]any) bool {
+	for _, name := range []string{"body", "confidence_state", "valid_from", "valid_to", "member_refs", "start", "end"} {
+		if _, found := arguments[name]; found {
+			return true
+		}
+	}
+	return false
+}
+
 func graphGrades(value any) []model.GraphGrade {
 	items, _ := value.([]any)
 	grades := make([]model.GraphGrade, len(items))
@@ -460,6 +623,24 @@ func stringValues(value any) []string {
 		values = append(values, item.(string))
 	}
 	return values
+}
+
+func relationStates(value any) []model.RelationState {
+	items, _ := value.([]any)
+	states := make([]model.RelationState, 0, len(items))
+	for _, item := range items {
+		states = append(states, model.RelationState(item.(string)))
+	}
+	return states
+}
+
+func relationTypes(value any) []model.RelationType {
+	items, _ := value.([]any)
+	types := make([]model.RelationType, 0, len(items))
+	for _, item := range items {
+		types = append(types, model.RelationType(item.(string)))
+	}
+	return types
 }
 
 func hopEdges(edges []store.HopEdge) ([]any, []any) {
@@ -486,6 +667,27 @@ func graphListItems(graphs []model.GraphListItem) []any {
 
 func graphValue(graph model.Graph) map[string]any {
 	return map[string]any{"graph_id": graph.ID.String(), "name": graph.Name, "description": graph.Description, "created_by": graph.CreatedBy.String(), "created_at": graph.CreatedAt, "last_activity_at": graph.LastActivityAt, "stored_chars": graph.StoredChars, "version": graph.Version}
+}
+
+func relationValue(relation model.Relation) map[string]any {
+	value := map[string]any{
+		"relation_id": relation.ID.String(), "graph_id": relation.GraphID.String(), "relation_type": string(relation.Type),
+		"from_context_id": relation.FromContextID.String(), "to_context_id": relation.ToContextID.String(), "state": string(relation.State),
+		"proposed_by": string(relation.ProposedBy), "proposed_at": relation.ProposedAt,
+	}
+	if !relation.ConfirmedBy.IsZero() {
+		value["confirmed_by"] = relation.ConfirmedBy.String()
+	}
+	if !relation.ConfirmedByAgent.IsZero() {
+		value["confirmed_by_agent"] = relation.ConfirmedByAgent.String()
+	}
+	if relation.ConfirmedAt != nil {
+		value["confirmed_at"] = *relation.ConfirmedAt
+	}
+	if relation.DeletedAt != nil {
+		value["deleted_at"] = *relation.DeletedAt
+	}
+	return value
 }
 
 func contextValue(value model.Context) map[string]any {

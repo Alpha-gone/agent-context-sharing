@@ -146,3 +146,34 @@ func TestRejectReasonKeepsDomainCode(t *testing.T) {
 		})
 	}
 }
+
+// TestRelationErrorsCarryViolatedField는 관계 계층의 거부도 위반한 필드를 싣는지 확인한다.
+// store가 감싸고 model이 이름을 담으므로 두 겹을 지나서도 필드가 살아남아야 한다.
+func TestRelationErrorsCarryViolatedField(t *testing.T) {
+	tests := map[string]struct {
+		err   error
+		field string
+	}{
+		"관계 제약 위반": {
+			err: fmt.Errorf("관계 검증: %w", errors.Join(store.ErrInvalidRelation,
+				model.FieldError{Field: "to_context_id", Message: "관계의 양 끝은 같을 수 없다"})),
+			field: "to_context_id",
+		},
+		"상태 전이 거부": {
+			err: fmt.Errorf("관계가 이미 폐기됐다: %w", errors.Join(store.ErrInvalidState,
+				model.FieldError{Field: "relation_id", Message: "관계가 이미 폐기됐다"})),
+			field: "relation_id",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			domain, ok := errors.AsType[*Error](mapError(test.err))
+			if !ok || domain.Code != "invalid_argument" {
+				t.Fatalf("도메인 오류 = %#v, want invalid_argument", domain)
+			}
+			if field, _ := domain.Data["field"].(string); field != test.field {
+				t.Fatalf("field = %q, want %q", field, test.field)
+			}
+		})
+	}
+}

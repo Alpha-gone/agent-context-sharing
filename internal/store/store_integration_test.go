@@ -25,7 +25,7 @@ func TestStoreIntegration(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	store, err := New(t.Context(), databaseURL, graphName)
+	store, err := New(t.Context(), databaseURL, graphName, nil)
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}
@@ -279,6 +279,129 @@ func indexTaskCount(t *testing.T, store *Store, contextID model.ID) int {
 	return count
 }
 
+// TestEventRelationProposals는 사건 저장 커밋 뒤 시간 인접과 구성원 진부분집합 후보가
+// 제안되고 같은 정체성을 중복으로 만들지 않는지 실제 AGE에서 확인한다.
+func TestEventRelationProposals(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
+			t.Fatal("TEST_DATABASE_REQUIRED가 설정됐지만 TEST_DATABASE_URL이 비어 있다")
+		}
+		t.Skip("TEST_DATABASE_URL이 없어 AGE 통합 테스트를 건너뛴다")
+	}
+	graphName := os.Getenv("AGE_GRAPH_NAME")
+	if graphName == "" {
+		graphName = "agent_context"
+	}
+	store, err := New(t.Context(), databaseURL, graphName, &RelationProposalConfig{AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 10})
+	if err != nil {
+		t.Fatalf("후보 제안 저장소 준비: %v", err)
+	}
+	defer store.Close()
+
+	actorID, graphID := newTestID(t), newTestID(t)
+	createTestAccount(t, store, actorID)
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := store.CreateGraph(t.Context(), model.Graph{ID: graphID, Name: "relation proposals", CreatedBy: actorID, CreatedAt: now, LastActivityAt: now, Version: 1}); err != nil {
+		t.Fatalf("그래프 생성: %v", err)
+	}
+	grantAccount(t, store, graphID, actorID, model.GraphGradeEditor)
+
+	firstSource := testSourceContext(t, graphID, actorID, "api://relation-proposal/first")
+	secondSource := testSourceContext(t, graphID, actorID, "api://relation-proposal/second")
+	thirdSource := testSourceContext(t, graphID, actorID, "api://relation-proposal/third")
+	thirdSource.Source.OccurredAt = now.Add(2*time.Minute + 30*time.Second)
+	for _, source := range []model.Context{firstSource, secondSource, thirdSource} {
+		if _, err := store.CreateContext(t.Context(), graphID, source, nil); err != nil {
+			t.Fatalf("후보 제안 원천 생성: %v", err)
+		}
+	}
+
+	whole := testEventContext(t, graphID, actorID, firstSource.ID)
+	whole.Event.MemberIDs = []model.ID{firstSource.ID, secondSource.ID}
+	whole.Event.Start = now.Add(-time.Minute)
+	wholeEnd := now.Add(time.Minute)
+	whole.Event.End = &wholeEnd
+	if _, err := store.CreateContext(t.Context(), graphID, whole, nil); err != nil {
+		t.Fatalf("전체 사건 생성: %v", err)
+	}
+	part := testEventContext(t, graphID, actorID, firstSource.ID)
+	part.Event.Start = now.Add(-30 * time.Second)
+	partEnd := now.Add(30 * time.Second)
+	part.Event.End = &partEnd
+	createdPart, err := store.CreateContext(t.Context(), graphID, part, nil)
+	if err != nil {
+		t.Fatalf("부분 사건 생성: %v", err)
+	}
+	following := testEventContext(t, graphID, actorID, thirdSource.ID)
+	following.Event.Start = now.Add(2 * time.Minute)
+	followingEnd := now.Add(3 * time.Minute)
+	following.Event.End = &followingEnd
+	createdFollowing, err := store.CreateContext(t.Context(), graphID, following, nil)
+	if err != nil {
+		t.Fatalf("후속 사건 생성: %v", err)
+	}
+
+	relations, _, err := store.ListRelations(t.Context(), graphID, "", 20)
+	if err != nil {
+		t.Fatalf("후보 관계 조회: %v", err)
+	}
+	partRelation, found := proposedRelationByIdentity(relations, model.RelationTypePartOf, createdPart.ID, whole.ID)
+	if !found {
+		t.Fatalf("구성원 진부분집합 part_of 후보가 없다: %#v", relations)
+	}
+	precedesRelation, found := proposedRelationByIdentity(relations, model.RelationTypePrecedes, whole.ID, createdFollowing.ID)
+	if !found {
+		t.Fatalf("시간 인접 precedes 후보가 없다: %#v", relations)
+	}
+	if _, err := store.DiscardRelation(t.Context(), graphID, partRelation.ID, nil); err != nil {
+		t.Fatalf("부분집합 후보 폐기: %v", err)
+	}
+	confirmedAt := time.Now().UTC()
+	if _, err := store.ConfirmRelation(t.Context(), graphID, model.Relation{
+		ID: newTestID(t), GraphID: graphID, Type: model.RelationTypePrecedes, FromContextID: whole.ID, ToContextID: createdFollowing.ID,
+		State: model.RelationStateConfirmed, ProposedBy: model.ProposalSourceAgent, ProposedAt: confirmedAt,
+		ConfirmedBy: actorID, ConfirmedByAgent: actorID, ConfirmedAt: &confirmedAt,
+	}, nil); err != nil {
+		t.Fatalf("시간 인접 후보 확정: %v", err)
+	}
+	before := len(relations)
+	if err := store.ProposeEventRelations(t.Context(), graphID, createdFollowing.ID); err != nil {
+		t.Fatalf("후속 사건 후보 재계산: %v", err)
+	}
+	relations, _, err = store.ListRelations(t.Context(), graphID, "", 20)
+	if err != nil {
+		t.Fatalf("후보 관계 재조회: %v", err)
+	}
+	if len(relations) != before {
+		t.Fatalf("동일한 후보를 중복 생성했다: before=%d after=%d", before, len(relations))
+	}
+	if relation, found := relationByID(relations, partRelation.ID); !found || relation.State != model.RelationStateDiscarded {
+		t.Fatalf("폐기한 후보가 다시 제안됐다: %#v", relation)
+	}
+	if relation, found := relationByID(relations, precedesRelation.ID); !found || relation.State != model.RelationStateConfirmed {
+		t.Fatalf("확정한 후보가 다시 제안됐다: %#v", relation)
+	}
+}
+
+func proposedRelationByIdentity(relations []model.Relation, relationType model.RelationType, fromID, toID model.ID) (model.Relation, bool) {
+	for _, relation := range relations {
+		if relation.Type == relationType && relation.FromContextID == fromID && relation.ToContextID == toID && relation.State == model.RelationStateProposed && relation.ProposedBy == model.ProposalSourceSystem {
+			return relation, true
+		}
+	}
+	return model.Relation{}, false
+}
+
+func relationByID(relations []model.Relation, relationID model.ID) (model.Relation, bool) {
+	for _, relation := range relations {
+		if relation.ID == relationID {
+			return relation, true
+		}
+	}
+	return model.Relation{}, false
+}
+
 // createTestAccount는 권한 목록 통합 테스트에 필요한 계정 행을 만든다.
 func createTestAccount(t *testing.T, store *Store, accountID model.ID) {
 	t.Helper()
@@ -428,7 +551,7 @@ func TestHopEdgeOrderIsDeterministic(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	store, err := New(t.Context(), databaseURL, graphName)
+	store, err := New(t.Context(), databaseURL, graphName, nil)
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}
@@ -486,3 +609,119 @@ func formatHopEdges(edges []HopEdge) string {
 	}
 	return "[" + strings.Join(values, " ") + "]"
 }
+
+// TestEventRelationProposalRules는 제안 규칙 중 기존 테스트가 덮지 않던 넷을 확인한다.
+// 구성원이 같은 사건을 part_of 후보로 올리지 않는지, 신호별 후보 수 상한이 자르는지,
+// 진행 중 사건이 후속 후보가 되는지, 갱신 경로에서 제안이 다시 도는지다.
+func TestEventRelationProposalRules(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
+			t.Fatal("TEST_DATABASE_REQUIRED가 설정됐지만 TEST_DATABASE_URL이 비어 있다")
+		}
+		t.Skip("TEST_DATABASE_URL이 없어 AGE 통합 테스트를 건너뛴다")
+	}
+	graphName := os.Getenv("AGE_GRAPH_NAME")
+	if graphName == "" {
+		graphName = "agent_context"
+	}
+	// 상한이 자르는지 보려면 상한이 후보 수보다 작아야 하므로 1로 둔다.
+	store, err := New(t.Context(), databaseURL, graphName, &RelationProposalConfig{
+		AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("후보 제안 저장소 준비: %v", err)
+	}
+	defer store.Close()
+
+	actorID, graphID := newTestID(t), newTestID(t)
+	createTestAccount(t, store, actorID)
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := store.CreateGraph(t.Context(), model.Graph{
+		ID: graphID, Name: "proposal rules", CreatedBy: actorID, CreatedAt: now, LastActivityAt: now, Version: 1,
+	}); err != nil {
+		t.Fatalf("그래프 생성: %v", err)
+	}
+	grantAccount(t, store, graphID, actorID, model.GraphGradeEditor)
+
+	// 구성원 원천의 발생 시각은 그 구성원을 담는 사건의 시간 범위 안에 있어야 한다.
+	first := proposalSource(t, store, graphID, actorID, "first", now)
+	second := proposalSource(t, store, graphID, actorID, "second", now.Add(30*time.Second))
+	third := proposalSource(t, store, graphID, actorID, "third", now.Add(2*time.Minute+30*time.Second))
+	fourth := proposalSource(t, store, graphID, actorID, "fourth", now.Add(4*time.Minute+30*time.Second))
+
+	whole := proposalEvent(t, store, graphID, actorID, []model.ID{first, second}, now, ptrTime(now.Add(time.Minute)))
+	twin := proposalEvent(t, store, graphID, actorID, []model.ID{first, second}, now, ptrTime(now.Add(time.Minute)))
+	relations := proposalRelations(t, store, graphID)
+	for _, relation := range relations {
+		if relation.Type == model.RelationTypePartOf {
+			t.Fatalf("구성원이 같은 사건을 part_of 후보로 올렸다: %#v", relation)
+		}
+	}
+
+	// 앞의 두 사건과 모두 인접한 사건을 만든다. 후보는 둘인데 상한이 1이므로 하나만 남는다.
+	before := len(relations)
+	following := proposalEvent(t, store, graphID, actorID, []model.ID{third}, now.Add(2*time.Minute), ptrTime(now.Add(3*time.Minute)))
+	relations = proposalRelations(t, store, graphID)
+	if added := len(relations) - before; added != 1 {
+		t.Fatalf("신호별 후보 수 상한이 적용되지 않았다: 새 후보 %d개", added)
+	}
+
+	// 진행 중 사건은 종료 시각이 없어도 앞선 사건의 후속 후보가 된다.
+	ongoing := proposalEvent(t, store, graphID, actorID, []model.ID{fourth}, now.Add(4*time.Minute), nil)
+	relations = proposalRelations(t, store, graphID)
+	if _, found := proposedRelationByIdentity(relations, model.RelationTypePrecedes, following.ID, ongoing.ID); !found {
+		t.Fatalf("진행 중 사건이 후속 후보로 오르지 않았다: %#v", relations)
+	}
+
+	// 구성원을 줄이면 진부분집합이 되므로 갱신 경로가 제안을 다시 돌려야 새 후보가 생긴다.
+	if _, found := proposedRelationByIdentity(relations, model.RelationTypePartOf, twin.ID, whole.ID); found {
+		t.Fatal("갱신 전에 이미 part_of 후보가 있다")
+	}
+	narrowed := twin
+	narrowed.Version = twin.Version + 1
+	narrowed.Event = &model.EventAttributes{MemberIDs: []model.ID{first}, Start: twin.Event.Start, End: twin.Event.End}
+	if _, err := store.UpdateContext(t.Context(), graphID, twin.Version, narrowed); err != nil {
+		t.Fatalf("사건 구성원 갱신: %v", err)
+	}
+	relations = proposalRelations(t, store, graphID)
+	if _, found := proposedRelationByIdentity(relations, model.RelationTypePartOf, twin.ID, whole.ID); !found {
+		t.Fatalf("갱신 경로에서 제안이 다시 돌지 않았다: %#v", relations)
+	}
+}
+
+// proposalSource는 지정한 발생 시각을 가진 원천을 만들어 식별자를 돌려준다.
+func proposalSource(t *testing.T, store *Store, graphID, actorID model.ID, name string, occurredAt time.Time) model.ID {
+	t.Helper()
+	source := testSourceContext(t, graphID, actorID, "api://proposal-rules/"+name)
+	source.Source.OccurredAt = occurredAt
+	created, err := store.CreateContext(t.Context(), graphID, source, nil)
+	if err != nil {
+		t.Fatalf("%s 원천 생성: %v", name, err)
+	}
+	return created.ID
+}
+
+// proposalEvent는 지정한 구성원과 시간 범위를 가진 사건을 만든다.
+func proposalEvent(t *testing.T, store *Store, graphID, actorID model.ID, members []model.ID, start time.Time, end *time.Time) model.Context {
+	t.Helper()
+	event := testEventContext(t, graphID, actorID, members[0])
+	event.Event = &model.EventAttributes{MemberIDs: members, Start: start, End: end}
+	created, err := store.CreateContext(t.Context(), graphID, event, nil)
+	if err != nil {
+		t.Fatalf("사건 생성: %v", err)
+	}
+	return created
+}
+
+// proposalRelations는 그래프의 모든 관계를 읽는다.
+func proposalRelations(t *testing.T, store *Store, graphID model.ID) []model.Relation {
+	t.Helper()
+	relations, err := store.allRelations(t.Context(), store.pool, graphID, model.ID{}, nil, nil)
+	if err != nil {
+		t.Fatalf("후보 조회: %v", err)
+	}
+	return relations
+}
+
+func ptrTime(value time.Time) *time.Time { return &value }

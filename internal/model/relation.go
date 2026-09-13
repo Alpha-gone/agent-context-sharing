@@ -73,45 +73,45 @@ type Relation struct {
 // ValidateRelation은 사건 양 끝과 관계 속성의 공통·유형별 제약을 확인한다.
 func ValidateRelation(relation Relation, from, to Context) error {
 	if !relation.ID.IsV7() || !relation.GraphID.IsV7() || !relation.FromContextID.IsV7() || !relation.ToContextID.IsV7() {
-		return fmt.Errorf("관계 식별자는 UUIDv7이어야 한다")
+		return fieldErrorf("relation_id", "관계 식별자는 UUIDv7이어야 한다")
 	}
 	if relation.FromContextID == relation.ToContextID {
-		return fmt.Errorf("관계의 양 끝은 같을 수 없다")
+		return fieldErrorf("to_context_id", "관계의 양 끝은 같을 수 없다")
 	}
 	if !isUTC(relation.ProposedAt) {
-		return fmt.Errorf("관계 제안 시각은 UTC여야 한다")
+		return fieldErrorf("proposed_at", "관계 제안 시각은 UTC여야 한다")
 	}
 	if !slices.Contains([]RelationType{RelationTypePrecedes, RelationTypeCauses, RelationTypePartOf, RelationTypeRelatesTo}, relation.Type) {
-		return fmt.Errorf("관계 유형 %q가 허용된 값이 아니다", relation.Type)
+		return fieldErrorf("relation_type", "관계 유형 %q가 허용된 값이 아니다", relation.Type)
 	}
 	if !slices.Contains([]RelationState{RelationStateProposed, RelationStateConfirmed, RelationStateDiscarded}, relation.State) {
-		return fmt.Errorf("관계 상태 %q가 허용된 값이 아니다", relation.State)
+		return fieldErrorf("state", "관계 상태 %q가 허용된 값이 아니다", relation.State)
 	}
 	if !slices.Contains([]ProposalSource{ProposalSourceSystem, ProposalSourceAgent}, relation.ProposedBy) {
-		return fmt.Errorf("관계 후보 출처 %q가 허용된 값이 아니다", relation.ProposedBy)
+		return fieldErrorf("proposed_by", "관계 후보 출처 %q가 허용된 값이 아니다", relation.ProposedBy)
 	}
 	if relation.State == RelationStateConfirmed {
 		if !relation.ConfirmedBy.IsV7() || !relation.ConfirmedByAgent.IsV7() || relation.ConfirmedAt == nil || !isUTC(*relation.ConfirmedAt) {
-			return fmt.Errorf("확정 관계에는 계정, 에이전트와 UTC 확정 시각이 필요하다")
+			return fieldErrorf("created_by_agent", "확정 관계에는 계정, 에이전트와 UTC 확정 시각이 필요하다")
 		}
 	} else if !relation.ConfirmedBy.IsZero() || !relation.ConfirmedByAgent.IsZero() || relation.ConfirmedAt != nil {
-		return fmt.Errorf("확정되지 않은 관계에는 확정 정보를 둘 수 없다")
+		return fieldErrorf("state", "확정되지 않은 관계에는 확정 정보를 둘 수 없다")
 	}
 	if relation.State == RelationStateDiscarded && (relation.DeletedAt == nil || !isUTC(*relation.DeletedAt)) {
-		return fmt.Errorf("폐기 관계에는 UTC 폐기 시각이 필요하다")
+		return fieldErrorf("state", "폐기 관계에는 UTC 폐기 시각이 필요하다")
 	}
 	if relation.State != RelationStateDiscarded && relation.DeletedAt != nil {
-		return fmt.Errorf("폐기되지 않은 관계에는 폐기 시각을 둘 수 없다")
+		return fieldErrorf("state", "폐기되지 않은 관계에는 폐기 시각을 둘 수 없다")
 	}
 
 	if from.Layer != LayerEvent || to.Layer != LayerEvent || from.Event == nil || to.Event == nil {
-		return fmt.Errorf("관계 양 끝은 사건 컨텍스트여야 한다")
+		return fieldErrorf("from_context_id", "관계 양 끝은 사건 컨텍스트여야 한다")
 	}
 	if from.ID != relation.FromContextID || to.ID != relation.ToContextID || from.GraphID != relation.GraphID || to.GraphID != relation.GraphID {
-		return fmt.Errorf("관계와 사건의 식별자 또는 그래프가 맞지 않는다")
+		return fieldErrorf("from_context_id", "관계와 사건의 식별자 또는 그래프가 맞지 않는다")
 	}
 	if relation.Type == RelationTypeRelatesTo && relation.FromContextID.String() > relation.ToContextID.String() {
-		return fmt.Errorf("relates_to는 식별자 순서로 양 끝을 정규화해야 한다")
+		return fieldErrorf("from_context_id", "relates_to는 식별자 순서로 양 끝을 정규화해야 한다")
 	}
 	if err := validateRelationTime(relation.Type, *from.Event, *to.Event); err != nil {
 		return err
@@ -129,7 +129,7 @@ func ValidateRelationCycle(relation Relation, pathExists func(ID, ID) bool) erro
 		return nil
 	}
 	if pathExists(relation.ToContextID, relation.FromContextID) {
-		return fmt.Errorf("%s 관계가 사건 관계 순환을 만든다", relation.Type)
+		return fieldErrorf("relation_type", "%s 관계가 사건 관계 순환을 만든다", relation.Type)
 	}
 	return nil
 }
@@ -139,14 +139,14 @@ func validateRelationTime(kind RelationType, from, to EventAttributes) error {
 	switch kind {
 	case RelationTypePrecedes, RelationTypeCauses:
 		if from.Start.After(to.Start) {
-			return fmt.Errorf("%s 관계의 시작 사건이 대상보다 늦다", kind)
+			return fieldErrorf("from_context_id", "%s 관계의 시작 사건이 대상보다 늦다", kind)
 		}
 	case RelationTypePartOf:
 		if from.Start.Before(to.Start) {
-			return fmt.Errorf("part_of 관계의 전체 사건 시작 시각이 부분을 포함하지 않는다")
+			return fieldErrorf("to_context_id", "part_of 관계의 전체 사건 시작 시각이 부분을 포함하지 않는다")
 		}
 		if to.End != nil && (from.End == nil || from.End.After(*to.End)) {
-			return fmt.Errorf("part_of 관계의 전체 사건 종료 시각이 부분을 포함하지 않는다")
+			return fieldErrorf("to_context_id", "part_of 관계의 전체 사건 종료 시각이 부분을 포함하지 않는다")
 		}
 	}
 	return nil

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,6 +14,12 @@ import (
 
 // ErrNotFound는 지정한 그래프 안에서 대상을 찾지 못했음을 나타낸다.
 var ErrNotFound = errors.New("대상을 찾지 못했다")
+
+// ErrInvalidState는 현재 상태에서 허용되지 않는 전이를 요청했음을 나타낸다.
+var ErrInvalidState = errors.New("현재 상태에서 허용되지 않는 연산이다")
+
+// ErrInvalidRelation은 관계의 양 끝, 시간 또는 순환 제약을 위반했음을 나타낸다.
+var ErrInvalidRelation = errors.New("관계 제약을 위반했다")
 
 // ErrActiveSigningKeyExists는 이미 활성 서명 키가 있을 때 새 활성 키를 만들려 했음을 나타낸다.
 var ErrActiveSigningKeyExists = errors.New("활성 서명 키가 이미 있다")
@@ -40,12 +47,49 @@ type Store struct {
 	pool *pgxpool.Pool
 	// graphName 필드는 모든 AGE openCypher 호출이 공유하는 물리 그래프 이름이다.
 	graphName string
+	// relationProposals 필드는 사건 저장 뒤에 실행할 자동 후보 제안의 배포 구성이다.
+	// 설정하지 않은 저장소는 후보를 만들지 않아 기존 도구·단위 테스트의 저장 의미를 보존한다.
+	relationProposals *RelationProposalConfig
+}
+
+// RelationProposalConfig는 사건 관계 후보 제안에 쓰는 검증된 배포 구성이다.
+type RelationProposalConfig struct {
+	// AdjacencyWindow는 precedes 후보로 허용할 두 사건 사이 최대 간격이다.
+	AdjacencyWindow time.Duration
+	// SimilarityThreshold는 6단계의 relates_to 후보 제안에 넘길 코사인 유사도 하한이다.
+	SimilarityThreshold float64
+	// Limit은 한 신호가 한 사건에서 만들 수 있는 proposed 관계 수 상한이다.
+	Limit int
+}
+
+func (config RelationProposalConfig) validate() error {
+	if config.AdjacencyWindow <= 0 {
+		return fmt.Errorf("관계 시간 인접 임계값은 양수여야 한다")
+	}
+	if config.SimilarityThreshold < -1 || config.SimilarityThreshold > 1 {
+		return fmt.Errorf("관계 유사도 임계값은 -1에서 1 사이여야 한다")
+	}
+	if config.Limit <= 0 {
+		return fmt.Errorf("관계 후보 수 상한은 양수여야 한다")
+	}
+	return nil
 }
 
 // New는 AGE 준비를 마친 연결만 담는 애플리케이션 풀을 만든다.
-func New(ctx context.Context, databaseURL, graphName string) (*Store, error) {
+//
+// relationProposals는 생략할 수 없고 nil을 명시해야 자동 후보 제안이 꺼진다. 가변 인자로
+// 두면 호출부가 빠뜨려도 조용히 통과해, 제안이 꺼진 저장소로 검증이 지나간다.
+func New(ctx context.Context, databaseURL, graphName string, relationProposals *RelationProposalConfig) (*Store, error) {
 	if !graphNamePattern.MatchString(graphName) {
 		return nil, fmt.Errorf("AGE 그래프 이름 %q가 영문 소문자, 숫자와 밑줄 형식이 아니다", graphName)
+	}
+	var proposalConfig *RelationProposalConfig
+	if relationProposals != nil {
+		if err := relationProposals.validate(); err != nil {
+			return nil, fmt.Errorf("관계 후보 제안 구성: %w", err)
+		}
+		proposal := *relationProposals
+		proposalConfig = &proposal
 	}
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -64,7 +108,7 @@ func New(ctx context.Context, databaseURL, graphName string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("연결 풀 생성: %w", err)
 	}
-	return &Store{pool: pool, graphName: graphName}, nil
+	return &Store{pool: pool, graphName: graphName, relationProposals: proposalConfig}, nil
 }
 
 // Ping은 데이터베이스 연결과 AGE 준비가 현재 요청을 받을 수 있는지 확인한다.

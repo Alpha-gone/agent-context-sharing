@@ -77,24 +77,26 @@ var toolSchemas = map[string]map[string]argumentRule{
 		"description":      optional(textAtMost(maxDescriptionRunes)),
 	},
 	"node_create": {
-		"graph_id":         required(idString),
-		"created_by_agent": required(idString),
-		"layer":            required(oneOf("source", "derived", "event")),
-		"body":             required(textRange(1, maxBodyRunes)),
-		"source_channel":   optional(oneOf("conversation", "file", "web", "api", "other")),
-		"locator":          optional(uriString),
-		"occurred_at":      optional(dateTimeString),
-		"origin_kind":      optional(oneOf("user_utterance", "agent_output", "external_content")),
-		"derivation_kind":  optional(oneOf("proposition", "summary", "reflection")),
-		"summary_scope":    optional(oneOf("local", "global")),
-		"evidence_state":   optional(oneOf("observation", "experience", "opinion")),
-		"confidence_state": optional(oneOf("supported", "uncertain", "disputed")),
-		"valid_from":       optional(dateTimeString),
-		"valid_to":         optional(dateTimeString),
-		"derived_from":     optional(idArray(maxReferences)),
-		"member_refs":      optional(idArray(maxMembers)),
-		"start":            optional(dateTimeString),
-		"end":              optional(dateTimeString),
+		"graph_id":              required(idString),
+		"created_by_agent":      required(idString),
+		"layer":                 required(oneOf("source", "derived", "event")),
+		"body":                  required(textRange(1, maxBodyRunes)),
+		"judgment_input":        optional(textRange(1, maxBodyRunes)),
+		"source_channel":        optional(oneOf("conversation", "file", "web", "api", "other")),
+		"locator":               optional(uriString),
+		"occurred_at":           optional(dateTimeString),
+		"origin_kind":           optional(oneOf("user_utterance", "agent_output", "external_content")),
+		"derivation_kind":       optional(oneOf("proposition", "summary", "reflection")),
+		"summary_scope":         optional(oneOf("local", "global")),
+		"evidence_state":        optional(oneOf("observation", "experience", "opinion")),
+		"confidence_state":      optional(oneOf("supported", "uncertain", "disputed")),
+		"valid_from":            optional(dateTimeString),
+		"valid_to":              optional(dateTimeString),
+		"derived_from":          optional(idArray(maxReferences)),
+		"supersedes_context_id": optional(idString),
+		"member_refs":           optional(idArray(maxMembers)),
+		"start":                 optional(dateTimeString),
+		"end":                   optional(dateTimeString),
 	},
 	"node_get": {
 		"graph_id":         required(idString),
@@ -104,27 +106,31 @@ var toolSchemas = map[string]map[string]argumentRule{
 		"traversal_filter": optional(stringArray("derived_from", "has_member", "supersedes", "precedes", "causes", "part_of", "relates_to")),
 	},
 	"node_update": {
-		"graph_id":         required(idString),
-		"context_id":       required(idString),
-		"expected_version": required(positiveInteger),
-		"created_by_agent": required(idString),
-		"body":             optional(textRange(1, maxBodyRunes)),
-		"confidence_state": optional(oneOf("supported", "uncertain", "disputed")),
-		"valid_from":       optional(dateTimeString),
-		"valid_to":         optional(dateTimeString),
-		"member_refs":      optional(idArray(maxMembers)),
-		"start":            optional(dateTimeString),
-		"end":              optional(dateTimeString),
+		"graph_id":          required(idString),
+		"context_id":        required(idString),
+		"expected_version":  required(positiveInteger),
+		"created_by_agent":  required(idString),
+		"management_action": optional(oneOf("update", "keep")),
+		"judgment_input":    optional(textRange(1, maxBodyRunes)),
+		"body":              optional(textRange(1, maxBodyRunes)),
+		"confidence_state":  optional(oneOf("supported", "uncertain", "disputed")),
+		"valid_from":        optional(dateTimeString),
+		"valid_to":          optional(dateTimeString),
+		"member_refs":       optional(idArray(maxMembers)),
+		"start":             optional(dateTimeString),
+		"end":               optional(dateTimeString),
 	},
 	"node_discard": {
 		"graph_id":         required(idString),
 		"context_id":       required(idString),
 		"created_by_agent": required(idString),
+		"judgment_input":   optional(textRange(1, maxBodyRunes)),
 	},
 	"node_restore": {
 		"graph_id":         required(idString),
 		"context_id":       required(idString),
 		"created_by_agent": required(idString),
+		"judgment_input":   optional(textRange(1, maxBodyRunes)),
 	},
 	"context_flow_get": {
 		"graph_id":     required(idString),
@@ -142,14 +148,18 @@ var toolSchemas = map[string]map[string]argumentRule{
 		"page_size":    optional(positiveInteger),
 	},
 	"relation_confirm": {
-		"graph_id":        required(idString),
-		"relation_type":   required(oneOf("precedes", "causes", "part_of", "relates_to")),
-		"from_context_id": required(idString),
-		"to_context_id":   required(idString),
+		"graph_id":         required(idString),
+		"relation_type":    required(oneOf("precedes", "causes", "part_of", "relates_to")),
+		"from_context_id":  required(idString),
+		"to_context_id":    required(idString),
+		"created_by_agent": required(idString),
+		"judgment_input":   optional(textRange(1, maxBodyRunes)),
 	},
 	"relation_discard": {
-		"graph_id":    required(idString),
-		"relation_id": required(idString),
+		"graph_id":         required(idString),
+		"relation_id":      required(idString),
+		"created_by_agent": required(idString),
+		"judgment_input":   optional(textRange(1, maxBodyRunes)),
 	},
 }
 
@@ -291,7 +301,7 @@ func contextIDSchema() map[string]any {
 }
 
 func nodeLifecycleSchema() map[string]any {
-	return schema(map[string]any{"graph_id": idSchema(), "context_id": idSchema(), "created_by_agent": idSchema()}, "graph_id", "context_id", "created_by_agent")
+	return schema(map[string]any{"graph_id": idSchema(), "context_id": idSchema(), "created_by_agent": idSchema(), "judgment_input": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes})}, "graph_id", "context_id", "created_by_agent")
 }
 
 func graphListSchema() map[string]any {
@@ -313,10 +323,10 @@ func graphUpdateSchema() map[string]any {
 func nodeCreateSchema() map[string]any {
 	return schema(map[string]any{
 		"graph_id": idSchema(), "created_by_agent": idSchema(), "layer": enumSchema("source", "derived", "event"),
-		"body": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes}), "source_channel": enumSchema("conversation", "file", "web", "api", "other"),
+		"body": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes}), "judgment_input": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes}), "source_channel": enumSchema("conversation", "file", "web", "api", "other"),
 		"locator": stringSchema(map[string]any{"minLength": 1, "maxLength": 1_024, "format": "uri"}), "occurred_at": dateTimeSchema(), "origin_kind": enumSchema("user_utterance", "agent_output", "external_content"),
 		"derivation_kind": enumSchema("proposition", "summary", "reflection"), "summary_scope": enumSchema("local", "global"), "evidence_state": enumSchema("observation", "experience", "opinion"), "confidence_state": enumSchema("supported", "uncertain", "disputed"),
-		"valid_from": dateTimeSchema(), "valid_to": dateTimeSchema(), "derived_from": arraySchema(idSchema(), 1, maxReferences), "member_refs": arraySchema(idSchema(), 1, maxMembers), "start": dateTimeSchema(), "end": dateTimeSchema(),
+		"valid_from": dateTimeSchema(), "valid_to": dateTimeSchema(), "derived_from": arraySchema(idSchema(), 1, maxReferences), "supersedes_context_id": idSchema(), "member_refs": arraySchema(idSchema(), 1, maxMembers), "start": dateTimeSchema(), "end": dateTimeSchema(),
 	}, "graph_id", "created_by_agent", "layer", "body")
 }
 
@@ -325,7 +335,7 @@ func nodeGetSchema() map[string]any {
 }
 
 func nodeUpdateSchema() map[string]any {
-	return schema(map[string]any{"graph_id": idSchema(), "context_id": idSchema(), "expected_version": integerSchema(1), "created_by_agent": idSchema(), "body": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes}), "confidence_state": enumSchema("supported", "uncertain", "disputed"), "valid_from": dateTimeSchema(), "valid_to": dateTimeSchema(), "member_refs": arraySchema(idSchema(), 1, maxMembers), "start": dateTimeSchema(), "end": dateTimeSchema()}, "graph_id", "context_id", "expected_version", "created_by_agent")
+	return schema(map[string]any{"graph_id": idSchema(), "context_id": idSchema(), "expected_version": integerSchema(1), "created_by_agent": idSchema(), "management_action": enumSchema("update", "keep"), "judgment_input": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes}), "body": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes}), "confidence_state": enumSchema("supported", "uncertain", "disputed"), "valid_from": dateTimeSchema(), "valid_to": dateTimeSchema(), "member_refs": arraySchema(idSchema(), 1, maxMembers), "start": dateTimeSchema(), "end": dateTimeSchema()}, "graph_id", "context_id", "expected_version", "created_by_agent")
 }
 
 func contextFlowSchema() map[string]any {
@@ -337,11 +347,11 @@ func relationListSchema() map[string]any {
 }
 
 func relationConfirmSchema() map[string]any {
-	return schema(map[string]any{"graph_id": idSchema(), "relation_type": enumSchema("precedes", "causes", "part_of", "relates_to"), "from_context_id": idSchema(), "to_context_id": idSchema()}, "graph_id", "relation_type", "from_context_id", "to_context_id")
+	return schema(map[string]any{"graph_id": idSchema(), "relation_type": enumSchema("precedes", "causes", "part_of", "relates_to"), "from_context_id": idSchema(), "to_context_id": idSchema(), "created_by_agent": idSchema(), "judgment_input": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes})}, "graph_id", "relation_type", "from_context_id", "to_context_id", "created_by_agent")
 }
 
 func relationDiscardSchema() map[string]any {
-	return schema(map[string]any{"graph_id": idSchema(), "relation_id": idSchema()}, "graph_id", "relation_id")
+	return schema(map[string]any{"graph_id": idSchema(), "relation_id": idSchema(), "created_by_agent": idSchema(), "judgment_input": stringSchema(map[string]any{"minLength": 1, "maxLength": maxBodyRunes})}, "graph_id", "relation_id", "created_by_agent")
 }
 
 func idSchema() map[string]any { return stringSchema(map[string]any{"format": "uuid"}) }

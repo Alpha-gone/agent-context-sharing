@@ -18,24 +18,35 @@ const (
 	OperationAdd OperationKind = "add"
 	// OperationUpdate는 기존 컨텍스트를 갱신한 연산이다.
 	OperationUpdate OperationKind = "update"
+	// OperationSupersede는 새 파생 판으로 이전 파생을 대체한 연산이다.
+	OperationSupersede OperationKind = "supersede"
 	// OperationDiscard는 컨텍스트를 폐기한 연산이다.
 	OperationDiscard OperationKind = "discard"
+	// OperationKeep는 상태를 바꾸지 않고 유지하기로 판단한 연산이다.
+	OperationKeep OperationKind = "keep"
 )
 
-// OperationRecord은 적용 또는 거부한 컨텍스트 관리 연산을 기록하는 입력이다.
+// OperationRecord은 적용 또는 거부한 관리 연산을 기록하는 입력이다.
+//
+// 대상은 컨텍스트이거나 사건 관계이며 둘을 동시에 가리키지 않는다. 「기록 항목」이 정한
+// 구분이며, 관계에는 판 번호가 없어 RelationID를 쓰는 기록은 TargetVersion을 남기지 않는다.
 type OperationRecord struct {
 	Kind          OperationKind
 	GraphID       model.ID
 	ContextID     model.ID
+	RelationID    model.ID
 	TargetVersion int64
 	JudgmentInput string
 	AccountID     model.ID
 	AgentID       model.ID
 }
 
+// forRelation은 대상이 사건 관계인지 알려준다.
+func (operation OperationRecord) forRelation() bool { return operation.RelationID.IsV7() }
+
 // RecordRejectedOperation은 되돌린 변경 트랜잭션 밖에 거부 기록을 남긴다.
 func (s *Store) RecordRejectedOperation(ctx context.Context, operation OperationRecord, reason string) error {
-	if err := operation.valid(); err != nil {
+	if err := operation.valid("rejected"); err != nil {
 		return err
 	}
 	if reason == "" {
@@ -60,15 +71,37 @@ func (s *Store) HasAppliedDiscard(ctx context.Context, graphID, contextID model.
 	return found, nil
 }
 
-func (operation OperationRecord) valid() error {
-	if operation.Kind != OperationAdd && operation.Kind != OperationUpdate && operation.Kind != OperationDiscard {
+// valid는 적용과 거부의 대상 요구가 다르므로 기록 결과를 함께 본다. 추가와 확정의 거부는
+// 「기록 항목」이 대상을 비우기로 확정했고, 적용 기록은 언제나 대상을 하나 갖는다.
+func (operation OperationRecord) valid(result string) error {
+	if operation.Kind != OperationAdd && operation.Kind != OperationUpdate && operation.Kind != OperationSupersede && operation.Kind != OperationDiscard && operation.Kind != OperationKeep {
 		return fmt.Errorf("관리 연산 종류 %q가 올바르지 않다", operation.Kind)
 	}
-	if !operation.GraphID.IsV7() || !operation.ContextID.IsV7() || !operation.AccountID.IsV7() || !operation.AgentID.IsV7() {
+	if !operation.GraphID.IsV7() || !operation.AccountID.IsV7() || !operation.AgentID.IsV7() {
 		return fmt.Errorf("관리 연산 식별자가 UUIDv7이 아니다")
 	}
-	if operation.TargetVersion < 1 || operation.JudgmentInput == "" {
-		return fmt.Errorf("관리 연산 대상 판 또는 판단 입력이 올바르지 않다")
+	if operation.ContextID.IsV7() && operation.forRelation() {
+		return fmt.Errorf("관리 연산 대상은 컨텍스트와 사건 관계 중 하나여야 한다")
+	}
+	if !operation.ContextID.IsV7() && !operation.forRelation() {
+		if result != "rejected" {
+			return fmt.Errorf("적용한 관리 연산에는 대상이 있어야 한다")
+		}
+		if operation.TargetVersion != 0 {
+			return fmt.Errorf("대상 없는 기록에는 판 번호를 둘 수 없다")
+		}
+	} else if operation.forRelation() {
+		if operation.Kind != OperationAdd && operation.Kind != OperationDiscard {
+			return fmt.Errorf("사건 관계 기록의 연산 종류 %q가 올바르지 않다", operation.Kind)
+		}
+		if operation.TargetVersion != 0 {
+			return fmt.Errorf("사건 관계에는 판 번호가 없다")
+		}
+	} else if operation.TargetVersion < 1 {
+		return fmt.Errorf("관리 연산 대상 판 번호가 올바르지 않다")
+	}
+	if operation.JudgmentInput == "" {
+		return fmt.Errorf("관리 연산 판단 입력이 비어 있다")
 	}
 	return nil
 }
@@ -78,8 +111,27 @@ func (s *Store) recordAppliedOperation(ctx context.Context, tx pgx.Tx, operation
 		return nil
 	}
 	copy := *operation
-	copy.TargetVersion = targetVersion
-	if err := copy.valid(); err != nil {
+	if !copy.forRelation() {
+		copy.TargetVersion = targetVersion
+	}
+	if err := copy.valid("applied"); err != nil {
+		return err
+	}
+	return s.insertOperation(ctx, tx, copy, "applied", "")
+}
+
+// recordAppliedRelationOperation은 실제로 저장된 관계 식별자로 적용 기록을 남긴다.
+// 확정 요청이 미리 만든 식별자는 기존 후보를 확정할 때 쓰이지 않으므로, 그대로 기록하면
+// 기록이 존재하지 않는 관계를 가리킨다.
+func (s *Store) recordAppliedRelationOperation(ctx context.Context, tx pgx.Tx, operation *OperationRecord, relationID model.ID) error {
+	if operation == nil {
+		return nil
+	}
+	copy := *operation
+	copy.ContextID = model.ID{}
+	copy.RelationID = relationID
+	copy.TargetVersion = 0
+	if err := copy.valid("applied"); err != nil {
 		return err
 	}
 	return s.insertOperation(ctx, tx, copy, "applied", "")
@@ -118,12 +170,23 @@ func (s *Store) insertOperation(ctx context.Context, queryer operationQueryer, o
 	if err != nil {
 		return fmt.Errorf("관리 연산 기록 식별자 생성: %w", err)
 	}
+	var contextID, relationID *string
+	var targetVersion *int64
+	switch {
+	case operation.forRelation():
+		identifier := operation.RelationID.String()
+		relationID = &identifier
+	case operation.ContextID.IsV7():
+		identifier := operation.ContextID.String()
+		version := operation.TargetVersion
+		contextID, targetVersion = &identifier, &version
+	}
 	_, err = queryer.Exec(ctx, `
 		INSERT INTO public.operation_log (
-			operation_id, graph_id, operation_kind, context_id, target_version,
+			operation_id, graph_id, operation_kind, context_id, relation_id, target_version,
 			judgment_input, actor_account_id, actor_agent_id, applied_at, result, reject_reason
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		operationID.String(), operation.GraphID.String(), string(operation.Kind), operation.ContextID.String(), operation.TargetVersion,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		operationID.String(), operation.GraphID.String(), string(operation.Kind), contextID, relationID, targetVersion,
 		operation.JudgmentInput, operation.AccountID.String(), operation.AgentID.String(), time.Now().UTC(), result, nullableString(reason),
 	)
 	if err != nil {

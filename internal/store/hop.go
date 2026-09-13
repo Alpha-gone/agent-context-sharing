@@ -28,7 +28,9 @@ type HopResult struct {
 
 // HopContexts는 graph_id 안에서 확정 참조와 관계를 따라 너비 우선으로 탐색한다.
 func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops int, direction string, filter []string, limit int) (HopResult, error) {
-	if !graphID.IsV7() || !startID.IsV7() || hops < 0 || limit < 1 {
+	// limit 0은 「계정 플랜」이 선언한 대로 한도 없음이다. 값을 그대로 내려받아 여기에서
+	// 해석하지 않으면 한도를 푸는 설정이 연산을 죽인다.
+	if !graphID.IsV7() || !startID.IsV7() || hops < 0 || limit < 0 {
 		return HopResult{}, fmt.Errorf("홉 탐색 인자가 올바르지 않다")
 	}
 	start, err := s.Context(ctx, graphID, startID)
@@ -63,7 +65,7 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 					if _, found := visited[neighbor.context.ID]; found {
 						continue
 					}
-					if len(result.Contexts) == limit {
+					if limit > 0 && len(result.Contexts) == limit {
 						// 경계는 처음 자른 깊이다. 덮어쓰면 마지막 깊이가 남아 어디에서
 						// 잘렸는지 알 수 없다.
 						if !result.Truncated {

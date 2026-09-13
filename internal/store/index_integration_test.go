@@ -49,8 +49,8 @@ func TestIndexAndNonGraphSearchIntegration(t *testing.T) {
 	if err != nil || len(timed) != 1 || timed[0].Context.ID != stored.ID {
 		t.Fatalf("시간 후보 = %#v, err=%v", timed, err)
 	}
-	origins, err := database.ContextOriginKinds(t.Context(), graphID, stored.ID)
-	if err != nil || len(origins) != 1 || origins[0] != model.OriginKindExternalContent {
+	origins, err := database.ContextOriginKinds(t.Context(), graphID, []model.ID{stored.ID})
+	if err != nil || len(origins[stored.ID]) != 1 || origins[stored.ID][0] != model.OriginKindExternalContent {
 		t.Fatalf("출처 구분 = %v, err=%v", origins, err)
 	}
 }

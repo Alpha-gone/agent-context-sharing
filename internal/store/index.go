@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -327,42 +328,78 @@ func (s *Store) searchCandidates(ctx context.Context, graphID model.ID, ids []mo
 	return result, nil
 }
 
-// ContextOriginKinds는 참조와 구성원을 따라 원천의 출처 구분을 중복 없이 모은다.
-func (s *Store) ContextOriginKinds(ctx context.Context, graphID, contextID model.ID) ([]model.OriginKind, error) {
-	visited := make(map[model.ID]struct{})
-	origins := make(map[model.OriginKind]struct{})
-	var visit func(model.ID) error
-	visit = func(id model.ID) error {
-		if _, found := visited[id]; found {
-			return nil
+// ContextOriginKinds는 여러 컨텍스트의 출처 구분을 한 번에 모은다.
+//
+// 컨텍스트마다 근거 트리를 따로 타면 같은 원천을 후보 수만큼 다시 읽고 질의가 후보 수에
+// 비례해 늘어난다. 흐름 응답은 담긴 컨텍스트 전부의 출처가 필요하므로, 한 깊이씩 넓혀 가며
+// 묶어 읽고 방문한 정점을 호출 전체에서 공유한다.
+func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contextIDs []model.ID) (map[model.ID][]model.OriginKind, error) {
+	result := make(map[model.ID][]model.OriginKind, len(contextIDs))
+	if len(contextIDs) == 0 {
+		return result, nil
+	}
+	// 근거를 따라가며 만나는 모든 정점을 한 번씩만 읽는다.
+	loaded := make(map[model.ID]model.Context)
+	frontier := slices.Clone(contextIDs)
+	for len(frontier) > 0 {
+		pending := make([]model.ID, 0, len(frontier))
+		for _, id := range frontier {
+			if _, found := loaded[id]; !found {
+				pending = append(pending, id)
+			}
 		}
-		visited[id] = struct{}{}
-		value, err := s.Context(ctx, graphID, id)
+		if len(pending) == 0 {
+			break
+		}
+		slices.SortFunc(pending, func(left, right model.ID) int { return cmp.Compare(left.String(), right.String()) })
+		pending = slices.Compact(pending)
+		values, err := s.ContextsByIDs(ctx, graphID, pending)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		switch value.Layer {
-		case model.LayerSource:
-			origins[value.Source.OriginKind] = struct{}{}
-		case model.LayerDerived:
-			for _, referenceID := range value.Derived.DerivedFrom {
-				if err := visit(referenceID); err != nil {
-					return err
-				}
-			}
-		case model.LayerEvent:
-			for _, memberID := range value.Event.MemberIDs {
-				if err := visit(memberID); err != nil {
-					return err
-				}
+		next := make([]model.ID, 0)
+		for _, value := range values {
+			loaded[value.ID] = value
+			switch value.Layer {
+			case model.LayerDerived:
+				next = append(next, value.Derived.DerivedFrom...)
+			case model.LayerEvent:
+				next = append(next, value.Event.MemberIDs...)
 			}
 		}
-		return nil
+		frontier = next
 	}
-	if err := visit(contextID); err != nil {
-		return nil, err
+	for _, contextID := range contextIDs {
+		origins := make(map[model.OriginKind]struct{})
+		visited := make(map[model.ID]struct{})
+		collectOriginKinds(loaded, contextID, visited, origins)
+		result[contextID] = slices.Sorted(maps.Keys(origins))
 	}
-	return slices.Sorted(maps.Keys(origins)), nil
+	return result, nil
+}
+
+// collectOriginKinds는 이미 읽어 둔 정점만 따라가며 출처 구분을 모은다.
+func collectOriginKinds(loaded map[model.ID]model.Context, contextID model.ID, visited map[model.ID]struct{}, origins map[model.OriginKind]struct{}) {
+	if _, found := visited[contextID]; found {
+		return
+	}
+	visited[contextID] = struct{}{}
+	value, found := loaded[contextID]
+	if !found {
+		return
+	}
+	switch value.Layer {
+	case model.LayerSource:
+		origins[value.Source.OriginKind] = struct{}{}
+	case model.LayerDerived:
+		for _, referenceID := range value.Derived.DerivedFrom {
+			collectOriginKinds(loaded, referenceID, visited, origins)
+		}
+	case model.LayerEvent:
+		for _, memberID := range value.Event.MemberIDs {
+			collectOriginKinds(loaded, memberID, visited, origins)
+		}
+	}
 }
 
 // ProposeSimilarEventRelations는 색인을 마친 사건과 같은 모델의 사건 벡터를 비교한다.

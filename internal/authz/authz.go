@@ -32,7 +32,8 @@ const (
 	authorizationCodeLifetime = time.Minute
 	minPasswordRunes          = 8
 	maxPasswordRunes          = 128
-	passwordHashPrefix        = "bcrypt-sha256-v1:"
+	passwordHashPrefix        = "bcrypt-sha256-b64-v2:"
+	legacyRawDigestPrefix     = "bcrypt-sha256-v1:"
 )
 
 var loginIDPattern = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
@@ -148,24 +149,34 @@ func validPassword(password string) bool {
 }
 
 func hashPassword(password string, cost int) (string, error) {
-	material := passwordMaterial(password)
-	hash, err := bcrypt.GenerateFromPassword(material[:], cost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(passwordMaterial(password)), cost)
 	if err != nil {
 		return "", err
 	}
 	return passwordHashPrefix + string(hash), nil
 }
 
+// comparePassword는 저장된 해시 형식을 보고 대조하며, 현재 형식이 아니면 재해시 대상으로
+// 알린다. 반환한 bool이 true이면 호출자가 성공한 로그인에서 현재 형식으로 바꾼다.
 func comparePassword(stored, password string) (bool, error) {
-	if hash, prehashed := strings.CutPrefix(stored, passwordHashPrefix); prehashed {
-		material := passwordMaterial(password)
-		return false, bcrypt.CompareHashAndPassword([]byte(hash), material[:])
+	if hash, current := strings.CutPrefix(stored, passwordHashPrefix); current {
+		return false, bcrypt.CompareHashAndPassword([]byte(hash), []byte(passwordMaterial(password)))
+	}
+	if hash, raw := strings.CutPrefix(stored, legacyRawDigestPrefix); raw {
+		digest := sha256.Sum256([]byte(password))
+		return true, bcrypt.CompareHashAndPassword([]byte(hash), digest[:])
 	}
 	return true, bcrypt.CompareHashAndPassword([]byte(stored), []byte(password))
 }
 
-func passwordMaterial(password string) [sha256.Size]byte {
-	return sha256.Sum256([]byte(password))
+// passwordMaterial은 bcrypt의 72바이트 상한을 피하려고 먼저 해시한 값을 base64로 만든다.
+//
+// 원시 다이제스트를 그대로 넣지 않는 이유는 NUL 바이트 때문이다. Go의 bcrypt는 NUL을
+// 특별히 다루지 않지만 bcrypt 규격은 NUL 종료 문자열을 전제하므로, 다이제스트에 NUL이
+// 들어간 비밀번호는 다른 구현에서 그 지점까지만 검증된다. base64는 NUL을 만들지 않는다.
+func passwordMaterial(password string) string {
+	digest := sha256.Sum256([]byte(password))
+	return base64.RawStdEncoding.EncodeToString(digest[:])
 }
 
 // ValidateAuthorizeRequest는 사전 등록 클라이언트, 완전 일치 redirect_uri, PKCE와 리소스를 확인한다.

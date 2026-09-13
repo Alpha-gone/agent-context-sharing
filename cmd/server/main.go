@@ -57,13 +57,8 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("색인 작업자 준비: %w", err)
 	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		if err := indexer.Close(shutdownContext); err != nil {
-			slog.Error("색인 작업자 종료", "error", err)
-		}
-	}()
+	// 작업자 종료는 defer가 아니라 아래 종료 순서에서 처리한다. defer로 두면 요청 종료와
+	// 풀 종료 사이가 아니라 그 뒤에 실행되어, 작업자가 도는 중에 풀이 닫힌다.
 	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
 	indexer.Start(context.Background())
 	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, FoldThreshold: cfg.SearchFoldThreshold}, slog.Default())
@@ -117,10 +112,15 @@ func run() error {
 		slog.Info("종료 신호 수신", "signal", signal.String())
 	}
 
+	// 순서를 고정한다. 트래픽을 끊고 진행 요청을 마친 뒤 색인 작업자를 멈추고, 둘 다 풀을
+	// 쓰지 않게 된 다음에 defer가 풀을 닫는다.
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := app.shutdown(shutdownContext, server); err != nil {
 		return err
+	}
+	if err := indexer.Close(shutdownContext); err != nil {
+		slog.Error("색인 작업자 종료", "error", err)
 	}
 	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("HTTP 서버 종료: %w", err)

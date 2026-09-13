@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/url"
@@ -395,9 +396,40 @@ func TestAuthenticateRehashesLegacyDirectBcryptHash(t *testing.T) {
 	if !rehashed {
 		t.Fatalf("기존 해시가 현재 형식으로 바뀌지 않았다: %q", account.PasswordHash)
 	}
-	material := passwordMaterial(password)
-	if err := bcrypt.CompareHashAndPassword([]byte(currentHash), material[:]); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(currentHash), []byte(passwordMaterial(password))); err != nil {
 		t.Fatalf("재해시한 비밀번호 대조: %v", err)
+	}
+}
+
+// TestAuthenticateUpgradesRawDigestHash는 v1 원시 다이제스트 해시가 여전히 인증되고
+// 성공한 로그인에서 현재 형식으로 바뀌는지 확인한다.
+func TestAuthenticateUpgradesRawDigestHash(t *testing.T) {
+	const password = "raw-digest-password"
+	digest := sha256.Sum256([]byte(password))
+	raw, err := bcrypt.GenerateFromPassword(digest[:], bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("v1 해시 생성: %v", err)
+	}
+	id, err := model.NewID()
+	if err != nil {
+		t.Fatalf("계정 식별자: %v", err)
+	}
+	backend := newMemoryStore()
+	if err := backend.CreateAccount(t.Context(), store.Account{
+		ID: id, LoginID: "rawdigest", PasswordHash: legacyRawDigestPrefix + string(raw), CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("계정 생성: %v", err)
+	}
+	service := testService(t, backend)
+	if authenticated, err := service.Authenticate(t.Context(), "rawdigest", password); err != nil || authenticated != id {
+		t.Fatalf("v1 해시 인증 = %s, %v; want %s, nil", authenticated, err, id)
+	}
+	account, err := backend.AccountByLoginID(t.Context(), "rawdigest")
+	if err != nil {
+		t.Fatalf("재해시한 계정 조회: %v", err)
+	}
+	if !strings.HasPrefix(account.PasswordHash, passwordHashPrefix) {
+		t.Fatalf("v1 해시가 현재 형식으로 바뀌지 않았다: %q", account.PasswordHash)
 	}
 }
 

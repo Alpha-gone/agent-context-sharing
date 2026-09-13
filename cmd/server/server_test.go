@@ -62,16 +62,18 @@ func TestHealthAndReadySeparateFailures(t *testing.T) {
 	}
 }
 
-// TestShutdownStopsReadinessAndClosesDatabase는 종료가 준비 상태를 먼저 내리고 풀을 닫는지 확인한다.
-func TestShutdownStopsReadinessAndClosesDatabase(t *testing.T) {
+// TestShutdownStopsReadinessAndLeavesPoolOpen은 종료가 준비 상태를 내리고 진행 요청을
+// 기다리되 연결 풀은 닫지 않는지 확인한다. 풀은 색인 작업자도 쓰므로 닫는 순서를 조립한
+// 곳이 정하며, 여기에서 닫으면 작업자가 도는 중에 사라진다.
+func TestShutdownStopsReadinessAndLeavesPoolOpen(t *testing.T) {
 	database := &fakeReadiness{}
 	app := newApplication(database, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
 	server := &http.Server{Handler: app.handler()}
 	if err := app.shutdown(t.Context(), server); err != nil {
 		t.Fatalf("정상 종료: %v", err)
 	}
-	if !database.closed {
-		t.Fatal("데이터베이스 풀이 닫히지 않았다")
+	if database.closed {
+		t.Fatal("종료가 연결 풀까지 닫았다")
 	}
 	ready := httptest.NewRecorder()
 	app.handler().ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))

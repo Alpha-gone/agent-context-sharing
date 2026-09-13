@@ -45,7 +45,7 @@ type Store interface {
 	KeywordCandidates(context.Context, model.ID, string, time.Time, int) ([]store.SearchCandidate, error)
 	TimeCandidates(context.Context, model.ID, time.Time, int) ([]store.SearchCandidate, error)
 	SemanticCandidates(context.Context, model.ID, string, []float64, time.Time, int) ([]store.SearchCandidate, error)
-	ContextOriginKinds(context.Context, model.ID, model.ID) ([]model.OriginKind, error)
+	ContextOriginKinds(context.Context, model.ID, []model.ID) (map[model.ID][]model.OriginKind, error)
 }
 
 // Service는 비그래프 기준선의 세 진입 채널을 실행한다.
@@ -123,7 +123,8 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 
 // Flow는 그래프 확장 채널을 켠 적 없는 기준선의 세 진입 채널을 결합한다.
 func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
-	if !input.GraphID.IsV7() || input.WorkContext == "" || input.Budget < 1 {
+	// Budget 0은 「계정 플랜」이 선언한 대로 한도 없음이다.
+	if !input.GraphID.IsV7() || input.WorkContext == "" || input.Budget < 0 {
 		return Flow{}, fmt.Errorf("검색 입력이 올바르지 않다")
 	}
 	if input.AsOf.IsZero() {
@@ -183,14 +184,19 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	combined = foldSimilarDerived(combined, service.config.FoldThreshold)
 	selected, used, truncation := applyBudget(combined, input.Budget)
 	ids := make([]model.ID, 0, len(selected))
+	for _, candidate := range selected {
+		ids = append(ids, candidate.value.ID)
+	}
+	// 출처 추적은 응답의 부가 메타데이터다. 실패해도 채널이 낸 결과를 버리지 않고 빈 값으로
+	// 두며, 「정상 응답의 부분 상태」가 internal을 모든 채널 실패에만 쓰기로 확정했다.
+	origins, err := service.store.ContextOriginKinds(ctx, input.GraphID, ids)
+	if err != nil {
+		service.logger.ErrorContext(ctx, "컨텍스트 출처 계산 실패", "graph_id", input.GraphID.String(), "error", err.Error())
+		origins = map[model.ID][]model.OriginKind{}
+	}
 	contexts := make([]Context, 0, len(selected))
 	for rank, candidate := range selected {
-		origins, err := service.store.ContextOriginKinds(ctx, input.GraphID, candidate.value.ID)
-		if err != nil {
-			return Flow{}, fmt.Errorf("컨텍스트 출처 계산: %w", err)
-		}
-		ids = append(ids, candidate.value.ID)
-		contexts = append(contexts, Context{Value: candidate.value, OriginKinds: origins, MatchedChannels: candidate.channels, Rank: rank + 1, FoldedCount: candidate.folded})
+		contexts = append(contexts, Context{Value: candidate.value, OriginKinds: origins[candidate.value.ID], MatchedChannels: candidate.channels, Rank: rank + 1, FoldedCount: candidate.folded})
 		for _, channel := range candidate.channels {
 			metric := channels[channel]
 			metric.Contribution++
@@ -352,11 +358,13 @@ func trigrams(text string) map[string]struct{} {
 	return grams
 }
 
+// applyBudget은 순위 순서대로 담다가 예산을 넘기는 컨텍스트에서 멈춘다.
+// budget 0은 한도 없음이므로 절단하지 않는다.
 func applyBudget(candidates []combinedCandidate, budget int) ([]combinedCandidate, int, *Truncation) {
 	used := 0
 	for index, candidate := range candidates {
 		length := utf8.RuneCountInString(candidate.value.Body)
-		if used+length > budget {
+		if budget > 0 && used+length > budget {
 			return candidates[:index], used, &Truncation{Reason: "budget", Excluded: len(candidates) - index}
 		}
 		used += length

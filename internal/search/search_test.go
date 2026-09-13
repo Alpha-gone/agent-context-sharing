@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -115,8 +116,12 @@ func (fake *fakeStore) SemanticCandidates(context.Context, model.ID, string, []f
 	return append([]store.SearchCandidate(nil), fake.semantic...), nil
 }
 
-func (fake *fakeStore) ContextOriginKinds(context.Context, model.ID, model.ID) ([]model.OriginKind, error) {
-	return []model.OriginKind{model.OriginKindUserUtterance}, nil
+func (fake *fakeStore) ContextOriginKinds(_ context.Context, _ model.ID, contextIDs []model.ID) (map[model.ID][]model.OriginKind, error) {
+	origins := make(map[model.ID][]model.OriginKind, len(contextIDs))
+	for _, contextID := range contextIDs {
+		origins[contextID] = []model.OriginKind{model.OriginKindUserUtterance}
+	}
+	return origins, nil
 }
 
 type failingStore struct{}
@@ -133,7 +138,7 @@ func (failingStore) SemanticCandidates(context.Context, model.ID, string, []floa
 	return nil, context.DeadlineExceeded
 }
 
-func (failingStore) ContextOriginKinds(context.Context, model.ID, model.ID) ([]model.OriginKind, error) {
+func (failingStore) ContextOriginKinds(context.Context, model.ID, []model.ID) (map[model.ID][]model.OriginKind, error) {
 	return nil, nil
 }
 
@@ -258,4 +263,49 @@ func TestChannelFailureReasonSeparatesUpstreamFromStore(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestApplyBudgetTreatsZeroAsNoLimit은 「계정 플랜」이 0을 한도 없음으로 선언한 것을
+// 예산 적용이 그대로 지키는지 확인한다. 0을 거부하면 한도를 푸는 설정이 연산을 죽인다.
+func TestApplyBudgetTreatsZeroAsNoLimit(t *testing.T) {
+	candidates := []combinedCandidate{
+		{value: model.Context{ID: newFoldID(t), Layer: model.LayerSource, Body: strings.Repeat("가", 5_000)}},
+		{value: model.Context{ID: newFoldID(t), Layer: model.LayerSource, Body: strings.Repeat("나", 5_000)}},
+	}
+	selected, used, truncation := applyBudget(candidates, 0)
+	if len(selected) != 2 || used != 10_000 || truncation != nil {
+		t.Fatalf("무제한 예산 결과 = %d개, 사용 %d, 절단 %+v", len(selected), used, truncation)
+	}
+	if selected, _, truncation := applyBudget(candidates, 6_000); len(selected) != 1 || truncation == nil {
+		t.Fatalf("유한 예산이 절단하지 않았다: %d개, 절단 %+v", len(selected), truncation)
+	}
+}
+
+// TestFlowKeepsResultsWhenOriginTraceFails는 출처 추적 실패가 성공한 검색을 버리지 않는지
+// 확인한다. 「정상 응답의 부분 상태」가 internal을 모든 채널 실패에만 쓰기로 확정했다.
+func TestFlowKeepsResultsWhenOriginTraceFails(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000001")
+	value := testContext(t, graphID, "019a0000-0000-7000-8000-000000000002", "본문", 1)
+	backing := &fakeStore{time: []store.SearchCandidate{{Context: value}}}
+	service, err := New(&originFailingStore{fakeStore: backing}, fakeEmbedder{},
+		Config{Execution: ExecutionParallel, CandidateLimit: 5, FoldThreshold: 0.9}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	flow, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "질의", AsOf: time.Now().UTC(), Budget: 10_000})
+	if err != nil {
+		t.Fatalf("출처 추적 실패가 검색을 중단시켰다: %v", err)
+	}
+	if len(flow.Contexts) == 0 {
+		t.Fatal("출처 추적 실패 뒤 컨텍스트가 비었다")
+	}
+	if len(flow.Contexts[0].OriginKinds) != 0 {
+		t.Fatalf("추적 실패인데 출처가 채워졌다: %v", flow.Contexts[0].OriginKinds)
+	}
+}
+
+type originFailingStore struct{ *fakeStore }
+
+func (originFailingStore) ContextOriginKinds(context.Context, model.ID, []model.ID) (map[model.ID][]model.OriginKind, error) {
+	return nil, errors.New("출처 조회 실패")
 }

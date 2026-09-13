@@ -18,9 +18,9 @@ import (
 )
 
 // readiness는 준비 확인과 종료에 필요한 데이터베이스 연결의 최소 계약이다.
+// 풀을 닫는 것은 조립한 곳의 책임이므로 이 계약에는 준비 확인만 둔다.
 type readiness interface {
 	Ping(context.Context) error
-	Close()
 }
 
 // transportSecurity은 수신 연결의 TLS 여부를 판단하는 배포 경계다.
@@ -157,15 +157,15 @@ func (app *application) ready(writer http.ResponseWriter, request *http.Request)
 }
 
 // shutdown은 준비 상태를 먼저 내려 새 트래픽을 막고 진행 요청을 끝낸 뒤 풀을 닫는다.
+// shutdown은 트래픽을 끊고 진행 중인 요청이 끝날 때까지 기다린다.
+//
+// 연결 풀은 여기에서 닫지 않는다. 풀을 쓰는 것이 요청 경로만이 아니라 색인 작업자도
+// 있으므로, 닫는 순서를 조립한 곳이 정해야 작업자가 도는 중에 풀이 사라지지 않는다.
+// 1단계에서는 주기 작업 잠금을 아직 획득하지 않으므로 이 시점에 해제할 잠금은 없다.
 func (app *application) shutdown(ctx context.Context, server *http.Server) error {
 	app.accepting.Store(false)
 	if err := server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("진행 요청 종료 대기: %w", err)
-	}
-	// 1단계에서는 주기 작업 잠금을 아직 획득하지 않으므로, 이 시점에 해제할 잠금은 없다.
-	// 이후 단계에서 잠금이 추가돼도 연결 풀을 닫기 전 이 순서에 해제한다.
-	if app.database != nil {
-		app.database.Close()
 	}
 	return nil
 }

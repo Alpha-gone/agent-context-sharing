@@ -545,11 +545,17 @@ func relationOperationRecord(kind store.OperationKind, graphID, relationID, acco
 }
 
 // judgmentInput은 요청이 보낸 판단 입력을 쓰고, 없으면 검증을 마친 인자 묶음을 남긴다.
+//
+// 인자는 JSON에서 해석한 값뿐이라 직렬화가 실패하지 않지만, 실패하면 빈 문자열이 저장소까지
+// 내려가 "판단 입력이 비어 있다"로 거절되어 원인과 증상이 멀어진다. 여기에서 대체 값을 둔다.
 func judgmentInput(arguments map[string]any) string {
 	if given := optionalString(arguments, "judgment_input"); given != "" {
 		return given
 	}
-	encoded, _ := json.Marshal(arguments)
+	encoded, err := json.Marshal(arguments)
+	if err != nil || len(encoded) == 0 {
+		return "판단 입력 직렬화 실패"
+	}
 	return string(encoded)
 }
 

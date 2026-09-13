@@ -725,3 +725,38 @@ func proposalRelations(t *testing.T, store *Store, graphID model.ID) []model.Rel
 }
 
 func ptrTime(value time.Time) *time.Time { return &value }
+
+// TestHopContextsTreatsZeroLimitAsNoCap은 플랜의 max_hop_nodes 0이 한도 없음으로
+// 동작하는지 확인한다. 거부하면 한도를 푸는 설정이 node_get을 internal로 만든다.
+func TestHopContextsTreatsZeroLimitAsNoCap(t *testing.T) {
+	store := newIntegrationStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, store, actorID)
+	graphID := createTestGraph(t, store, actorID)
+
+	source := testSourceContext(t, graphID, actorID, "api://zero-limit/"+newTestID(t).String())
+	createdSource, err := store.CreateContext(t.Context(), graphID, source, nil)
+	if err != nil {
+		t.Fatalf("원천 생성: %v", err)
+	}
+	for range 3 {
+		if _, err := store.CreateContext(t.Context(), graphID, testDerivedContext(t, graphID, actorID), []model.ID{createdSource.ID}); err != nil {
+			t.Fatalf("파생 생성: %v", err)
+		}
+	}
+
+	capped, err := store.HopContexts(t.Context(), graphID, createdSource.ID, 1, "in", []string{"derived_from"}, 2)
+	if err != nil {
+		t.Fatalf("상한 조회: %v", err)
+	}
+	if len(capped.Contexts) != 2 || !capped.Truncated {
+		t.Fatalf("상한이 적용되지 않았다: %d개, 절단 %v", len(capped.Contexts), capped.Truncated)
+	}
+	unlimited, err := store.HopContexts(t.Context(), graphID, createdSource.ID, 1, "in", []string{"derived_from"}, 0)
+	if err != nil {
+		t.Fatalf("무제한 조회: %v", err)
+	}
+	if len(unlimited.Contexts) != 4 || unlimited.Truncated {
+		t.Fatalf("무제한 조회 결과 = %d개, 절단 %v", len(unlimited.Contexts), unlimited.Truncated)
+	}
+}

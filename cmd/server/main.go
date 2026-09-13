@@ -37,7 +37,11 @@ func run() error {
 		return fmt.Errorf("배포 구성 검증: %w", err)
 	}
 
-	database, err := store.New(context.Background(), cfg.DatabaseURL, cfg.GraphName)
+	database, err := store.New(context.Background(), cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
+		AdjacencyWindow:     cfg.RelationAdjacencyWindow,
+		SimilarityThreshold: cfg.RelationSimilarityThreshold,
+		Limit:               cfg.RelationProposalLimit,
+	})
 	if err != nil {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}

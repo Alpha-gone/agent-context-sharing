@@ -427,7 +427,7 @@ func newAuthorizationCodeIntegrationStore(t *testing.T) *store.Store {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	database, err := store.New(t.Context(), databaseURL, graphName)
+	database, err := store.New(t.Context(), databaseURL, graphName, nil)
 	if err != nil {
 		t.Fatalf("통합 검사 저장소 준비: %v", err)
 	}

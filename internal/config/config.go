@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"agent_context_sharing/internal/plan"
 )
@@ -56,6 +57,12 @@ type Config struct {
 	MCPAllowedOrigins []*url.URL
 	// BcryptCost 필드에는 새 계정 비밀번호 해시에 쓸 비용 계수를 둔다.
 	BcryptCost int
+	// RelationAdjacencyWindow 필드에는 precedes 후보의 최대 시간 간격을 둔다.
+	RelationAdjacencyWindow time.Duration
+	// RelationSimilarityThreshold 필드에는 relates_to 후보의 코사인 유사도 하한을 둔다.
+	RelationSimilarityThreshold float64
+	// RelationProposalLimit 필드에는 한 신호가 한 사건에서 만들 수 있는 후보 수 상한을 둔다.
+	RelationProposalLimit int
 	// AccountPlans 필드에는 계정별로 배정한 플랜 값을 둔다.
 	AccountPlans plan.AccountPlans
 	// TLSMode 필드에는 TLS 종단 배치를 둔다.
@@ -146,6 +153,21 @@ func Load(env Environment) (Config, error) {
 		return Config{}, fmt.Errorf("BCRYPT_COST가 4에서 31 사이의 정수가 아니다")
 	}
 	cfg.BcryptCost = bcryptCost
+	adjacencyWindow, err := time.ParseDuration(strings.TrimSpace(env("RELATION_ADJACENCY_WINDOW")))
+	if err != nil || adjacencyWindow <= 0 {
+		return Config{}, fmt.Errorf("RELATION_ADJACENCY_WINDOW가 양의 Go 기간 형식이 아니다")
+	}
+	cfg.RelationAdjacencyWindow = adjacencyWindow
+	similarityThreshold, err := strconv.ParseFloat(strings.TrimSpace(env("RELATION_SIMILARITY_THRESHOLD")), 64)
+	if err != nil || similarityThreshold < -1 || similarityThreshold > 1 {
+		return Config{}, fmt.Errorf("RELATION_SIMILARITY_THRESHOLD가 -1에서 1 사이의 수가 아니다")
+	}
+	cfg.RelationSimilarityThreshold = similarityThreshold
+	proposalLimit, err := strconv.Atoi(strings.TrimSpace(env("RELATION_PROPOSAL_LIMIT")))
+	if err != nil || proposalLimit <= 0 {
+		return Config{}, fmt.Errorf("RELATION_PROPOSAL_LIMIT이 양의 정수가 아니다")
+	}
+	cfg.RelationProposalLimit = proposalLimit
 	accountPlans, err := plan.ParseAccountPlans(strings.TrimSpace(env("ACCOUNT_PLAN_LIMITS")))
 	if err != nil {
 		return Config{}, fmt.Errorf("ACCOUNT_PLAN_LIMITS: %w", err)

@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/plan"
@@ -14,7 +15,7 @@ func TestLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("구성 읽기: %v", err)
 	}
-	if cfg.HTTPAddr != ":8080" || cfg.EmbeddingDimension != 1024 {
+	if cfg.HTTPAddr != ":8080" || cfg.EmbeddingDimension != 1024 || cfg.RelationAdjacencyWindow != time.Hour || cfg.RelationSimilarityThreshold != 0.8 || cfg.RelationProposalLimit != 10 {
 		t.Fatalf("핵심 구성 값이 다르다: %+v", cfg)
 	}
 	if len(cfg.OAuthClientIDs) != 1 || len(cfg.OAuthRedirectURIs) != 1 || cfg.ResourceServerURL.String() != "https://service.test/mcp" || cfg.AuthorizationServerURL.String() != "https://issuer.test" || len(cfg.MCPAllowedOrigins) != 1 {
@@ -48,9 +49,12 @@ func TestLoadAccountPlanLimits(t *testing.T) {
 // TestLoadRejectsInvalidValues은 기동 전에 잘못된 배포 구성이 거부되는지 확인한다.
 func TestLoadRejectsInvalidValues(t *testing.T) {
 	tests := map[string]func(map[string]string){
-		"수신 주소 누락":     func(values map[string]string) { values["HTTP_ADDR"] = "" },
-		"그래프 이름 형식 오류": func(values map[string]string) { values["AGE_GRAPH_NAME"] = "bad-name" },
-		"벡터 차원 오류":     func(values map[string]string) { values["EMBEDDING_DIMENSION"] = "0" },
+		"수신 주소 누락":        func(values map[string]string) { values["HTTP_ADDR"] = "" },
+		"그래프 이름 형식 오류":    func(values map[string]string) { values["AGE_GRAPH_NAME"] = "bad-name" },
+		"벡터 차원 오류":        func(values map[string]string) { values["EMBEDDING_DIMENSION"] = "0" },
+		"관계 시간 인접 임계값 오류": func(values map[string]string) { values["RELATION_ADJACENCY_WINDOW"] = "0" },
+		"관계 유사도 임계값 오류":   func(values map[string]string) { values["RELATION_SIMILARITY_THRESHOLD"] = "1.1" },
+		"관계 후보 수 상한 오류":   func(values map[string]string) { values["RELATION_PROPOSAL_LIMIT"] = "0" },
 		"직접 TLS의 신뢰 프록시 지정": func(values map[string]string) {
 			values["TLS_TERMINATION"] = "direct"
 			values["TLS_CERT_FILE"] = "/run/secrets/server.crt"
@@ -141,23 +145,26 @@ func TestGraphNamePattern(t *testing.T) {
 // validValues는 각 테스트가 독립적으로 바꿀 수 있는 유효한 배포 구성을 만든다.
 func validValues() map[string]string {
 	return map[string]string{
-		"HTTP_ADDR":                ":8080",
-		"DATABASE_URL":             "postgres://user:pass@localhost:5432/app",
-		"AGE_GRAPH_NAME":           "agent_context",
-		"EMBEDDING_BASE_URL":       "http://localhost:11434",
-		"EMBEDDING_MODEL":          "bge-m3",
-		"EMBEDDING_VECTOR_TYPE":    "vector",
-		"EMBEDDING_DIMENSION":      "1024",
-		"OAUTH_CLIENT_IDS":         "agent-context-dev",
-		"OAUTH_REDIRECT_URIS":      "http://127.0.0.1/callback",
-		"RESOURCE_SERVER_URL":      "https://service.test/mcp",
-		"AUTHORIZATION_SERVER_URL": "https://issuer.test",
-		"MCP_ALLOWED_ORIGINS":      "https://client.test",
-		"BCRYPT_COST":              "12",
-		"ACCOUNT_PLAN_LIMITS":      "",
-		"TLS_TERMINATION":          "proxy",
-		"TRUSTED_PROXY_CIDRS":      "10.0.0.0/8",
-		"TLS_CERT_FILE":            "",
-		"TLS_KEY_FILE":             "",
+		"HTTP_ADDR":                     ":8080",
+		"DATABASE_URL":                  "postgres://user:pass@localhost:5432/app",
+		"AGE_GRAPH_NAME":                "agent_context",
+		"EMBEDDING_BASE_URL":            "http://localhost:11434",
+		"EMBEDDING_MODEL":               "bge-m3",
+		"EMBEDDING_VECTOR_TYPE":         "vector",
+		"EMBEDDING_DIMENSION":           "1024",
+		"OAUTH_CLIENT_IDS":              "agent-context-dev",
+		"OAUTH_REDIRECT_URIS":           "http://127.0.0.1/callback",
+		"RESOURCE_SERVER_URL":           "https://service.test/mcp",
+		"AUTHORIZATION_SERVER_URL":      "https://issuer.test",
+		"MCP_ALLOWED_ORIGINS":           "https://client.test",
+		"BCRYPT_COST":                   "12",
+		"RELATION_ADJACENCY_WINDOW":     "1h",
+		"RELATION_SIMILARITY_THRESHOLD": "0.8",
+		"RELATION_PROPOSAL_LIMIT":       "10",
+		"ACCOUNT_PLAN_LIMITS":           "",
+		"TLS_TERMINATION":               "proxy",
+		"TRUSTED_PROXY_CIDRS":           "10.0.0.0/8",
+		"TLS_CERT_FILE":                 "",
+		"TLS_KEY_FILE":                  "",
 	}
 }

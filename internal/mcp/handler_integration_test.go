@@ -28,7 +28,10 @@ func TestHandlerIntegration(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	database, err := store.New(t.Context(), databaseURL, graphName)
+	// 요청 경로에서 자동 후보 제안이 실제로 도는지 확인해야 하므로 구성을 켜고 만든다.
+	database, err := store.New(t.Context(), databaseURL, graphName, &store.RelationProposalConfig{
+		AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 10,
+	})
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}
@@ -104,6 +107,20 @@ func TestHandlerIntegration(t *testing.T) {
 	if structured(t, duplicated)["context_id"].(string) != sourceID {
 		t.Fatal("같은 source_ref가 기존 원천을 반환하지 않았다")
 	}
+	// 거부된 생성의 기록은 대상을 비운다. 요청이 배정한 식별자는 저장되지 않으므로 남기면
+	// 기록이 존재하지 않는 컨텍스트를 가리킨다. 근거는 「기록 항목」이다.
+	// 없는 근거를 가리켜 저장 계층에서 거부시킨다. 처리기 검증에서 막히면 기록 자체가 없다.
+	if _, callErr := call(t.Context(), ownerID, "node_create", map[string]any{
+		"graph_id": graphID, "layer": "derived", "body": "없는 근거를 가리키는 파생", "created_by_agent": ownerID.String(),
+		"derivation_kind": "proposition", "evidence_state": "observation",
+		"derived_from": []any{newHandlerID(t).String()},
+	}); callErr == nil {
+		t.Fatal("없는 근거를 가리킨 파생 생성이 거부되지 않았다")
+	}
+	if dangling := danglingRejectedTargets(t, pool, graphID); dangling != 0 {
+		t.Fatalf("거부 기록이 없는 대상을 가리킨다: %d개", dangling)
+	}
+
 	if _, callErr := call(t.Context(), viewerID, "node_create", map[string]any{
 		"graph_id": graphID, "layer": "source", "body": "열람자 원천", "created_by_agent": viewerID.String(),
 		"source_channel": "api", "locator": locator + "/viewer", "occurred_at": time.Now().UTC().Format(time.RFC3339), "origin_kind": "external_content",
@@ -185,6 +202,37 @@ func TestHandlerIntegration(t *testing.T) {
 	if _, stillDeleted := structured(t, restored)["deleted_at"]; stillDeleted {
 		t.Fatal("복구한 파생에 deleted_at이 남아 있다")
 	}
+	kept, err := call(t.Context(), ownerID, "node_update", map[string]any{
+		"graph_id": graphID, "context_id": derivedID, "expected_version": float64(structured(t, restored)["version"].(int64)),
+		"created_by_agent": ownerID.String(), "management_action": "keep",
+	})
+	if err != nil {
+		t.Fatalf("파생 유지 판단: %v", err)
+	}
+	if structured(t, kept)["version"] != structured(t, restored)["version"] {
+		t.Fatal("유지 판단이 컨텍스트 판 번호를 바꿨다")
+	}
+	dependent, err := call(t.Context(), ownerID, "node_create", map[string]any{
+		"graph_id": graphID, "layer": "derived", "body": "이전 판을 근거로 한 파생", "created_by_agent": ownerID.String(),
+		"derivation_kind": "proposition", "evidence_state": "observation", "derived_from": []any{derivedID},
+	})
+	if err != nil {
+		t.Fatalf("대체 전 파생 생성: %v", err)
+	}
+	dependentID := structured(t, dependent)["context_id"].(string)
+	if _, err := call(t.Context(), ownerID, "node_create", map[string]any{
+		"graph_id": graphID, "layer": "derived", "body": "대체 파생", "created_by_agent": ownerID.String(),
+		"derivation_kind": "proposition", "evidence_state": "observation", "derived_from": []any{sourceID}, "supersedes_context_id": derivedID,
+	}); err != nil {
+		t.Fatalf("파생 대체: %v", err)
+	}
+	dependentView, err := call(t.Context(), ownerID, "node_get", map[string]any{"graph_id": graphID, "context_id": dependentID, "hops": float64(0)})
+	if err != nil {
+		t.Fatalf("대체 근거 무효 표시 조회: %v", err)
+	}
+	if dependentContext := structured(t, dependentView)["contexts"].([]any)[0].(map[string]any); dependentContext["evidence_invalidated"] != true {
+		t.Fatalf("파생 대체가 직접 의존 파생을 무효 표시하지 않았다: %#v", dependentContext)
+	}
 	occurredAt, ok := sourceValue["occurred_at"].(time.Time)
 	if !ok {
 		t.Fatalf("원천 발생 시각이 time.Time이 아니다: %#v", sourceValue["occurred_at"])
@@ -202,6 +250,82 @@ func TestHandlerIntegration(t *testing.T) {
 	}
 	if eventValue["event_start"] == nil || eventValue["event_end"] == nil {
 		t.Fatalf("사건 응답에 시간 범위가 없다: %#v", eventValue)
+	}
+	eventID := eventValue["context_id"].(string)
+	nextSource, err := call(t.Context(), ownerID, "node_create", map[string]any{
+		"graph_id": graphID, "layer": "source", "body": "다음 사건 원천", "created_by_agent": ownerID.String(),
+		"source_channel": "api", "locator": locator + "/next", "occurred_at": occurredAt.Add(2 * time.Minute).Format(time.RFC3339), "origin_kind": "external_content",
+	})
+	if err != nil {
+		t.Fatalf("다음 사건 원천 생성: %v", err)
+	}
+	nextSourceID := structured(t, nextSource)["context_id"].(string)
+	createdNextEvent, err := call(t.Context(), ownerID, "node_create", map[string]any{
+		"graph_id": graphID, "layer": "event", "body": "다음 사건 본문", "created_by_agent": ownerID.String(),
+		"member_refs": []any{nextSourceID}, "start": occurredAt.Add(2 * time.Minute).Format(time.RFC3339), "end": occurredAt.Add(3 * time.Minute).Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Fatalf("두 번째 사건 생성: %v", err)
+	}
+	nextEventID := structured(t, createdNextEvent)["context_id"].(string)
+
+	// 두 사건의 간격이 인접 임계값 안이므로 요청 경로의 저장이 끝난 뒤 시스템 제안이 남아야
+	// 한다. 저장소 단위 테스트와 달리 여기에서는 MCP 요청이 그 경로를 실제로 밟는지 본다.
+	proposedList, err := call(t.Context(), ownerID, "relation_list", map[string]any{
+		"graph_id": graphID, "context_id": nextEventID, "state_filter": []any{"proposed"},
+	})
+	if err != nil {
+		t.Fatalf("시스템 후보 조회: %v", err)
+	}
+	if !hasSystemProposal(structured(t, proposedList), "precedes", eventID, nextEventID) {
+		t.Fatalf("요청 경로의 사건 저장이 시스템 후보를 만들지 않았다: %#v", structured(t, proposedList)["relations"])
+	}
+	confirmed, err := call(t.Context(), ownerID, "relation_confirm", map[string]any{
+		"graph_id": graphID, "relation_type": "relates_to", "from_context_id": nextEventID, "to_context_id": eventID, "created_by_agent": ownerID.String(),
+	})
+	if err != nil {
+		t.Fatalf("관계 확정: %v", err)
+	}
+	confirmedValue := structured(t, confirmed)
+	if confirmedValue["from_context_id"] != eventID || confirmedValue["to_context_id"] != nextEventID || confirmedValue["state"] != "confirmed" {
+		t.Fatalf("대칭 관계가 정규화되어 확정되지 않았다: %#v", confirmedValue)
+	}
+	relationID := confirmedValue["relation_id"].(string)
+	// 자동 후보가 함께 붙으므로 확정 상태로 좁혀야 이 단언이 확정 관계만 본다.
+	listedRelations, err := call(t.Context(), ownerID, "relation_list", map[string]any{
+		"graph_id": graphID, "context_id": eventID, "state_filter": []any{"confirmed"},
+	})
+	if err != nil || len(structured(t, listedRelations)["relations"].([]any)) != 1 {
+		t.Fatalf("사건 관계 목록 조회: result=%#v, err=%v", structured(t, listedRelations), err)
+	}
+	if _, err := call(t.Context(), ownerID, "relation_discard", map[string]any{"graph_id": graphID, "relation_id": relationID, "created_by_agent": ownerID.String()}); err != nil {
+		t.Fatalf("관계 폐기: %v", err)
+	}
+	if _, callErr := call(t.Context(), ownerID, "relation_discard", map[string]any{"graph_id": graphID, "relation_id": relationID, "created_by_agent": ownerID.String()}); !hasCode(callErr, "invalid_argument") {
+		t.Fatalf("관계 재폐기가 invalid_argument로 처리되지 않았다: %v", callErr)
+	}
+	reconfirmed, err := call(t.Context(), ownerID, "relation_confirm", map[string]any{
+		"graph_id": graphID, "relation_type": "relates_to", "from_context_id": eventID, "to_context_id": nextEventID, "created_by_agent": ownerID.String(),
+	})
+	if err != nil || structured(t, reconfirmed)["relation_id"] != relationID || structured(t, reconfirmed)["state"] != "confirmed" {
+		t.Fatalf("폐기 관계 재확정: result=%#v, err=%v", structured(t, reconfirmed), err)
+	}
+	if _, err := call(t.Context(), ownerID, "relation_confirm", map[string]any{
+		"graph_id": graphID, "relation_type": "precedes", "from_context_id": eventID, "to_context_id": nextEventID, "created_by_agent": ownerID.String(),
+	}); err != nil {
+		t.Fatalf("시간 관계 확정: %v", err)
+	}
+	if _, callErr := call(t.Context(), ownerID, "relation_confirm", map[string]any{
+		"graph_id": graphID, "relation_type": "precedes", "from_context_id": nextEventID, "to_context_id": eventID, "created_by_agent": ownerID.String(),
+	}); !hasCode(callErr, "invalid_argument") {
+		t.Fatalf("순환 시간 관계가 invalid_argument로 거부되지 않았다: %v", callErr)
+	}
+	if _, err := call(t.Context(), ownerID, "node_discard", map[string]any{"graph_id": graphID, "context_id": nextEventID, "created_by_agent": ownerID.String()}); err != nil {
+		t.Fatalf("관계가 붙은 사건 폐기: %v", err)
+	}
+	afterEventDiscard, err := call(t.Context(), ownerID, "relation_list", map[string]any{"graph_id": graphID, "context_id": eventID, "state_filter": []any{"discarded"}})
+	if err != nil || len(structured(t, afterEventDiscard)["relations"].([]any)) != 2 {
+		t.Fatalf("사건 폐기 뒤 관계 정리: result=%#v, err=%v", structured(t, afterEventDiscard), err)
 	}
 	if _, callErr := call(t.Context(), ownerID, "node_restore", map[string]any{"graph_id": graphID, "context_id": derivedID, "created_by_agent": ownerID.String()}); !hasCode(callErr, "invalid_argument") {
 		t.Fatalf("활성 노드 복구가 invalid_argument로 처리되지 않았다: %v", callErr)
@@ -319,4 +443,47 @@ func rejectedReasons(t *testing.T, pool *pgx.Conn, contextID string) []string {
 		t.Fatalf("거부 기록 행 읽기: %v", err)
 	}
 	return reasons
+}
+
+// hasSystemProposal은 관계 목록 응답에 지정한 정체성의 시스템 제안이 있는지 확인한다.
+func hasSystemProposal(listed map[string]any, relationType, fromID, toID string) bool {
+	relations, ok := listed["relations"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range relations {
+		relation, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if relation["relation_type"] == relationType && relation["from_context_id"] == fromID &&
+			relation["to_context_id"] == toID && relation["state"] == "proposed" && relation["proposed_by"] == "system" {
+			return true
+		}
+	}
+	return false
+}
+
+// danglingRejectedTargets는 대상 열이 채워졌지만 그 대상이 실재하지 않는 거부 기록을 센다.
+func danglingRejectedTargets(t *testing.T, pool *pgx.Conn, graphID string) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM public.operation_log log
+		WHERE log.graph_id = $1 AND log.result = 'rejected'
+		  AND log.context_id IS NULL AND log.relation_id IS NULL
+		  AND log.target_version IS NOT NULL`, graphID).Scan(&count); err != nil {
+		t.Fatalf("거부 기록 대상 조회: %v", err)
+	}
+	var withTarget int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM public.operation_log log
+		WHERE log.graph_id = $1 AND log.result = 'rejected' AND log.context_id IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM public.operation_log applied
+			WHERE applied.context_id = log.context_id AND applied.result = 'applied')`,
+		graphID).Scan(&withTarget); err != nil {
+		t.Fatalf("거부 기록 대상 실재 확인: %v", err)
+	}
+	return count + withTarget
 }

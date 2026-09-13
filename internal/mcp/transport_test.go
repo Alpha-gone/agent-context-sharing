@@ -281,6 +281,53 @@ func TestDateTimeStringAcceptsRFC3339(t *testing.T) {
 	}
 }
 
+func TestValidateToolCallAcceptsLifecycleAndRelationActors(t *testing.T) {
+	graphID, contextID, agentID := newTestID(t), newTestID(t), newTestID(t)
+	tests := []struct {
+		name      string
+		tool      string
+		arguments map[string]any
+	}{
+		{
+			name: "파생 대체", tool: "node_create", arguments: map[string]any{
+				"graph_id": graphID, "created_by_agent": agentID, "layer": "derived", "body": "대체 파생",
+				"derivation_kind": "proposition", "evidence_state": "observation", "derived_from": []any{contextID}, "supersedes_context_id": contextID,
+			},
+		},
+		{
+			name: "유지 판단", tool: "node_update", arguments: map[string]any{
+				"graph_id": graphID, "context_id": contextID, "expected_version": float64(1), "created_by_agent": agentID, "management_action": "keep",
+			},
+		},
+		{
+			name: "관계 확정", tool: "relation_confirm", arguments: map[string]any{
+				"graph_id": graphID, "relation_type": "precedes", "from_context_id": contextID, "to_context_id": newTestID(t), "created_by_agent": agentID,
+			},
+		},
+		{
+			name: "관계 폐기", tool: "relation_discard", arguments: map[string]any{
+				"graph_id": graphID, "relation_id": contextID, "created_by_agent": agentID,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateToolCall(test.tool, test.arguments); err != nil {
+				t.Fatalf("유효한 입력을 거부했다: %s %v", err.Field, err)
+			}
+		})
+	}
+}
+
+func TestValidateToolCallRequiresRelationActor(t *testing.T) {
+	err := validateToolCall("relation_confirm", map[string]any{
+		"graph_id": newTestID(t), "relation_type": "precedes", "from_context_id": newTestID(t), "to_context_id": newTestID(t),
+	})
+	if err == nil || err.Field != "created_by_agent" {
+		t.Fatalf("관계 실행 에이전트 누락 결과 = %#v", err)
+	}
+}
+
 func TestToolsCallRejectsWebOnlyToolBeforeArgumentValidation(t *testing.T) {
 	for _, name := range []string{"graph_delete", "graph_grant", "team_create"} {
 		t.Run(name, func(t *testing.T) {

@@ -329,7 +329,7 @@ func newIntegrationStore(t *testing.T) *Store {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	store, err := New(t.Context(), databaseURL, graphName)
+	store, err := New(t.Context(), databaseURL, graphName, nil)
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}

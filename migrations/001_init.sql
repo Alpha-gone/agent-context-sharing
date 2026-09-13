@@ -126,13 +126,17 @@ CREATE TABLE IF NOT EXISTS public.index_task (
     correlation_id  text
 );
 
--- 「기록 항목」의 7개 항목을 편 열
+-- 「기록 항목」의 7개 항목을 편 열. 대상은 컨텍스트이거나 사건 관계이며 둘을 동시에
+-- 가리키지 않는다. 한 열에 두 종류를 섞으면 어느 쪽인지 판별할 값이 없어 「되짚기」가
+-- 관계 기록을 컨텍스트로 잘못 읽는다. 관계에는 판 번호가 없어 target_version을 비우고,
+-- 추가와 확정의 거부는 대상이 끝내 만들어지지 않으므로 대상을 모두 비운다.
 CREATE TABLE IF NOT EXISTS public.operation_log (
     operation_id     uuid        PRIMARY KEY,
     graph_id         uuid        NOT NULL,
     operation_kind   text        NOT NULL CHECK (operation_kind IN ('add', 'update', 'supersede', 'discard', 'keep')),
-    context_id       uuid        NOT NULL,
-    target_version   integer     NOT NULL,
+    context_id       uuid,
+    relation_id      uuid,
+    target_version   integer,
     judgment_input   text        NOT NULL,
     actor_account_id uuid        NOT NULL,
     actor_agent_id   uuid        NOT NULL,
@@ -140,7 +144,14 @@ CREATE TABLE IF NOT EXISTS public.operation_log (
     result           text        NOT NULL CHECK (result IN ('applied', 'rejected')),
     reject_reason    text,
     CONSTRAINT operation_log_reject_reason CHECK (
-        (result = 'rejected') OR (reject_reason IS NULL))
+        (result = 'rejected') OR (reject_reason IS NULL)),
+    CONSTRAINT operation_log_target CHECK (
+        (context_id IS NOT NULL AND relation_id IS NULL AND target_version IS NOT NULL)
+        OR (context_id IS NULL AND relation_id IS NOT NULL AND target_version IS NULL)
+        OR (result = 'rejected' AND context_id IS NULL AND relation_id IS NULL AND target_version IS NULL)),
+    -- 관계에는 판이 없어 추가와 갱신을 나눌 기준이 없으므로 두 종류만 쓴다.
+    CONSTRAINT operation_log_relation_kind CHECK (
+        relation_id IS NULL OR operation_kind IN ('add', 'discard'))
 );
 
 -- 「감사 기록」의 대상 여섯 종. 공통 다섯 열 외에는 대상에 따라 비어 있을 수 있다.
@@ -249,6 +260,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS index_task_context_idx
 -- 복구 판정과 보존 기간 정리
 CREATE INDEX IF NOT EXISTS operation_log_context_applied_idx
     ON public.operation_log (context_id, applied_at);
+
+CREATE INDEX IF NOT EXISTS operation_log_relation_idx
+    ON public.operation_log (relation_id, applied_at)
+    WHERE relation_id IS NOT NULL;
 
 -- 만료된 인가 코드의 주기 정리
 CREATE INDEX IF NOT EXISTS authorization_code_expires_idx

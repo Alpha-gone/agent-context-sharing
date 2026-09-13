@@ -14,8 +14,10 @@ import (
 
 	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/config"
+	"agent_context_sharing/internal/index"
 	"agent_context_sharing/internal/mcp"
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
 )
 
@@ -46,6 +48,28 @@ func run() error {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
 	defer database.Close()
+	indexer, err := index.New(database, index.Config{
+		BaseURL:    cfg.EmbeddingBaseURL,
+		Model:      cfg.EmbeddingModel,
+		VectorType: cfg.EmbeddingVectorType,
+		Dimension:  cfg.EmbeddingDimension,
+	}, nil, slog.Default())
+	if err != nil {
+		return fmt.Errorf("색인 작업자 준비: %w", err)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := indexer.Close(shutdownContext); err != nil {
+			slog.Error("색인 작업자 종료", "error", err)
+		}
+	}()
+	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
+	indexer.Start(context.Background())
+	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, FoldThreshold: cfg.SearchFoldThreshold}, slog.Default())
+	if err != nil {
+		return fmt.Errorf("검색 실행기 준비: %w", err)
+	}
 	authorization, err := authz.New(database, authz.Config{
 		Issuer:       cfg.AuthorizationServerURL.String(),
 		Resource:     cfg.ResourceServerURL.String(),
@@ -63,7 +87,7 @@ func run() error {
 	}, func(ctx context.Context, raw, audience string) (model.ID, error) {
 		accountID, _, err := authorization.Verify(ctx, raw, audience)
 		return accountID, err
-	}, mcp.NewHandler(database, cfg.AccountPlans, slog.Default()))
+	}, mcp.NewHandlerWithSearch(database, cfg.AccountPlans, searcher, slog.Default()))
 	if err != nil {
 		return fmt.Errorf("MCP 리소스 서버 준비: %w", err)
 	}

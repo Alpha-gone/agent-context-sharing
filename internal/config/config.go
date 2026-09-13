@@ -29,6 +29,16 @@ const (
 	TLSModeProxy TLSMode = "proxy"
 )
 
+// SearchExecution은 서로 독립인 검색 진입 채널의 실행 방식을 나타낸다.
+type SearchExecution string
+
+const (
+	// SearchExecutionParallel은 진입 채널을 동시에 실행한다.
+	SearchExecutionParallel SearchExecution = "parallel"
+	// SearchExecutionSequential은 진입 채널을 정해진 순서로 실행한다.
+	SearchExecutionSequential SearchExecution = "sequential"
+)
+
 // Config는 실행 중 필요한 배포 구성의 검증된 묶음이다. 비밀값은 로그로 전달하지 않는다.
 type Config struct {
 	// HTTPAddr 필드에는 HTTP 서버가 수신할 TCP 주소를 둔다.
@@ -45,6 +55,12 @@ type Config struct {
 	EmbeddingVectorType string
 	// EmbeddingDimension 필드에는 모델 벡터 차원을 둔다.
 	EmbeddingDimension int
+	// SearchExecution 필드에는 검색 진입 채널 실행 방식을 둔다.
+	SearchExecution SearchExecution
+	// SearchCandidateLimit 필드에는 각 검색 채널이 결합 단계에 넘길 후보 수 상한을 둔다.
+	SearchCandidateLimit int
+	// SearchFoldThreshold 필드에는 중복 파생 접기의 유사 판정 임계값을 둔다.
+	SearchFoldThreshold float64
 	// OAuthClientIDs 필드에는 사전 등록한 OAuth 클라이언트 식별자를 둔다.
 	OAuthClientIDs []string
 	// OAuthRedirectURIs 필드에는 허용된 OAuth 콜백 주소를 둔다.
@@ -91,6 +107,7 @@ func Load(env Environment) (Config, error) {
 		GraphName:           strings.TrimSpace(env("AGE_GRAPH_NAME")),
 		EmbeddingModel:      strings.TrimSpace(env("EMBEDDING_MODEL")),
 		EmbeddingVectorType: strings.TrimSpace(env("EMBEDDING_VECTOR_TYPE")),
+		SearchExecution:     SearchExecution(strings.TrimSpace(env("SEARCH_CHANNEL_EXECUTION"))),
 		TLSMode:             TLSMode(strings.TrimSpace(env("TLS_TERMINATION"))),
 		TLSCertFile:         strings.TrimSpace(env("TLS_CERT_FILE")),
 		TLSKeyFile:          strings.TrimSpace(env("TLS_KEY_FILE")),
@@ -117,11 +134,30 @@ func Load(env Environment) (Config, error) {
 	if !slices.Contains([]string{"vector", "halfvec", "bit"}, cfg.EmbeddingVectorType) {
 		return Config{}, fmt.Errorf("EMBEDDING_VECTOR_TYPE %q가 허용된 값이 아니다", cfg.EmbeddingVectorType)
 	}
+	// 「임베딩 스키마」가 bit를 열어 두었지만 이진 양자화는 원본 벡터 재순위화가 함께 있어야
+	// 재현율이 성립하고 그 경로가 아직 없다. 코사인 연산자도 bit에는 정의되지 않으므로
+	// 질의 시점이 아니라 기동 시점에 막는다.
+	if cfg.EmbeddingVectorType == "bit" {
+		return Config{}, fmt.Errorf("EMBEDDING_VECTOR_TYPE bit는 재순위화 경로가 없어 아직 지원하지 않는다")
+	}
 	dimension, err := strconv.Atoi(strings.TrimSpace(env("EMBEDDING_DIMENSION")))
 	if err != nil || dimension <= 0 {
 		return Config{}, fmt.Errorf("EMBEDDING_DIMENSION이 양의 정수가 아니다")
 	}
 	cfg.EmbeddingDimension = dimension
+	if !slices.Contains([]SearchExecution{SearchExecutionParallel, SearchExecutionSequential}, cfg.SearchExecution) {
+		return Config{}, fmt.Errorf("SEARCH_CHANNEL_EXECUTION %q가 parallel 또는 sequential이 아니다", cfg.SearchExecution)
+	}
+	candidateLimit, err := strconv.Atoi(strings.TrimSpace(env("SEARCH_CHANNEL_CANDIDATE_LIMIT")))
+	if err != nil || candidateLimit <= 0 {
+		return Config{}, fmt.Errorf("SEARCH_CHANNEL_CANDIDATE_LIMIT이 양의 정수가 아니다")
+	}
+	cfg.SearchCandidateLimit = candidateLimit
+	foldThreshold, err := strconv.ParseFloat(strings.TrimSpace(env("SEARCH_FOLD_SIMILARITY_THRESHOLD")), 64)
+	if err != nil || foldThreshold <= 0 || foldThreshold > 1 {
+		return Config{}, fmt.Errorf("SEARCH_FOLD_SIMILARITY_THRESHOLD가 0 초과 1 이하의 수가 아니다")
+	}
+	cfg.SearchFoldThreshold = foldThreshold
 
 	clientIDs, err := parseList("OAUTH_CLIENT_IDS", env("OAUTH_CLIENT_IDS"))
 	if err != nil {

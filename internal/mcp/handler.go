@@ -12,6 +12,7 @@ import (
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/perm"
 	"agent_context_sharing/internal/plan"
+	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
 )
 
@@ -44,6 +45,15 @@ type Operations interface {
 // logger는 거부 기록 실패처럼 연산을 되돌리지는 않지만 감사 근거에 구멍을 내는 사건을
 // 남기는 데만 쓴다. nil이면 기본 로거를 쓴다.
 func NewHandler(operations Operations, accountPlans plan.AccountPlans, logger *slog.Logger) CallFunc {
+	return newHandler(operations, accountPlans, nil, logger)
+}
+
+// NewHandlerWithSearch는 비그래프 흐름 검색기를 연결한 MCP 호출 처리기를 만든다.
+func NewHandlerWithSearch(operations Operations, accountPlans plan.AccountPlans, flow *search.Service, logger *slog.Logger) CallFunc {
+	return newHandler(operations, accountPlans, flow, logger)
+}
+
+func newHandler(operations Operations, accountPlans plan.AccountPlans, flow *search.Service, logger *slog.Logger) CallFunc {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -51,7 +61,7 @@ func NewHandler(operations Operations, accountPlans plan.AccountPlans, logger *s
 		if operations == nil {
 			return ToolResult{}, fmt.Errorf("MCP 처리 접근 계층이 없다")
 		}
-		handler := handler{operations: operations, limits: accountPlans.For(accountID), logger: logger}
+		handler := handler{operations: operations, limits: accountPlans.For(accountID), flow: flow, logger: logger}
 		return handler.call(ctx, accountID, name, arguments)
 	}
 }
@@ -59,6 +69,7 @@ func NewHandler(operations Operations, accountPlans plan.AccountPlans, logger *s
 type handler struct {
 	operations Operations
 	limits     plan.Limits
+	flow       *search.Service
 	logger     *slog.Logger
 }
 
@@ -88,9 +99,40 @@ func (h handler) call(ctx context.Context, accountID model.ID, name string, argu
 		return h.confirmRelation(ctx, accountID, arguments)
 	case "relation_discard":
 		return h.discardRelation(ctx, accountID, arguments)
+	case "context_flow_get":
+		return h.contextFlow(ctx, accountID, arguments)
 	default:
 		return ToolResult{}, &Error{Code: "not_supported"}
 	}
+}
+
+func (h handler) contextFlow(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
+	if h.flow == nil {
+		return ToolResult{}, &Error{Code: "not_supported"}
+	}
+	graphID := argumentID(arguments, "graph_id")
+	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeViewer); err != nil {
+		return ToolResult{}, err
+	}
+	budget := h.limits.ContextBudget
+	if value, found := arguments["budget"]; found {
+		budget = int(value.(float64))
+	}
+	if err := plan.CheckRequest("context_budget", int64(budget), int64(h.limits.ContextBudget)); err != nil {
+		return ToolResult{}, limitError(err)
+	}
+	asOf := time.Now().UTC()
+	if value := optionalTime(arguments, "as_of"); value != nil {
+		asOf = *value
+	}
+	flow, err := h.flow.Flow(ctx, search.Input{GraphID: graphID, WorkContext: arguments["work_context"].(string), AsOf: asOf, Budget: budget})
+	if err != nil {
+		if errors.Is(err, search.ErrAllChannelsFailed) {
+			return ToolResult{}, &Error{Code: "internal"}
+		}
+		return ToolResult{}, mapError(err)
+	}
+	return result(flowValue(flow)), nil
 }
 
 func (h handler) listGraphs(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
@@ -725,6 +767,48 @@ func contextValue(value model.Context) map[string]any {
 		result["deleted_at"] = *value.DeletedAt
 	}
 	return result
+}
+
+func flowValue(flow search.Flow) map[string]any {
+	contexts := make([]any, 0, len(flow.Contexts))
+	for _, item := range flow.Contexts {
+		value := contextValue(item.Value)
+		origins := make([]string, 0, len(item.OriginKinds))
+		for _, origin := range item.OriginKinds {
+			origins = append(origins, string(origin))
+		}
+		// 모델 속성인 origin_kind는 그대로 두고, 근거를 따라가며 모은 집합은 다른 이름으로
+		// 전달한다. 같은 이름에 단일 값과 목록을 함께 두면 호출자가 두 모양을 다뤄야 한다.
+		value["origin_kinds"] = origins
+		value["entry_distance"] = 0
+		value["matched_channels"] = item.MatchedChannels
+		value["rank"] = item.Rank
+		if item.FoldedCount > 0 {
+			value["folded_count"] = item.FoldedCount
+		}
+		contexts = append(contexts, value)
+	}
+	references, relations := hopEdges(flow.Edges)
+	entryPoints := make([]string, 0, len(flow.EntryPoints))
+	for _, id := range flow.EntryPoints {
+		entryPoints = append(entryPoints, id.String())
+	}
+	channels := make(map[string]any, len(flow.Channels))
+	for name, metric := range flow.Channels {
+		value := map[string]any{"candidate_count": metric.Candidates, "latency_ms": metric.Latency.Milliseconds(), "contribution": metric.Contribution}
+		if metric.Failure != "" {
+			value["failure"] = metric.Failure
+		}
+		channels[name] = value
+	}
+	response := map[string]any{
+		"contexts": contexts, "references": references, "relations": relations, "entry_points": entryPoints,
+		"budget": map[string]any{"used": flow.BudgetUsed, "limit": flow.Budget}, "channels": channels,
+	}
+	if flow.Truncation != nil {
+		response["truncated"] = map[string]any{"reason": flow.Truncation.Reason, "excluded_count": flow.Truncation.Excluded}
+	}
+	return response
 }
 
 // idStrings는 식별자 목록을 응답 직렬화용 문자열로 바꾼다.

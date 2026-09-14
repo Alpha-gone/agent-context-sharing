@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
 )
 
@@ -175,5 +176,47 @@ func TestRelationErrorsCarryViolatedField(t *testing.T) {
 				t.Fatalf("field = %q, want %q", field, test.field)
 			}
 		})
+	}
+}
+
+// TestFlowValueCarriesHopBoundaryAndDistance는 흐름 응답이 홉 절단 경계를 예산 절단과
+// 따로 싣고, 「부가 정보의 출처」가 확정한 이름으로 node_get과 같은 모양을 쓰는지
+// 확인한다. 경계를 떨어뜨리면 상한으로 잘린 흐름에 아무 표시가 남지 않는다.
+func TestFlowValueCarriesHopBoundaryAndDistance(t *testing.T) {
+	boundary := 2
+	value := flowValue(search.Flow{
+		Contexts:    []search.Context{{Value: model.Context{Layer: model.LayerSource, Source: &model.SourceAttributes{}}, EntryDistance: 3, Rank: 1}},
+		Truncation:  &search.Truncation{Reason: "budget", Excluded: 1},
+		HopBoundary: &boundary,
+	})
+	contexts, ok := value["contexts"].([]any)
+	if !ok || len(contexts) != 1 {
+		t.Fatalf("흐름 응답의 컨텍스트 = %#v", value["contexts"])
+	}
+	if distance := contexts[0].(map[string]any)["entry_distance"]; distance != 3 {
+		t.Fatalf("entry_distance = %#v, want 3", distance)
+	}
+	truncated, ok := value["result_truncated"].(map[string]any)
+	if !ok || truncated["truncated_hop"] != 2 {
+		t.Fatalf("result_truncated = %#v", value["result_truncated"])
+	}
+	// 예산 절단은 원인이 다르므로 같은 열에 섞지 않는다.
+	budget, ok := value["truncated"].(map[string]any)
+	if !ok || budget["reason"] != "budget" {
+		t.Fatalf("예산 절단 표시 = %#v", value["truncated"])
+	}
+}
+
+// TestFlowValueOmitsHopBoundaryWhenNotTruncated는 절단이 없을 때 표시가 실리지 않는지
+// 확인한다. 경계 0과 절단 없음이 같은 값으로 보이면 호출자가 구분할 수 없다.
+func TestFlowValueOmitsHopBoundaryWhenNotTruncated(t *testing.T) {
+	if value := flowValue(search.Flow{}); value["result_truncated"] != nil {
+		t.Fatalf("절단 없는 흐름의 표시 = %#v", value["result_truncated"])
+	}
+	zero := 0
+	value := flowValue(search.Flow{HopBoundary: &zero})
+	truncated, ok := value["result_truncated"].(map[string]any)
+	if !ok || truncated["truncated_hop"] != 0 {
+		t.Fatalf("경계 0의 절단 표시 = %#v", value["result_truncated"])
 	}
 }

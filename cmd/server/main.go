@@ -61,7 +61,7 @@ func run() error {
 	// 풀 종료 사이가 아니라 그 뒤에 실행되어, 작업자가 도는 중에 풀이 닫힌다.
 	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
 	indexer.Start(context.Background())
-	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, FoldThreshold: cfg.SearchFoldThreshold}, slog.Default())
+	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, FoldThreshold: cfg.SearchFoldThreshold, GraphStage: search.GraphStage(cfg.SearchGraphStage)}, slog.Default())
 	if err != nil {
 		return fmt.Errorf("검색 실행기 준비: %w", err)
 	}

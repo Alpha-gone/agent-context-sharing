@@ -104,6 +104,10 @@ func TestStoreIntegration(t *testing.T) {
 	if len(hops.Contexts) != 2 || len(hops.Edges) != 1 || hops.Contexts[0].ID != createdSource.ID {
 		t.Fatalf("참조 홉 조회 결과가 예상과 다르다: %#v", hops)
 	}
+	// 호출자는 평평한 목록의 위치로 거리를 복원할 수 없으므로 노드별 홉 거리를 함께 받는다.
+	if hops.Distances[createdSource.ID] != 0 || hops.Distances[createdDerived.ID] != 1 {
+		t.Fatalf("참조 홉 거리가 예상과 다르다: %#v", hops.Distances)
+	}
 	operation := OperationRecord{
 		Kind: OperationDiscard, GraphID: graphID, ContextID: createdSource.ID, TargetVersion: 1,
 		JudgmentInput: "integration discard", AccountID: actorID, AgentID: actorID,
@@ -758,5 +762,70 @@ func TestHopContextsTreatsZeroLimitAsNoCap(t *testing.T) {
 	}
 	if len(unlimited.Contexts) != 4 || unlimited.Truncated {
 		t.Fatalf("무제한 조회 결과 = %d개, 절단 %v", len(unlimited.Contexts), unlimited.Truncated)
+	}
+}
+
+// TestHopContextsFromSharesOneCapAcrossStarts는 시작 노드를 모아 한 번에 확장할 때
+// 결과 상한과 절단이 시작 노드마다 겹치지 않고 하나로 적용되는지 확인한다. 거리는
+// 가장 가까운 시작 노드까지의 최단 홉 거리다.
+func TestHopContextsFromSharesOneCapAcrossStarts(t *testing.T) {
+	store := newIntegrationStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, store, actorID)
+	graphID := createTestGraph(t, store, actorID)
+
+	starts := make([]model.Context, 0, 2)
+	derivedIDs := make([]model.ID, 0, 4)
+	for range 2 {
+		source := testSourceContext(t, graphID, actorID, "api://shared-cap/"+newTestID(t).String())
+		createdSource, err := store.CreateContext(t.Context(), graphID, source, nil)
+		if err != nil {
+			t.Fatalf("원천 생성: %v", err)
+		}
+		starts = append(starts, createdSource)
+		for range 2 {
+			derived, err := store.CreateContext(t.Context(), graphID, testDerivedContext(t, graphID, actorID), []model.ID{createdSource.ID})
+			if err != nil {
+				t.Fatalf("파생 생성: %v", err)
+			}
+			derivedIDs = append(derivedIDs, derived.ID)
+		}
+	}
+
+	all, err := store.HopContextsFrom(t.Context(), graphID, starts, 1, "in", []string{"derived_from"}, 0)
+	if err != nil {
+		t.Fatalf("다중 시작 확장: %v", err)
+	}
+	if len(all.Contexts) != 6 || all.Truncated {
+		t.Fatalf("다중 시작 확장 결과 = %d개, 절단 %v", len(all.Contexts), all.Truncated)
+	}
+	for _, start := range starts {
+		if all.Distances[start.ID] != 0 {
+			t.Fatalf("시작 노드 거리 = %d, want 0", all.Distances[start.ID])
+		}
+	}
+	for _, derivedID := range derivedIDs {
+		if all.Distances[derivedID] != 1 {
+			t.Fatalf("파생 거리 = %d, want 1", all.Distances[derivedID])
+		}
+	}
+
+	// 상한 셋은 시작 노드 둘을 담고 남은 한 자리만 확장에 쓴다. 시작 노드마다 상한을
+	// 따로 적용하면 여섯 개가 모두 들어와 어느 것이 잘랐는지 알 수 없게 된다.
+	capped, err := store.HopContextsFrom(t.Context(), graphID, starts, 1, "in", []string{"derived_from"}, 3)
+	if err != nil {
+		t.Fatalf("상한 적용 확장: %v", err)
+	}
+	if len(capped.Contexts) != 3 || !capped.Truncated || capped.Boundary != 1 {
+		t.Fatalf("공유 상한 결과 = %d개, 절단 %v, 경계 %d", len(capped.Contexts), capped.Truncated, capped.Boundary)
+	}
+
+	// 시작 노드 수가 이미 상한을 넘으면 확장 전에 자른 것이므로 경계는 0이다.
+	startsOnly, err := store.HopContextsFrom(t.Context(), graphID, starts, 1, "in", []string{"derived_from"}, 1)
+	if err != nil {
+		t.Fatalf("시작 노드 상한 확장: %v", err)
+	}
+	if len(startsOnly.Contexts) != 1 || !startsOnly.Truncated || startsOnly.Boundary != 0 {
+		t.Fatalf("시작 노드 상한 결과 = %d개, 절단 %v, 경계 %d", len(startsOnly.Contexts), startsOnly.Truncated, startsOnly.Boundary)
 	}
 }

@@ -27,11 +27,22 @@ const (
 	ExecutionSequential Execution = "sequential"
 )
 
+// GraphStage는 그래프 효과 비교에서 누적해 활성화할 범위다.
+type GraphStage string
+
+const (
+	GraphStageBaseline   GraphStage = "baseline"
+	GraphStageReferences GraphStage = "references"
+	GraphStageRelations  GraphStage = "relations"
+	GraphStageGlobal     GraphStage = "global"
+)
+
 // Config는 검색 결합의 배포 구성을 담는다.
 type Config struct {
 	Execution      Execution
 	CandidateLimit int
 	FoldThreshold  float64
+	GraphStage     GraphStage
 }
 
 // Embedder는 질의 텍스트를 현재 색인 모델의 벡터로 바꾸는 index 경계다.
@@ -45,6 +56,8 @@ type Store interface {
 	KeywordCandidates(context.Context, model.ID, string, time.Time, int) ([]store.SearchCandidate, error)
 	TimeCandidates(context.Context, model.ID, time.Time, int) ([]store.SearchCandidate, error)
 	SemanticCandidates(context.Context, model.ID, string, []float64, time.Time, int) ([]store.SearchCandidate, error)
+	GlobalSummaryCandidates(context.Context, model.ID, time.Time, int) ([]store.SearchCandidate, error)
+	HopContextsFrom(context.Context, model.ID, []model.Context, int, string, []string, int) (store.HopResult, error)
 	ContextOriginKinds(context.Context, model.ID, []model.ID) (map[model.ID][]model.OriginKind, error)
 }
 
@@ -62,6 +75,9 @@ type Input struct {
 	WorkContext string
 	AsOf        time.Time
 	Budget      int
+	Scope       string
+	MaxHops     int
+	MaxHopNodes int
 }
 
 // Context는 흐름 응답을 만들기 위해 컨텍스트에 검색 메타데이터를 붙인 값이다.
@@ -71,6 +87,7 @@ type Context struct {
 	MatchedChannels []string
 	Rank            int
 	FoldedCount     int
+	EntryDistance   int
 }
 
 // Channel은 채널별 후보 수·지연·실패와 응답 기여를 담는다.
@@ -96,6 +113,9 @@ type Flow struct {
 	Budget      int
 	Channels    map[string]Channel
 	Truncation  *Truncation
+	// HopBoundary 필드에는 그래프 확장이 결과 상한으로 잘린 홉 경계를 둔다. 예산 절단과
+	// 다른 원인이므로 따로 싣고, 경계 0과 절단 없음을 구분하려고 포인터로 둔다.
+	HopBoundary *int
 }
 
 // ErrAllChannelsFailed는 부분 상태로 복구할 채널도 남지 않았음을 나타낸다.
@@ -115,17 +135,29 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 	if config.FoldThreshold <= 0 || config.FoldThreshold > 1 {
 		return nil, fmt.Errorf("중복 파생 접기 임계값은 0 초과 1 이하여야 한다")
 	}
+	if config.GraphStage == "" {
+		config.GraphStage = GraphStageBaseline
+	}
+	if !slices.Contains([]GraphStage{GraphStageBaseline, GraphStageReferences, GraphStageRelations, GraphStageGlobal}, config.GraphStage) {
+		return nil, fmt.Errorf("그래프 검색 비교 단계가 올바르지 않다")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Service{store: database, embedder: embedder, config: config, logger: logger}, nil
 }
 
-// Flow는 그래프 확장 채널을 켠 적 없는 기준선의 세 진입 채널을 결합한다.
+// Flow는 진입 채널을 결합하고 구성에 따라 그래프 경로와 전역 요약을 추가한다.
 func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	// Budget 0은 「계정 플랜」이 선언한 대로 한도 없음이다.
-	if !input.GraphID.IsV7() || input.WorkContext == "" || input.Budget < 0 {
+	if !input.GraphID.IsV7() || input.WorkContext == "" || input.Budget < 0 || input.MaxHops < 0 || input.MaxHopNodes < 0 {
 		return Flow{}, fmt.Errorf("검색 입력이 올바르지 않다")
+	}
+	if input.Scope == "" {
+		input.Scope = "auto"
+	}
+	if !slices.Contains([]string{"auto", "local", "global"}, input.Scope) {
+		return Flow{}, fmt.Errorf("검색 범위가 올바르지 않다")
 	}
 	if input.AsOf.IsZero() {
 		input.AsOf = time.Now().UTC()
@@ -163,24 +195,48 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	timeFilter := func() ([]store.SearchCandidate, error) {
 		return service.store.TimeCandidates(ctx, input.GraphID, input.AsOf, service.config.CandidateLimit)
 	}
-	if service.config.Execution == ExecutionParallel {
+	if input.Scope != "global" && service.config.Execution == ExecutionParallel {
 		var group sync.WaitGroup
 		group.Go(func() { run(0, "semantic", semantic) })
 		group.Go(func() { run(1, "keyword", keyword) })
 		group.Go(func() { run(2, "time", timeFilter) })
 		group.Wait()
-	} else {
+	} else if input.Scope != "global" {
 		run(0, "semantic", semantic)
 		run(1, "keyword", keyword)
 		run(2, "time", timeFilter)
 	}
 	for _, result := range results {
-		channels[result.name] = result.metric
+		if result.name != "" {
+			channels[result.name] = result.metric
+		}
 	}
-	if channels["semantic"].Failure != "" && channels["keyword"].Failure != "" && channels["time"].Failure != "" {
+	// 진입점이 없으면 확장할 것도 없으므로 그래프 채널의 상태까지 남기고 끝낸다.
+	allEntryChannelsFailed := func() (Flow, error) {
+		graph := service.graphCandidates(ctx, input, nil)
+		channels[graph.name] = graph.metric
 		return Flow{Channels: channels}, ErrAllChannelsFailed
 	}
+	if input.Scope != "global" && channels["semantic"].Failure != "" && channels["keyword"].Failure != "" && channels["time"].Failure != "" {
+		return allEntryChannelsFailed()
+	}
 	combined := combine(results)
+	if input.Scope == "global" || (input.Scope == "auto" && len(combined) == 0) {
+		global := service.globalSummaries(ctx, input)
+		channels[global.name] = global.metric
+		// 전역 범위의 진입 채널은 전역 요약 하나뿐이므로 그 채널의 실패가 곧 모든 채널
+		// 실패다. 비교 단계에서 끈 상태는 조회 실패가 아니라 구성이므로 제외한다.
+		if input.Scope == "global" && global.metric.Failure != "" && global.metric.Failure != failureDisabled {
+			return allEntryChannelsFailed()
+		}
+		results = append(results, global)
+		combined = combine(results)
+	}
+	entryPoints := candidateContexts(combined)
+	graph := service.graphCandidates(ctx, input, entryPoints)
+	channels[graph.name] = graph.metric
+	results = append(results, graph)
+	combined = combine(results)
 	combined = foldSimilarDerived(combined, service.config.FoldThreshold)
 	selected, used, truncation := applyBudget(combined, input.Budget)
 	ids := make([]model.ID, 0, len(selected))
@@ -196,22 +252,26 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	}
 	contexts := make([]Context, 0, len(selected))
 	for rank, candidate := range selected {
-		contexts = append(contexts, Context{Value: candidate.value, OriginKinds: origins[candidate.value.ID], MatchedChannels: candidate.channels, Rank: rank + 1, FoldedCount: candidate.folded})
+		contexts = append(contexts, Context{Value: candidate.value, OriginKinds: origins[candidate.value.ID], MatchedChannels: candidate.channels, Rank: rank + 1, FoldedCount: candidate.folded, EntryDistance: candidate.distance})
 		for _, channel := range candidate.channels {
 			metric := channels[channel]
 			metric.Contribution++
 			channels[channel] = metric
 		}
 	}
-	// 비그래프 기준선은 그래프 확장을 끈 구성이므로 references와 relations를 비워 둔다.
-	flow := Flow{Contexts: contexts, EntryPoints: ids, BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation}
-	service.logger.InfoContext(ctx, "비그래프 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil)
+	edges := filterEdges(selected, results)
+	flow := Flow{Contexts: contexts, Edges: edges, EntryPoints: contextIDs(entryPoints), BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation, HopBoundary: graph.boundary}
+	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil)
 	return flow, nil
 }
 
 // ErrEmbeddingUnavailable은 질의 임베딩 생성이 실패했음을 나타낸다.
 // 상류 제공자 장애와 채널 자체의 장애를 나눠 재려면 두 사유가 구분되어야 한다.
 var ErrEmbeddingUnavailable = errors.New("질의 임베딩을 만들지 못했다")
+
+// failureDisabled는 비교 단계 구성으로 채널을 끈 상태다. 조회가 실패한 것이 아니므로
+// 모든 채널 실패 판정에는 넣지 않는다.
+const failureDisabled = "disabled"
 
 // failureReason은 실패를 「측정」이 집계할 수 있는 고정 분류로 좁힌다.
 func failureReason(err error) string {
@@ -230,12 +290,149 @@ type combinedCandidate struct {
 	channels []string
 	score    float64
 	folded   int
+	distance int
 }
 
 type channelResult struct {
 	name       string
 	candidates []store.SearchCandidate
 	metric     Channel
+	distances  map[model.ID]int
+	edges      []store.HopEdge
+	boundary   *int
+}
+
+func (service *Service) globalSummaries(ctx context.Context, input Input) channelResult {
+	result := channelResult{name: "global_summary"}
+	// 명시한 전역 범위는 클라이언트가 고른 진입점 계약이므로 비교 단계로 끄지 않는다.
+	// 비교 단계가 끄는 것은 국소 결과가 비었을 때 전역 요약을 시작점으로 더하는
+	// `auto`의 되돌림이며, 그것이 「그래프 효과 비교」의 마지막 단계다.
+	if input.Scope != "global" && service.config.GraphStage != GraphStageGlobal {
+		result.metric.Failure = failureDisabled
+		return result
+	}
+	started := time.Now()
+	candidates, err := service.store.GlobalSummaryCandidates(ctx, input.GraphID, input.AsOf, service.config.CandidateLimit)
+	result.metric.Latency = time.Since(started)
+	if err != nil {
+		result.metric.Failure = failureReason(err)
+		service.logger.ErrorContext(ctx, "전역 요약 시작점 조회 실패", "reason", result.metric.Failure, "error", err.Error())
+		return result
+	}
+	result.candidates = candidates
+	result.metric.Candidates = len(candidates)
+	return result
+}
+
+func (service *Service) graphCandidates(ctx context.Context, input Input, entryPoints []model.Context) channelResult {
+	result := channelResult{name: "graph"}
+	// 진입점 부재를 먼저 판정한다. 「검색 채널 실행기」가 이 사유를 2단계에 두었으므로
+	// 비교 단계로 채널을 끈 것과 구분되어야 한다.
+	if len(entryPoints) == 0 {
+		result.metric.Failure = "no_entry_points"
+		return result
+	}
+	if service.config.GraphStage == GraphStageBaseline {
+		result.metric.Failure = failureDisabled
+		return result
+	}
+	started := time.Now()
+	filters := []string{"derived_from", "supersedes", "has_member"}
+	if service.config.GraphStage == GraphStageRelations || service.config.GraphStage == GraphStageGlobal {
+		filters = append(filters, "precedes", "causes", "part_of", "relates_to")
+	}
+	if input.Scope == "global" {
+		// 전역 범위는 전역 요약에서 근거를 따라 내려가는 흐름이다.
+		filters = []string{"derived_from"}
+	}
+	// 시작 노드를 한 번에 넘긴다. 진입점마다 따로 물으면 왕복이 진입점 수만큼 늘고
+	// 「채널 구현」이 하나로 두기로 한 결과 상한이 진입점마다 겹친다.
+	hops, err := service.store.HopContextsFrom(ctx, input.GraphID, entryPoints, input.MaxHops, "both", filters, input.MaxHopNodes)
+	result.metric.Latency = time.Since(started)
+	if err != nil {
+		result.metric.Failure = failureReason(err)
+		service.logger.ErrorContext(ctx, "그래프 경로 검색 실패", "reason", result.metric.Failure, "error", err.Error())
+		return result
+	}
+	// 거리 0은 진입 채널이 이미 낸 시작 노드이므로 확장분만 이 채널의 후보로 둔다.
+	values := make([]store.SearchCandidate, 0, len(hops.Contexts))
+	for _, value := range hops.Contexts {
+		if hops.Distances[value.ID] == 0 {
+			continue
+		}
+		values = append(values, store.SearchCandidate{Context: value})
+	}
+	slices.SortFunc(values, func(left, right store.SearchCandidate) int {
+		if order := cmp.Compare(hops.Distances[left.Context.ID], hops.Distances[right.Context.ID]); order != 0 {
+			return order
+		}
+		if order := right.Context.RecordedAt.Compare(left.Context.RecordedAt); order != 0 {
+			return order
+		}
+		return cmp.Compare(left.Context.ID.String(), right.Context.ID.String())
+	})
+	result.candidates, result.distances, result.edges = values, hops.Distances, hops.Edges
+	if hops.Truncated {
+		result.boundary = &hops.Boundary
+	}
+	result.metric.Candidates = len(values)
+	return result
+}
+
+func candidateContexts(candidates []combinedCandidate) []model.Context {
+	values := make([]model.Context, 0, len(candidates))
+	for _, candidate := range candidates {
+		values = append(values, candidate.value)
+	}
+	return values
+}
+
+func contextIDs(values []model.Context) []model.ID {
+	ids := make([]model.ID, 0, len(values))
+	for _, value := range values {
+		ids = append(ids, value.ID)
+	}
+	return ids
+}
+
+func filterEdges(selected []combinedCandidate, results []channelResult) []store.HopEdge {
+	included := make(map[model.ID]struct{}, len(selected))
+	for _, candidate := range selected {
+		included[candidate.value.ID] = struct{}{}
+	}
+	edges := make(map[string]store.HopEdge, len(selected))
+	for _, result := range results {
+		for _, edge := range result.edges {
+			if _, found := included[edge.FromID]; !found {
+				continue
+			}
+			if _, found := included[edge.ToID]; !found {
+				continue
+			}
+			edges[edge.FromID.String()+"|"+edge.ToID.String()+"|"+edge.Kind] = edge
+		}
+	}
+	return slices.SortedFunc(edgesValues(edges), compareEdges)
+}
+
+func edgesValues(edges map[string]store.HopEdge) func(func(store.HopEdge) bool) {
+	return func(yield func(store.HopEdge) bool) {
+		for _, edge := range edges {
+			if !yield(edge) {
+				return
+			}
+		}
+	}
+}
+
+func compareEdges(left, right store.HopEdge) int {
+	if order := cmp.Compare(left.FromID.String(), right.FromID.String()); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.ToID.String(), right.ToID.String()); order != 0 {
+		return order
+	}
+	return cmp.Compare(left.Kind, right.Kind)
 }
 
 func combine(results []channelResult) []combinedCandidate {
@@ -246,13 +443,18 @@ func combine(results []channelResult) []combinedCandidate {
 			continue
 		}
 		for rank, candidate := range result.candidates {
+			distance := 0
+			if result.distances != nil {
+				distance = result.distances[candidate.Context.ID]
+			}
 			if index, found := byID[candidate.Context.ID]; found {
 				combined[index].score += 1 / float64(rank+1)
 				combined[index].channels = append(combined[index].channels, result.name)
+				combined[index].distance = min(combined[index].distance, distance)
 				continue
 			}
 			byID[candidate.Context.ID] = len(combined)
-			combined = append(combined, combinedCandidate{value: candidate.Context, channels: []string{result.name}, score: 1 / float64(rank+1)})
+			combined = append(combined, combinedCandidate{value: candidate.Context, channels: []string{result.name}, score: 1 / float64(rank+1), distance: distance})
 		}
 	}
 	slices.SortFunc(combined, func(left, right combinedCandidate) int {

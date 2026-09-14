@@ -266,6 +266,32 @@ func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.
 	return s.searchCandidates(ctx, graphID, ids)
 }
 
+// GlobalSummaryCandidates는 전역 범위 흐름의 시작점이 될 활성 전역 요약 파생을 최근 순으로 읽는다.
+func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, asOf time.Time, limit int) ([]SearchCandidate, error) {
+	if !graphID.IsV7() || !asOf.UTC().Equal(asOf) || limit < 1 {
+		return nil, fmt.Errorf("전역 요약 검색 인자가 올바르지 않다")
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT properties ->> 'context_id'::text
+		FROM `+s.contextTable()+`
+		WHERE properties ->> 'graph_id'::text = $1 AND properties ->> 'deleted_at'::text IS NULL
+			AND properties ->> 'layer'::text = 'derived'
+			AND properties ->> 'derivation_kind'::text = 'summary'
+			AND properties ->> 'summary_scope'::text = 'global'
+			AND (NULLIF(properties ->> 'valid_from'::text, '') IS NULL OR (properties ->> 'valid_from'::text)::timestamptz <= $2)
+			AND (NULLIF(properties ->> 'valid_to'::text, '') IS NULL OR (properties ->> 'valid_to'::text)::timestamptz >= $2)
+		ORDER BY (properties ->> 'recorded_at'::text)::timestamptz DESC, properties ->> 'context_id'::text ASC
+		LIMIT $3`, graphID.String(), asOf, limit)
+	if err != nil {
+		return nil, fmt.Errorf("전역 요약 검색: %w", err)
+	}
+	ids, err := searchCandidateIDs(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.searchCandidates(ctx, graphID, ids)
+}
+
 // SemanticCandidates는 현재 모델과 같은 벡터만 사용해 활성 기본 검색 후보를 읽는다.
 func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelID string, embedding []float64, current time.Time, limit int) ([]SearchCandidate, error) {
 	if !graphID.IsV7() || modelID == "" || len(embedding) == 0 || !current.UTC().Equal(current) || limit < 1 {

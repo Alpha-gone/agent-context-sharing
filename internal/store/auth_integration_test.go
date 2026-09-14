@@ -282,7 +282,9 @@ func TestAuthorizationCodeIntegration(t *testing.T) {
 	}
 
 	tokenID := "token-" + newTestID(t).String()
-	tokenExpiresAt := time.Now().UTC().Add(time.Hour)
+	// PostgreSQL timestamptz는 마이크로초까지 보존하므로, 왕복 뒤 비교하는 기대값도
+	// 같은 정밀도로 맞춘다.
+	tokenExpiresAt := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
 	// 첫 소비는 발급 토큰 정보와 한 문장에서 기록한다.
 	consumed, err := store.ConsumeAuthorizationCode(t.Context(), code.Hash, tokenID, time.Now().UTC(), tokenExpiresAt)
 	if err != nil {

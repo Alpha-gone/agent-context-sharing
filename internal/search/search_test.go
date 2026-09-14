@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -85,17 +86,24 @@ func TestFlowReturnsInternalErrorOnlyWhenAllChannelsFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("검색기 생성: %v", err)
 	}
-	_, err = service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "현재 작업", AsOf: time.Now().UTC(), Budget: 100})
+	flow, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "현재 작업", AsOf: time.Now().UTC(), Budget: 100})
 	if !errors.Is(err, ErrAllChannelsFailed) {
 		t.Fatalf("모든 채널 실패 오류 = %v", err)
+	}
+	if flow.Channels["graph"].Failure != "no_entry_points" {
+		t.Fatalf("진입점 없는 그래프 채널 상태 = %#v", flow.Channels["graph"])
 	}
 }
 
 type fakeStore struct {
-	semantic []store.SearchCandidate
-	keyword  []store.SearchCandidate
-	time     []store.SearchCandidate
-	mu       sync.Mutex
+	semantic  []store.SearchCandidate
+	keyword   []store.SearchCandidate
+	time      []store.SearchCandidate
+	global    []store.SearchCandidate
+	hops      store.HopResult
+	hopCalls  int
+	hopStarts []model.ID
+	mu        sync.Mutex
 }
 
 func (fake *fakeStore) KeywordCandidates(context.Context, model.ID, string, time.Time, int) ([]store.SearchCandidate, error) {
@@ -114,6 +122,20 @@ func (fake *fakeStore) SemanticCandidates(context.Context, model.ID, string, []f
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	return append([]store.SearchCandidate(nil), fake.semantic...), nil
+}
+
+func (fake *fakeStore) GlobalSummaryCandidates(context.Context, model.ID, time.Time, int) ([]store.SearchCandidate, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return append([]store.SearchCandidate(nil), fake.global...), nil
+}
+
+func (fake *fakeStore) HopContextsFrom(_ context.Context, _ model.ID, starts []model.Context, _ int, _ string, _ []string, _ int) (store.HopResult, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.hopCalls++
+	fake.hopStarts = append(fake.hopStarts, contextIDs(starts)...)
+	return fake.hops, nil
 }
 
 func (fake *fakeStore) ContextOriginKinds(_ context.Context, _ model.ID, contextIDs []model.ID) (map[model.ID][]model.OriginKind, error) {
@@ -136,6 +158,14 @@ func (failingStore) TimeCandidates(context.Context, model.ID, time.Time, int) ([
 
 func (failingStore) SemanticCandidates(context.Context, model.ID, string, []float64, time.Time, int) ([]store.SearchCandidate, error) {
 	return nil, context.DeadlineExceeded
+}
+
+func (failingStore) GlobalSummaryCandidates(context.Context, model.ID, time.Time, int) ([]store.SearchCandidate, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func (failingStore) HopContextsFrom(context.Context, model.ID, []model.Context, int, string, []string, int) (store.HopResult, error) {
+	return store.HopResult{}, context.DeadlineExceeded
 }
 
 func (failingStore) ContextOriginKinds(context.Context, model.ID, []model.ID) (map[model.ID][]model.OriginKind, error) {
@@ -301,6 +331,170 @@ func TestFlowKeepsResultsWhenOriginTraceFails(t *testing.T) {
 	}
 	if len(flow.Contexts[0].OriginKinds) != 0 {
 		t.Fatalf("추적 실패인데 출처가 채워졌다: %v", flow.Contexts[0].OriginKinds)
+	}
+}
+
+// TestFlowAddsGraphCandidatesAndKeepsOnlyIncludedEdges는 확장 노드가 결합에 들어가고
+// 예산에 포함된 컨텍스트를 잇는 간선만 남는지 확인한다. 같은 홉에 이웃을 둘 이상 두어
+// entry_distance가 목록 위치가 아니라 저장소가 준 홉 거리인지도 함께 고정한다.
+func TestFlowAddsGraphCandidatesAndKeepsOnlyIncludedEdges(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000041")
+	entry := testContext(t, graphID, "019a0000-0000-7000-8000-000000000042", "진입점", 1)
+	near := testContext(t, graphID, "019a0000-0000-7000-8000-000000000043", "한 홉", 2)
+	alsoNear := testContext(t, graphID, "019a0000-0000-7000-8000-000000000044", "같은 한 홉", 3)
+	far := testContext(t, graphID, "019a0000-0000-7000-8000-000000000045", "두 홉", 4)
+	dropped := testContext(t, graphID, "019a0000-0000-7000-8000-000000000046", "응답 밖", 5)
+	database := &fakeStore{
+		time: []store.SearchCandidate{{Context: entry}},
+		hops: store.HopResult{
+			Contexts:  []model.Context{entry, near, alsoNear, far},
+			Distances: map[model.ID]int{entry.ID: 0, near.ID: 1, alsoNear.ID: 1, far.ID: 2},
+			Edges: []store.HopEdge{
+				{FromID: entry.ID, ToID: near.ID, Kind: "derived_from"},
+				{FromID: entry.ID, ToID: alsoNear.ID, Kind: "derived_from"},
+				{FromID: near.ID, ToID: far.ID, Kind: "supersedes"},
+				{FromID: far.ID, ToID: dropped.ID, Kind: "derived_from"},
+			},
+		},
+	}
+	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, FoldThreshold: 0.9, GraphStage: GraphStageReferences}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	flow, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "질의", AsOf: time.Now().UTC(), Budget: 100, MaxHops: 2, MaxHopNodes: 10})
+	if err != nil {
+		t.Fatalf("그래프 흐름: %v", err)
+	}
+	if len(flow.Contexts) != 4 {
+		t.Fatalf("그래프 확장 결과 = %v", flowIDs(flow))
+	}
+	// 응답에 없는 dropped를 한쪽 끝으로 둔 간선은 빠지고 나머지 셋만 남는다.
+	if len(flow.Edges) != 3 {
+		t.Fatalf("응답에 남은 간선 = %+v", flow.Edges)
+	}
+	want := map[model.ID]int{entry.ID: 0, near.ID: 1, alsoNear.ID: 1, far.ID: 2}
+	for _, item := range flow.Contexts {
+		if item.EntryDistance != want[item.Value.ID] {
+			t.Errorf("%q entry_distance = %d, want %d", item.Value.Body, item.EntryDistance, want[item.Value.ID])
+		}
+	}
+	for _, item := range flow.Contexts {
+		if item.Value.ID != entry.ID {
+			continue
+		}
+		// 진입 채널이 찾은 노드는 그래프 확장이 아니라 진입 채널의 거리 0을 유지한다.
+		if got := item.MatchedChannels; !reflect.DeepEqual(got, []string{"time"}) {
+			t.Fatalf("진입점 채널 = %v", got)
+		}
+	}
+}
+
+// TestFlowFailsWhenGlobalScopeEntryChannelFails는 전역 범위의 진입 채널이 전역 요약
+// 하나뿐이므로 그 채널의 조회 실패가 모든 채널 실패로 올라가는지 확인한다.
+func TestFlowFailsWhenGlobalScopeEntryChannelFails(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000051")
+	service, err := New(failingStore{}, failingEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, FoldThreshold: 0.9, GraphStage: GraphStageGlobal}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	flow, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "질의", AsOf: time.Now().UTC(), Budget: 100, Scope: "global", MaxHops: 2, MaxHopNodes: 10})
+	if !errors.Is(err, ErrAllChannelsFailed) {
+		t.Fatalf("전역 범위 진입 채널 실패 = %v", err)
+	}
+	if flow.Channels["global_summary"].Failure != "timeout" {
+		t.Fatalf("전역 요약 채널 상태 = %#v", flow.Channels["global_summary"])
+	}
+}
+
+// TestFlowDisablesOnlyAutoGlobalFallbackAtBaseline은 비교 단계가 끄는 대상이 `auto`의
+// 되돌림뿐이고 끈 상태가 조회 실패와 다르게 다뤄지는지 확인한다. 국소 결과가 비어도
+// 기준선에서는 전역 요약을 시작점으로 더하지 않는다.
+func TestFlowDisablesOnlyAutoGlobalFallbackAtBaseline(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000061")
+	summary := testContext(t, graphID, "019a0000-0000-7000-8000-000000000062", "전역 요약", 1)
+	database := &fakeStore{global: []store.SearchCandidate{{Context: summary}}}
+	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, FoldThreshold: 0.9, GraphStage: GraphStageBaseline}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	flow, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "질의", AsOf: time.Now().UTC(), Budget: 100, MaxHops: 2, MaxHopNodes: 10})
+	if err != nil {
+		t.Fatalf("auto 범위 흐름 = %v", err)
+	}
+	if flow.Channels["global_summary"].Failure != "disabled" || len(flow.Contexts) != 0 {
+		t.Fatalf("기준선의 auto 되돌림 = %#v, 컨텍스트 %d개", flow.Channels["global_summary"], len(flow.Contexts))
+	}
+	// 그래프 경로도 끈 상태로 남아야 측정에서 기준선 구성을 확인할 수 있다.
+	if flow.Channels["graph"].Failure != "no_entry_points" {
+		t.Fatalf("기준선의 그래프 채널 = %#v", flow.Channels["graph"])
+	}
+}
+
+// TestFlowKeepsExplicitGlobalScopeAtBaseline은 명시한 `scope=global`이 비교 단계와
+// 무관하게 속성 필터로 전역 요약을 찾는지 확인한다. 진입점 선택은 클라이언트 계약이다.
+func TestFlowKeepsExplicitGlobalScopeAtBaseline(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000071")
+	summary := testContext(t, graphID, "019a0000-0000-7000-8000-000000000072", "전역 요약", 1)
+	database := &fakeStore{global: []store.SearchCandidate{{Context: summary}}}
+	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, FoldThreshold: 0.9, GraphStage: GraphStageBaseline}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	flow, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "질의", AsOf: time.Now().UTC(), Budget: 100, Scope: "global", MaxHops: 2, MaxHopNodes: 10})
+	if err != nil {
+		t.Fatalf("전역 범위 흐름 = %v", err)
+	}
+	if len(flow.Contexts) != 1 || flow.Contexts[0].Value.ID != summary.ID {
+		t.Fatalf("전역 범위 결과 = %v", flowIDs(flow))
+	}
+	if flow.Channels["global_summary"].Failure != "" {
+		t.Fatalf("전역 요약 채널 상태 = %#v", flow.Channels["global_summary"])
+	}
+	// 기준선은 그래프 경로를 끈 구성이므로 근거를 따라 내려가지 않는다.
+	if flow.Channels["graph"].Failure != "disabled" || database.hopCalls != 0 {
+		t.Fatalf("기준선의 그래프 확장 = %#v, 호출 %d회", flow.Channels["graph"], database.hopCalls)
+	}
+}
+
+// TestFlowExpandsAllEntryPointsInOneQuery는 진입점을 모아 한 번에 확장하고 홉 조회의
+// 결과 상한이 잘랐을 때 그 경계를 흐름 응답까지 올리는지 확인한다.
+func TestFlowExpandsAllEntryPointsInOneQuery(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000081")
+	first := testContext(t, graphID, "019a0000-0000-7000-8000-000000000082", "진입점 하나", 1)
+	second := testContext(t, graphID, "019a0000-0000-7000-8000-000000000083", "진입점 둘", 2)
+	reached := testContext(t, graphID, "019a0000-0000-7000-8000-000000000084", "확장된 노드", 3)
+	database := &fakeStore{
+		keyword: []store.SearchCandidate{{Context: first}},
+		time:    []store.SearchCandidate{{Context: second}},
+		hops: store.HopResult{
+			Contexts:  []model.Context{first, second, reached},
+			Distances: map[model.ID]int{first.ID: 0, second.ID: 0, reached.ID: 1},
+			Edges:     []store.HopEdge{{FromID: second.ID, ToID: reached.ID, Kind: "derived_from"}},
+			Truncated: true,
+			Boundary:  2,
+		},
+	}
+	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, FoldThreshold: 0.9, GraphStage: GraphStageReferences}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	flow, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "질의", AsOf: time.Now().UTC(), Budget: 100, MaxHops: 2, MaxHopNodes: 3})
+	if err != nil {
+		t.Fatalf("그래프 흐름: %v", err)
+	}
+	// 진입점이 둘이어도 확장은 한 번이고 두 시작 노드를 함께 받는다.
+	if database.hopCalls != 1 {
+		t.Fatalf("확장 호출 = %d회, want 1회", database.hopCalls)
+	}
+	if got := database.hopStarts; len(got) != 2 || !slices.Contains(got, first.ID) || !slices.Contains(got, second.ID) {
+		t.Fatalf("확장이 받은 시작 노드 = %v", got)
+	}
+	if flow.HopBoundary == nil || *flow.HopBoundary != 2 {
+		t.Fatalf("잘린 홉 경계 = %v", flow.HopBoundary)
+	}
+	// 시작 노드는 진입 채널의 결과로 남고 확장분만 그래프 채널의 기여가 된다.
+	if flow.Channels["graph"].Candidates != 1 || flow.Channels["graph"].Contribution != 1 {
+		t.Fatalf("그래프 채널 측정 = %#v", flow.Channels["graph"])
 	}
 }
 

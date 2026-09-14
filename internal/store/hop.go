@@ -19,8 +19,13 @@ type HopEdge struct {
 }
 
 // HopResult는 시작 노드에서 지정한 범위까지의 컨텍스트와 연결을 담는다.
+//
+// Contexts는 깊이별로 나뉘지 않은 너비 우선 순서의 평평한 목록이므로 목록 위치로는 홉
+// 거리를 복원할 수 없다. 호출자가 거리를 응답에 실을 수 있도록 Distances에 노드별 최단
+// 홉 거리를 함께 둔다. 시작 노드의 거리는 0이다.
 type HopResult struct {
 	Contexts  []model.Context
+	Distances map[model.ID]int
 	Edges     []HopEdge
 	Truncated bool
 	Boundary  int
@@ -28,9 +33,7 @@ type HopResult struct {
 
 // HopContexts는 graph_id 안에서 확정 참조와 관계를 따라 너비 우선으로 탐색한다.
 func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops int, direction string, filter []string, limit int) (HopResult, error) {
-	// limit 0은 「계정 플랜」이 선언한 대로 한도 없음이다. 값을 그대로 내려받아 여기에서
-	// 해석하지 않으면 한도를 푸는 설정이 연산을 죽인다.
-	if !graphID.IsV7() || !startID.IsV7() || hops < 0 || limit < 0 {
+	if !graphID.IsV7() || !startID.IsV7() {
 		return HopResult{}, fmt.Errorf("홉 탐색 인자가 올바르지 않다")
 	}
 	start, err := s.Context(ctx, graphID, startID)
@@ -40,13 +43,45 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 	if start.DeletedAt != nil {
 		return HopResult{}, ErrNotFound
 	}
+	return s.HopContextsFrom(ctx, graphID, []model.Context{start}, hops, direction, filter, limit)
+}
+
+// HopContextsFrom은 시작 노드 여럿에서 한 번에 너비 우선으로 탐색한다.
+//
+// 시작 노드마다 따로 호출하지 않는 이유는 두 가지다. 「검색 채널 실행기」의 2단계가 진입
+// 채널의 결과를 모아 확장 채널의 시작 노드로 넘기라고 확정했고, 따로 호출하면 「채널
+// 구현」이 하나로 두기로 한 결과 상한이 시작 노드 수만큼 겹쳐 어느 것이 잘랐는지 알 수
+// 없게 된다. 거리는 가장 가까운 시작 노드까지의 최단 홉 거리다.
+func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []model.Context, hops int, direction string, filter []string, limit int) (HopResult, error) {
+	// limit 0은 「계정 플랜」이 선언한 대로 한도 없음이다. 값을 그대로 내려받아 여기에서
+	// 해석하지 않으면 한도를 푸는 설정이 연산을 죽인다.
+	if !graphID.IsV7() || hops < 0 || limit < 0 {
+		return HopResult{}, fmt.Errorf("홉 탐색 인자가 올바르지 않다")
+	}
 	labels, err := traversalLabels(filter)
 	if err != nil {
 		return HopResult{}, err
 	}
-	visited := map[model.ID]struct{}{start.ID: {}}
-	result := HopResult{Contexts: []model.Context{start}}
-	frontier := []model.ID{start.ID}
+	// 방문 여부와 최단 홉 거리는 같은 판정에서 나오므로 맵 하나로 둔다. 너비 우선이라
+	// 처음 방문한 깊이가 곧 최단 거리다.
+	distances := make(map[model.ID]int, len(starts))
+	result := HopResult{Contexts: make([]model.Context, 0, len(starts))}
+	frontier := make([]model.ID, 0, len(starts))
+	for _, start := range starts {
+		if _, found := distances[start.ID]; found {
+			continue
+		}
+		if limit > 0 && len(result.Contexts) == limit {
+			// 시작 노드에서 이미 상한을 넘으면 확장 전에 자른 것이므로 경계는 0이다.
+			if !result.Truncated {
+				result.Truncated, result.Boundary = true, 0
+			}
+			continue
+		}
+		distances[start.ID] = 0
+		result.Contexts = append(result.Contexts, start)
+		frontier = append(frontier, start.ID)
+	}
 	edges := make(map[string]HopEdge)
 	for depth := 1; depth <= hops && len(frontier) > 0; depth++ {
 		next := make([]model.ID, 0)
@@ -62,7 +97,7 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 					}
 					edgeKey := neighbor.fromID.String() + "|" + neighbor.toID.String() + "|" + label.kind
 					edges[edgeKey] = HopEdge{FromID: neighbor.fromID, ToID: neighbor.toID, Kind: label.kind}
-					if _, found := visited[neighbor.context.ID]; found {
+					if _, found := distances[neighbor.context.ID]; found {
 						continue
 					}
 					if limit > 0 && len(result.Contexts) == limit {
@@ -73,7 +108,7 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 						}
 						continue
 					}
-					visited[neighbor.context.ID] = struct{}{}
+					distances[neighbor.context.ID] = depth
 					result.Contexts = append(result.Contexts, neighbor.context)
 					next = append(next, neighbor.context.ID)
 				}
@@ -81,7 +116,8 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 		}
 		frontier = next
 	}
-	result.Edges = slices.SortedFunc(edgesValues(edges, visited), compareHopEdges)
+	result.Distances = distances
+	result.Edges = slices.SortedFunc(edgesValues(edges, distances), compareHopEdges)
 	return result, nil
 }
 
@@ -192,7 +228,7 @@ func parseAnchorID(raw string) (model.ID, error) {
 	return anchorID, nil
 }
 
-func edgesValues(edges map[string]HopEdge, visited map[model.ID]struct{}) func(func(HopEdge) bool) {
+func edgesValues(edges map[string]HopEdge, visited map[model.ID]int) func(func(HopEdge) bool) {
 	return func(yield func(HopEdge) bool) {
 		for _, edge := range edges {
 			if _, fromFound := visited[edge.FromID]; !fromFound {

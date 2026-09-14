@@ -55,6 +55,68 @@ func TestIndexAndNonGraphSearchIntegration(t *testing.T) {
 	}
 }
 
+// TestGlobalSummaryCandidatesIntegration은 전역 검색 시작점이 전역 요약 파생만
+// 유효 기간과 기록 시각 순서에 따라 반환하는지 실제 AGE에서 확인한다.
+func TestGlobalSummaryCandidatesIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, database, actorID)
+	graphID := createTestGraph(t, database, actorID)
+	now := time.Now().UTC()
+
+	source := testSourceContext(t, graphID, actorID, "https://example.test/global-summary-"+newTestID(t).String())
+	storedSource, err := database.CreateContext(t.Context(), graphID, source, nil)
+	if err != nil {
+		t.Fatalf("전역 요약 근거 생성: %v", err)
+	}
+	createSummary := func(body string, scope model.SummaryScope, recordedAt time.Time, validTo *time.Time) model.Context {
+		return model.Context{
+			ID:             newTestID(t),
+			GraphID:        graphID,
+			Layer:          model.LayerDerived,
+			Body:           body,
+			RecordedAt:     recordedAt,
+			CreatedBy:      actorID,
+			CreatedByAgent: actorID,
+			Version:        1,
+			Derived: &model.DerivedAttributes{
+				Kind:          model.DerivationKindSummary,
+				SummaryScope:  scope,
+				EvidenceState: model.EvidenceStateExperience,
+				ValidTo:       validTo,
+			},
+		}
+	}
+	older, err := database.CreateContext(t.Context(), graphID, createSummary("이전 전역 요약", model.SummaryScopeGlobal, now.Add(-2*time.Minute), nil), []model.ID{storedSource.ID})
+	if err != nil {
+		t.Fatalf("이전 전역 요약 생성: %v", err)
+	}
+	newer, err := database.CreateContext(t.Context(), graphID, createSummary("최신 전역 요약", model.SummaryScopeGlobal, now.Add(-time.Minute), nil), []model.ID{storedSource.ID})
+	if err != nil {
+		t.Fatalf("최신 전역 요약 생성: %v", err)
+	}
+	if _, err := database.CreateContext(t.Context(), graphID, createSummary("국소 요약", model.SummaryScopeLocal, now, nil), []model.ID{storedSource.ID}); err != nil {
+		t.Fatalf("국소 요약 생성: %v", err)
+	}
+	expiredAt := new(time.Time)
+	*expiredAt = now.Add(-time.Second)
+	if _, err := database.CreateContext(t.Context(), graphID, createSummary("만료 전역 요약", model.SummaryScopeGlobal, now, expiredAt), []model.ID{storedSource.ID}); err != nil {
+		t.Fatalf("만료 전역 요약 생성: %v", err)
+	}
+
+	candidates, err := database.GlobalSummaryCandidates(t.Context(), graphID, now, 10)
+	if err != nil {
+		t.Fatalf("전역 요약 후보 조회: %v", err)
+	}
+	if len(candidates) != 2 || candidates[0].Context.ID != newer.ID || candidates[1].Context.ID != older.ID {
+		t.Fatalf("전역 요약 후보 = %#v, want 최신·이전 전역 요약", candidates)
+	}
+	limited, err := database.GlobalSummaryCandidates(t.Context(), graphID, now, 1)
+	if err != nil || len(limited) != 1 || limited[0].Context.ID != newer.ID {
+		t.Fatalf("전역 요약 후보 상한 = %#v, err=%v", limited, err)
+	}
+}
+
 func TestIndexTaskClaimConcurrency(t *testing.T) {
 	database := newIntegrationStore(t)
 	actorID := newTestID(t)

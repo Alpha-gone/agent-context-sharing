@@ -125,7 +125,7 @@ func (h handler) contextFlow(ctx context.Context, accountID model.ID, arguments 
 	if value := optionalTime(arguments, "as_of"); value != nil {
 		asOf = *value
 	}
-	flow, err := h.flow.Flow(ctx, search.Input{GraphID: graphID, WorkContext: arguments["work_context"].(string), AsOf: asOf, Budget: budget})
+	flow, err := h.flow.Flow(ctx, search.Input{GraphID: graphID, WorkContext: arguments["work_context"].(string), AsOf: asOf, Budget: budget, Scope: optionalString(arguments, "scope"), MaxHops: h.limits.MaxHops, MaxHopNodes: h.limits.MaxHopNodes})
 	if err != nil {
 		if errors.Is(err, search.ErrAllChannelsFailed) {
 			return ToolResult{}, &Error{Code: "internal"}
@@ -786,7 +786,7 @@ func flowValue(flow search.Flow) map[string]any {
 		// 모델 속성인 origin_kind는 그대로 두고, 근거를 따라가며 모은 집합은 다른 이름으로
 		// 전달한다. 같은 이름에 단일 값과 목록을 함께 두면 호출자가 두 모양을 다뤄야 한다.
 		value["origin_kinds"] = origins
-		value["entry_distance"] = 0
+		value["entry_distance"] = item.EntryDistance
 		value["matched_channels"] = item.MatchedChannels
 		value["rank"] = item.Rank
 		if item.FoldedCount > 0 {
@@ -813,6 +813,11 @@ func flowValue(flow search.Flow) map[string]any {
 	}
 	if flow.Truncation != nil {
 		response["truncated"] = map[string]any{"reason": flow.Truncation.Reason, "excluded_count": flow.Truncation.Excluded}
+	}
+	// 예산 절단과 원인이 다르므로 따로 싣는다. 이름과 모양은 「부가 정보의 출처」가 홉
+	// 경계에 확정한 값이며 node_get의 절단 표시와 같다.
+	if flow.HopBoundary != nil {
+		response["result_truncated"] = map[string]any{"truncated_hop": *flow.HopBoundary}
 	}
 	return response
 }

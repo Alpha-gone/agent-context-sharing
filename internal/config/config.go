@@ -39,6 +39,16 @@ const (
 	SearchExecutionSequential SearchExecution = "sequential"
 )
 
+// SearchGraphStage는 그래프 효과를 비교할 때 누적해서 켜는 검색 범위다.
+type SearchGraphStage string
+
+const (
+	SearchGraphStageBaseline   SearchGraphStage = "baseline"
+	SearchGraphStageReferences SearchGraphStage = "references"
+	SearchGraphStageRelations  SearchGraphStage = "relations"
+	SearchGraphStageGlobal     SearchGraphStage = "global"
+)
+
 // Config는 실행 중 필요한 배포 구성의 검증된 묶음이다. 비밀값은 로그로 전달하지 않는다.
 type Config struct {
 	// HTTPAddr 필드에는 HTTP 서버가 수신할 TCP 주소를 둔다.
@@ -61,6 +71,8 @@ type Config struct {
 	SearchCandidateLimit int
 	// SearchFoldThreshold 필드에는 중복 파생 접기의 유사 판정 임계값을 둔다.
 	SearchFoldThreshold float64
+	// SearchGraphStage 필드에는 그래프 검색 비교에서 활성화할 누적 단계를 둔다.
+	SearchGraphStage SearchGraphStage
 	// OAuthClientIDs 필드에는 사전 등록한 OAuth 클라이언트 식별자를 둔다.
 	OAuthClientIDs []string
 	// OAuthRedirectURIs 필드에는 허용된 OAuth 콜백 주소를 둔다.
@@ -108,6 +120,7 @@ func Load(env Environment) (Config, error) {
 		EmbeddingModel:      strings.TrimSpace(env("EMBEDDING_MODEL")),
 		EmbeddingVectorType: strings.TrimSpace(env("EMBEDDING_VECTOR_TYPE")),
 		SearchExecution:     SearchExecution(strings.TrimSpace(env("SEARCH_CHANNEL_EXECUTION"))),
+		SearchGraphStage:    SearchGraphStage(strings.TrimSpace(env("SEARCH_GRAPH_STAGE"))),
 		TLSMode:             TLSMode(strings.TrimSpace(env("TLS_TERMINATION"))),
 		TLSCertFile:         strings.TrimSpace(env("TLS_CERT_FILE")),
 		TLSKeyFile:          strings.TrimSpace(env("TLS_KEY_FILE")),
@@ -158,6 +171,9 @@ func Load(env Environment) (Config, error) {
 		return Config{}, fmt.Errorf("SEARCH_FOLD_SIMILARITY_THRESHOLD가 0 초과 1 이하의 수가 아니다")
 	}
 	cfg.SearchFoldThreshold = foldThreshold
+	if !slices.Contains([]SearchGraphStage{SearchGraphStageBaseline, SearchGraphStageReferences, SearchGraphStageRelations, SearchGraphStageGlobal}, cfg.SearchGraphStage) {
+		return Config{}, fmt.Errorf("SEARCH_GRAPH_STAGE %q가 baseline, references, relations, global 중 하나가 아니다", cfg.SearchGraphStage)
+	}
 
 	clientIDs, err := parseList("OAUTH_CLIENT_IDS", env("OAUTH_CLIENT_IDS"))
 	if err != nil {

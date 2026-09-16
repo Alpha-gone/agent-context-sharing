@@ -81,7 +81,7 @@ func (s *Store) RevokeGraphGrant(ctx context.Context, graphID model.ID, subjectT
 	if err := requireOwner(ctx, tx, graphID); err != nil {
 		return err
 	}
-	if err := startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
+	if err := s.startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -117,7 +117,7 @@ func (s *Store) RemoveTeamMember(ctx context.Context, teamID, accountID model.ID
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	if err := startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
+	if err := s.startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -153,7 +153,7 @@ func (s *Store) DeleteTeam(ctx context.Context, teamID model.ID) error {
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	if err := startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
+	if err := s.startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -262,39 +262,92 @@ func requireOwner(ctx context.Context, tx pgx.Tx, graphID model.ID) error {
 	return nil
 }
 
-func startGraceForDisconnectedGraphs(ctx context.Context, tx pgx.Tx, graphIDs []model.ID) error {
+// startGraceForDisconnectedGraphs는 접근 가능한 계정이 없어진 그래프의 유예를 시작하고,
+// 그 시점 생성 계정 플랜의 유예 일수로 만료 시각을 함께 고정한다.
+func (s *Store) startGraceForDisconnectedGraphs(ctx context.Context, tx pgx.Tx, graphIDs []model.ID) error {
 	disconnected := make([]string, 0, len(graphIDs))
+	graceDays := make([]int32, 0, len(graphIDs))
 	for _, graphID := range graphIDs {
-		var accounts int
-		err := tx.QueryRow(ctx, `
-			SELECT count(*) FROM (
-				SELECT subject_id AS account_id
-				FROM public.graph_grant
-				WHERE graph_id = $1 AND subject_type = 'account'
-				UNION
-				SELECT member.account_id
-				FROM public.graph_grant AS team_grant
-				JOIN public.team_member AS member ON member.team_id = team_grant.subject_id
-				JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL
-				WHERE team_grant.graph_id = $1 AND team_grant.subject_type = 'team'
-			) AS accessible`, graphID.String()).Scan(&accounts)
+		accounts, err := accessibleAccountCount(ctx, tx, graphID)
 		if err != nil {
-			return fmt.Errorf("접근 가능한 계정 수 조회: %w", err)
+			return err
 		}
 		if accounts != 0 {
 			continue
 		}
+		var rawCreatedBy string
+		if err := tx.QueryRow(ctx, `SELECT created_by FROM public.context_graph WHERE graph_id = $1`, graphID.String()).Scan(&rawCreatedBy); err != nil {
+			return fmt.Errorf("유예 대상 생성 계정 조회: %w", err)
+		}
+		createdBy, err := model.ParseID(rawCreatedBy)
+		if err != nil {
+			return fmt.Errorf("유예 대상 생성 계정 식별자: %w", err)
+		}
+		days := 0
+		if s.graceDays != nil {
+			days = s.graceDays(createdBy)
+		}
 		disconnected = append(disconnected, graphID.String())
+		graceDays = append(graceDays, int32(days))
 	}
 	if len(disconnected) == 0 {
 		return nil
 	}
 	// 모든 판정을 끝낸 뒤 커밋 직전 한 갱신으로 기록하며, 이미 시작한 유예는 덮어쓰지 않는다.
+	// 시각을 한 번만 읽어 시작 시각과 만료 시각이 같은 기준을 쓰게 한다.
 	if _, err := tx.Exec(ctx, `
-		UPDATE public.context_graph
-		SET grace_started_at = clock_timestamp()
-		WHERE graph_id = ANY($1::uuid[]) AND deleted_at IS NULL AND grace_started_at IS NULL`, disconnected); err != nil {
+		UPDATE public.context_graph AS graph
+		SET grace_started_at = clock.started_at,
+		    grace_expires_at = CASE WHEN target.days > 0 THEN clock.started_at + make_interval(days => target.days) END
+		FROM (SELECT clock_timestamp() AS started_at) AS clock,
+		     unnest($1::uuid[], $2::int[]) AS target(graph_id, days)
+		WHERE graph.graph_id = target.graph_id AND graph.deleted_at IS NULL AND graph.grace_started_at IS NULL`, disconnected, graceDays); err != nil {
 		return fmt.Errorf("유예 시작 시각 기록: %w", err)
 	}
 	return nil
+}
+
+// cancelGraceForConnectedGraphs는 접근 가능한 계정이 실제로 있는 그래프의 유예만 취소한다.
+// 구성원이 없는 팀이나 삭제된 팀에 등급을 부여한 것만으로는 유예를 취소하지 않는다.
+func cancelGraceForConnectedGraphs(ctx context.Context, tx pgx.Tx, graphIDs []model.ID) error {
+	connected := make([]string, 0, len(graphIDs))
+	for _, graphID := range graphIDs {
+		accounts, err := accessibleAccountCount(ctx, tx, graphID)
+		if err != nil {
+			return err
+		}
+		if accounts != 0 {
+			connected = append(connected, graphID.String())
+		}
+	}
+	if len(connected) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE public.context_graph
+		SET grace_started_at = NULL, grace_expires_at = NULL
+		WHERE graph_id = ANY($1::uuid[]) AND deleted_at IS NULL AND grace_started_at IS NOT NULL`, connected); err != nil {
+		return fmt.Errorf("그래프 유예 취소: %w", err)
+	}
+	return nil
+}
+
+func accessibleAccountCount(ctx context.Context, tx pgx.Tx, graphID model.ID) (int, error) {
+	var accounts int
+	err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM (
+			SELECT subject_id AS account_id
+			FROM public.graph_grant
+			WHERE graph_id = $1 AND subject_type = 'account'
+			UNION
+			SELECT member.account_id
+			FROM public.graph_grant AS team_grant
+			JOIN public.team_member AS member ON member.team_id = team_grant.subject_id
+			JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL
+			WHERE team_grant.graph_id = $1 AND team_grant.subject_type = 'team'
+		) AS accessible`, graphID.String()).Scan(&accounts)
+	if err != nil {
+		return 0, fmt.Errorf("접근 가능한 계정 수 조회: %w", err)
+	}
+	return accounts, nil
 }

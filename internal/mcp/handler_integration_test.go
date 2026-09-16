@@ -31,7 +31,7 @@ func TestHandlerIntegration(t *testing.T) {
 	// 요청 경로에서 자동 후보 제안이 실제로 도는지 확인해야 하므로 구성을 켜고 만든다.
 	database, err := store.New(t.Context(), databaseURL, graphName, &store.RelationProposalConfig{
 		AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 10,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}

@@ -25,7 +25,7 @@ func TestStoreIntegration(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	store, err := New(t.Context(), databaseURL, graphName, nil)
+	store, err := New(t.Context(), databaseURL, graphName, nil, nil)
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestEventRelationProposals(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	store, err := New(t.Context(), databaseURL, graphName, &RelationProposalConfig{AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 10})
+	store, err := New(t.Context(), databaseURL, graphName, &RelationProposalConfig{AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 10}, nil)
 	if err != nil {
 		t.Fatalf("후보 제안 저장소 준비: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestHopEdgeOrderIsDeterministic(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	store, err := New(t.Context(), databaseURL, graphName, nil)
+	store, err := New(t.Context(), databaseURL, graphName, nil, nil)
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}
@@ -632,7 +632,7 @@ func TestEventRelationProposalRules(t *testing.T) {
 	// 상한이 자르는지 보려면 상한이 후보 수보다 작아야 하므로 1로 둔다.
 	store, err := New(t.Context(), databaseURL, graphName, &RelationProposalConfig{
 		AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 1,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("후보 제안 저장소 준비: %v", err)
 	}

@@ -50,6 +50,9 @@ type Store struct {
 	// relationProposals 필드는 사건 저장 뒤에 실행할 자동 후보 제안의 배포 구성이다.
 	// 설정하지 않은 저장소는 후보를 만들지 않아 기존 도구·단위 테스트의 저장 의미를 보존한다.
 	relationProposals *RelationProposalConfig
+	// graceDays 필드는 유예를 시작할 때 생성 계정 플랜의 유예 일수를 돌려준다. nil이면
+	// 만료 시각을 남기지 않아 유예가 만료되지 않는다.
+	graceDays RetentionDays
 }
 
 // RelationProposalConfig는 사건 관계 후보 제안에 쓰는 검증된 배포 구성이다.
@@ -79,7 +82,8 @@ func (config RelationProposalConfig) validate() error {
 //
 // relationProposals는 생략할 수 없고 nil을 명시해야 자동 후보 제안이 꺼진다. 가변 인자로
 // 두면 호출부가 빠뜨려도 조용히 통과해, 제안이 꺼진 저장소로 검증이 지나간다.
-func New(ctx context.Context, databaseURL, graphName string, relationProposals *RelationProposalConfig) (*Store, error) {
+// graceDays도 같은 이유로 생략할 수 없으며 nil이면 유예 만료 시각을 남기지 않는다.
+func New(ctx context.Context, databaseURL, graphName string, relationProposals *RelationProposalConfig, graceDays RetentionDays) (*Store, error) {
 	if !graphNamePattern.MatchString(graphName) {
 		return nil, fmt.Errorf("AGE 그래프 이름 %q가 영문 소문자, 숫자와 밑줄 형식이 아니다", graphName)
 	}
@@ -108,7 +112,7 @@ func New(ctx context.Context, databaseURL, graphName string, relationProposals *
 	if err != nil {
 		return nil, fmt.Errorf("연결 풀 생성: %w", err)
 	}
-	return &Store{pool: pool, graphName: graphName, relationProposals: proposalConfig}, nil
+	return &Store{pool: pool, graphName: graphName, relationProposals: proposalConfig, graceDays: graceDays}, nil
 }
 
 // Ping은 데이터베이스 연결과 AGE 준비가 현재 요청을 받을 수 있는지 확인한다.

@@ -15,6 +15,7 @@ import (
 
 	"agent_context_sharing/internal/mcp"
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/web"
 )
 
 // readiness는 준비 확인과 종료에 필요한 데이터베이스 연결의 최소 계약이다.
@@ -38,6 +39,7 @@ type application struct {
 	logger    *slog.Logger
 	transport transportSecurity
 	mcp       *mcp.Server
+	web       *web.Server
 	accepting atomic.Bool
 }
 
@@ -71,6 +73,9 @@ func (app *application) handler() http.Handler {
 		gated.HandleFunc("GET /.well-known/oauth-protected-resource", app.mcp.ProtectedResourceMetadata)
 		gated.HandleFunc("GET /.well-known/oauth-authorization-server", app.mcp.AuthorizationServerMetadata)
 	}
+	if app.web != nil {
+		gated.Handle("/", app.web)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", app.health)
@@ -96,11 +101,16 @@ func (app *application) requireTLS(next http.Handler) http.Handler {
 // 요청을 보낸 상대가 신뢰 대역 안에 있을 때에만 그 헤더를 읽으며, 대역 밖에서 온
 // 요청은 헤더가 있어도 평문으로 다뤄 FR-AGENT_CONTEXT-140의 거부 대상이 된다.
 func (app *application) isTLSRequest(request *http.Request) bool {
-	if app.transport.directTLS {
+	return app.transport.isTLSRequest(request)
+}
+
+// isTLSRequest는 HTTP 요청이 현재 TLS 종단 계약을 충족하는지 판정한다.
+func (security transportSecurity) isTLSRequest(request *http.Request) bool {
+	if security.directTLS {
 		return request.TLS != nil
 	}
 	peer, ok := remoteAddr(request.RemoteAddr)
-	if !ok || !app.isTrustedProxy(peer) {
+	if !ok || !security.isTrustedProxy(peer) {
 		return false
 	}
 	// 값이 하나일 때만 읽는다. 프록시가 헤더를 덮어쓰지 않고 덧붙이도록 설정되면 원
@@ -113,8 +123,8 @@ func (app *application) isTLSRequest(request *http.Request) bool {
 }
 
 // isTrustedProxy는 요청을 보낸 상대가 전달 헤더를 신뢰할 대역에 속하는지 확인한다.
-func (app *application) isTrustedProxy(peer netip.Addr) bool {
-	return slices.ContainsFunc(app.transport.trustedProxies, func(prefix netip.Prefix) bool {
+func (security transportSecurity) isTrustedProxy(peer netip.Addr) bool {
+	return slices.ContainsFunc(security.trustedProxies, func(prefix netip.Prefix) bool {
 		return prefix.Contains(peer)
 	})
 }

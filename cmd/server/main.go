@@ -19,6 +19,7 @@ import (
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
+	"agent_context_sharing/internal/web"
 )
 
 // shutdownTimeout은 종료 신호 뒤 진행 중인 요청을 기다리는 최대 시간이다.
@@ -86,10 +87,19 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("MCP 리소스 서버 준비: %w", err)
 	}
-	app := newApplication(database, slog.Default(), transportSecurity{
+	transport := transportSecurity{
 		directTLS:      cfg.TLSMode == config.TLSModeDirect,
 		trustedProxies: cfg.TrustedProxies,
-	}, resourceServer)
+	}
+	webServer, err := web.New(webAuthentication{service: authorization}, database, web.Config{
+		SecureCookie: transport.isTLSRequest,
+		Plans:        cfg.AccountPlans,
+	})
+	if err != nil {
+		return fmt.Errorf("웹 서버 준비: %w", err)
+	}
+	app := newApplication(database, slog.Default(), transport, resourceServer)
+	app.web = webServer
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: app.handler()}
 
 	stopSignals := make(chan os.Signal, 1)

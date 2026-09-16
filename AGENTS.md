@@ -108,5 +108,6 @@
 ## Child DOX Index
 
 - `internal/mcp/AGENTS.md`: MCP 전송 계층과 도구 입력·오류 응답의 로컬 작업 계약을 정의한다.
+- `internal/web/AGENTS.md`: 웹 관리 화면과 시각화 자산의 로컬 작업 계약을 정의한다.
 - `spec/AGENTS.md`: 명세 문서와 용어 정리집의 로컬 작업 계약을 정의한다.
 - `migrations/AGENTS.md`: 데이터베이스 마이그레이션 파일의 작성과 적용 계약을 정의한다.

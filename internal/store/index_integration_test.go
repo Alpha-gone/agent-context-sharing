@@ -202,9 +202,16 @@ func TestReindexExcludesAndReplacesOutdatedModel(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("현재 모델 색인: %v", err)
 	}
+	before, err := database.OutdatedEmbeddingCount(t.Context(), currentModel)
+	if err != nil {
+		t.Fatalf("재색인 전 이전 모델 행 수 조회: %v", err)
+	}
 	query := "UPDATE public.context_embedding SET model_id = 'old:vector:1024' WHERE context_id = $1"
 	if _, err := database.pool.Exec(t.Context(), query, stored.ID.String()); err != nil {
 		t.Fatalf("이전 모델 표시: %v", err)
+	}
+	if remaining, err := database.OutdatedEmbeddingCount(t.Context(), currentModel); err != nil || remaining != before+1 {
+		t.Fatalf("재색인 전 이전 모델 행 수 = %d, want %d, err=%v", remaining, before+1, err)
 	}
 	candidates, err := database.SemanticCandidates(t.Context(), graphID, currentModel, vector, time.Now().UTC(), 10)
 	if err != nil || len(candidates) != 0 {
@@ -225,6 +232,9 @@ func TestReindexExcludesAndReplacesOutdatedModel(t *testing.T) {
 	candidates, err = database.SemanticCandidates(t.Context(), graphID, currentModel, vector, time.Now().UTC(), 10)
 	if err != nil || len(candidates) != 1 || candidates[0].Context.ID != stored.ID {
 		t.Fatalf("재색인 결과 = %#v, err=%v", candidates, err)
+	}
+	if remaining, err := database.OutdatedEmbeddingCount(t.Context(), currentModel); err != nil || remaining != before {
+		t.Fatalf("재색인 뒤 이전 모델 행 수 = %d, want %d, err=%v", remaining, before, err)
 	}
 }
 

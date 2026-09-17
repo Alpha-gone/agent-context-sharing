@@ -174,6 +174,19 @@ func (s *Store) ReindexOutdatedEmbeddings(ctx context.Context, modelID string) e
 	return nil
 }
 
+// OutdatedEmbeddingCount는 현재 모델과 다른 임베딩 행 수를 돌려준다. 이 수는 재색인
+// 진행 중인 행 수이므로 별도 상태 없이 재색인 진행률을 관측하는 값으로 쓴다.
+func (s *Store) OutdatedEmbeddingCount(ctx context.Context, modelID string) (int, error) {
+	if strings.TrimSpace(modelID) == "" {
+		return 0, fmt.Errorf("현재 임베딩 모델 식별자가 없다")
+	}
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM public.context_embedding WHERE model_id <> $1`, modelID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("이전 임베딩 수 조회: %w", err)
+	}
+	return count, nil
+}
+
 // ReindexGraph는 그래프의 모든 컨텍스트를 기존 upsert 규칙으로 다시 등록한다.
 func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 	if !graphID.IsV7() {

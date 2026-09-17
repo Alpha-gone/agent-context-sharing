@@ -44,11 +44,15 @@ func run() error {
 		AdjacencyWindow:     cfg.RelationAdjacencyWindow,
 		SimilarityThreshold: cfg.RelationSimilarityThreshold,
 		Limit:               cfg.RelationProposalLimit,
-	})
+	}, func(accountID model.ID) int { return cfg.AccountPlans.For(accountID).GraceDays })
 	if err != nil {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
 	defer database.Close()
+	periodic, err := newPeriodicWorker(database, cfg.AccountPlans, slog.Default())
+	if err != nil {
+		return fmt.Errorf("주기 작업 준비: %w", err)
+	}
 	indexer, err := index.New(database, index.Config{
 		BaseURL:    cfg.EmbeddingBaseURL,
 		Model:      cfg.EmbeddingModel,
@@ -62,6 +66,7 @@ func run() error {
 	// 풀 종료 사이가 아니라 그 뒤에 실행되어, 작업자가 도는 중에 풀이 닫힌다.
 	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
 	indexer.Start(context.Background())
+	periodic.Start(context.Background())
 	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, FoldThreshold: cfg.SearchFoldThreshold, GraphStage: search.GraphStage(cfg.SearchGraphStage)}, slog.Default())
 	if err != nil {
 		return fmt.Errorf("검색 실행기 준비: %w", err)
@@ -128,6 +133,9 @@ func run() error {
 	defer cancel()
 	if err := app.shutdown(shutdownContext, server); err != nil {
 		return err
+	}
+	if err := periodic.Close(shutdownContext); err != nil {
+		slog.Error("주기 작업 종료", "error", err)
 	}
 	if err := indexer.Close(shutdownContext); err != nil {
 		slog.Error("색인 작업자 종료", "error", err)

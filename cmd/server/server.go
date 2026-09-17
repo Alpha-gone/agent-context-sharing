@@ -171,7 +171,7 @@ func (app *application) ready(writer http.ResponseWriter, request *http.Request)
 //
 // 연결 풀은 여기에서 닫지 않는다. 풀을 쓰는 것이 요청 경로만이 아니라 색인 작업자도
 // 있으므로, 닫는 순서를 조립한 곳이 정해야 작업자가 도는 중에 풀이 사라지지 않는다.
-// 1단계에서는 주기 작업 잠금을 아직 획득하지 않으므로 이 시점에 해제할 잠금은 없다.
+// 주기 작업의 자문 잠금도 조립한 곳이 이 메서드 뒤에 해제한다.
 func (app *application) shutdown(ctx context.Context, server *http.Server) error {
 	app.accepting.Store(false)
 	if err := server.Shutdown(ctx); err != nil {

@@ -16,6 +16,9 @@ import (
 	"agent_context_sharing/internal/store"
 )
 
+// reindexProgressInterval은 재색인이 남아 있는 동안 진행률을 구조화 로그에 남기는 간격이다.
+const reindexProgressInterval = time.Minute
+
 // Config는 하나의 배포가 쓰는 임베딩 제공자와 벡터 계약이다.
 type Config struct {
 	BaseURL    *url.URL
@@ -101,12 +104,21 @@ func (worker *Worker) Close(ctx context.Context) error {
 func (worker *Worker) run(ctx context.Context) {
 	// 오래된 모델의 벡터를 다시 등록하는 일은 기동을 막을 이유가 없다. 대상이 많으면 그만큼
 	// 기동이 늦어지고, 등록이 끝나기 전에 죽어도 upsert라 다음 기동이 같은 일을 다시 한다.
+	remaining := -1
 	if err := worker.store.ReindexOutdatedEmbeddings(ctx, worker.ModelID()); err != nil {
 		worker.logger.ErrorContext(ctx, "이전 임베딩 재색인 등록 실패", "error", err)
+	} else {
+		remaining = worker.logReindexProgress(ctx)
 	}
+	nextProgress := time.Now().Add(reindexProgressInterval)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
+		// 남은 행이 0이 되면 더 늘지 않으므로 그때부터 진행률 조회를 멈춘다.
+		if remaining != 0 && !time.Now().Before(nextProgress) {
+			remaining = worker.logReindexProgress(ctx)
+			nextProgress = time.Now().Add(reindexProgressInterval)
+		}
 		processed, err := worker.RunOnce(ctx)
 		if err != nil {
 			worker.logger.ErrorContext(ctx, "색인 작업 처리 실패", "error", err)
@@ -120,6 +132,18 @@ func (worker *Worker) run(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// logReindexProgress는 옛 model_id로 남은 임베딩 행 수를 재색인 진행률로 기록하고 그 수를
+// 돌려준다. 조회에 실패하면 -1을 돌려 다음 간격에 다시 조회하게 한다.
+func (worker *Worker) logReindexProgress(ctx context.Context) int {
+	remaining, err := worker.store.OutdatedEmbeddingCount(ctx, worker.ModelID())
+	if err != nil {
+		worker.logger.ErrorContext(ctx, "이전 임베딩 진행률 조회 실패", "error", err)
+		return -1
+	}
+	worker.logger.InfoContext(ctx, "이전 임베딩 재색인 진행률", "old_model_embeddings_remaining", remaining)
+	return remaining
 }
 
 // RunOnce는 현재 가능한 색인 작업 하나를 처리하고, 완료된 사건의 의미 관계 후보를 제안한다.

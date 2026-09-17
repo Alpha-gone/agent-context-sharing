@@ -36,8 +36,8 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 		graphID.String(), subjectType, subjectID.String(), grade); err != nil {
 		return fmt.Errorf("그래프 등급 부여: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE public.context_graph SET grace_started_at = NULL WHERE graph_id = $1 AND deleted_at IS NULL`, graphID.String()); err != nil {
-		return fmt.Errorf("그래프 유예 취소: %w", err)
+	if err := cancelGraceForConnectedGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return err
 	}
 	action, targetKind := "grant", "grant"
 	if before != nil && *before == "owner" && grade != model.GraphGradeOwner {
@@ -69,7 +69,7 @@ func (s *Store) RevokeGraphGrantWithAudit(ctx context.Context, graphID, actorID,
 	if err := requireOwner(ctx, tx, graphID); err != nil {
 		return err
 	}
-	if err := startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
+	if err := s.startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: "grant", Action: "revoke", ActorID: actorID, GraphID: graphID, SubjectType: subjectType, SubjectID: subjectID, BeforeGrade: model.GraphGrade(before)})
@@ -203,14 +203,8 @@ func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID mo
 	if _, err := lockGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
-	if len(graphIDs) > 0 {
-		raw := make([]string, len(graphIDs))
-		for index, graphID := range graphIDs {
-			raw[index] = graphID.String()
-		}
-		if _, err := tx.Exec(ctx, `UPDATE public.context_graph SET grace_started_at = NULL WHERE graph_id = ANY($1::uuid[]) AND deleted_at IS NULL`, raw); err != nil {
-			return fmt.Errorf("팀 구성원 추가 뒤 유예 취소: %w", err)
-		}
+	if err := cancelGraceForConnectedGraphs(ctx, tx, graphIDs); err != nil {
+		return err
 	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: "team", Action: "add", ActorID: actorID, TeamID: teamID, MemberAccountID: accountID})
 }
@@ -242,7 +236,7 @@ func (s *Store) RemoveTeamMemberWithAudit(ctx context.Context, teamID, actorID, 
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	if err := startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
+	if err := s.startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: "team", Action: "remove", ActorID: actorID, TeamID: teamID, MemberAccountID: accountID})
@@ -281,17 +275,11 @@ func (s *Store) SetTeamDeleted(ctx context.Context, teamID, actorID model.ID, de
 		return ErrInvalidState
 	}
 	if deleted {
-		if err := startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
+		if err := s.startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
 			return err
 		}
-	} else if len(graphIDs) > 0 {
-		raw := make([]string, len(graphIDs))
-		for index, graphID := range graphIDs {
-			raw[index] = graphID.String()
-		}
-		if _, err := tx.Exec(ctx, `UPDATE public.context_graph SET grace_started_at = NULL WHERE graph_id = ANY($1::uuid[]) AND deleted_at IS NULL`, raw); err != nil {
-			return fmt.Errorf("팀 복구 뒤 유예 취소: %w", err)
-		}
+	} else if err := cancelGraceForConnectedGraphs(ctx, tx, graphIDs); err != nil {
+		return err
 	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: "team", Action: action, ActorID: actorID, TeamID: teamID})
 }
@@ -489,7 +477,7 @@ func (s *Store) SetGraphDeleted(ctx context.Context, graphID, actorID model.ID, 
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
-	query, action := `UPDATE public.context_graph SET deleted_at = NULL, grace_started_at = NULL WHERE graph_id = $1 AND deleted_at IS NOT NULL`, "restore"
+	query, action := `UPDATE public.context_graph SET deleted_at = NULL, grace_started_at = NULL, grace_expires_at = NULL WHERE graph_id = $1 AND deleted_at IS NOT NULL`, "restore"
 	if deleted {
 		query, action = `UPDATE public.context_graph SET deleted_at = clock_timestamp() WHERE graph_id = $1 AND deleted_at IS NULL`, "delete"
 	}
@@ -690,7 +678,7 @@ func (s *Store) OperatorRestoreGraph(ctx context.Context, graphID, operatorID mo
 		return fmt.Errorf("운영자 그래프 복구 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	result, err := tx.Exec(ctx, `UPDATE public.context_graph SET deleted_at = NULL, grace_started_at = NULL WHERE graph_id = $1 AND deleted_at IS NOT NULL AND grace_started_at IS NOT NULL`, graphID.String())
+	result, err := tx.Exec(ctx, `UPDATE public.context_graph SET deleted_at = NULL, grace_started_at = NULL, grace_expires_at = NULL WHERE graph_id = $1 AND deleted_at IS NOT NULL AND grace_started_at IS NOT NULL`, graphID.String())
 	if err != nil {
 		return fmt.Errorf("운영자 그래프 복구: %w", err)
 	}

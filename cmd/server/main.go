@@ -25,6 +25,31 @@ import (
 // shutdownTimeout은 종료 신호 뒤 진행 중인 요청을 기다리는 최대 시간이다.
 const shutdownTimeout = 30 * time.Second
 
+const (
+	// readHeaderTimeout은 요청 헤더를 모두 받기까지 기다리는 최대 시간이다.
+	readHeaderTimeout = 10 * time.Second
+	// readTimeout은 헤더와 본문을 모두 받기까지 기다리는 최대 시간이다.
+	readTimeout = 30 * time.Second
+	// idleTimeout은 keep-alive 연결에서 다음 요청을 기다리는 최대 시간이다.
+	idleTimeout = 120 * time.Second
+)
+
+// newHTTPServer는 수신 서버에 읽기 쪽 제한을 걸어 만든다.
+//
+// 헤더를 느리게 보내는 연결이 고루틴과 파일 디스크립터를 붙잡지 못하게 한다. TLS 판정보다
+// 앞이라 인증 없이도 열 수 있는 자리이며, 명세가 값을 정하지 않았으므로 여기에서 고른다.
+// 쓰기 제한은 두지 않는다. 흐름 검색이 외부 임베딩 제공자를 기다리는 동안 응답이 끊기면
+// 안 되기 때문이다.
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+}
+
 // main 함수는 구성 검증, 데이터베이스 풀 준비와 HTTP 서버의 정상 종료를 조립한다.
 func main() {
 	if err := run(); err != nil {
@@ -109,7 +134,7 @@ func run() error {
 	app := newApplication(database, slog.Default(), transport, resourceServer)
 	app.web = webServer
 	app.authz = authorizationHandler
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: app.handler()}
+	server := newHTTPServer(cfg.HTTPAddr, app.handler())
 
 	stopSignals := make(chan os.Signal, 1)
 	signal.Notify(stopSignals, os.Interrupt, syscall.SIGTERM)

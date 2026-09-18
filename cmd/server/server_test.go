@@ -259,3 +259,24 @@ func (stubAuthorizationRoutes) Token(writer http.ResponseWriter, _ *http.Request
 func (stubAuthorizationRoutes) JWKS(writer http.ResponseWriter, _ *http.Request) {
 	writer.WriteHeader(http.StatusOK)
 }
+
+// TestHTTPServerSetsReadTimeouts는 수신 서버에 읽기·헤더·유휴 제한이 있는지 확인한다.
+// 제한이 없으면 헤더를 느리게 보내는 연결을 대량으로 열어 고루틴과 파일 디스크립터를
+// 고갈시킬 수 있고, 그 자리는 TLS 판정보다 앞이라 인증 없이 닿는다.
+func TestHTTPServerSetsReadTimeouts(t *testing.T) {
+	if readHeaderTimeout <= 0 || readTimeout <= 0 || idleTimeout <= 0 {
+		t.Fatalf("타임아웃 = 헤더 %v, 읽기 %v, 유휴 %v; 모두 양수여야 한다", readHeaderTimeout, readTimeout, idleTimeout)
+	}
+	if readHeaderTimeout > readTimeout {
+		t.Fatalf("헤더 제한 %v가 읽기 제한 %v보다 크다", readHeaderTimeout, readTimeout)
+	}
+	// 쓰기 제한은 두지 않는다. 흐름 검색이 외부 임베딩 제공자를 기다리는 동안 응답이
+	// 끊기면 안 되므로, 값이 생기면 그 판단을 다시 해야 한다.
+	server := newHTTPServer(":0", http.NewServeMux())
+	if server.ReadHeaderTimeout != readHeaderTimeout || server.ReadTimeout != readTimeout || server.IdleTimeout != idleTimeout {
+		t.Fatalf("서버 타임아웃 = %#v", server)
+	}
+	if server.WriteTimeout != 0 {
+		t.Fatalf("쓰기 제한 = %v, want 0", server.WriteTimeout)
+	}
+}

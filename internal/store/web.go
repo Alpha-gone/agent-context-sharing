@@ -743,22 +743,55 @@ func (s *Store) GraphVisualization(ctx context.Context, graphID model.ID, hops, 
 
 // ListDeletedContexts는 복구 화면이 쓸 소프트 삭제된 컨텍스트만 읽는다. 「화면 접근 제어」가
 // 삭제된 컨텍스트를 복구 화면 밖에서 보이지 않게 했으므로 다른 화면은 이 조회를 쓰지 않는다.
-func (s *Store) ListDeletedContexts(ctx context.Context, graphID model.ID, limit int) ([]model.Context, error) {
-	return s.graphContexts(ctx, graphID, deletedContexts, limit)
+// 두 번째 반환값은 상한에 걸려 잘린 목록인지를 나타낸다.
+func (s *Store) ListDeletedContexts(ctx context.Context, graphID model.ID, limit int) ([]model.Context, bool, error) {
+	return s.graphContextPage(ctx, graphID, deletedContexts, limit)
 }
 
 // ListActiveContexts는 삭제 대상을 고르는 화면이 쓸 활성 컨텍스트를 읽는다.
-func (s *Store) ListActiveContexts(ctx context.Context, graphID model.ID, limit int) ([]model.Context, error) {
-	return s.graphContexts(ctx, graphID, activeContexts, limit)
+// 두 번째 반환값은 상한에 걸려 잘린 목록인지를 나타낸다.
+func (s *Store) ListActiveContexts(ctx context.Context, graphID model.ID, limit int) ([]model.Context, bool, error) {
+	return s.graphContextPage(ctx, graphID, activeContexts, limit)
+}
+
+// graphContextPage는 화면 목록이 쓸 최신 컨텍스트를 상한만큼 읽고 잘렸는지 알려 준다.
+//
+// 최신순으로 두는 이유는 상한에 걸릴 때 남는 것이 무엇인지 때문이다. 오래된 순으로 자르면
+// 방금 만든 컨텍스트가 화면에서 사라져 삭제도 복구도 할 수 없다. context_id가 UUIDv7이라
+// 내림차순이 곧 최신순이다. 잘림 여부는 상한보다 한 건 더 읽어 판정한다.
+func (s *Store) graphContextPage(ctx context.Context, graphID model.ID, predicate string, limit int) ([]model.Context, bool, error) {
+	if limit < 0 {
+		return nil, false, fmt.Errorf("그래프 정점 조회 인자가 올바르지 않다")
+	}
+	fetch := limit
+	if fetch > 0 {
+		fetch++
+	}
+	contexts, err := s.graphContextsOrdered(ctx, graphID, predicate, fetch, true)
+	if err != nil {
+		return nil, false, err
+	}
+	if limit > 0 && len(contexts) > limit {
+		return contexts[:limit], true, nil
+	}
+	return contexts, false, nil
 }
 
 // graphContexts는 한 그래프의 정점을 주어진 조건과 상한으로 읽는다. limit 0은 「계정 플랜」이
 // 선언한 대로 한도 없음이다.
 func (s *Store) graphContexts(ctx context.Context, graphID model.ID, predicate string, limit int) ([]model.Context, error) {
+	return s.graphContextsOrdered(ctx, graphID, predicate, limit, false)
+}
+
+func (s *Store) graphContextsOrdered(ctx context.Context, graphID model.ID, predicate string, limit int, newestFirst bool) ([]model.Context, error) {
 	if !graphID.IsV7() || limit < 0 {
 		return nil, fmt.Errorf("그래프 정점 조회 인자가 올바르지 않다")
 	}
-	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) + " AND " + predicate + " RETURN node ORDER BY node.context_id"
+	order := " RETURN node ORDER BY node.context_id"
+	if newestFirst {
+		order += " DESC"
+	}
+	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) + " AND " + predicate + order
 	if limit > 0 {
 		query += " LIMIT " + strconv.Itoa(limit)
 	}

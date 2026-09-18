@@ -172,14 +172,14 @@ func TestContextDeletionAndRestoreRoundTrip(t *testing.T) {
 	if _, err := store.SetContextDeleted(t.Context(), graphID, createdSource.ID, actorID, true); err != nil {
 		t.Fatalf("컨텍스트 소프트 삭제: %v", err)
 	}
-	active, err := store.ListActiveContexts(t.Context(), graphID, 50)
+	active, _, err := store.ListActiveContexts(t.Context(), graphID, 50)
 	if err != nil {
 		t.Fatalf("활성 컨텍스트 조회: %v", err)
 	}
 	if containsContext(active, createdSource.ID) {
 		t.Fatalf("삭제된 컨텍스트가 활성 목록에 남았다")
 	}
-	deleted, err := store.ListDeletedContexts(t.Context(), graphID, 50)
+	deleted, _, err := store.ListDeletedContexts(t.Context(), graphID, 50)
 	if err != nil {
 		t.Fatalf("삭제된 컨텍스트 조회: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestContextDeletionAndRestoreRoundTrip(t *testing.T) {
 	if _, err := store.SetContextDeleted(t.Context(), graphID, createdSource.ID, actorID, false); err != nil {
 		t.Fatalf("컨텍스트 복구: %v", err)
 	}
-	active, err = store.ListActiveContexts(t.Context(), graphID, 50)
+	active, _, err = store.ListActiveContexts(t.Context(), graphID, 50)
 	if err != nil {
 		t.Fatalf("복구 뒤 활성 컨텍스트 조회: %v", err)
 	}

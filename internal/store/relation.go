@@ -150,6 +150,13 @@ func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.I
 		return model.Relation{}, fmt.Errorf("관계 폐기 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// 확정과 같은 그래프 행을 잠근다. 관계에는 판 번호가 없어 낙관적 잠금으로 거를 수
+	// 없으므로, 같은 관계에 폐기가 동시에 오면 읽은 상태가 둘 다 통과해 AGE가 동시 갱신
+	// 오류를 낸다. 잠금이 조회와 갱신 사이를 직렬화해 뒤에 온 요청이 이미 폐기된 상태를
+	// 보고 정상적으로 거부된다.
+	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return model.Relation{}, err
+	}
 	stored, err := s.relationByID(ctx, tx, graphID, relationID)
 	if err != nil {
 		return model.Relation{}, err

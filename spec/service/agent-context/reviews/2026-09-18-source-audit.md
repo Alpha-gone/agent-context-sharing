@@ -106,7 +106,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 재현. 재확정은 수락됐고 같은 형태의 새 간선은 순환으로 거부됐다.
 
-#### - [ ] 6. 폐기와 복구가 판 번호 조건 없이 노드 전체를 덮어쓴다
+#### - [x] 6. 폐기와 복구가 판 번호 조건 없이 노드 전체를 덮어쓴다
 
 `internal/store/context.go:186`~`:260`
 
@@ -114,7 +114,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 이중 적용은 재현(동시 폐기 8건 중 2건 성공, `stored_chars` 11 → 1). 수정 유실은 같은 메커니즘의 판독.
 
-#### - [ ] 7. AGE 동시 갱신 오류가 `version_conflict`가 아닌 `internal`로 나간다
+#### - [x] 7. AGE 동시 갱신 오류가 `version_conflict`가 아닌 `internal`로 나간다
 
 `internal/store/context.go:100`~`:113`, `:233`~`:238`, `internal/store/relation.go:537`
 
@@ -531,6 +531,7 @@ openCypher의 label 교대와 무방향 패턴으로 묶으면 깊이마다 한�
 | 배포 버전 확인 필요 | 46번은 AGE의 label 교대 지원 여부, 50번은 pgvector의 반복 탐색 지원 여부에 따라 방법이 달라진다 |
 | 불안정한 테스트 | `TestWorkerProposesSimilarEventRelationsAfterIndexIntegration`이 단독 실행 5회 중 1회 "의미 관계 후보가 만들어지지 않았다"로 실패했다. 실패한 실행은 5~8초, 통과한 실행은 0.09초였다. 공유 DB에 남은 다른 색인 작업이 루프를 소모하는 격리 문제로 추정하나 원인을 확정하지 못했다. `go test ./...`로 패키지를 함께 돌리면 "대기 중인 그래프 색인 작업을 찾지 못했다"로도 실패하며, 4번과 5번 수정 전후 각각 5회를 돌려 양쪽 모두 1회씩 실패했다. 이 수정과 무관한 기존 문제다 |
 | 개발 DB 부작용 | 9번 재현 테스트가 개발 DB에 있던 pending 색인 작업 2건(context_id `01a09ad3-9f0f-75d1-9a28-bca16034eb9e`, `01a0a053-10a5-729c-a195-753f194d5f3f`)을 잡아 `last_error='slow'`와 시도 횟수 증가를 남겼다. 되돌리지 않았다 |
+| 색인 작업 테스트 격리 | `internal/index`와 `internal/store`를 `go test ./...`로 함께 돌리면 두 프로세스가 같은 개발 DB의 `index_task`를 서로 집어 간다. `ProcessNextIndexTask`가 그래프를 가리지 않고 대기 행 하나를 집기 때문이다. `TestWorkerProposesSimilarEventRelationsAfterIndexIntegration`, `TestIndexRetryAndImmediateFailureIntegration`, `TestIndexTaskClaimConcurrency`가 번갈아 실패하며, 검사 대상 커밋 `d07509d`에서도 3회 중 1회 재현된다. `-p 1`로 순차 실행하면 3회 모두 통과한다. 이 문서의 수정과 무관한 테스트 격리 문제이며 별도 항목으로 다룰지 판단이 필요하다 |
 | 브라우저 미확인 | 웹 화면 결함은 HTTP 응답과 코드 판독으로 확인했고 실제 브라우저로는 확인하지 않았다 |
 
 ## 개발 계획 체크박스

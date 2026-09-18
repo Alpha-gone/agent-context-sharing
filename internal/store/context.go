@@ -104,6 +104,9 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	stored, err := s.contextFromCypher(ctx, tx, graphID, query)
 	if err != nil {
 		if !errors.Is(err, ErrNotFound) {
+			if conflict := s.asVersionConflict(ctx, graphID, value.ID, err); conflict != err {
+				return model.Context{}, conflict
+			}
 			return model.Context{}, fmt.Errorf("컨텍스트 정점 갱신: %w", err)
 		}
 		if err := s.contextVersionConflict(ctx, tx, graphID, value.ID); err != nil {
@@ -230,11 +233,26 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if err != nil {
 		return model.Context{}, err
 	}
+	// 쓰기 조건에 읽은 판 번호와 폐기 상태를 함께 건다. 조건이 없으면 같은 노드에 폐기
+	// 두 건이 동시에 와도 둘 다 성공해 저장량이 두 번 차감되고, 읽은 뒤 커밋된 수정을
+	// 옛 본문으로 덮어써 수정이 사라진다. 원천은 판 번호가 늘지 않으므로 폐기 상태
+	// 조건이 그 경우의 유일한 방어다.
+	deletionGuard := " AND node.deleted_at IS NULL"
+	if !discard {
+		deletionGuard = " AND node.deleted_at IS NOT NULL"
+	}
 	query := "MATCH (node:Context) WHERE node.context_id = " + cypherString(contextID.String()) +
 		" AND node.graph_id = " + cypherString(graphID.String()) +
+		" AND node.version = " + fmt.Sprint(previous.Version) + deletionGuard +
 		" SET node = " + properties + " RETURN node"
 	stored, err := s.contextFromCypher(ctx, tx, graphID, query)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return model.Context{}, s.deletionConflict(ctx, graphID, contextID, discard)
+		}
+		if conflict := s.asVersionConflict(ctx, graphID, contextID, err); conflict != err {
+			return model.Context{}, conflict
+		}
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이: %w", err)
 	}
 	delta := -utf8.RuneCountInString(previous.Body)
@@ -257,6 +275,22 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 		}
 	}
 	return stored, nil
+}
+
+// deletionConflict은 상태 전이의 쓰기 조건이 맞지 않은 이유를 다시 읽어 구분한다.
+// 다른 요청이 같은 전이를 먼저 끝냈으면 상태 오류를, 본문이나 판이 바뀌었으면 충돌을 낸다.
+func (s *Store) deletionConflict(ctx context.Context, graphID, contextID model.ID, discard bool) error {
+	current, err := s.context(ctx, s.pool, graphID, contextID)
+	if err != nil {
+		return err
+	}
+	if discard && current.DeletedAt != nil {
+		return fmt.Errorf("컨텍스트가 이미 폐기됐다")
+	}
+	if !discard && current.DeletedAt == nil {
+		return fmt.Errorf("컨텍스트가 활성 상태다")
+	}
+	return VersionConflictError{Current: current.Version}
 }
 
 // invalidateDerivedEvidence는 폐기한 컨텍스트를 근거로 가리키는 파생에
@@ -683,6 +717,31 @@ func encodeProperties(properties map[string]any) (string, error) {
 func isUniqueViolation(err error) bool {
 	pgError, ok := errors.AsType[*pgconn.PgError](err)
 	return ok && pgError.Code == "23505"
+}
+
+// isConcurrentAGEUpdate는 AGE가 같은 정점이나 간선의 동시 갱신에서 내는 오류를 판별한다.
+//
+// AGE는 다른 트랜잭션이 이미 고친 항목을 고치려 하면 XX000으로 실패한다. 판 번호 조건이
+// 앞에서 거르지 못한 경합이 여기까지 오며, 그대로 두면 `mapError`가 internal로 바꿔
+// `SRS.md`의 충돌 응답과 `SDD.md`의 재시도 계약이 성립하지 않는다.
+func isConcurrentAGEUpdate(err error) bool {
+	pgError, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgError.Code == "XX000" && strings.Contains(pgError.Message, "failed to be updated")
+}
+
+// asVersionConflict는 AGE 동시 갱신 오류를 판 번호 충돌로 바꾼다.
+//
+// 오류가 난 트랜잭션은 이미 중단되어 그 안에서 현재 판 번호를 읽을 수 없으므로 풀에서
+// 새로 읽는다. 재조회까지 실패하면 판 번호 없이 충돌만 알린다.
+func (s *Store) asVersionConflict(ctx context.Context, graphID, contextID model.ID, err error) error {
+	if !isConcurrentAGEUpdate(err) {
+		return err
+	}
+	current, readErr := s.context(ctx, s.pool, graphID, contextID)
+	if readErr != nil {
+		return VersionConflictError{}
+	}
+	return VersionConflictError{Current: current.Version}
 }
 
 // ContextsByIDs는 여러 컨텍스트를 세 질의로 조립해 요청 순서대로 돌려준다.

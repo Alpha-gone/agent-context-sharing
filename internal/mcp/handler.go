@@ -597,6 +597,11 @@ func mapError(err error) error {
 		return &Error{Code: "not_found"}
 	}
 	if conflict, ok := errors.AsType[store.VersionConflictError](err); ok {
+		// 현재 판 번호를 읽지 못한 충돌은 값을 싣지 않는다. 0을 실으면 호출자가 그 값을
+		// 기대 판으로 다시 보내 재시도가 반드시 실패한다.
+		if conflict.Current == 0 {
+			return &Error{Code: "version_conflict"}
+		}
 		return &Error{Code: "version_conflict", Data: map[string]any{"current_version": conflict.Current}}
 	}
 	return &Error{Code: "internal"}

@@ -36,6 +36,11 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 		graphID.String(), subjectType, subjectID.String(), grade); err != nil {
 		return fmt.Errorf("그래프 등급 부여: %w", err)
 	}
+	// upsert가 기존 등급을 덮어쓰므로 부여도 소유자를 없앨 수 있다. 유일한 소유자가 자기
+	// 계정에 editor를 부여하면 소유자 0명이 되므로 회수와 같은 판정을 여기에도 둔다.
+	if err := requireOwner(ctx, tx, graphID); err != nil {
+		return err
+	}
 	if err := cancelGraceForConnectedGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
@@ -477,7 +482,10 @@ func (s *Store) SetGraphDeleted(ctx context.Context, graphID, actorID model.ID, 
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
-	query, action := `UPDATE public.context_graph SET deleted_at = NULL, grace_started_at = NULL, grace_expires_at = NULL WHERE graph_id = $1 AND deleted_at IS NOT NULL`, "restore"
+	// 복구는 웹에서 직접 삭제한 그래프만 되돌린다. grace_started_at이 남아 있으면 유예
+	// 만료로 자동 삭제된 그래프이며, 그 복구는 요청과 운영자 경로만 수행한다. 조건을
+	// 빼면 나중에 소유자 등급을 얻은 계정이 자동 삭제를 웹에서 되살릴 수 있다.
+	query, action := `UPDATE public.context_graph SET deleted_at = NULL WHERE graph_id = $1 AND deleted_at IS NOT NULL AND grace_started_at IS NULL`, "restore"
 	if deleted {
 		query, action = `UPDATE public.context_graph SET deleted_at = clock_timestamp() WHERE graph_id = $1 AND deleted_at IS NULL`, "delete"
 	}

@@ -103,7 +103,9 @@ type fakeStore struct {
 	hops      store.HopResult
 	hopCalls  int
 	hopStarts []model.ID
-	mu        sync.Mutex
+	// hopDepth에는 마지막 호출이 받은 탐색 깊이를 둔다.
+	hopDepth int
+	mu       sync.Mutex
 }
 
 func (fake *fakeStore) KeywordCandidates(context.Context, model.ID, string, time.Time, int) ([]store.SearchCandidate, error) {
@@ -130,10 +132,11 @@ func (fake *fakeStore) GlobalSummaryCandidates(context.Context, model.ID, time.T
 	return append([]store.SearchCandidate(nil), fake.global...), nil
 }
 
-func (fake *fakeStore) HopContextsFrom(_ context.Context, _ model.ID, starts []model.Context, _ int, _ string, _ []string, _ int) (store.HopResult, error) {
+func (fake *fakeStore) HopContextsFrom(_ context.Context, _ model.ID, starts []model.Context, hops int, _ string, _ []string, _ int) (store.HopResult, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.hopCalls++
+	fake.hopDepth = hops
 	fake.hopStarts = append(fake.hopStarts, contextIDs(starts)...)
 	return fake.hops, nil
 }
@@ -502,4 +505,57 @@ type originFailingStore struct{ *fakeStore }
 
 func (originFailingStore) ContextOriginKinds(context.Context, model.ID, []model.ID) (map[model.ID][]model.OriginKind, error) {
 	return nil, errors.New("출처 조회 실패")
+}
+
+// TestUnlimitedMaxHopsExpandsGraph는 MaxHops 0이 탐색을 막지 않는지 확인한다.
+// 「계정 플랜」이 0을 한도 없음으로 선언했으므로 예산과 MaxHopNodes와 같게 해석해야
+// 하며, 그대로 깊이로 넘기면 graph 채널이 실패 표시 없이 항상 0건이 된다.
+func TestUnlimitedMaxHopsExpandsGraph(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000011")
+	entry := testContext(t, graphID, "019a0000-0000-7000-8000-000000000012", "진입", 1)
+	reached := testContext(t, graphID, "019a0000-0000-7000-8000-000000000013", "확장", 2)
+	database := &fakeStore{
+		keyword: []store.SearchCandidate{{Context: entry}},
+		hops: store.HopResult{
+			Contexts:  []model.Context{entry, reached},
+			Distances: map[model.ID]int{entry.ID: 0, reached.ID: 1},
+		},
+	}
+	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, FoldThreshold: 0.9, GraphStage: GraphStageRelations}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	flow, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "현재 작업", AsOf: time.Now().UTC(), Budget: 0, MaxHops: 0, MaxHopNodes: 0})
+	if err != nil {
+		t.Fatalf("흐름 검색: %v", err)
+	}
+	if database.hopDepth <= 0 {
+		t.Fatalf("탐색 깊이 = %d; MaxHops 0을 그대로 넘겼다", database.hopDepth)
+	}
+	if flow.Channels["graph"].Failure != "" {
+		t.Fatalf("graph 채널 실패 = %q", flow.Channels["graph"].Failure)
+	}
+	if flow.Channels["graph"].Candidates != 1 {
+		t.Fatalf("graph 채널 후보 = %d, want 1", flow.Channels["graph"].Candidates)
+	}
+}
+
+// TestBoundedMaxHopsPassesDepthThrough는 0이 아닌 값은 그대로 깊이로 넘기는지 확인한다.
+func TestBoundedMaxHopsPassesDepthThrough(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000021")
+	entry := testContext(t, graphID, "019a0000-0000-7000-8000-000000000022", "진입", 1)
+	database := &fakeStore{
+		keyword: []store.SearchCandidate{{Context: entry}},
+		hops:    store.HopResult{Contexts: []model.Context{entry}, Distances: map[model.ID]int{entry.ID: 0}},
+	}
+	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, FoldThreshold: 0.9, GraphStage: GraphStageRelations}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	if _, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "현재 작업", AsOf: time.Now().UTC(), Budget: 0, MaxHops: 3, MaxHopNodes: 0}); err != nil {
+		t.Fatalf("흐름 검색: %v", err)
+	}
+	if database.hopDepth != 3 {
+		t.Fatalf("탐색 깊이 = %d, want 3", database.hopDepth)
+	}
 }

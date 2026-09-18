@@ -188,7 +188,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 판독.
 
-#### - [ ] 16. `relation_list`가 관계 목록 페이지 크기 대신 그래프 목록 값을 쓴다
+#### - [x] 16. `relation_list`가 관계 목록 페이지 크기 대신 그래프 목록 값을 쓴다
 
 `internal/mcp/handler.go:334`~`:341`
 
@@ -196,7 +196,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 재현.
 
-#### - [ ] 17. 잘못된 목록 커서가 `invalid_argument`가 아닌 `internal`로 나간다
+#### - [x] 17. 잘못된 목록 커서가 `invalid_argument`가 아닌 `internal`로 나간다
 
 `internal/mcp/schema.go:65`, `:147`, `internal/mcp/handler.go:147`, `:341`
 
@@ -204,7 +204,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 재현. `cursor:"!!"` → `internal`.
 
-#### - [ ] 18. 공백만 있는 그래프 이름을 받는다
+#### - [x] 18. 공백만 있는 그래프 이름을 받는다
 
 `internal/mcp/schema.go:69`, `:76`
 
@@ -212,7 +212,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 재현.
 
-#### - [ ] 19. `max_hops`가 0(제한 없음)이면 흐름 검색의 그래프 확장이 일어나지 않는다
+#### - [x] 19. `max_hops`가 0(제한 없음)이면 흐름 검색의 그래프 확장이 일어나지 않는다
 
 `internal/search/search.go:350`, `internal/mcp/handler.go:128`
 

@@ -331,11 +331,11 @@ func (h handler) listRelations(ctx context.Context, accountID model.ID, argument
 	if contextValue.DeletedAt != nil {
 		return ToolResult{}, &Error{Code: "not_found"}
 	}
-	pageSize := h.limits.GraphPage.Default
+	pageSize := h.limits.RelationPage.Default
 	if value, ok := arguments["page_size"]; ok {
 		pageSize = int(value.(float64))
 	}
-	if err := plan.CheckRequest("graph_page", int64(pageSize), int64(h.limits.GraphPage.Maximum)); err != nil {
+	if err := plan.CheckRequest("relation_page", int64(pageSize), int64(h.limits.RelationPage.Maximum)); err != nil {
 		return ToolResult{}, limitError(err)
 	}
 	relations, cursor, err := h.operations.ListContextRelations(ctx, graphID, contextID, relationStates(arguments["state_filter"]), relationTypes(arguments["type_filter"]), optionalString(arguments, "cursor"), pageSize)
@@ -583,6 +583,9 @@ func mapError(err error) error {
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		return &Error{Code: "not_found"}
+	}
+	if errors.Is(err, store.ErrInvalidCursor) {
+		return &Error{Code: "invalid_argument", Data: map[string]any{"field": "cursor"}}
 	}
 	if errors.Is(err, store.ErrInvalidState) {
 		return invalidArgument(err)

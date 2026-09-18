@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/base64"
 	"math"
 	"net/url"
 	"strings"
@@ -16,6 +17,9 @@ const (
 	maxBodyRunes        = 8_000
 	maxReferences       = 100
 	maxMembers          = 1_000
+	// maxCursorRunes는 저장소가 만드는 가장 긴 커서보다 넉넉한 상한이다. 그래프 목록
+	// 커서가 RFC3339Nano 시각과 UUID를 base64로 담아 가장 길다.
+	maxCursorRunes = 256
 )
 
 // argumentError는 MCP 입력 계층에서 거절할 인자의 이름만 노출한다.
@@ -62,18 +66,18 @@ var toolSchemas = map[string]map[string]argumentRule{
 	"graph_list": {
 		"name_filter":  optional(textAtMost(maxNameRunes)),
 		"grade_filter": optional(stringArray("owner", "editor", "viewer")),
-		"cursor":       optional(stringValue),
+		"cursor":       optional(cursorString),
 		"page_size":    optional(positiveInteger),
 	},
 	"graph_create": {
-		"name":        required(textRange(1, maxNameRunes)),
+		"name":        required(nonBlankText(maxNameRunes)),
 		"description": optional(textAtMost(maxDescriptionRunes)),
 	},
 	"graph_get": graphIDRules(),
 	"graph_update": {
 		"graph_id":         required(idString),
 		"expected_version": required(positiveInteger),
-		"name":             required(textRange(1, maxNameRunes)),
+		"name":             required(nonBlankText(maxNameRunes)),
 		"description":      optional(textAtMost(maxDescriptionRunes)),
 	},
 	"node_create": {
@@ -144,7 +148,7 @@ var toolSchemas = map[string]map[string]argumentRule{
 		"context_id":   required(idString),
 		"state_filter": optional(stringArray("proposed", "confirmed", "discarded")),
 		"type_filter":  optional(stringArray("precedes", "causes", "part_of", "relates_to")),
-		"cursor":       optional(stringValue),
+		"cursor":       optional(cursorString),
 		"page_size":    optional(positiveInteger),
 	},
 	"relation_confirm": {
@@ -205,6 +209,19 @@ func oneOf(values ...string) func(any) bool {
 }
 
 func stringValue(value any) bool { _, ok := value.(string); return ok }
+
+// cursorString은 목록 커서가 저장소가 만든 불투명 문자열의 형식인지 본다.
+//
+// 「입력 검증」이 커서 형식 검증을 이 패키지의 책임으로 두었다. 내용까지 해석하지는
+// 않는다. 그것은 커서를 만든 저장소의 몫이며, 그 해독 실패도 invalid_argument로 나간다.
+func cursorString(value any) bool {
+	text, ok := value.(string)
+	if !ok || text == "" || utf8.RuneCountInString(text) > maxCursorRunes {
+		return false
+	}
+	_, err := base64.RawURLEncoding.DecodeString(text)
+	return err == nil
+}
 
 func dateTimeString(value any) bool {
 	text, ok := value.(string)

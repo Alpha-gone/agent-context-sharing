@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/plan"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -35,7 +36,7 @@ func (s *Store) CreateGraph(ctx context.Context, graph model.Graph) (model.Graph
 }
 
 // CreateGraphWithOwner는 그래프 생성과 생성 계정의 소유자 등급 부여를 한 트랜잭션에 묶는다.
-func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph) (model.Graph, error) {
+func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, limits WriteLimits) (model.Graph, error) {
 	if err := graph.Validate(); err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 검증: %w", err)
 	}
@@ -44,6 +45,17 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph) (mo
 		return model.Graph{}, fmt.Errorf("그래프 생성 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// 소유 그래프 수를 같은 트랜잭션에서 센다. 밖에서 읽은 값으로만 판정하면 한도 직전
+	// 계정의 동시 생성이 둘 다 통과한다.
+	if limits.GraphsPerAccount > 0 {
+		count, err := ownedGraphCount(ctx, tx, graph.CreatedBy)
+		if err != nil {
+			return model.Graph{}, err
+		}
+		if err := plan.CheckIncrease("graphs_per_account", count, 1, limits.GraphsPerAccount); err != nil {
+			return model.Graph{}, err
+		}
+	}
 	row := tx.QueryRow(ctx, `
 		INSERT INTO public.context_graph (
 			graph_id, name, description, created_by, created_at, last_activity_at,

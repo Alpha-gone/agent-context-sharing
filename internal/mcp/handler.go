@@ -20,14 +20,14 @@ import (
 type Operations interface {
 	perm.GradeStore
 	ListGraphs(context.Context, model.ID, model.GraphListFilter, string, int) ([]model.GraphListItem, string, error)
-	CreateGraphWithOwner(context.Context, model.Graph) (model.Graph, error)
+	CreateGraphWithOwner(context.Context, model.Graph, store.WriteLimits) (model.Graph, error)
 	Graph(context.Context, model.ID) (model.Graph, error)
 	UpdateGraph(context.Context, model.ID, int64, string, string) (model.Graph, error)
 	Context(context.Context, model.ID, model.ID) (model.Context, error)
 	HopContexts(context.Context, model.ID, model.ID, int, string, []string, int) (store.HopResult, error)
-	CreateContextWithOperation(context.Context, model.ID, model.Context, []model.ID, *store.OperationRecord) (model.Context, error)
-	CreateSupersedingContextWithOperation(context.Context, model.ID, model.Context, []model.ID, model.ID, *store.OperationRecord) (model.Context, error)
-	UpdateContextWithOperation(context.Context, model.ID, int64, model.Context, *store.OperationRecord) (model.Context, error)
+	CreateContextWithOperation(context.Context, model.ID, model.Context, []model.ID, *store.OperationRecord, store.WriteLimits) (model.Context, error)
+	CreateSupersedingContextWithOperation(context.Context, model.ID, model.Context, []model.ID, model.ID, *store.OperationRecord, store.WriteLimits) (model.Context, error)
+	UpdateContextWithOperation(context.Context, model.ID, int64, model.Context, *store.OperationRecord, store.WriteLimits) (model.Context, error)
 	DiscardContext(context.Context, model.ID, model.ID, *store.OperationRecord) (model.Context, error)
 	RestoreContext(context.Context, model.ID, model.ID, *store.OperationRecord) (model.Context, error)
 	KeepContext(context.Context, model.ID, model.ID, int64, *store.OperationRecord) (model.Context, error)
@@ -163,7 +163,7 @@ func (h handler) createGraph(ctx context.Context, accountID model.ID, arguments 
 	graph, err := h.operations.CreateGraphWithOwner(ctx, model.Graph{
 		ID: graphID, Name: arguments["name"].(string), Description: optionalString(arguments, "description"), CreatedBy: accountID,
 		CreatedAt: now, LastActivityAt: now, Version: 1,
-	})
+	}, h.writeLimits())
 	if err != nil {
 		return ToolResult{}, mapError(err)
 	}
@@ -227,9 +227,9 @@ func (h handler) createNode(ctx context.Context, accountID model.ID, arguments m
 			return ToolResult{}, &Error{Code: "invalid_argument", Data: map[string]any{"field": "supersedes_context_id"}}
 		}
 		operation.Kind = store.OperationSupersede
-		stored, err = h.operations.CreateSupersedingContextWithOperation(ctx, graphID, value, references, supersededID, &operation)
+		stored, err = h.operations.CreateSupersedingContextWithOperation(ctx, graphID, value, references, supersededID, &operation, h.writeLimits())
 	} else {
-		stored, err = h.operations.CreateContextWithOperation(ctx, graphID, value, references, &operation)
+		stored, err = h.operations.CreateContextWithOperation(ctx, graphID, value, references, &operation, h.writeLimits())
 	}
 	if err != nil {
 		h.recordRejectedCreation(ctx, operation, err)
@@ -311,7 +311,7 @@ func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments m
 	agentID := argumentID(arguments, "created_by_agent")
 	operation := operationRecord(store.OperationUpdate, graphID, contextID, accountID, agentID, arguments)
 	operation.TargetVersion = previous.Version
-	stored, err := h.operations.UpdateContextWithOperation(ctx, graphID, int64(arguments["expected_version"].(float64)), next, &operation)
+	stored, err := h.operations.UpdateContextWithOperation(ctx, graphID, int64(arguments["expected_version"].(float64)), next, &operation, h.writeLimits())
 	if err != nil {
 		h.recordRejected(ctx, operation, err)
 		return ToolResult{}, mapError(err)
@@ -470,6 +470,15 @@ func (h handler) requireActiveGraph(ctx context.Context, graphID, accountID mode
 	return graph, nil
 }
 
+// writeLimits는 저장 트랜잭션 안에서 강제할 누적 한도를 접근 계층 플랜에서 만든다.
+// 트랜잭션 밖의 사전 검사는 빠른 거부일 뿐이고, 실제 강제는 쓰기와 같은 트랜잭션이 한다.
+func (h handler) writeLimits() store.WriteLimits {
+	return store.WriteLimits{
+		StoredCharsPerGraph: int64(h.limits.StoredCharactersPerGraph),
+		GraphsPerAccount:    int64(h.limits.GraphsPerAccount),
+	}
+}
+
 func (h handler) checkGraphCount(ctx context.Context, accountID model.ID) error {
 	if h.limits.GraphsPerAccount == 0 {
 		return nil
@@ -583,6 +592,9 @@ func mapError(err error) error {
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		return &Error{Code: "not_found"}
+	}
+	if _, ok := errors.AsType[plan.LimitError](err); ok {
+		return limitError(err)
 	}
 	if errors.Is(err, store.ErrInvalidCursor) {
 		return &Error{Code: "invalid_argument", Data: map[string]any{"field": "cursor"}}

@@ -55,6 +55,18 @@ type Store struct {
 	graceDays RetentionDays
 }
 
+// WriteLimits는 저장 트랜잭션 안에서 강제할 누적 한도다. 0은 한도 없음이다.
+//
+// 접근 계층이 트랜잭션 밖에서 읽은 값으로만 판정하면 한도 직전의 그래프에 생성이 동시에
+// 와도 둘 다 통과한다. 「계정 플랜 값」의 누적 단위 한도는 값을 늘리는 쓰기와 같은
+// 트랜잭션에서 판정되어야 하므로 한도를 여기까지 넘긴다.
+type WriteLimits struct {
+	// StoredCharsPerGraph는 그래프 하나가 담을 수 있는 최대 문자 수다.
+	StoredCharsPerGraph int64
+	// GraphsPerAccount는 한 계정이 소유자 등급으로 가질 수 있는 최대 활성 그래프 수다.
+	GraphsPerAccount int64
+}
+
 // RelationProposalConfig는 사건 관계 후보 제안에 쓰는 검증된 배포 구성이다.
 type RelationProposalConfig struct {
 	// AdjacencyWindow는 precedes 후보로 허용할 두 사건 사이 최대 간격이다.

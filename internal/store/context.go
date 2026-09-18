@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/plan"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -18,15 +19,15 @@ import (
 // CreateContext은 정점과 계층별 참조 간선을 같은 Read Committed 트랜잭션에서 만든다.
 // 원천은 같은 source_ref가 있으면 기존 정점을 반환한다.
 func (s *Store) CreateContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID) (model.Context, error) {
-	return s.CreateContextWithOperation(ctx, graphID, value, derivedFrom, nil)
+	return s.CreateContextWithOperation(ctx, graphID, value, derivedFrom, nil, WriteLimits{})
 }
 
 // CreateContextWithOperation은 새 컨텍스트와 적용 기록을 같은 트랜잭션에 남긴다.
-func (s *Store) CreateContextWithOperation(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, operation *OperationRecord) (model.Context, error) {
+func (s *Store) CreateContextWithOperation(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, operation *OperationRecord, limits WriteLimits) (model.Context, error) {
 	if err := validateContextInput(graphID, value, derivedFrom); err != nil {
 		return model.Context{}, err
 	}
-	created, err := s.createContext(ctx, graphID, value, derivedFrom, model.ID{}, operation)
+	created, err := s.createContext(ctx, graphID, value, derivedFrom, model.ID{}, operation, limits)
 	if err == nil {
 		s.proposeEventRelationsAfterSave(ctx, graphID, created)
 		return created, nil
@@ -44,14 +45,14 @@ func (s *Store) CreateContextWithOperation(ctx context.Context, graphID model.ID
 
 // CreateSupersedingContextWithOperation은 새 파생 판과 SUPERSEDES 간선, 근거 무효 표시와
 // 관리 연산 기록을 하나의 트랜잭션으로 적용한다.
-func (s *Store) CreateSupersedingContextWithOperation(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord) (model.Context, error) {
+func (s *Store) CreateSupersedingContextWithOperation(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits) (model.Context, error) {
 	if err := validateContextInput(graphID, value, derivedFrom); err != nil {
 		return model.Context{}, err
 	}
 	if value.Layer != model.LayerDerived || !supersededID.IsV7() {
 		return model.Context{}, fmt.Errorf("대체는 UUIDv7 이전 파생을 지정한 파생에만 적용할 수 있다")
 	}
-	return s.createContext(ctx, graphID, value, derivedFrom, supersededID, operation)
+	return s.createContext(ctx, graphID, value, derivedFrom, supersededID, operation, limits)
 }
 
 // Context는 graph_id 안에서 context_id에 해당하는 정점을 읽고 응답 격리를 재검사한다.
@@ -64,11 +65,11 @@ func (s *Store) Context(ctx context.Context, graphID, contextID model.ID) (model
 
 // UpdateContext는 조건부 openCypher 갱신으로 판 번호의 비교와 증가를 같은 트랜잭션에 둔다.
 func (s *Store) UpdateContext(ctx context.Context, graphID model.ID, expectedVersion int64, value model.Context) (model.Context, error) {
-	return s.UpdateContextWithOperation(ctx, graphID, expectedVersion, value, nil)
+	return s.UpdateContextWithOperation(ctx, graphID, expectedVersion, value, nil, WriteLimits{})
 }
 
 // UpdateContextWithOperation은 갱신과 적용 기록을 같은 트랜잭션에 남긴다.
-func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID, expectedVersion int64, value model.Context, operation *OperationRecord) (model.Context, error) {
+func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID, expectedVersion int64, value model.Context, operation *OperationRecord, limits WriteLimits) (model.Context, error) {
 	if !graphID.IsV7() || value.GraphID != graphID || expectedVersion < 1 {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 인자가 올바르지 않다")
 	}
@@ -124,7 +125,7 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 			return model.Context{}, err
 		}
 	}
-	if err := s.updateGraphActivity(ctx, tx, graphID, utf8.RuneCountInString(value.Body)-utf8.RuneCountInString(previous.Body)); err != nil {
+	if err := s.updateGraphActivity(ctx, tx, graphID, utf8.RuneCountInString(value.Body)-utf8.RuneCountInString(previous.Body), limits.StoredCharsPerGraph); err != nil {
 		return model.Context{}, err
 	}
 	if err := s.recordAppliedOperation(ctx, tx, operation, stored.Version); err != nil {
@@ -133,27 +134,31 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if err := tx.Commit(ctx); err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 커밋: %w", err)
 	}
+	// 파생 근거는 「컨텍스트 모델」이 불변으로 두었으므로 갱신 전 값을 그대로 옮기고,
+	// 사건 구성원은 이 트랜잭션이 쓴 값을 옮긴다. 커밋 뒤 재조회는 하지 않는다.
+	stored = withReferences(stored, previousReferences(previous), value)
 	if value.Layer == model.LayerEvent && eventProposalInputChanged(previous, value) {
 		s.proposeEventRelationsAfterSave(ctx, graphID, stored)
-	}
-	if value.Layer != model.LayerSource {
-		stored, err := s.context(ctx, s.pool, graphID, value.ID)
-		if err != nil {
-			return model.Context{}, fmt.Errorf("갱신한 컨텍스트 조립: %w", err)
-		}
-		return stored, nil
 	}
 	return stored, nil
 }
 
+// previousReferences는 불변인 파생 근거를 갱신 전 판에서 가져온다.
+func previousReferences(previous model.Context) []model.ID {
+	if previous.Derived == nil {
+		return nil
+	}
+	return previous.Derived.DerivedFrom
+}
+
 // DiscardContext는 활성 컨텍스트에 폐기 시각을 표시하고 적용 기록을 함께 남긴다.
 func (s *Store) DiscardContext(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord) (model.Context, error) {
-	return s.changeContextDeletion(ctx, graphID, contextID, operation, true)
+	return s.changeContextDeletion(ctx, graphID, contextID, operation, nil, true)
 }
 
 // RestoreContext는 연산으로 폐기한 컨텍스트의 폐기 시각을 지우고 적용 기록을 함께 남긴다.
 func (s *Store) RestoreContext(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord) (model.Context, error) {
-	return s.changeContextDeletion(ctx, graphID, contextID, operation, false)
+	return s.changeContextDeletion(ctx, graphID, contextID, operation, nil, false)
 }
 
 // KeepContext는 대상 판 번호를 확인하고 상태를 바꾸지 않은 유지 판단을 기록한다.
@@ -186,7 +191,11 @@ func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, ex
 	return stored, nil
 }
 
-func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord, discard bool) (model.Context, error) {
+// changeContextDeletion은 폐기와 복구를 한 트랜잭션으로 적용한다.
+//
+// webAudit이 있으면 상태 변경과 같은 트랜잭션에 웹 감사 기록을 남긴다. 따로 커밋하면
+// 그 사이의 취소나 오류로 변경만 남고 기록이 사라진다.
+func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord, webAudit *webAuditRecord, discard bool) (model.Context, error) {
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
@@ -259,22 +268,23 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if !discard {
 		delta = -delta
 	}
-	if err := s.updateGraphActivity(ctx, tx, graphID, delta); err != nil {
+	// 폐기와 복구는 저장량을 늘리지 않거나 이전 값으로 되돌릴 뿐이므로 한도를 걸지 않는다.
+	if err := s.updateGraphActivity(ctx, tx, graphID, delta, 0); err != nil {
 		return model.Context{}, err
 	}
 	if err := s.recordAppliedOperation(ctx, tx, operation, stored.Version); err != nil {
 		return model.Context{}, err
 	}
+	if webAudit != nil {
+		if err := s.insertWebAudit(ctx, tx, *webAudit); err != nil {
+			return model.Context{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 커밋: %w", err)
 	}
-	if previous.Layer != model.LayerSource {
-		stored, err = s.context(ctx, s.pool, graphID, contextID)
-		if err != nil {
-			return model.Context{}, fmt.Errorf("상태 전이한 컨텍스트 조립: %w", err)
-		}
-	}
-	return stored, nil
+	// 상태 전이는 참조를 바꾸지 않으므로 전이 전 판에서 그대로 옮긴다.
+	return withReferences(stored, previousReferences(previous), previous), nil
 }
 
 // deletionConflict은 상태 전이의 쓰기 조건이 맞지 않은 이유를 다시 읽어 구분한다.
@@ -348,7 +358,7 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 }
 
 // createContext은 원천 중복 확인과 그래프 활동 갱신을 포함한 실제 쓰기 트랜잭션이다.
-func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord) (model.Context, error) {
+func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits) (model.Context, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 생성 트랜잭션 시작: %w", err)
@@ -405,7 +415,7 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	if err := s.enqueueIndexTask(ctx, tx, graphID, value.ID); err != nil {
 		return model.Context{}, err
 	}
-	if err := s.updateGraphActivity(ctx, tx, graphID, utf8.RuneCountInString(value.Body)); err != nil {
+	if err := s.updateGraphActivity(ctx, tx, graphID, utf8.RuneCountInString(value.Body), limits.StoredCharsPerGraph); err != nil {
 		return model.Context{}, err
 	}
 	if err := s.recordAppliedOperation(ctx, tx, operation, stored.Version); err != nil {
@@ -414,13 +424,26 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	if err := tx.Commit(ctx); err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 생성 커밋: %w", err)
 	}
-	if value.Layer != model.LayerSource {
-		stored, err = s.context(ctx, s.pool, graphID, value.ID)
-		if err != nil {
-			return model.Context{}, fmt.Errorf("생성한 컨텍스트 조립: %w", err)
+	// 참조 목록은 방금 같은 트랜잭션에서 만든 값이므로 커밋 뒤 다시 읽지 않는다. 재조회가
+	// 실패하면 이미 적용된 연산이 실패로 응답되어 적용 기록과 거부 기록이 모순되고,
+	// 호출자가 재시도하면 판 번호 충돌이 난다.
+	return withReferences(stored, derivedFrom, value), nil
+}
+
+// withReferences는 커밋한 정점에 같은 트랜잭션이 쓴 참조 목록을 붙인다.
+// 정점 속성에는 참조를 두지 않으므로 간선에서 조립하는 대신 쓴 값을 그대로 옮긴다.
+func withReferences(stored model.Context, derivedFrom []model.ID, written model.Context) model.Context {
+	switch stored.Layer {
+	case model.LayerDerived:
+		if stored.Derived != nil {
+			stored.Derived.DerivedFrom = slices.Clone(derivedFrom)
+		}
+	case model.LayerEvent:
+		if stored.Event != nil && written.Event != nil {
+			stored.Event.MemberIDs = slices.Clone(written.Event.MemberIDs)
 		}
 	}
-	return stored, nil
+	return stored
 }
 
 // createSupersedesEdge는 새 파생에서 이전 파생으로 향하는 단일 참조를 만든다.
@@ -640,18 +663,40 @@ func (s *Store) findSourceWith(ctx context.Context, queryer cypherQueryer, graph
 }
 
 // updateGraphActivity는 컨텍스트 변경과 같은 트랜잭션에서 저장 문자 수와 최근 활동을 갱신한다.
-func (s *Store) updateGraphActivity(ctx context.Context, tx pgx.Tx, graphID model.ID, characterDelta int) error {
+// updateGraphActivity는 저장 문자 수와 최근 활동을 갱신하며 누적 한도를 같은 문장에서
+// 강제한다. maxStoredChars 0은 한도 없음이다.
+//
+// 값을 늘리는 요청만 한도로 막는다. 「계정 플랜 값」이 누적 한도를 그렇게 정했으므로
+// 이미 한도를 넘은 그래프에서도 축소와 읽기는 통과해야 한다.
+func (s *Store) updateGraphActivity(ctx context.Context, tx pgx.Tx, graphID model.ID, characterDelta int, maxStoredChars int64) error {
 	command, err := tx.Exec(ctx, `
 		UPDATE public.context_graph
 		SET last_activity_at = $1, stored_chars = stored_chars + $2
-		WHERE graph_id = $3 AND stored_chars + $2 >= 0`, nowUTC(), characterDelta, graphID.String())
+		WHERE graph_id = $3 AND stored_chars + $2 >= 0
+		  AND ($4 = 0 OR $2 <= 0 OR stored_chars + $2 <= $4)`, nowUTC(), characterDelta, graphID.String(), maxStoredChars)
 	if err != nil {
 		return fmt.Errorf("그래프 활동 갱신: %w", err)
 	}
 	if command.RowsAffected() == 0 {
-		return ErrNotFound
+		return s.graphActivityRejection(ctx, tx, graphID, characterDelta, maxStoredChars)
 	}
 	return nil
+}
+
+// graphActivityRejection은 갱신이 걸리지 않은 이유를 다시 읽어 없는 그래프와 한도 초과를
+// 구분한다. 구분하지 않으면 한도 초과가 not_found로 나간다.
+func (s *Store) graphActivityRejection(ctx context.Context, tx pgx.Tx, graphID model.ID, characterDelta int, maxStoredChars int64) error {
+	var stored int64
+	if err := tx.QueryRow(ctx, `SELECT stored_chars FROM public.context_graph WHERE graph_id = $1`, graphID.String()).Scan(&stored); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("그래프 저장량 조회: %w", err)
+	}
+	if err := plan.CheckIncrease("stored_characters_per_graph", stored, int64(characterDelta), maxStoredChars); err != nil {
+		return err
+	}
+	return ErrNotFound
 }
 
 // contextVersionConflict은 같은 트랜잭션에서 현재 판 번호를 읽어 충돌 또는 부재를 구분한다.

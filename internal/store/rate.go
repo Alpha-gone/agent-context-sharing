@@ -42,8 +42,15 @@ func (s *Store) TryIncrementRequestRate(ctx context.Context, accountID model.ID,
 
 // OwnedGraphCount는 계정이 직접 또는 팀 상속으로 소유자 등급을 가진 활성 그래프 수를 센다.
 func (s *Store) OwnedGraphCount(ctx context.Context, accountID model.ID) (int, error) {
-	var count int
-	err := s.pool.QueryRow(ctx, `
+	count, err := ownedGraphCount(ctx, s.pool, accountID)
+	return int(count), err
+}
+
+// ownedGraphCount는 같은 질의를 풀과 트랜잭션에서 함께 쓰도록 분리한 것이다. 생성
+// 트랜잭션은 이 값을 그 안에서 세어야 누적 한도가 동시 요청에도 성립한다.
+func ownedGraphCount(ctx context.Context, queryer cypherQueryer, accountID model.ID) (int64, error) {
+	var count int64
+	err := queryer.QueryRow(ctx, `
 		WITH owned AS (
 			SELECT graph_id FROM public.graph_grant WHERE subject_type = 'account' AND subject_id = $1 AND grade = 'owner'
 			UNION

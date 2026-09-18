@@ -504,26 +504,12 @@ func (s *Store) SetContextDeleted(ctx context.Context, graphID, contextID, actor
 	if !graphID.IsV7() || !contextID.IsV7() || !actorID.IsV7() {
 		return model.Context{}, fmt.Errorf("컨텍스트 웹 상태 변경 인자가 올바르지 않다")
 	}
-	value, err := s.changeContextDeletion(ctx, graphID, contextID, nil, deleted)
-	if err != nil {
-		return model.Context{}, err
-	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return model.Context{}, fmt.Errorf("컨텍스트 웹 감사 트랜잭션 시작: %w", err)
-	}
-	defer tx.Rollback(ctx)
 	action := "restore"
 	if deleted {
 		action = "delete"
 	}
-	if err := s.insertWebAudit(ctx, tx, webAuditRecord{TargetKind: "web_delete", Action: action, ActorID: actorID, GraphID: graphID, TargetContextID: contextID}); err != nil {
-		return model.Context{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.Context{}, fmt.Errorf("컨텍스트 웹 감사 커밋: %w", err)
-	}
-	return value, nil
+	audit := webAuditRecord{TargetKind: "web_delete", Action: action, ActorID: actorID, GraphID: graphID, TargetContextID: contextID}
+	return s.changeContextDeletion(ctx, graphID, contextID, nil, &audit, deleted)
 }
 
 // ListRestoreEligibleGraphs는 요청 계정이 소유자였던 자동 삭제 그래프만 반환한다.

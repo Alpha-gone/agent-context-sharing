@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -166,24 +167,29 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Query().Get("registered") == "1" {
 			message = "계정이 등록되었습니다. 로그인해 주세요."
 		}
-		server.render(writer, http.StatusOK, "login", pageData{Title: "로그인", Message: message})
+		server.render(writer, http.StatusOK, "login", pageData{Title: "로그인", Message: message, Next: localRedirect(request.URL.Query().Get("next"))})
 	case http.MethodPost:
 		if err := request.ParseForm(); err != nil {
 			server.render(writer, http.StatusBadRequest, "login", pageData{Title: "로그인", Error: "입력을 처리할 수 없습니다."})
 			return
 		}
+		next := localRedirect(request.PostForm.Get("next"))
 		loginID := request.PostForm.Get("login_id")
 		accountID, err := server.auth.Authenticate(request.Context(), loginID, request.PostForm.Get("password"))
 		if err != nil {
-			server.render(writer, http.StatusUnauthorized, "login", pageData{Title: "로그인", LoginID: loginID, Error: "로그인 아이디 또는 비밀번호가 올바르지 않습니다."})
+			server.render(writer, http.StatusUnauthorized, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "로그인 아이디 또는 비밀번호가 올바르지 않습니다."})
 			return
 		}
 		session, err := server.auth.WebSession(request.Context(), accountID, SessionAudience)
 		if err != nil {
-			server.render(writer, http.StatusInternalServerError, "login", pageData{Title: "로그인", LoginID: loginID, Error: "세션을 만들 수 없습니다."})
+			server.render(writer, http.StatusInternalServerError, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "세션을 만들 수 없습니다."})
 			return
 		}
 		server.setSessionCookie(writer, request, session)
+		if next != "" {
+			http.Redirect(writer, request, next, http.StatusSeeOther)
+			return
+		}
 		http.Redirect(writer, request, "/graphs", http.StatusSeeOther)
 	default:
 		writer.Header().Set("Allow", "GET, POST")
@@ -646,6 +652,28 @@ func graphFilter(request *http.Request) (model.GraphListFilter, error) {
 	return filter, nil
 }
 
+// localRedirect는 로그인 뒤 돌아갈 주소를 이 서버 안의 절대 경로로 좁힌다.
+//
+// 값이 사용자 입력이므로 그대로 쓰면 열린 리다이렉션이 된다. scheme과 host가 붙은
+// 주소와 `//host` 형태를 모두 버리고 경로로 시작하는 값만 남긴다.
+func localRedirect(value string) string {
+	if !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") {
+		return ""
+	}
+	target, err := url.Parse(value)
+	if err != nil || target.Scheme != "" || target.Host != "" {
+		return ""
+	}
+	return target.RequestURI()
+}
+
+// SessionAccount는 현재 요청의 검증된 웹 세션 계정을 돌려준다. 세션 쿠키의 이름과
+// 수명은 이 패키지가 소유하므로, 인가 서버의 `/authorize`는 판정 결과만 받아 쓴다.
+func (server *Server) SessionAccount(request *http.Request) (model.ID, bool) {
+	accountID, _, ok := server.session(request)
+	return accountID, ok
+}
+
 func (server *Server) session(request *http.Request) (model.ID, Session, bool) {
 	cookie, err := request.Cookie(sessionCookie)
 	if err != nil || cookie.Value == "" {
@@ -691,10 +719,13 @@ func (server *Server) render(writer http.ResponseWriter, status int, name string
 }
 
 type pageData struct {
-	Title             string
-	Message           string
-	Error             string
-	LoginID           string
+	Title   string
+	Message string
+	Error   string
+	LoginID string
+	// Next에는 로그인 뒤 돌아갈 저장소 안의 경로를 둔다. 「인가 코드 흐름」 5단계가
+	// 인가 요청으로 되돌아오는 유일한 통로다.
+	Next              string
 	AccountID         model.ID
 	GraphID           model.ID
 	Graph             model.Graph
@@ -774,7 +805,7 @@ const pageTemplates = `{{define "head"}}<!doctype html><html lang="ko"><head><me
 body { margin: 0; } main { max-width: 1120px; margin: 32px auto; padding: 0 16px; } h1 { margin: 0 0 16px; font-size: 24px; } section, form, table { margin: 16px 0; } .panel { padding: 16px; background: #fff; border: 1px solid #d9dee5; } label { display: block; margin: 8px 0; } input, select, button { box-sizing: border-box; padding: 8px; font: inherit; } input { width: 100%; } button { cursor: pointer; } .notice { padding: 8px; background: #e8f3ee; } .error { padding: 8px; background: #fdecec; } table { width: 100%; border-collapse: collapse; background: #fff; } th, td { padding: 8px; text-align: left; border: 1px solid #d9dee5; } nav { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; } .inline { display: inline; } .actions { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } .actions label { min-width: 140px; flex: 1; } .graph-layout { display: grid; grid-template-columns: 1fr 260px; gap: 16px; } #context-graph { min-height: 540px; border: 1px solid #d9dee5; } #node-details { white-space: pre-wrap; } @media (max-width: 720px) { .graph-layout { grid-template-columns: 1fr; } #context-graph { min-height: 420px; } }
 </style></head><body><main>{{if .Message}}<p class="notice">{{.Message}}</p>{{end}}{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{end}}
 {{define "foot"}}</main></body></html>{{end}}
-{{define "login"}}{{template "head" .}}<h1>로그인</h1><form class="panel" method="post" action="/login"><label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" required></label><label>비밀번호<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">로그인</button></form><p><a href="/register">계정 등록</a></p>{{template "foot" .}}{{end}}
+{{define "login"}}{{template "head" .}}<h1>로그인</h1><form class="panel" method="post" action="/login">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}<label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" required></label><label>비밀번호<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">로그인</button></form><p><a href="/register">계정 등록</a></p>{{template "foot" .}}{{end}}
 {{define "register"}}{{template "head" .}}<h1>계정 등록</h1><form class="panel" method="post" action="/register"><label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" pattern="[a-z0-9_]{3,32}" required></label><p>영문 소문자, 숫자, 밑줄을 사용해 3~32자로 입력합니다.</p><label>비밀번호<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="128" required></label><p>비밀번호는 8~128자입니다.</p><button type="submit">등록</button></form><p><a href="/login">로그인으로 돌아가기</a></p>{{template "foot" .}}{{end}}
 {{define "logout"}}{{template "head" .}}<h1>로그아웃</h1><form class="panel" method="post" action="/logout"><p>이 브라우저의 세션을 종료합니다.</p><button type="submit">로그아웃</button></form>{{template "foot" .}}{{end}}
 {{define "message"}}{{template "head" .}}<h1>{{.Title}}</h1><p><a href="/graphs">그래프 목록</a></p>{{template "foot" .}}{{end}}

@@ -179,17 +179,28 @@ func passwordMaterial(password string) string {
 	return base64.RawStdEncoding.EncodeToString(digest[:])
 }
 
-// ValidateAuthorizeRequest는 사전 등록 클라이언트, 완전 일치 redirect_uri, PKCE와 리소스를 확인한다.
-func (s *Service) ValidateAuthorizeRequest(request AuthorizeRequest) error {
+// ValidateRedirectTarget은 「인가 코드 흐름」의 1~2단계만 확인하고 돌려보낼 주소를 만든다.
+//
+// 3단계 이후의 실패는 redirect_uri로 알리기로 확정했으므로 그 전에 주소를 신뢰할 수
+// 있어야 한다. 두 단계를 따로 부를 수 있게 나눠 두고 전체 검증은 이 함수를 재사용한다.
+func (s *Service) ValidateRedirectTarget(request AuthorizeRequest) (*url.URL, error) {
 	if !slices.Contains(s.config.Clients, request.ClientID) {
-		return fmt.Errorf("등록되지 않은 client_id")
+		return nil, fmt.Errorf("등록되지 않은 client_id")
 	}
 	redirect, err := url.Parse(request.RedirectURI)
 	if err != nil {
-		return fmt.Errorf("redirect_uri 해석: %w", err)
+		return nil, fmt.Errorf("redirect_uri 해석: %w", err)
 	}
 	if !slices.ContainsFunc(s.config.RedirectURIs, func(allowed *url.URL) bool { return redirectMatches(allowed, redirect) }) {
-		return fmt.Errorf("허용되지 않은 redirect_uri")
+		return nil, fmt.Errorf("허용되지 않은 redirect_uri")
+	}
+	return redirect, nil
+}
+
+// ValidateAuthorizeRequest는 사전 등록 클라이언트, 완전 일치 redirect_uri, PKCE와 리소스를 확인한다.
+func (s *Service) ValidateAuthorizeRequest(request AuthorizeRequest) error {
+	if _, err := s.ValidateRedirectTarget(request); err != nil {
+		return err
 	}
 	if request.CodeChallenge == "" || request.CodeChallengeMethod != "S256" {
 		return fmt.Errorf("PKCE S256 code_challenge이 필요하다")
@@ -270,6 +281,30 @@ func (s *Service) Verify(ctx context.Context, raw, audience string) (model.ID, T
 	return id, Token{Raw: raw, ID: claims.ID, ExpiresAt: claims.Expiry.Time()}, nil
 }
 
+// VerifyAndRenew는 MCP 요청 하나에 필요한 검증과 「토큰 갱신」 판정을 함께 수행한다.
+//
+// Verify와 Renew를 이어 부르지 않는 이유는 왕복 때문이다. 두 함수가 각각 서명 키와
+// 폐기 목록을 읽으므로 이어 부르면 요청마다 그 조회가 두 배가 된다. 갱신 조건에 들지
+// 않거나 발급이 실패하면 renewed가 비고, 「토큰 갱신」대로 요청 자체는 정상 처리한다.
+func (s *Service) VerifyAndRenew(ctx context.Context, raw, audience string) (model.ID, Token, error) {
+	claims, err := s.verifiedClaims(ctx, raw, audience)
+	if err != nil {
+		return model.ID{}, Token{}, err
+	}
+	id, err := model.ParseID(claims.Subject)
+	if err != nil {
+		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
+	}
+	if audience != s.config.Resource {
+		return id, Token{}, nil
+	}
+	renewed, ok, err := s.renewFromClaims(ctx, id, claims)
+	if err != nil || !ok {
+		return id, Token{}, nil
+	}
+	return id, renewed, nil
+}
+
 func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (tokenClaims, error) {
 	parsed, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
 	if err != nil {
@@ -303,6 +338,12 @@ func (s *Service) Renew(ctx context.Context, accountID model.ID, token Token) (T
 	if err != nil || claims.Subject != accountID.String() {
 		return Token{}, false, nil
 	}
+	return s.renewFromClaims(ctx, accountID, claims)
+}
+
+// renewFromClaims는 이미 검증한 클레임으로 갱신 조건만 판정한다. 호출자가 클레임을
+// 들고 있으면 서명 키와 폐기 목록을 다시 읽지 않는다.
+func (s *Service) renewFromClaims(ctx context.Context, accountID model.ID, claims tokenClaims) (Token, bool, error) {
 	now := time.Now().UTC()
 	expiresAt := claims.Expiry.Time()
 	if !expiresAt.After(now) || expiresAt.Sub(now) > 10*time.Second {

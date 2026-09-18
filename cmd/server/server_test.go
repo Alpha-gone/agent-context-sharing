@@ -221,3 +221,41 @@ func (fake *fakeReadiness) Ping(context.Context) error {
 func (fake *fakeReadiness) Close() {
 	fake.closed = true
 }
+
+// TestAuthorizationServerPathsAreRegistered는 인가 서버 메타데이터가 알리는 세 경로가
+// TLS 판정 뒤에 실제로 등록되어 있는지 확인한다. 등록되지 않으면 클라이언트가 접근
+// 토큰을 받을 수 없어 `/mcp` 전체를 쓸 수 없다.
+func TestAuthorizationServerPathsAreRegistered(t *testing.T) {
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
+	app.authz = stubAuthorizationRoutes{}
+	handler := app.handler()
+
+	for _, testCase := range []struct{ method, path string }{
+		{http.MethodGet, "/authorize"},
+		{http.MethodPost, "/token"},
+		{http.MethodGet, "/jwks.json"},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(testCase.method, testCase.path, nil)
+		request.Header.Set("X-Forwarded-Proto", "https")
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code == http.StatusNotFound {
+			t.Fatalf("%s %s가 등록되지 않았다", testCase.method, testCase.path)
+		}
+	}
+}
+
+// stubAuthorizationRoutes는 경로가 등록됐는지만 보기 위해 본문 없이 응답한다.
+type stubAuthorizationRoutes struct{}
+
+func (stubAuthorizationRoutes) Authorize(writer http.ResponseWriter, _ *http.Request) {
+	writer.WriteHeader(http.StatusSeeOther)
+}
+
+func (stubAuthorizationRoutes) Token(writer http.ResponseWriter, _ *http.Request) {
+	writer.WriteHeader(http.StatusOK)
+}
+
+func (stubAuthorizationRoutes) JWKS(writer http.ResponseWriter, _ *http.Request) {
+	writer.WriteHeader(http.StatusOK)
+}

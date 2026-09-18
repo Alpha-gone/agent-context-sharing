@@ -350,3 +350,37 @@ func TestGraphListLinksRestoreForOwnDeletedGraphs(t *testing.T) {
 		t.Fatal("직접 삭제한 그래프의 복구 링크가 없다")
 	}
 }
+
+// TestLoginReturnsToAuthorizeRequest는 로그인 뒤 원래의 인가 요청으로 돌아가는지
+// 확인한다. 「인가 코드 흐름」 5단계가 인가 요청으로 되돌아오는 유일한 통로다.
+func TestLoginReturnsToAuthorizeRequest(t *testing.T) {
+	server := newTestServer(t, model.ID{1}, model.ID{2})
+	next := "/authorize?client_id=test-client&resource=https%3A%2F%2Fservice.test%2Fmcp"
+	form := url.Values{"login_id": {"tester"}, "password": {"correct horse battery staple"}, "next": {next}}
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("로그인 응답 상태 = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if location := recorder.Header().Get("Location"); location != next {
+		t.Fatalf("로그인 뒤 이동 = %q, want %q", location, next)
+	}
+}
+
+// TestLoginRejectsExternalReturnTarget은 복귀 주소가 이 서버 밖을 가리키면 버리는지
+// 확인한다. 값이 사용자 입력이므로 그대로 쓰면 열린 리다이렉션이 된다.
+func TestLoginRejectsExternalReturnTarget(t *testing.T) {
+	server := newTestServer(t, model.ID{1}, model.ID{2})
+	for _, target := range []string{"https://evil.test/steal", "//evil.test/steal", "javascript:alert(1)"} {
+		form := url.Values{"login_id": {"tester"}, "password": {"correct horse battery staple"}, "next": {target}}
+		request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, request)
+		if location := recorder.Header().Get("Location"); location != "/graphs" {
+			t.Fatalf("%s 복귀 주소 = %q, want /graphs", target, location)
+		}
+	}
+}

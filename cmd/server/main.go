@@ -85,10 +85,7 @@ func run() error {
 		ResourceURL:            cfg.ResourceServerURL,
 		AuthorizationServerURL: cfg.AuthorizationServerURL,
 		AllowedOrigins:         cfg.MCPAllowedOrigins,
-	}, func(ctx context.Context, raw, audience string) (model.ID, error) {
-		accountID, _, err := authorization.Verify(ctx, raw, audience)
-		return accountID, err
-	}, mcp.NewHandlerWithSearch(database, cfg.AccountPlans, searcher, slog.Default()))
+	}, verifyWithRenewal(authorization), mcp.NewHandlerWithSearch(database, cfg.AccountPlans, searcher, slog.Default()))
 	if err != nil {
 		return fmt.Errorf("MCP 리소스 서버 준비: %w", err)
 	}
@@ -103,8 +100,15 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("웹 서버 준비: %w", err)
 	}
+	// 인가 서버 경로는 로그인 화면과 세션 쿠키 판정을 웹에서 받아 쓴다. 쿠키의 이름과
+	// 수명은 web이 소유하므로 authz는 판정 결과만 주입받는다.
+	authorizationHandler, err := authz.NewHandler(authorization, webServer.SessionAccount, "/login")
+	if err != nil {
+		return fmt.Errorf("인가 서버 경로 준비: %w", err)
+	}
 	app := newApplication(database, slog.Default(), transport, resourceServer)
 	app.web = webServer
+	app.authz = authorizationHandler
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: app.handler()}
 
 	stopSignals := make(chan os.Signal, 1)

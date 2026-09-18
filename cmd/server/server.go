@@ -33,6 +33,14 @@ type transportSecurity struct {
 	trustedProxies []netip.Prefix
 }
 
+// authorizationRoutes는 「HTTP 진입점」이 인가 서버에 배정한 세 경로의 처리기다.
+// readiness와 같은 이유로 인터페이스를 두어 조립과 경로 등록을 서로 떼어 놓는다.
+type authorizationRoutes interface {
+	Authorize(http.ResponseWriter, *http.Request)
+	Token(http.ResponseWriter, *http.Request)
+	JWKS(http.ResponseWriter, *http.Request)
+}
+
 // application은 1단계 HTTP 상태 경로와 요청 로그를 관리한다.
 type application struct {
 	database  readiness
@@ -40,6 +48,7 @@ type application struct {
 	transport transportSecurity
 	mcp       *mcp.Server
 	web       *web.Server
+	authz     authorizationRoutes
 	accepting atomic.Bool
 }
 
@@ -69,9 +78,16 @@ func (app *application) handler() http.Handler {
 	// 업무 경로는 이후 단계에서 이 mux에 등록하며 모두 TLS 판정을 지난다.
 	gated := http.NewServeMux()
 	if app.mcp != nil {
-		gated.Handle("POST /mcp", app.mcp)
+		gated.Handle("POST /mcp", withRenewalHeader(app.mcp))
 		gated.HandleFunc("GET /.well-known/oauth-protected-resource", app.mcp.ProtectedResourceMetadata)
 		gated.HandleFunc("GET /.well-known/oauth-authorization-server", app.mcp.AuthorizationServerMetadata)
+	}
+	// 인가 서버의 세 경로를 등록한다. 등록하지 않으면 인가 서버 메타데이터가 알리는
+	// 주소가 모두 404가 되어 클라이언트가 접근 토큰을 받을 수 없다.
+	if app.authz != nil {
+		gated.HandleFunc("GET /authorize", app.authz.Authorize)
+		gated.HandleFunc("POST /token", app.authz.Token)
+		gated.HandleFunc("GET /jwks.json", app.authz.JWKS)
 	}
 	if app.web != nil {
 		gated.Handle("/", app.web)

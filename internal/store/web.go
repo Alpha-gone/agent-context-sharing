@@ -38,14 +38,21 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 	}
 	// upsert가 기존 등급을 덮어쓰므로 부여도 소유자를 없앨 수 있다. 유일한 소유자가 자기
 	// 계정에 editor를 부여하면 소유자 0명이 되므로 회수와 같은 판정을 여기에도 둔다.
-	if err := requireOwner(ctx, tx, graphID); err != nil {
-		return err
+	//
+	// 판정을 소유자를 낮추는 부여로 한정하는 이유는 「판정의 직렬화」가 방아쇠를 등급
+	// 회수와 소유권 이전으로 정했기 때문이다. 소유자를 건드리지 않는 부여까지 막으면
+	// 이미 소유자가 없어 유예 중인 그래프에 등급을 다시 붙여 되살릴 수 없다.
+	demotesOwner := before != nil && *before == "owner" && grade != model.GraphGradeOwner
+	if demotesOwner {
+		if err := requireOwner(ctx, tx, graphID); err != nil {
+			return err
+		}
 	}
 	if err := cancelGraceForConnectedGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
 	action, targetKind := "grant", "grant"
-	if before != nil && *before == "owner" && grade != model.GraphGradeOwner {
+	if demotesOwner {
 		action, targetKind = "transfer", "ownership_transfer"
 	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: targetKind, Action: action, ActorID: actorID, GraphID: graphID, SubjectType: subjectType, SubjectID: subjectID, BeforeGrade: nullableGrade(before), AfterGrade: grade})
@@ -201,11 +208,8 @@ func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID mo
 	if _, err := tx.Exec(ctx, `INSERT INTO public.team_member (team_id, account_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, teamID.String(), accountID.String()); err != nil {
 		return fmt.Errorf("팀 구성원 추가: %w", err)
 	}
-	graphIDs, err := teamGraphIDs(ctx, tx, teamID)
+	graphIDs, err := lockTeamGraphs(ctx, tx, teamID)
 	if err != nil {
-		return err
-	}
-	if _, err := lockGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
 	if err := cancelGraceForConnectedGraphs(ctx, tx, graphIDs); err != nil {
@@ -227,11 +231,8 @@ func (s *Store) RemoveTeamMemberWithAudit(ctx context.Context, teamID, actorID, 
 	if err := requireTeamManager(ctx, tx, teamID, actorID); err != nil {
 		return err
 	}
-	graphIDs, err := teamGraphIDs(ctx, tx, teamID)
+	graphIDs, err := lockTeamGraphs(ctx, tx, teamID)
 	if err != nil {
-		return err
-	}
-	if _, err := lockGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
 	result, err := tx.Exec(ctx, `DELETE FROM public.team_member WHERE team_id = $1 AND account_id = $2`, teamID.String(), accountID.String())
@@ -260,11 +261,8 @@ func (s *Store) SetTeamDeleted(ctx context.Context, teamID, actorID model.ID, de
 	if err := requireTeamManager(ctx, tx, teamID, actorID); err != nil {
 		return err
 	}
-	graphIDs, err := teamGraphIDs(ctx, tx, teamID)
+	graphIDs, err := lockTeamGraphs(ctx, tx, teamID)
 	if err != nil {
-		return err
-	}
-	if _, err := lockGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
 	query := `UPDATE public.team SET deleted_at = NULL WHERE team_id = $1 AND deleted_at IS NOT NULL`

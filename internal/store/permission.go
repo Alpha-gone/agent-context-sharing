@@ -102,11 +102,7 @@ func (s *Store) RemoveTeamMember(ctx context.Context, teamID, accountID model.ID
 	}
 	defer tx.Rollback(ctx)
 
-	graphIDs, err := teamGraphIDs(ctx, tx, teamID)
-	if err != nil {
-		return err
-	}
-	graphIDs, err = lockGraphs(ctx, tx, graphIDs)
+	graphIDs, err := lockTeamGraphs(ctx, tx, teamID)
 	if err != nil {
 		return err
 	}
@@ -138,11 +134,7 @@ func (s *Store) DeleteTeam(ctx context.Context, teamID model.ID) error {
 	}
 	defer tx.Rollback(ctx)
 
-	graphIDs, err := teamGraphIDs(ctx, tx, teamID)
-	if err != nil {
-		return err
-	}
-	graphIDs, err = lockGraphs(ctx, tx, graphIDs)
+	graphIDs, err := lockTeamGraphs(ctx, tx, teamID)
 	if err != nil {
 		return err
 	}
@@ -164,6 +156,32 @@ func (s *Store) DeleteTeam(ctx context.Context, teamID model.ID) error {
 
 func (subjectType GrantSubjectType) valid() bool {
 	return subjectType == GrantSubjectAccount || subjectType == GrantSubjectTeam
+}
+
+// lockTeamGraphs는 팀이 등급을 가진 모든 그래프 행을 잠그되, 잠근 뒤 목록을 다시 읽어
+// 더 늘지 않을 때까지 반복한다.
+//
+// 목록을 한 번만 읽으면 잠그기 직전에 추가된 팀 등급의 그래프를 놓친다. 그 그래프에서는
+// 구성원 제거가 판정을 건너뛰고, 동시에 진행된 부여 쪽은 제거 전 구성원을 보고 유예를
+// 취소해, 접근 가능한 계정이 0인데 유예도 없는 그래프가 남는다.
+func lockTeamGraphs(ctx context.Context, tx pgx.Tx, teamID model.ID) ([]model.ID, error) {
+	locked := make([]model.ID, 0)
+	// 잠금이 늘 때마다 새 부여가 들어올 수 있으나, 잠긴 그래프에는 더 들어오지 못하므로
+	// 반복은 곧 멈춘다. 상한은 예상 밖의 상황에서 무한 반복을 막는 안전장치다.
+	for range 16 {
+		current, err := teamGraphIDs(ctx, tx, teamID)
+		if err != nil {
+			return nil, err
+		}
+		union := sortedUniqueGraphIDs(append(slices.Clone(locked), current...))
+		if slices.Equal(union, locked) {
+			return locked, nil
+		}
+		if locked, err = lockGraphs(ctx, tx, union); err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("팀 영향 그래프 잠금이 안정되지 않는다")
 }
 
 func teamGraphIDs(ctx context.Context, tx pgx.Tx, teamID model.ID) ([]model.ID, error) {
@@ -251,9 +269,26 @@ func sortedUniqueGraphIDs(graphIDs []model.ID) []model.ID {
 	return unique
 }
 
+// requireOwner는 그래프에 소유자 등급을 쓸 수 있는 계정이 남아 있는지 본다.
+//
+// 부여된 등급이 아니라 그 등급을 쓸 계정을 세는 이유는 `FR-AGENT_CONTEXT-042`가 판정을
+// "소유자 등급의 계정"으로 정했기 때문이다. 삭제된 팀이나 구성원이 없는 팀의 owner 부여는
+// 행이 남아 있어도 그 등급을 쓸 계정이 없으므로 세지 않는다. 세면 계정 소유자를 회수해도
+// 통과해 소유자 계정이 없는 그래프가 된다.
 func requireOwner(ctx context.Context, tx pgx.Tx, graphID model.ID) error {
 	var owners int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM public.graph_grant WHERE graph_id = $1 AND grade = 'owner'`, graphID.String()).Scan(&owners); err != nil {
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM (
+			SELECT subject_id AS account_id
+			FROM public.graph_grant
+			WHERE graph_id = $1 AND subject_type = 'account' AND grade = 'owner'
+			UNION
+			SELECT member.account_id
+			FROM public.graph_grant AS team_grant
+			JOIN public.team_member AS member ON member.team_id = team_grant.subject_id
+			JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL
+			WHERE team_grant.graph_id = $1 AND team_grant.subject_type = 'team' AND team_grant.grade = 'owner'
+		) AS owners`, graphID.String()).Scan(&owners); err != nil {
 		return fmt.Errorf("그래프 소유자 수 조회: %w", err)
 	}
 	if owners == 0 {

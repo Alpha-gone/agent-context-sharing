@@ -13,6 +13,7 @@ import (
 	"agent_context_sharing/internal/plan"
 	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
+	"github.com/jackc/pgx/v5"
 )
 
 // isolationFixture는 한 그래프와 그 안에 넣어 둔 정점·간선 식별자다.
@@ -82,8 +83,18 @@ func TestOperationIsolationIntegration(t *testing.T) {
 	}
 	call := NewHandlerWithSearch(database, plan.AccountPlans{}, searcher, nil)
 
+	connection, err := pgx.Connect(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatalf("색인 작업 정리 연결: %v", err)
+	}
+	// defer가 아니라 Cleanup으로 닫는다. defer는 Cleanup보다 먼저 돌아 연결이 닫힌 뒤에
+	// 정리가 실행되며, Cleanup은 나중에 등록한 것부터 돌아 이 닫기가 마지막이 된다.
+	t.Cleanup(func() { connection.Close(context.WithoutCancel(t.Context())) })
+
 	own := seedIsolationGraph(t, call, actorID, "격리 자기 그래프")
 	foreign := seedIsolationGraph(t, call, strangerID, "격리 상대 그래프")
+	cleanupIndexTasks(t, connection, own.graphID)
+	cleanupIndexTasks(t, connection, foreign.graphID)
 
 	cases := isolationCases()
 	// 4단계. 연산 목록을 이 표와 대조한다. 목록은 tools/list가 내보내는 것과 같은 곳에서

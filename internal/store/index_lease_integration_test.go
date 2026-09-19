@@ -28,8 +28,9 @@ func TestIndexProviderCallDoesNotBlockSavesIntegration(t *testing.T) {
 		t.Fatalf("파생 생성: %v", err)
 	}
 
-	// 공유 개발 데이터베이스에는 다른 테스트가 남긴 대기 작업이 있다. 확보 순서가
-	// enqueued_at이므로 대상 작업을 맨 앞으로 옮겨 첫 회차에 잡히게 한다.
+	// 공유 개발 데이터베이스에는 다른 테스트가 남긴 대기 작업이 있다. 대상 작업만 앞으로
+	// 옮기면 남은 행 중에 더 앞선 시각을 가진 것이 있을 때 그쪽이 먼저 잡힌다. 나머지
+	// 대기 작업을 함께 미루는 readyIndexTasks로 확보 순서를 고정한다.
 	//
 	// 옮긴 표식은 실패한 회차가 남기면 다음 회차를 가로채므로 반드시 되돌린다. 이 테스트가
 	// 만든 컨텍스트의 행만 지우므로 다른 테스트의 대기 작업은 건드리지 않는다.
@@ -39,9 +40,7 @@ func TestIndexProviderCallDoesNotBlockSavesIntegration(t *testing.T) {
 			t.Errorf("색인 작업 정리: %v", err)
 		}
 	})
-	if _, err := database.pool.Exec(t.Context(), `UPDATE public.index_task SET enqueued_at = $2 WHERE context_id = $1`, target.ID.String(), time.Date(1800, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatalf("확보 순서 준비: %v", err)
-	}
+	readyIndexTasks(t, database, target.ID)
 
 	const providerDelay = 2 * time.Second
 	saved := make(chan time.Duration, 1)

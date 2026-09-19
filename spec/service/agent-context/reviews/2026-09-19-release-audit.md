@@ -151,7 +151,7 @@ docker compose exec -u postgres db pg_ctl -D <기본 백업 경로> -o '-p 5433 
 복구 인스턴스도 `shared_preload_libraries=age`가 필요하다. 없으면 기동은 되지만 그래프 질의가 확장을 찾지 못한다.
 
 - 근거: 재현. 개발 데이터베이스에서 기본 백업, WAL 보관, 시점 복구를 수행하고 복구본에서 그래프 질의와 표식을 확인했다.
-- 처리: `compose.yaml`에 WAL 보관을 켰다. 개발 구성의 보관 디렉터리는 정리하지 않으므로 오래 쓰면 커진다. 확인에 쓴 기본 백업과 표식은 지웠다.
+- 처리: `compose.yaml`에 WAL 보관을 켰다. `archive_mode=on`이면 PostgreSQL이 보관본을 지우지 않으므로 보관 기간이 지난 파일을 지우는 `wal_cleanup` 서비스를 함께 두었다. 기본 7일이며 `WAL_ARCHIVE_RETENTION_DAYS`로 바꾼다. 확인에 쓴 기본 백업과 표식은 지웠다.
 
 ## 남은 확인 한계
 

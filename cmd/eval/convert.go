@@ -21,6 +21,9 @@ const convertHippoRAG = "hipporag"
 // convertOwn은 사건 관계를 포함한 자체 세트의 생성기 이름이다.
 const convertOwn = "own"
 
+// convertOwnGlobal은 전역 요약과 그 근거를 포함한 자체 세트의 생성기 이름이다.
+const convertOwnGlobal = "own-global"
+
 // 자체 세트의 재료다. 그룹마다 주제와 세부 어휘가 달라져 그래프 단계 비교에 쓸
 // 어휘적 거리가 만들어진다. 낱말은 고정이고 그룹 번호로만 고르므로 생성은 결정적이다.
 var (
@@ -81,6 +84,50 @@ func convertOwnSet(name string, questions int) (contextSet, querySet, error) {
 	}
 	version := fmt.Sprintf("%s-%dq", name, questions)
 	return contextSet{Version: version, Contexts: contexts, Relations: relations}, querySet{Version: version, Queries: queries}, nil
+}
+
+// convertOwnGlobalSet은 전역 요약 검색을 검증하는 자체 세트를 결정적으로 만든다.
+//
+// 전역 요약 후보는 질의 유사도가 아니라 유효 시점과 최근 기록 순으로 정해진다. 질의마다
+// 겹치지 않는 유효 구간을 두어 해당 시점의 요약 하나만 진입점이 되게 한다. 정답은 요약
+// 자체가 아니라 그 근거 원천 넷이다. 따라서 명시적 global 범위의 기준선은 요약만 내고,
+// references 단계부터 derived_from을 따라 그래프 전반의 근거를 모으는 차이가 드러난다.
+func convertOwnGlobalSet(name string, questions int) (contextSet, querySet, error) {
+	if questions < 1 {
+		return contextSet{}, querySet{}, fmt.Errorf("전역 요약 자체 세트의 질의 수는 1 이상이어야 한다")
+	}
+	contexts := make([]contextSpec, 0, questions*5)
+	queries := make([]querySpec, 0, questions)
+	for group := range questions {
+		topic := ownTopics[group%len(ownTopics)]
+		if group >= len(ownTopics) {
+			topic += "·" + ownModules[(group/len(ownTopics))%len(ownModules)]
+		}
+		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(group) * 24 * time.Hour)
+		to := from.Add(12 * time.Hour)
+		answers := make([]string, 0, 4)
+		for index := range 4 {
+			key := fmt.Sprintf("w%03d-s%d", group, index)
+			answers = append(answers, key)
+			body := fmt.Sprintf("%s 전반의 %s 영역에서 %s. 검토 항목은 %s이다.",
+				topic, ownModules[(group+index)%len(ownModules)], ownEarlyActs[index%len(ownEarlyActs)],
+				ownFindings[(group*3+index*5)%len(ownFindings)])
+			contexts = append(contexts, contextSpec{Key: key, Layer: "source", Body: body,
+				Source: &sourceSpec{Channel: "conversation", Locator: fmt.Sprintf("urn:own-global:%s:%03d:%d", ownSlug(topic), group, index),
+					OccurredAt: from.Add(time.Duration(index+1) * time.Hour), OriginKind: "user_utterance"}})
+		}
+		summaryKey := fmt.Sprintf("w%03d-g", group)
+		contexts = append(contexts, contextSpec{Key: summaryKey, Layer: "derived",
+			Body: fmt.Sprintf("%s의 그래프 전반을 정리한 전역 요약이다. 네 영역의 결정과 검토 항목을 함께 다룬다.", topic),
+			Derived: &derivedSpec{Kind: "summary", SummaryScope: "global", DerivedFrom: answers,
+				EvidenceState: "observation", ValidFrom: &from, ValidTo: &to}})
+		asOf := from.Add(6 * time.Hour)
+		queries = append(queries, querySpec{ID: fmt.Sprintf("own-g-%04d", group), UseCase: useCaseGlobal,
+			WorkContext: topic + "의 그래프 전반에 걸친 결정 근거를 모두 모아야 한다.", Answers: answers,
+			Scope: "global", AsOf: &asOf})
+	}
+	version := fmt.Sprintf("%s-%dq", name, questions)
+	return contextSet{Version: version, Contexts: contexts}, querySet{Version: version, Queries: queries}, nil
 }
 
 // ownSlug는 주제를 로케이터에 쓸 수 있는 표기로 바꾼다. 로케이터가 scheme을 가진 URI여야

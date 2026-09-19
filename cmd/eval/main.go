@@ -68,10 +68,11 @@ func run() error {
 	maxHops := flag.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
 	maxHopNodes := flag.Int("max-hop-nodes", defaultLimits.MaxHopNodes, "그래프 확장 최대 노드 수")
 	indexTargets := flag.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
-	convert := flag.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag 또는 own")
+	convert := flag.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag, own 또는 own-global")
 	convertSource := flag.String("convert-source", "", "변환할 벤치마크 파일 경로")
 	convertName := flag.String("convert-name", "", "데이터셋 판에 넣을 세트 이름")
 	convertLimit := flag.Int("convert-questions", 0, "변환에 쓸 질의 수. 0이면 전부 쓴다")
+	convertUseCase := flag.String("convert-use-case", "", "변환 결과의 질의를 fact, associative 또는 global 사용 사례로 제한한다")
 	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
 	flag.Parse()
 
@@ -81,7 +82,7 @@ func run() error {
 	// 변환은 데이터베이스에 닿지 않는다. 같은 두 경로를 출력 자리로 쓰므로 변환한
 	// 파일을 그대로 측정에 넘길 수 있다.
 	if *convert != "" {
-		return runConvert(*convert, *convertSource, *convertName, *convertLimit, *contextsPath, *queriesPath)
+		return runConvert(*convert, *convertSource, *convertName, *convertLimit, *convertUseCase, *contextsPath, *queriesPath)
 	}
 	if *repeats < minimumRepeats {
 		return fmt.Errorf("반복 회차는 %d 이상이어야 한다. 「검증」이 최소 세 번으로 정했다", minimumRepeats)
@@ -181,7 +182,7 @@ func run() error {
 }
 
 // runConvert는 공개 벤치마크를 데이터셋 두 파일로 옮기고 끝낸다.
-func runConvert(format, source, name string, limit int, contextsPath, queriesPath string) error {
+func runConvert(format, source, name string, limit int, useCase, contextsPath, queriesPath string) error {
 	var contexts contextSet
 	var queries querySet
 	var err error
@@ -196,9 +197,18 @@ func runConvert(format, source, name string, limit int, contextsPath, queriesPat
 			return fmt.Errorf("-convert-name이 필요하다")
 		}
 		contexts, queries, err = convertOwnSet(name, limit)
+	case convertOwnGlobal:
+		if name == "" {
+			return fmt.Errorf("-convert-name이 필요하다")
+		}
+		contexts, queries, err = convertOwnGlobalSet(name, limit)
 	default:
 		return fmt.Errorf("변환 형식 %q를 알 수 없다", format)
 	}
+	if err != nil {
+		return err
+	}
+	queries, err = filterQuerySet(queries, useCase)
 	if err != nil {
 		return err
 	}
@@ -219,6 +229,29 @@ func runConvert(format, source, name string, limit int, contextsPath, queriesPat
 	}
 	slog.Info("변환 완료", "version", contexts.Version, "contexts", len(contexts.Contexts), "queries", len(queries.Queries))
 	return nil
+}
+
+// filterQuerySet은 컨텍스트 표현은 그대로 두고 측정할 사용 사례의 질의 파일만 분리한다.
+// 그래프 효과 비교의 통제 조건을 유지하려면 사용 사례마다 컨텍스트를 잘라서는 안 된다.
+func filterQuerySet(set querySet, useCase string) (querySet, error) {
+	if useCase == "" {
+		return set, nil
+	}
+	if !slices.Contains(useCases, useCase) {
+		return querySet{}, fmt.Errorf("변환 사용 사례 %q를 알 수 없다", useCase)
+	}
+	filtered := make([]querySpec, 0, len(set.Queries))
+	for _, query := range set.Queries {
+		if query.UseCase == useCase {
+			filtered = append(filtered, query)
+		}
+	}
+	if len(filtered) == 0 {
+		return querySet{}, fmt.Errorf("변환 결과에 %q 사용 사례 질의가 없다", useCase)
+	}
+	set.Version += "-" + useCase
+	set.Queries = filtered
+	return set, nil
 }
 
 func parseStages(raw string) ([]string, error) {

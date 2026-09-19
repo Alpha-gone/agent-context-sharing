@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	json "encoding/json/v2"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -110,6 +111,95 @@ func TestConvertOwnSetKeepsAssociativeAnswerBehindRelation(t *testing.T) {
 	wantRelation := relationSpec{Type: "precedes", From: "g001-ew", To: "g001-ef"}
 	if !slices.Contains(contexts.Relations, wantRelation) {
 		t.Fatalf("연상 정답으로 한 홉 경로를 여는 관계가 없다: %+v", wantRelation)
+	}
+}
+
+func TestConvertOwnGlobalSet(t *testing.T) {
+	contexts, queries, err := convertOwnGlobalSet("own-global", 50)
+	if err != nil {
+		t.Fatalf("전역 요약 자체 세트 생성: %v", err)
+	}
+	if contexts.Version != "own-global-50q" || len(contexts.Contexts) != 250 || len(queries.Queries) != 50 {
+		t.Fatalf("판·개수가 다르다: %q %d %d", contexts.Version, len(contexts.Contexts), len(queries.Queries))
+	}
+	byKey := make(map[string]contextSpec, len(contexts.Contexts))
+	for _, spec := range contexts.Contexts {
+		byKey[spec.Key] = spec
+	}
+	for index, query := range queries.Queries {
+		if query.UseCase != useCaseGlobal || query.Scope != "global" || query.AsOf == nil {
+			t.Fatalf("전역 질의 %d의 계약이 다르다: %+v", index, query)
+		}
+		if len(query.Answers) != 4 {
+			t.Fatalf("전역 질의 %d의 정답 수 = %d", index, len(query.Answers))
+		}
+		summary := byKey[fmt.Sprintf("w%03d-g", index)]
+		if summary.Derived == nil || summary.Derived.SummaryScope != "global" {
+			t.Fatalf("전역 요약 %d의 속성이 다르다: %+v", index, summary)
+		}
+		if !slices.Equal(summary.Derived.DerivedFrom, query.Answers) {
+			t.Fatalf("전역 요약 %d의 근거와 정답이 다르다", index)
+		}
+		if summary.Derived.ValidFrom == nil || summary.Derived.ValidTo == nil ||
+			query.AsOf.Before(*summary.Derived.ValidFrom) || query.AsOf.After(*summary.Derived.ValidTo) {
+			t.Fatalf("전역 질의 %d의 조회 시점이 요약 유효 구간 밖이다", index)
+		}
+		for other := range queries.Queries {
+			if other == index {
+				continue
+			}
+			candidate := byKey[fmt.Sprintf("w%03d-g", other)].Derived
+			if !query.AsOf.Before(*candidate.ValidFrom) && !query.AsOf.After(*candidate.ValidTo) {
+				t.Fatalf("전역 질의 %d의 조회 시점에 요약 %d도 유효하다", index, other)
+			}
+		}
+	}
+	repeat, repeatQueries, err := convertOwnGlobalSet("own-global", 50)
+	if err != nil {
+		t.Fatalf("전역 요약 자체 세트 재생성: %v", err)
+	}
+	first, err := json.Marshal(struct {
+		Contexts contextSet
+		Queries  querySet
+	}{contexts, queries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := json.Marshal(struct {
+		Contexts contextSet
+		Queries  querySet
+	}{repeat, repeatQueries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("전역 요약 자체 세트 생성이 결정적이지 않다")
+	}
+	if _, _, err := convertOwnGlobalSet("own-global", 0); err == nil {
+		t.Fatal("0개 질의가 허용됐다")
+	}
+}
+
+func TestFilterQuerySet(t *testing.T) {
+	set := querySet{Version: "mixed", Queries: []querySpec{
+		{ID: "f", UseCase: useCaseFact},
+		{ID: "a", UseCase: useCaseAssociative},
+	}}
+	facts, err := filterQuerySet(set, useCaseFact)
+	if err != nil {
+		t.Fatalf("사실 질의 분리: %v", err)
+	}
+	if facts.Version != "mixed-fact" || len(facts.Queries) != 1 || facts.Queries[0].ID != "f" {
+		t.Fatalf("분리한 사실 질의가 다르다: %+v", facts)
+	}
+	if len(set.Queries) != 2 {
+		t.Fatalf("원래 질의 집합이 바뀌었다: %+v", set)
+	}
+	if _, err := filterQuerySet(set, useCaseGlobal); err == nil {
+		t.Fatal("없는 사용 사례가 허용됐다")
+	}
+	if _, err := filterQuerySet(set, "other"); err == nil {
+		t.Fatal("알 수 없는 사용 사례가 허용됐다")
 	}
 }
 

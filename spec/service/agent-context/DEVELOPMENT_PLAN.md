@@ -610,7 +610,7 @@ MCP 2026-07-28 전송 계약과 그래프·컨텍스트 관리 연산을 구현�
   - [x] 결과에 통제 조건, 반복 회차, 지표 값과 데이터셋 판을 함께 남긴다.
   - [x] 컨텍스트 본문과 질의문을 결과 파일과 로그에 남기지 않는다. 식별자와 집계값만 싣는다.
   - [x] 사실 검색과 연상 검색 데이터셋을 HippoRAG 2 계열 세트에서 변환한다. 실행기의 `-convert hipporag`가 재현 세트의 문단을 원천으로 옮기고 질의를 사용 사례별로 가른다.
-  - [ ] 전역 요약 자체 세트를 만든다. 공개 벤치마크에는 대응물이 없어 직접 쓴다.
+  - [x] 전역 요약 자체 세트를 만든다. `-convert own-global`이 질의 50건과 컨텍스트 250건을 결정적으로 만들며 질의별 유효 시점에 전역 요약 하나만 고른다. [전역 요약 자체 세트 시험 측정](reviews/2026-09-19-global-summary-dataset.md)에서 명시적 `global` 범위가 요약의 근거 넷을 모두 회수하는 것과 `auto` 되돌림의 도달 불가능 조건을 확인했다.
   - [x] 사건 관계를 포함한 자체 세트를 만든다. `-convert own`이 질의 50건, 컨텍스트 950건과 확정 관계 150건을 결정적으로 만들며 사실·연상 검색을 절반씩 담는다. [사건 관계 자체 세트 시험 측정](reviews/2026-09-19-event-relation-dataset.md)에서 관계 단계가 연상 정답 사건을 한 홉으로 찾는 것과 후보·홉 상한 사이의 트레이드오프를 확인했다.
 
 실행기의 반복 회차는 같은 그래프 상태에서 같은 질의를 다시 돌리므로 검색 경로의 재현성을 확인한다. [평가 시험 측정](reviews/2026-09-19-eval-pilot.md)에서 회차 셋이 모든 지표에서 같은 값을 냈으므로 반복값을 독립 표본으로 쓰지 않는다. 단계 효과는 같은 질의의 반복값을 먼저 평균낸 뒤 질의별 단계 차이의 95% 신뢰구간으로 판정한다.
@@ -619,6 +619,14 @@ MCP 2026-07-28 전송 계약과 그래프·컨텍스트 관리 연산을 구현�
 # HippoRAG 2 재현 세트를 데이터셋 두 파일로 변환한다. -convert-questions로 시험 규모를 고른다.
 go run ./cmd/eval -convert hipporag -convert-source musique.json -convert-name musique \
   -convert-questions 50 -contexts <컨텍스트 집합>.json -queries <질의 집합>.json
+
+# 전역 요약 자체 세트를 생성한다.
+go run ./cmd/eval -convert own-global -convert-name own-global -convert-questions 50 \
+  -contexts <전역 컨텍스트 집합>.json -queries <전역 질의 집합>.json
+
+# 같은 컨텍스트 표현을 유지하고 사실·연상 질의 파일만 분리한다.
+go run ./cmd/eval -convert own -convert-name own-events -convert-questions 50 \
+  -convert-use-case fact -contexts <컨텍스트 집합>.json -queries <사실 질의 집합>.json
 
 # 변환한 데이터셋으로 단계별 비교를 측정한다.
 go run ./cmd/eval -contexts <컨텍스트 집합>.json -queries <질의 집합>.json -repeat 3 -out <결과>.json
@@ -633,7 +641,7 @@ go run ./cmd/eval -contexts <컨텍스트 집합>.json -queries <질의 집합>.
 [평가 시험 측정](reviews/2026-09-19-eval-pilot.md)이 본 측정 전에 확인한 것과 드러난 것을 담는다. 사용 사례 구분과 예산 4,000자가 변별을 만드는 것을 확인했고, 공개 벤치마크만으로는 그래프 효과를 잴 수 없다는 것과 키워드 채널이 자연어 질의에서 거의 기여하지 않는다는 것이 드러났다.
 
 - [x] 키워드 채널의 질의 구성을 판단한다. 어휘를 OR로 묶어 `websearch_to_tsquery` 구문으로 실행하기로 확정했다. 시험 측정의 기여 0.007이 AND 질의 구성 때문이었고 근거는 「채널 구현」의 질의 구성 문단에 남겼다. 시험 측정값은 기준선에서 빼고 본 측정을 다시 시작한다.
-- [ ] 사실 검색, 연상 검색과 전역 요약 데이터셋을 분리한다.
+- [x] 사실 검색, 연상 검색과 전역 요약 데이터셋을 분리한다. `-convert-use-case`가 같은 컨텍스트 집합을 보존하면서 `fact`, `associative`, `global` 질의 파일만 따로 만든다.
 - [ ] 동일한 입력, 표현, 검색 예산과 환경을 통제한다.
 - [ ] 재현율, 순위 품질, 예산 효율과 채널 기여를 측정한다.
 - [ ] 원천 포함 색인과 원천 제외 색인을 비교한다.

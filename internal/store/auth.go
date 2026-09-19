@@ -129,11 +129,15 @@ func (s *Store) AuthorizationCodeForExchange(ctx context.Context, hash string, n
 	if err != nil {
 		return AuthorizationCode{}, err
 	}
-	if !code.ExpiresAt.After(now) {
-		return AuthorizationCode{}, ErrNotFound
-	}
+	// 소비 여부를 만료보다 먼저 본다. 코드 수명은 60초이고 접근 토큰은 1시간이므로,
+	// 만료를 먼저 보면 탈취한 코드를 60초 뒤에 다시 제시할 때 재사용이 아니라 없는
+	// 코드로 판정되어 그 코드로 발급한 토큰이 폐기되지 않는다. 「인가 코드 흐름」이
+	// 소비 행을 남겨 두는 이유가 재사용 감지와 폐기 대상 찾기다.
 	if code.ConsumedAt != nil {
 		return AuthorizationCode{}, codeUsedError(code)
+	}
+	if !code.ExpiresAt.After(now) {
+		return AuthorizationCode{}, ErrNotFound
 	}
 	return code, nil
 }
@@ -167,11 +171,15 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, hash, tokenID stri
 	if err != nil {
 		return AuthorizationCode{}, err
 	}
-	if !code.ExpiresAt.After(now) {
-		return AuthorizationCode{}, ErrNotFound
-	}
+	// 소비 여부를 만료보다 먼저 본다. 코드 수명은 60초이고 접근 토큰은 1시간이므로,
+	// 만료를 먼저 보면 탈취한 코드를 60초 뒤에 다시 제시할 때 재사용이 아니라 없는
+	// 코드로 판정되어 그 코드로 발급한 토큰이 폐기되지 않는다. 「인가 코드 흐름」이
+	// 소비 행을 남겨 두는 이유가 재사용 감지와 폐기 대상 찾기다.
 	if code.ConsumedAt != nil {
 		return AuthorizationCode{}, codeUsedError(code)
+	}
+	if !code.ExpiresAt.After(now) {
+		return AuthorizationCode{}, ErrNotFound
 	}
 	return AuthorizationCode{}, ErrNotFound
 }

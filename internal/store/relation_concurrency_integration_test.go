@@ -160,3 +160,67 @@ func TestReconfirmDiscardedRelationChecksCycleIntegration(t *testing.T) {
 		t.Fatalf("순환이 되는 재확정 = %v, want ErrInvalidRelation", err)
 	}
 }
+
+// TestRelationRejectsDiscardedEventIntegration은 폐기된 사건을 끝으로 갖는 관계 확정이
+// 거부되는지 확인한다. FR-AGENT_CONTEXT-076이 사건을 폐기하면 그 확정 관계도 함께
+// 폐기하기로 했으므로, 새로 만들면 그 규칙이 곧바로 깨진 상태가 된다.
+func TestRelationRejectsDiscardedEventIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	graphID, first, second := relationTestEvents(t, database)
+	if _, err := database.DiscardContext(t.Context(), graphID, second.ID, nil); err != nil {
+		t.Fatalf("사건 폐기: %v", err)
+	}
+	err := func() error {
+		_, err := database.ConfirmRelation(t.Context(), graphID, confirmable(t, graphID, model.RelationTypePrecedes, first.ID, second.ID), nil)
+		return err
+	}()
+	if !errors.Is(err, ErrInvalidRelation) {
+		t.Fatalf("폐기된 사건을 끝으로 하는 확정 = %v, want ErrInvalidRelation", err)
+	}
+}
+
+// TestHopResultsCarryReferencesIntegration은 홉 확장으로 가져온 파생과 사건이 근거와
+// 구성원 목록을 담는지 확인한다. 비우면 흐름 응답의 확장 노드가 빈 목록으로 나가고
+// 중복 파생 접기가 근거를 구분하지 못한다.
+func TestHopResultsCarryReferencesIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, database, actorID)
+	graphID := createTestGraph(t, database, actorID)
+	source, err := database.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "https://example.test/hop-ref-"+graphID.String()), nil)
+	if err != nil {
+		t.Fatalf("원천 생성: %v", err)
+	}
+	derived, err := database.CreateContext(t.Context(), graphID, testDerivedContext(t, graphID, actorID), []model.ID{source.ID})
+	if err != nil {
+		t.Fatalf("파생 생성: %v", err)
+	}
+	event, err := database.CreateContext(t.Context(), graphID, testEventContext(t, graphID, actorID, source.ID), nil)
+	if err != nil {
+		t.Fatalf("사건 생성: %v", err)
+	}
+
+	// 원천에서 들어오는 방향으로 확장하면 파생과 사건이 확장분으로 들어온다.
+	hops, err := database.HopContexts(t.Context(), graphID, source.ID, 2, "both", nil, 0)
+	if err != nil {
+		t.Fatalf("홉 탐색: %v", err)
+	}
+	seenDerived, seenEvent := false, false
+	for _, value := range hops.Contexts {
+		switch value.ID {
+		case derived.ID:
+			seenDerived = true
+			if got := value.Derived.DerivedFrom; len(got) != 1 || got[0] != source.ID {
+				t.Fatalf("확장 파생의 근거 = %v, want [%s]", got, source.ID)
+			}
+		case event.ID:
+			seenEvent = true
+			if got := value.Event.MemberIDs; len(got) != 1 || got[0] != source.ID {
+				t.Fatalf("확장 사건의 구성원 = %v, want [%s]", got, source.ID)
+			}
+		}
+	}
+	if !seenDerived || !seenEvent {
+		t.Fatalf("확장 결과에 파생 %t, 사건 %t", seenDerived, seenEvent)
+	}
+}

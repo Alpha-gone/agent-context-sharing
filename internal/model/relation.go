@@ -107,6 +107,15 @@ func ValidateRelation(relation Relation, from, to Context) error {
 	if from.Layer != LayerEvent || to.Layer != LayerEvent || from.Event == nil || to.Event == nil {
 		return fieldErrorf("from_context_id", "관계 양 끝은 사건 컨텍스트여야 한다")
 	}
+	// 폐기된 사건을 끝으로 갖는 관계는 남지 않아야 한다. `FR-AGENT_CONTEXT-076`이 사건을
+	// 폐기하면 그 확정 관계도 함께 폐기하기로 했으므로, 이미 폐기된 사건으로 새 관계를
+	// 만들면 그 규칙이 곧바로 깨진 상태가 된다.
+	if from.DeletedAt != nil {
+		return fieldErrorf("from_context_id", "폐기된 사건은 관계의 끝이 될 수 없다")
+	}
+	if to.DeletedAt != nil {
+		return fieldErrorf("to_context_id", "폐기된 사건은 관계의 끝이 될 수 없다")
+	}
 	if from.ID != relation.FromContextID || to.ID != relation.ToContextID || from.GraphID != relation.GraphID || to.GraphID != relation.GraphID {
 		return fieldErrorf("from_context_id", "관계와 사건의 식별자 또는 그래프가 맞지 않는다")
 	}

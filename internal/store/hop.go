@@ -118,7 +118,50 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 	}
 	result.Distances = distances
 	result.Edges = slices.SortedFunc(edgesValues(edges, distances), compareHopEdges)
+	if err := s.fillHopReferences(ctx, graphID, result.Contexts); err != nil {
+		return HopResult{}, err
+	}
 	return result, nil
+}
+
+// fillHopReferences는 확장으로 가져온 파생과 사건에 근거와 구성원 목록을 채운다.
+//
+// hopNeighbors는 정점 속성만 읽어 오는데 참조는 속성이 아니라 간선에 있다. 비우면 흐름
+// 응답의 확장 노드에서 `derived_from`과 `member_refs`가 빈 목록으로 나가고, 「예산 적용과
+// 절단」이 근거가 다르면 접지 않기로 한 중복 파생 접기가 근거를 구분하지 못한다.
+// 노드마다 묶어 읽지 않고 두 질의로 한 번에 읽는다.
+func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, contexts []model.Context) error {
+	needs := make([]string, 0, len(contexts))
+	for _, value := range contexts {
+		if value.Layer == model.LayerDerived || value.Layer == model.LayerEvent {
+			needs = append(needs, cypherString(value.ID.String()))
+		}
+	}
+	if len(needs) == 0 {
+		return nil
+	}
+	list := "[" + strings.Join(needs, ", ") + "]"
+	references, err := s.edgeTargetsBySource(ctx, graphID, "DERIVED_FROM", list)
+	if err != nil {
+		return err
+	}
+	members, err := s.edgeTargetsBySource(ctx, graphID, "HAS_MEMBER", list)
+	if err != nil {
+		return err
+	}
+	for index, value := range contexts {
+		switch value.Layer {
+		case model.LayerDerived:
+			if value.Derived != nil {
+				contexts[index].Derived.DerivedFrom = references[value.ID]
+			}
+		case model.LayerEvent:
+			if value.Event != nil {
+				contexts[index].Event.MemberIDs = members[value.ID]
+			}
+		}
+	}
+	return nil
 }
 
 type traversalLabel struct {

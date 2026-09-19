@@ -56,6 +56,8 @@ type IndexProcessResult struct {
 // SearchCandidate는 검색 채널이 순위를 부여하기 전 저장소가 돌려주는 컨텍스트다.
 type SearchCandidate struct {
 	Context model.Context
+	// Similarity는 의미 유사도 채널에서만 코사인 유사도를 담는다. 다른 채널은 0이다.
+	Similarity float64
 }
 
 // ProcessNextIndexTask는 대기 중인 작업 하나를 확보하고 제공자 결과를 저장한다.
@@ -360,6 +362,9 @@ func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query s
 		FROM `+s.contextTable()+`
 		WHERE properties ->> 'graph_id'::text = $1
 			AND properties ->> 'deleted_at'::text IS NULL
+			AND NOT (properties ->> 'layer'::text = 'derived'
+				AND properties ->> 'derivation_kind'::text = 'summary'
+				AND properties ->> 'summary_scope'::text = 'global')
 			AND ((properties ->> 'layer'::text) <> 'derived'
 				OR NULLIF(properties ->> 'valid_to'::text, '') IS NULL
 				OR (properties ->> 'valid_to'::text)::timestamptz >= $3)
@@ -386,6 +391,9 @@ func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.
 		SELECT properties ->> 'context_id'::text
 		FROM `+s.contextTable()+`
 		WHERE properties ->> 'graph_id'::text = $1 AND properties ->> 'deleted_at'::text IS NULL
+			AND NOT (properties ->> 'layer'::text = 'derived'
+				AND properties ->> 'derivation_kind'::text = 'summary'
+				AND properties ->> 'summary_scope'::text = 'global')
 			AND ((properties ->> 'layer'::text) <> 'derived'
 				OR (NULLIF(properties ->> 'valid_from'::text, '') IS NULL OR (properties ->> 'valid_from'::text)::timestamptz <= $2)
 				AND (NULLIF(properties ->> 'valid_to'::text, '') IS NULL OR (properties ->> 'valid_to'::text)::timestamptz >= $2))
@@ -444,12 +452,15 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT candidate.context_id::text
+		SELECT candidate.context_id::text, 1 - (candidate.embedding <=> $3::vector) AS similarity
 		FROM public.context_embedding AS candidate
 		JOIN `+s.contextTable()+` AS node ON (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
 		WHERE candidate.graph_id = $1 AND candidate.model_id = $2
 			AND node.properties ->> 'graph_id'::text = $1::text
 			AND node.properties ->> 'deleted_at'::text IS NULL
+			AND NOT (node.properties ->> 'layer'::text = 'derived'
+				AND node.properties ->> 'derivation_kind'::text = 'summary'
+				AND node.properties ->> 'summary_scope'::text = 'global')
 			AND ((node.properties ->> 'layer'::text) <> 'derived'
 				OR NULLIF(node.properties ->> 'valid_to'::text, '') IS NULL
 				OR (node.properties ->> 'valid_to'::text)::timestamptz >= $4)
@@ -458,14 +469,39 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	if err != nil {
 		return nil, fmt.Errorf("의미 유사도 검색: %w", err)
 	}
-	ids, err := searchCandidateIDs(rows)
-	if err != nil {
-		return nil, err
+	ids := make([]model.ID, 0)
+	similarities := make(map[model.ID]float64)
+	for rows.Next() {
+		var rawID string
+		var similarity float64
+		if err := rows.Scan(&rawID, &similarity); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("의미 유사도 후보 행 해석: %w", err)
+		}
+		contextID, err := model.ParseID(rawID)
+		if err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("의미 유사도 후보 식별자 해석: %w", err)
+		}
+		ids = append(ids, contextID)
+		similarities[contextID] = similarity
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("의미 유사도 후보 행 읽기: %w", err)
+	}
+	rows.Close()
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("의미 유사도 검색 커밋: %w", err)
 	}
-	return s.searchCandidates(ctx, graphID, ids)
+	candidates, err := s.searchCandidates(ctx, graphID, ids)
+	if err != nil {
+		return nil, err
+	}
+	for index := range candidates {
+		candidates[index].Similarity = similarities[candidates[index].Context.ID]
+	}
+	return candidates, nil
 }
 
 // searchCandidateIDs는 결과 행을 끝까지 읽어 식별자만 모으고 연결을 놓아준다.

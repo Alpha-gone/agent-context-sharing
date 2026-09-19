@@ -93,6 +93,8 @@ type Config struct {
 	SearchExecution SearchExecution
 	// SearchCandidateLimit 필드에는 각 검색 채널이 결합 단계에 넘길 후보 수 상한을 둔다.
 	SearchCandidateLimit int
+	// SearchSemanticThreshold 필드에는 의미 후보가 국소 관련성을 입증하는 코사인 유사도 하한을 둔다.
+	SearchSemanticThreshold float64
 	// SearchFoldThreshold 필드에는 중복 파생 접기의 유사 판정 임계값을 둔다.
 	SearchFoldThreshold float64
 	// SearchGraphStage 필드에는 그래프 검색 비교에서 활성화할 누적 단계를 둔다.
@@ -199,6 +201,11 @@ func Load(env Environment) (Config, error) {
 		return Config{}, fmt.Errorf("SEARCH_CHANNEL_CANDIDATE_LIMIT이 양의 정수가 아니다")
 	}
 	cfg.SearchCandidateLimit = candidateLimit
+	semanticThreshold, err := strconv.ParseFloat(strings.TrimSpace(env("SEARCH_SEMANTIC_SIMILARITY_THRESHOLD")), 64)
+	if err != nil || semanticThreshold < 0 || semanticThreshold > 1 {
+		return Config{}, fmt.Errorf("SEARCH_SEMANTIC_SIMILARITY_THRESHOLD가 0 이상 1 이하의 수가 아니다")
+	}
+	cfg.SearchSemanticThreshold = semanticThreshold
 	foldThreshold, err := strconv.ParseFloat(strings.TrimSpace(env("SEARCH_FOLD_SIMILARITY_THRESHOLD")), 64)
 	if err != nil || foldThreshold <= 0 || foldThreshold > 1 {
 		return Config{}, fmt.Errorf("SEARCH_FOLD_SIMILARITY_THRESHOLD가 0 초과 1 이하의 수가 아니다")

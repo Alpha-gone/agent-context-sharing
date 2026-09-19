@@ -38,8 +38,14 @@ func TestIndexAndNonGraphSearchIntegration(t *testing.T) {
 		t.Fatalf("색인 작업 결과 = %+v", processed)
 	}
 	semantic, err := database.SemanticCandidates(t.Context(), graphID, "test:vector:1024", vector, time.Now().UTC(), 10)
-	if err != nil || len(semantic) != 1 || semantic[0].Context.ID != stored.ID {
+	if err != nil || len(semantic) != 1 || semantic[0].Context.ID != stored.ID || semantic[0].Similarity != 1 {
 		t.Fatalf("의미 유사도 후보 = %#v, err=%v", semantic, err)
+	}
+	orthogonal := make([]float64, 1024)
+	orthogonal[1] = 1
+	semantic, err = database.SemanticCandidates(t.Context(), graphID, "test:vector:1024", orthogonal, time.Now().UTC(), 10)
+	if err != nil || len(semantic) != 1 || semantic[0].Similarity != 0 {
+		t.Fatalf("직교 의미 후보 = %#v, err=%v", semantic, err)
 	}
 	keyword, err := database.KeywordCandidates(t.Context(), graphID, "고유어", time.Now().UTC(), 10)
 	if err != nil || len(keyword) != 1 || keyword[0].Context.ID != stored.ID {
@@ -102,7 +108,8 @@ func TestGlobalSummaryCandidatesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("최신 전역 요약 생성: %v", err)
 	}
-	if _, err := database.CreateContext(t.Context(), graphID, createSummary("국소 요약", model.SummaryScopeLocal, now, nil), []model.ID{storedSource.ID}); err != nil {
+	local, err := database.CreateContext(t.Context(), graphID, createSummary("국소 요약", model.SummaryScopeLocal, now, nil), []model.ID{storedSource.ID})
+	if err != nil {
 		t.Fatalf("국소 요약 생성: %v", err)
 	}
 	expiredAt := new(time.Time)
@@ -121,6 +128,19 @@ func TestGlobalSummaryCandidatesIntegration(t *testing.T) {
 	limited, err := database.GlobalSummaryCandidates(t.Context(), graphID, now, 1)
 	if err != nil || len(limited) != 1 || limited[0].Context.ID != newer.ID {
 		t.Fatalf("전역 요약 후보 상한 = %#v, err=%v", limited, err)
+	}
+	keyword, err := database.KeywordCandidates(t.Context(), graphID, "전역 요약", now, 10)
+	if err != nil || len(keyword) != 1 || keyword[0].Context.ID != local.ID {
+		t.Fatalf("국소 키워드 후보 = %#v, want 국소 요약만, err=%v", keyword, err)
+	}
+	timed, err := database.TimeCandidates(t.Context(), graphID, now, 10)
+	if err != nil {
+		t.Fatalf("국소 시간 후보 조회: %v", err)
+	}
+	for _, candidate := range timed {
+		if candidate.Context.ID == older.ID || candidate.Context.ID == newer.ID {
+			t.Fatalf("국소 시간 후보에 전역 요약이 섞였다: %s", candidate.Context.ID)
+		}
 	}
 }
 

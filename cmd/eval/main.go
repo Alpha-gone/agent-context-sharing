@@ -39,16 +39,17 @@ type report struct {
 
 // conditions는 단계를 제외하고 회차마다 고정한 통제 조건이다.
 type conditions struct {
-	Stages         []string `json:"stages"`
-	Repeats        int      `json:"repeats"`
-	Budget         int      `json:"budget"`
-	MaxHops        int      `json:"max_hops"`
-	MaxHopNodes    int      `json:"max_hop_nodes"`
-	Execution      string   `json:"channel_execution"`
-	CandidateLimit int      `json:"channel_candidate_limit"`
-	FoldThreshold  float64  `json:"fold_threshold"`
-	EmbeddingModel string   `json:"embedding_model"`
-	IndexTargets   string   `json:"index_targets"`
+	Stages            []string `json:"stages"`
+	Repeats           int      `json:"repeats"`
+	Budget            int      `json:"budget"`
+	MaxHops           int      `json:"max_hops"`
+	MaxHopNodes       int      `json:"max_hop_nodes"`
+	Execution         string   `json:"channel_execution"`
+	CandidateLimit    int      `json:"channel_candidate_limit"`
+	SemanticThreshold float64  `json:"semantic_similarity_threshold"`
+	FoldThreshold     float64  `json:"fold_threshold"`
+	EmbeddingModel    string   `json:"embedding_model"`
+	IndexTargets      string   `json:"index_targets"`
 }
 
 func main() {
@@ -68,7 +69,7 @@ func run() error {
 	maxHops := flag.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
 	maxHopNodes := flag.Int("max-hop-nodes", defaultLimits.MaxHopNodes, "그래프 확장 최대 노드 수")
 	indexTargets := flag.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
-	convert := flag.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag, own 또는 own-global")
+	convert := flag.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag, own, own-global 또는 own-global-auto")
 	convertSource := flag.String("convert-source", "", "변환할 벤치마크 파일 경로")
 	convertName := flag.String("convert-name", "", "데이터셋 판에 넣을 세트 이름")
 	convertLimit := flag.Int("convert-questions", 0, "변환에 쓸 질의 수. 0이면 전부 쓴다")
@@ -141,25 +142,27 @@ func run() error {
 		ContextVersion: contexts.Version,
 		QueryVersion:   queries.Version,
 		Conditions: conditions{
-			Stages:         stages,
-			Repeats:        *repeats,
-			Budget:         *budget,
-			MaxHops:        *maxHops,
-			MaxHopNodes:    *maxHopNodes,
-			Execution:      string(settings.execution),
-			CandidateLimit: settings.candidateLimit,
-			FoldThreshold:  settings.foldThreshold,
-			EmbeddingModel: worker.ModelID(),
-			IndexTargets:   *indexTargets,
+			Stages:            stages,
+			Repeats:           *repeats,
+			Budget:            *budget,
+			MaxHops:           *maxHops,
+			MaxHopNodes:       *maxHopNodes,
+			Execution:         string(settings.execution),
+			CandidateLimit:    settings.candidateLimit,
+			SemanticThreshold: settings.semanticThreshold,
+			FoldThreshold:     settings.foldThreshold,
+			EmbeddingModel:    worker.ModelID(),
+			IndexTargets:      *indexTargets,
 		},
 	}
 	runs := map[string][]runMetrics{}
 	for _, stage := range stages {
 		service, err := search.New(database, worker, search.Config{
-			Execution:      settings.execution,
-			CandidateLimit: settings.candidateLimit,
-			FoldThreshold:  settings.foldThreshold,
-			GraphStage:     search.GraphStage(stage),
+			Execution:         settings.execution,
+			CandidateLimit:    settings.candidateLimit,
+			SemanticThreshold: settings.semanticThreshold,
+			FoldThreshold:     settings.foldThreshold,
+			GraphStage:        search.GraphStage(stage),
 		}, slog.Default())
 		if err != nil {
 			return fmt.Errorf("단계 %q 검색 실행기 준비: %w", stage, err)
@@ -202,6 +205,11 @@ func runConvert(format, source, name string, limit int, useCase, contextsPath, q
 			return fmt.Errorf("-convert-name이 필요하다")
 		}
 		contexts, queries, err = convertOwnGlobalSet(name, limit)
+	case convertOwnGlobalAuto:
+		if name == "" {
+			return fmt.Errorf("-convert-name이 필요하다")
+		}
+		contexts, queries, err = convertOwnGlobalAutoSet(name, limit)
 	default:
 		return fmt.Errorf("변환 형식 %q를 알 수 없다", format)
 	}
@@ -284,12 +292,13 @@ func parseStages(raw string) ([]string, error) {
 // settings는 평가가 읽는 배포 구성이다. 마이그레이션 실행기와 같이 애플리케이션
 // 구성 전체를 요구하지 않고 필요한 값만 직접 읽는다.
 type settings struct {
-	databaseURL    string
-	graphName      string
-	index          index.Config
-	execution      search.Execution
-	candidateLimit int
-	foldThreshold  float64
+	databaseURL       string
+	graphName         string
+	index             index.Config
+	execution         search.Execution
+	candidateLimit    int
+	semanticThreshold float64
+	foldThreshold     float64
 }
 
 func loadSettings() (settings, error) {
@@ -317,6 +326,9 @@ func loadSettings() (settings, error) {
 	}
 	if loaded.candidateLimit, err = strconv.Atoi(strings.TrimSpace(envOr("SEARCH_CHANNEL_CANDIDATE_LIMIT", "50"))); err != nil {
 		return settings{}, fmt.Errorf("SEARCH_CHANNEL_CANDIDATE_LIMIT 해석: %w", err)
+	}
+	if loaded.semanticThreshold, err = strconv.ParseFloat(strings.TrimSpace(envOr("SEARCH_SEMANTIC_SIMILARITY_THRESHOLD", "0.5")), 64); err != nil {
+		return settings{}, fmt.Errorf("SEARCH_SEMANTIC_SIMILARITY_THRESHOLD 해석: %w", err)
 	}
 	if loaded.foldThreshold, err = strconv.ParseFloat(strings.TrimSpace(envOr("SEARCH_FOLD_SIMILARITY_THRESHOLD", "0.9")), 64); err != nil {
 		return settings{}, fmt.Errorf("SEARCH_FOLD_SIMILARITY_THRESHOLD 해석: %w", err)

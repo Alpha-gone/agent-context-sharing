@@ -40,10 +40,11 @@ const (
 
 // Config는 검색 결합의 배포 구성을 담는다.
 type Config struct {
-	Execution      Execution
-	CandidateLimit int
-	FoldThreshold  float64
-	GraphStage     GraphStage
+	Execution         Execution
+	CandidateLimit    int
+	SemanticThreshold float64
+	FoldThreshold     float64
+	GraphStage        GraphStage
 }
 
 // Embedder는 질의 텍스트를 현재 색인 모델의 벡터로 바꾸는 index 경계다.
@@ -132,6 +133,9 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 	}
 	if config.CandidateLimit < 1 {
 		return nil, fmt.Errorf("검색 채널 후보 수 상한은 양수여야 한다")
+	}
+	if config.SemanticThreshold < 0 || config.SemanticThreshold > 1 {
+		return nil, fmt.Errorf("의미 유사도 하한은 0 이상 1 이하여야 한다")
 	}
 	if config.FoldThreshold <= 0 || config.FoldThreshold > 1 {
 		return nil, fmt.Errorf("중복 파생 접기 임계값은 0 초과 1 이하여야 한다")
@@ -222,8 +226,11 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 		return allEntryChannelsFailed()
 	}
 	combined := combine(results)
-	if input.Scope == "global" || (input.Scope == "auto" && len(combined) == 0) {
-		global := service.globalSummaries(ctx, input)
+	relevantLocal := hasRelevantSemantic(results[0].candidates, service.config.SemanticThreshold) || len(results[1].candidates) > 0
+	globalFallback := input.Scope == "auto" && !relevantLocal
+	var global channelResult
+	if input.Scope == "global" || globalFallback {
+		global = service.globalSummaries(ctx, input)
 		channels[global.name] = global.metric
 		// 전역 범위의 진입 채널은 전역 요약 하나뿐이므로 그 채널의 실패가 곧 모든 채널
 		// 실패다. 비교 단계에서 끈 상태는 조회 실패가 아니라 구성이므로 제외한다.
@@ -234,6 +241,12 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 		combined = combine(results)
 	}
 	entryPoints := candidateContexts(combined)
+	// auto가 전역 요약으로 전환됐으면 광범위한 시간 후보가 홉 결과 상한을 먼저
+	// 채우지 않게 실제 전역 요약이 있을 때 그 요약만 확장 시작점으로 쓴다. 전역 요약이
+	// 없거나 비교 단계가 되돌림을 껐으면 기존 국소 후보를 그대로 쓴다.
+	if globalFallback && len(global.candidates) > 0 {
+		entryPoints = candidateContexts(combine([]channelResult{global}))
+	}
 	graph := service.graphCandidates(ctx, input, entryPoints)
 	channels[graph.name] = graph.metric
 	results = append(results, graph)
@@ -262,8 +275,17 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	}
 	edges := filterEdges(selected, results)
 	flow := Flow{Contexts: contexts, Edges: edges, EntryPoints: contextIDs(entryPoints), BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation, HopBoundary: graph.boundary}
-	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil)
+	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "global_fallback_triggered", globalFallback, "global_fallback_applied", globalFallback && len(global.candidates) > 0, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil)
 	return flow, nil
+}
+
+func hasRelevantSemantic(candidates []store.SearchCandidate, threshold float64) bool {
+	for _, candidate := range candidates {
+		if candidate.Similarity >= threshold {
+			return true
+		}
+	}
+	return false
 }
 
 // ErrEmbeddingUnavailable은 질의 임베딩 생성이 실패했음을 나타낸다.

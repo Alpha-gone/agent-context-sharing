@@ -96,13 +96,14 @@ func TestFlowReturnsInternalErrorOnlyWhenAllChannelsFail(t *testing.T) {
 }
 
 type fakeStore struct {
-	semantic  []store.SearchCandidate
-	keyword   []store.SearchCandidate
-	time      []store.SearchCandidate
-	global    []store.SearchCandidate
-	hops      store.HopResult
-	hopCalls  int
-	hopStarts []model.ID
+	semantic    []store.SearchCandidate
+	keyword     []store.SearchCandidate
+	time        []store.SearchCandidate
+	global      []store.SearchCandidate
+	hops        store.HopResult
+	hopCalls    int
+	globalCalls int
+	hopStarts   []model.ID
 	// hopDepth에는 마지막 호출이 받은 탐색 깊이를 둔다.
 	hopDepth int
 	mu       sync.Mutex
@@ -129,6 +130,7 @@ func (fake *fakeStore) SemanticCandidates(context.Context, model.ID, string, []f
 func (fake *fakeStore) GlobalSummaryCandidates(context.Context, model.ID, time.Time, int) ([]store.SearchCandidate, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	fake.globalCalls++
 	return append([]store.SearchCandidate(nil), fake.global...), nil
 }
 
@@ -456,6 +458,82 @@ func TestFlowKeepsExplicitGlobalScopeAtBaseline(t *testing.T) {
 	// 기준선은 그래프 경로를 끈 구성이므로 근거를 따라 내려가지 않는다.
 	if flow.Channels["graph"].Failure != "disabled" || database.hopCalls != 0 {
 		t.Fatalf("기준선의 그래프 확장 = %#v, 호출 %d회", flow.Channels["graph"], database.hopCalls)
+	}
+}
+
+// TestFlowAutoFallsBackDespiteTimeCandidates는 시간 후보가 있어도 관련 의미·키워드
+// 후보가 없으면 전역 요약으로 전환하고, 전역 요약만 그래프 시작점으로 쓰는지 확인한다.
+func TestFlowAutoFallsBackDespiteTimeCandidates(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000073")
+	timed := testContext(t, graphID, "019a0000-0000-7000-8000-000000000074", "시간 후보", 1)
+	summary := testContext(t, graphID, "019a0000-0000-7000-8000-000000000075", "전역 요약", 2)
+	database := &fakeStore{time: []store.SearchCandidate{{Context: timed}}, global: []store.SearchCandidate{{Context: summary}}}
+	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, SemanticThreshold: 0.7, FoldThreshold: 0.9, GraphStage: GraphStageGlobal}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	if _, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "질의", AsOf: time.Now().UTC(), Budget: 100, MaxHops: 2, MaxHopNodes: 10}); err != nil {
+		t.Fatalf("auto 전역 되돌림: %v", err)
+	}
+	if database.globalCalls != 1 {
+		t.Fatalf("전역 요약 조회 = %d회, want 1회", database.globalCalls)
+	}
+	if !slices.Equal(database.hopStarts, []model.ID{summary.ID}) {
+		t.Fatalf("전역 전환의 그래프 시작점 = %v, want 전역 요약", database.hopStarts)
+	}
+}
+
+// TestFlowAutoFallsBackDespiteWeakSemanticCandidates는 의미 후보를 검색 결과에서는
+// 보존하되 최상위 유사도가 하한보다 낮으면 전역 요약으로 전환하는지 확인한다.
+func TestFlowAutoFallsBackDespiteWeakSemanticCandidates(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000078")
+	weak := testContext(t, graphID, "019a0000-0000-7000-8000-000000000079", "약한 의미 후보", 1)
+	summary := testContext(t, graphID, "019a0000-0000-7000-8000-00000000007a", "전역 요약", 2)
+	database := &fakeStore{
+		semantic: []store.SearchCandidate{{Context: weak, Similarity: 0.49}},
+		global:   []store.SearchCandidate{{Context: summary}},
+	}
+	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, SemanticThreshold: 0.5, FoldThreshold: 0.9, GraphStage: GraphStageGlobal}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	flow, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "질의", AsOf: time.Now().UTC(), Budget: 100, MaxHops: 2, MaxHopNodes: 10})
+	if err != nil {
+		t.Fatalf("auto 전역 되돌림: %v", err)
+	}
+	if database.globalCalls != 1 || !slices.Contains(flowIDs(flow), weak.ID.String()) {
+		t.Fatalf("약한 의미 후보 보존 또는 전역 전환 실패: 호출 %d회, 결과 %v", database.globalCalls, flowIDs(flow))
+	}
+	if !slices.Equal(database.hopStarts, []model.ID{summary.ID}) {
+		t.Fatalf("전역 전환의 그래프 시작점 = %v, want 전역 요약", database.hopStarts)
+	}
+}
+
+// TestFlowAutoKeepsRelevantLocalCandidates는 키워드 후보가 있으면 global 단계에서도
+// 전역 요약 되돌림을 실행하지 않는지 확인한다.
+func TestFlowAutoKeepsRelevantLocalCandidates(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000076")
+	local := testContext(t, graphID, "019a0000-0000-7000-8000-000000000077", "국소 후보", 1)
+	database := &fakeStore{keyword: []store.SearchCandidate{{Context: local}}}
+	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, SemanticThreshold: 0.7, FoldThreshold: 0.9, GraphStage: GraphStageGlobal}, nil)
+	if err != nil {
+		t.Fatalf("검색기 생성: %v", err)
+	}
+	if _, err := service.Flow(t.Context(), Input{GraphID: graphID, WorkContext: "질의", AsOf: time.Now().UTC(), Budget: 100, MaxHops: 2, MaxHopNodes: 10}); err != nil {
+		t.Fatalf("auto 국소 검색: %v", err)
+	}
+	if database.globalCalls != 0 {
+		t.Fatalf("관련 국소 후보가 있는데 전역 요약을 %d회 조회했다", database.globalCalls)
+	}
+}
+
+func TestHasRelevantSemantic(t *testing.T) {
+	candidates := []store.SearchCandidate{{Similarity: 0.49}, {Similarity: 0.5}}
+	if !hasRelevantSemantic(candidates, 0.5) {
+		t.Fatal("하한과 같은 의미 후보를 관련 후보로 판정하지 않았다")
+	}
+	if hasRelevantSemantic(candidates[:1], 0.5) {
+		t.Fatal("하한보다 낮은 의미 후보를 관련 후보로 판정했다")
 	}
 }
 

@@ -130,10 +130,13 @@ func TestConvertOwnGlobalSet(t *testing.T) {
 		if query.UseCase != useCaseGlobal || query.Scope != "global" || query.AsOf == nil {
 			t.Fatalf("전역 질의 %d의 계약이 다르다: %+v", index, query)
 		}
+		summary := byKey[fmt.Sprintf("w%03d-g", index)]
+		if query.WorkContext != ownGlobalMarker(index) || !strings.Contains(summary.Body, ownGlobalMarker(index)) {
+			t.Fatalf("전역 질의 %d의 표식이 요약과 다르다", index)
+		}
 		if len(query.Answers) != 4 {
 			t.Fatalf("전역 질의 %d의 정답 수 = %d", index, len(query.Answers))
 		}
-		summary := byKey[fmt.Sprintf("w%03d-g", index)]
 		if summary.Derived == nil || summary.Derived.SummaryScope != "global" {
 			t.Fatalf("전역 요약 %d의 속성이 다르다: %+v", index, summary)
 		}
@@ -151,6 +154,11 @@ func TestConvertOwnGlobalSet(t *testing.T) {
 			candidate := byKey[fmt.Sprintf("w%03d-g", other)].Derived
 			if !query.AsOf.Before(*candidate.ValidFrom) && !query.AsOf.After(*candidate.ValidTo) {
 				t.Fatalf("전역 질의 %d의 조회 시점에 요약 %d도 유효하다", index, other)
+			}
+		}
+		for _, answer := range query.Answers {
+			if strings.Contains(byKey[answer].Body, ownTopics[index%len(ownTopics)]) {
+				t.Fatalf("전역 질의 %d의 원천에 공개 주제가 노출됐다: %q", index, byKey[answer].Body)
 			}
 		}
 	}
@@ -177,6 +185,21 @@ func TestConvertOwnGlobalSet(t *testing.T) {
 	}
 	if _, _, err := convertOwnGlobalSet("own-global", 0); err == nil {
 		t.Fatal("0개 질의가 허용됐다")
+	}
+}
+
+func TestConvertOwnGlobalAutoSet(t *testing.T) {
+	contexts, queries, err := convertOwnGlobalAutoSet("own-global-auto", 2)
+	if err != nil {
+		t.Fatalf("자동 전역 전환 세트 생성: %v", err)
+	}
+	if contexts.Version != "own-global-auto-2q" || queries.Version != contexts.Version {
+		t.Fatalf("자동 전역 전환 세트 판이 다르다: %q, %q", contexts.Version, queries.Version)
+	}
+	for _, query := range queries.Queries {
+		if query.Scope != "auto" || query.UseCase != useCaseGlobal {
+			t.Fatalf("자동 전역 전환 질의 계약이 다르다: %+v", query)
+		}
 	}
 }
 

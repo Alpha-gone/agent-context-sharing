@@ -65,8 +65,17 @@ type eventSpec struct {
 // contextSet은 컨텍스트 집합 파일 전체다. Version은 「검증」이 기록하라고 한
 // "사용한 데이터셋 판"이며 결과 파일에 그대로 싣는다.
 type contextSet struct {
-	Version  string        `json:"version"`
-	Contexts []contextSpec `json:"contexts"`
+	Version   string         `json:"version"`
+	Contexts  []contextSpec  `json:"contexts"`
+	Relations []relationSpec `json:"relations,omitzero"`
+}
+
+// relationSpec은 데이터셋이 확정을 요구하는 사건 관계 하나다. 그래프 단계 비교에
+// 쓰는 세트는 제안이 아니라 확정 관계로 경로가 달라져야 하므로 적재가 확정 상태로 올린다.
+type relationSpec struct {
+	Type string `json:"type"`
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // querySpec은 질의 파일의 한 항목이다. Answers는 컨텍스트 집합의 Key 목록이며
@@ -113,6 +122,28 @@ func loadContextSet(path string) (contextSet, error) {
 		if err := validateContextSpec(spec, keys); err != nil {
 			return contextSet{}, fmt.Errorf("%s: %w", path, err)
 		}
+	}
+	identities := make(map[string]bool, len(set.Relations))
+	for _, spec := range set.Relations {
+		if !slices.Contains([]string{"precedes", "causes", "part_of", "relates_to"}, spec.Type) {
+			return contextSet{}, fmt.Errorf("%s: 관계 유형 %q가 허용된 값이 아니다", path, spec.Type)
+		}
+		fromLayer, ok := keys[spec.From]
+		if !ok {
+			return contextSet{}, fmt.Errorf("%s: 관계 시작 %q가 집합에 없다", path, spec.From)
+		}
+		toLayer, ok := keys[spec.To]
+		if !ok {
+			return contextSet{}, fmt.Errorf("%s: 관계 대상 %q가 집합에 없다", path, spec.To)
+		}
+		if fromLayer != "event" || toLayer != "event" {
+			return contextSet{}, fmt.Errorf("%s: 관계 %q→%q의 양 끝이 사건이 아니다", path, spec.From, spec.To)
+		}
+		identity := spec.Type + "|" + spec.From + "|" + spec.To
+		if identities[identity] {
+			return contextSet{}, fmt.Errorf("%s: 관계 %q가 중복된다", path, identity)
+		}
+		identities[identity] = true
 	}
 	return set, nil
 }

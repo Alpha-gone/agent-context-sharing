@@ -1,10 +1,117 @@
 package main
 
 import (
+	"bytes"
+	json "encoding/json/v2"
 	"slices"
 	"strings"
 	"testing"
 )
+
+func TestConvertOwnSet(t *testing.T) {
+	contexts, queries, err := convertOwnSet("own-events", 50)
+	if err != nil {
+		t.Fatalf("자체 세트 생성: %v", err)
+	}
+	if contexts.Version != "own-events-50q" || len(contexts.Contexts) != 50*19 || len(queries.Queries) != 50 {
+		t.Fatalf("판·개수가 다르다: %q %d %d", contexts.Version, len(contexts.Contexts), len(queries.Queries))
+	}
+	if len(contexts.Relations) != 50*3 {
+		t.Fatalf("관계 수가 다르다: %d", len(contexts.Relations))
+	}
+	layers := make(map[string]string, len(contexts.Contexts))
+	members := make(map[string][]string)
+	for _, spec := range contexts.Contexts {
+		layers[spec.Key] = spec.Layer
+		if spec.Event != nil {
+			members[spec.Key] = spec.Event.Members
+		}
+	}
+	for _, relation := range contexts.Relations {
+		if layers[relation.From] != "event" || layers[relation.To] != "event" {
+			t.Fatalf("관계 양 끝이 사건이 아니다: %+v", relation)
+		}
+	}
+	for _, part := range []string{"g000-e1", "g000-e2"} {
+		whole := members["g000-ew"]
+		for _, member := range members[part] {
+			if !slices.Contains(whole, member) {
+				t.Fatalf("%s의 구성원 %s가 전체 사건에 없다", part, member)
+			}
+		}
+	}
+	facts, associative := 0, 0
+	for _, query := range queries.Queries {
+		for _, answer := range query.Answers {
+			if _, found := layers[answer]; !found {
+				t.Fatalf("질의 %s의 정답 %s가 집합에 없다", query.ID, answer)
+			}
+		}
+		if query.UseCase == useCaseFact {
+			facts++
+		} else {
+			associative++
+		}
+	}
+	if facts != 25 || associative != 25 {
+		t.Fatalf("사용 사례 균형이 다르다: fact=%d associative=%d", facts, associative)
+	}
+	repeat, repeatQueries, err := convertOwnSet("own-events", 50)
+	if err != nil {
+		t.Fatalf("자체 세트 재생성: %v", err)
+	}
+	first, err := json.Marshal(contexts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := json.Marshal(repeat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) || len(repeatQueries.Queries) != len(queries.Queries) {
+		t.Fatal("생성이 결정적이지 않다")
+	}
+	if _, _, err := convertOwnSet("own-events", 3); err == nil {
+		t.Fatal("홀수 질의 수가 허용됐다")
+	}
+}
+
+func TestConvertOwnSetKeepsAssociativeAnswerBehindRelation(t *testing.T) {
+	contexts, queries, err := convertOwnSet("own-events", 2)
+	if err != nil {
+		t.Fatalf("자체 세트 생성: %v", err)
+	}
+	byKey := make(map[string]contextSpec, len(contexts.Contexts))
+	for _, context := range contexts.Contexts {
+		byKey[context.Key] = context
+	}
+	query := queries.Queries[1]
+	answer := byKey[query.Answers[0]]
+	if !strings.Contains(query.WorkContext, ownTopics[1]) {
+		t.Fatalf("연상 질의에 공개 주제가 없다: %q", query.WorkContext)
+	}
+	if !strings.Contains(query.WorkContext, ownMarker(1)) || !strings.Contains(byKey["g001-ef"].Body, ownMarker(1)) {
+		t.Fatalf("연상 질의와 마무리 사건의 완료 표식이 다르다")
+	}
+	if strings.Contains(answer.Body, ownTopics[1]) {
+		t.Fatalf("연상 정답에 공개 주제가 노출됐다: %q", answer.Body)
+	}
+	if answer.Layer != "event" {
+		t.Fatalf("연상 정답 계층 = %q, want event", answer.Layer)
+	}
+	for _, key := range []string{"g001-d0", "g001-d1", "g001-e1", "g001-e2", "g001-ew"} {
+		if strings.Contains(byKey[key].Body, ownTopics[1]) {
+			t.Fatalf("준비 구간 %s에 공개 주제가 노출됐다: %q", key, byKey[key].Body)
+		}
+		if strings.Contains(byKey[key].Body, ownMarker(1)) {
+			t.Fatalf("준비 구간 %s에 완료 표식이 노출됐다: %q", key, byKey[key].Body)
+		}
+	}
+	wantRelation := relationSpec{Type: "precedes", From: "g001-ew", To: "g001-ef"}
+	if !slices.Contains(contexts.Relations, wantRelation) {
+		t.Fatalf("연상 정답으로 한 홉 경로를 여는 관계가 없다: %+v", wantRelation)
+	}
+}
 
 // hippoFixture는 HippoRAG 2 재현 세트의 구조를 그대로 줄인 것이다. 문단 본문 필드
 // 이름이 세트마다 `text`와 `paragraph_text`로 갈리므로 둘을 함께 담는다.

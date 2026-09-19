@@ -69,7 +69,36 @@ func loadGraph(ctx context.Context, database *store.Store, set contextSet) (load
 		}
 		return loadedGraph{}, err
 	}
+	if err := confirmRelations(ctx, database, graph.ID, accountID, set, keys); err != nil {
+		if deleteErr := database.SetGraphDeleted(ctx, graph.ID, accountID, true); deleteErr != nil {
+			return loadedGraph{}, errors.Join(err, fmt.Errorf("관계 확정 실패 뒤 평가 그래프 정리: %w", deleteErr))
+		}
+		return loadedGraph{}, err
+	}
 	return loadedGraph{GraphID: graph.ID, AccountID: accountID, Keys: keys}, nil
+}
+
+// confirmRelations는 데이터셋의 사건 관계를 확정 상태로 올린다.
+//
+// 평가는 확정 관계가 그래프 경로 확장을 여는 것을 재야 하므로 제안 상태로 두지 않는다.
+// 기록은 남기지 않는다. 평가 그래프는 측정 뒤 지워지므로 감사 행은 판정에 쓰이지 않는다.
+func confirmRelations(ctx context.Context, database *store.Store, graphID, accountID model.ID, set contextSet, keys map[string]model.ID) error {
+	agentID, err := model.NewID()
+	if err != nil {
+		return fmt.Errorf("평가 에이전트 식별자 생성: %w", err)
+	}
+	for _, spec := range set.Relations {
+		relationID, err := model.NewID()
+		if err != nil {
+			return fmt.Errorf("관계 식별자 생성: %w", err)
+		}
+		now := time.Now().UTC()
+		relation := model.Relation{ID: relationID, GraphID: graphID, Type: model.RelationType(spec.Type), FromContextID: keys[spec.From], ToContextID: keys[spec.To], State: model.RelationStateConfirmed, ProposedBy: model.ProposalSourceAgent, ProposedAt: now, ConfirmedBy: accountID, ConfirmedByAgent: agentID, ConfirmedAt: &now}
+		if _, err := database.ConfirmRelation(ctx, graphID, relation, nil); err != nil {
+			return fmt.Errorf("관계 %s(%s→%s) 확정: %w", spec.Type, spec.From, spec.To, err)
+		}
+	}
+	return nil
 }
 
 // createContexts는 참조가 이미 만들어진 항목부터 차례로 올린다. 파생은 근거를,

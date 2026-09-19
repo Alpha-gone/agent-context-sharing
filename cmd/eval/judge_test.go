@@ -1,21 +1,27 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
 
-// stageRuns는 회차별 재현율만 다르게 둔 측정값을 만든다. 판정은 지표 값만 보므로
-// 나머지 필드는 판정에 영향을 주지 않는다.
+// stageRuns는 질의별 재현율을 세 반복에 같게 둔다. 반복을 표본으로 복제하지 않고
+// 질의별 차이를 판정하는지 확인하기 위한 입력이다.
 func stageRuns(stage string, recalls ...float64) []runMetrics {
-	runs := make([]runMetrics, 0, len(recalls))
-	for index, recall := range recalls {
+	runs := make([]runMetrics, 0, minimumRepeats)
+	for repeat := range minimumRepeats {
+		samples := make([]queryMetrics, 0, len(recalls))
+		for index, recall := range recalls {
+			samples = append(samples, queryMetrics{ID: fmt.Sprintf("q%d", index), UseCase: useCaseFact, Recall: recall, ReciprocalRank: recall, BudgetPerHit: 100})
+		}
 		runs = append(runs, runMetrics{
 			Stage:  stage,
-			Repeat: index + 1,
+			Repeat: repeat + 1,
 			UseCases: map[string]useCaseMetrics{
-				useCaseFact: {Queries: 10, Recall: recall, ReciprocalRank: recall, BudgetPerHit: 100},
+				useCaseFact: {Queries: len(recalls), Recall: mean(recalls), ReciprocalRank: mean(recalls), BudgetPerHit: 100},
 			},
+			QuerySamples: samples,
 		})
 	}
 	return runs
@@ -62,12 +68,15 @@ func TestJudgeTreatsBudgetLowerAsBetter(t *testing.T) {
 		metrics := improved[index].UseCases[useCaseFact]
 		metrics.BudgetPerHit = 50
 		improved[index].UseCases[useCaseFact] = metrics
+		for sampleIndex := range improved[index].QuerySamples {
+			improved[index].QuerySamples[sampleIndex].BudgetPerHit = 50
+		}
 	}
 	judgements := judge([]string{"baseline", "references"}, map[string][]runMetrics{
 		"baseline": baseline, "references": improved,
 	})
 	budget := findComparison(t, judgements[1], "budget_per_hit")
-	if !budget.Improved || budget.Difference >= 0 {
+	if !budget.Improved || !budget.Significant || budget.Difference >= 0 || budget.Samples != 3 {
 		t.Fatalf("문자 수가 줄면 개선이어야 한다: %+v", budget)
 	}
 }

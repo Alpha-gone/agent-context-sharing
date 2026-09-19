@@ -18,6 +18,163 @@ import (
 // 더할 때 변환 규칙이 이름으로 갈라져야 하기 때문이다.
 const convertHippoRAG = "hipporag"
 
+// convertOwn은 사건 관계를 포함한 자체 세트의 생성기 이름이다.
+const convertOwn = "own"
+
+// 자체 세트의 재료다. 그룹마다 주제와 세부 어휘가 달라져 그래프 단계 비교에 쓸
+// 어휘적 거리가 만들어진다. 낱말은 고정이고 그룹 번호로만 고르므로 생성은 결정적이다.
+var (
+	ownTopics = []string{
+		"배포 파이프라인", "인증 서버", "데이터 마이그레이션", "검색 품질", "비용 최적화",
+		"장애 대응", "권한 관리", "로그 수집", "캐시 전략", "테스트 자동화",
+		"문서화", "온보딩", "API 버전 관리", "모니터링", "보안 감사",
+		"데이터 백업", "성능 튜닝", "협업 워크플로", "요구사항 수집", "릴리스 관리",
+		"개발 환경", "코드 리뷰", "기술 부채", "외부 연동", "알림 채널",
+		"스키마 변경", "트래픽 대응", "실험 설계", "평가 지표", "운영 절차",
+	}
+	ownModules   = []string{"결제", "알림", "검색", "계정", "리포트", "게이트웨이", "작업 큐", "설정", "미터기", "웹훅"}
+	ownArtefacts = []string{"설계안", "회의록", "점검표", "배포 note", "장애 보고서", "검토 의견"}
+	ownEarlyActs = []string{"초기 요구사항을 정리했다", "현황을 조사했다", "초안을 작성했다", "제약 조건을 검토했다", "이해관계자 의견을 모았다"}
+	ownMidActs   = []string{"구현 방향을 확정했다", "일정을 조정했다", "리스크를 검토했다", "범위를 합의했다"}
+	ownLateActs  = []string{"안정화 작업을 마무리했다", "후속 조치를 정리했다", "재정리를 완료했다", "모니터링을 강화했다"}
+	ownFindings  = []string{"예산 상한", "담당자 지정", "일정 지연 사유", "환경 설정 값", "승인 대기 항목", "외부 의존 목록", "임계값 조정", "회차별 참석자", "데이터 보관 기간", "실패 사례 요약", "버전 호환 조건", "검토 기준"}
+)
+
+// convertOwnSet은 사건 관계를 포함한 자체 세트를 결정적으로 만든다.
+//
+// 공개 벤치마크에는 사건·관계 대응물이 없어 「검색 품질 평가」가 자체 세트를 요구한다.
+// 생성기가 곧 원본이므로 같은 명령으로 같은 파일이 다시 만들어진다. 질의 그룹 하나는
+// 원천 12개(초기·중간·마무리 넷씩), 파생 3개, 사건 4개(초기·중간·묶음·마무리)와 확정
+// 관계 3개로 구성한다. 사건 관계의 그래프 효과는 연상 질의가 재는데, 질의 어휘는 마무리
+// 사건과 겹치고 정답 사건과 준비 구간은 별도 작업 코드만 쓴다. 연상 정답은 마무리 사건과
+// `precedes`로 연결된 준비 묶음 사건이라 관계를 켠 단계에서 한 홉으로 올라온다.
+func convertOwnSet(name string, questions int) (contextSet, querySet, error) {
+	if questions < 2 || questions%2 != 0 {
+		return contextSet{}, querySet{}, fmt.Errorf("자체 세트의 질의 수는 2 이상의 짝수여야 한다")
+	}
+	contexts := make([]contextSpec, 0, questions*19)
+	relations := make([]relationSpec, 0, questions*3)
+	queries := make([]querySpec, 0, questions)
+	for group := range questions {
+		topic := ownTopics[group%len(ownTopics)]
+		if group >= len(ownTopics) {
+			topic += "·" + ownModules[(group/len(ownTopics))%len(ownModules)]
+		}
+		associative := group%2 != 0
+		base := time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC).Add(time.Duration(group) * 72 * time.Hour)
+		contexts = append(contexts, ownGroupContexts(group, topic, associative, base)...)
+		relations = append(relations,
+			relationSpec{Type: "part_of", From: ownKey(group, "e1"), To: ownKey(group, "ew")},
+			relationSpec{Type: "part_of", From: ownKey(group, "e2"), To: ownKey(group, "ew")},
+			relationSpec{Type: "precedes", From: ownKey(group, "ew"), To: ownKey(group, "ef")},
+		)
+		if !associative {
+			finding := ownFindings[(group*5+(group%4)*7)%len(ownFindings)]
+			queries = append(queries, querySpec{ID: fmt.Sprintf("own-f-%04d", group), UseCase: useCaseFact,
+				WorkContext: topic + " 논의에서 " + finding + " 내용이 담긴 기록을 찾아야 한다.",
+				Answers:     []string{ownKey(group, fmt.Sprintf("s%02d", group%4))}})
+		} else {
+			queries = append(queries, querySpec{ID: fmt.Sprintf("own-a-%04d", group), UseCase: useCaseAssociative,
+				WorkContext: ownMarker(group) + "로 표시한 " + topic + " 안정화 회차를 마쳤다. 이 회차와 연결된 준비 과정 사건이 필요하다.",
+				Answers:     []string{ownKey(group, "ew")}})
+		}
+	}
+	version := fmt.Sprintf("%s-%dq", name, questions)
+	return contextSet{Version: version, Contexts: contexts, Relations: relations}, querySet{Version: version, Queries: queries}, nil
+}
+
+// ownSlug는 주제를 로케이터에 쓸 수 있는 표기로 바꾼다. 로케이터가 scheme을 가진 URI여야
+// 하므로 주제의 빈칸과 가운뎃점을 하이픈으로 바꾼다.
+func ownSlug(topic string) string {
+	return strings.NewReplacer(" ", "-", "·", "-").Replace(topic)
+}
+
+// ownKey는 그룹 안 컨텍스트의 파일 식별자를 만든다.
+func ownKey(group int, suffix string) string {
+	return fmt.Sprintf("g%03d-%s", group, suffix)
+}
+
+// ownMarker는 연상 질의가 관계 경로의 시작 사건 하나를 안정적으로 찾게 하는 표식이다.
+func ownMarker(group int) string {
+	return fmt.Sprintf("완료표식 Z%03d", group)
+}
+
+// ownGroupContexts는 질의 그룹 하나의 원천·파생·사건을 만든다. 사건 시간은 관계 검증이
+// 요구하는 순서(초기·중간은 묶음 안, 마무리는 묶음 뒤)에 맞춘다.
+func ownGroupContexts(group int, topic string, associative bool, base time.Time) []contextSpec {
+	contexts := make([]contextSpec, 0, 19)
+	preparationTopic := topic
+	if associative {
+		// 연상 질의의 준비 구간에 공개 주제어를 넣으면 의미·키워드 채널이 정답을 직접
+		// 찾아 관계 단계의 효과가 사라진다. 작업 코드는 관계를 거쳐야만 뜻을 알 수 있다.
+		preparationTopic = fmt.Sprintf("작업 코드 R%03d", group)
+	}
+	windows := []struct {
+		topic string
+		start time.Time
+		acts  []string
+	}{
+		{preparationTopic, base.Add(time.Hour), ownEarlyActs},
+		{preparationTopic, base.Add(25 * time.Hour), ownMidActs},
+		{topic, base.Add(49 * time.Hour), ownLateActs},
+	}
+	for phase, window := range windows {
+		for index := range 4 {
+			id := phase*4 + index
+			body := fmt.Sprintf("%s 관련 %d차 논의에서 %s. %s %s에 %s 내용이 남았다.",
+				window.topic, id+1, window.acts[index%len(window.acts)],
+				ownModules[(group+id*3)%len(ownModules)], ownArtefacts[(group+id)%len(ownArtefacts)],
+				ownFindings[(group*5+id*7)%len(ownFindings)])
+			contexts = append(contexts, contextSpec{Key: ownKey(group, fmt.Sprintf("s%02d", id)), Layer: "source", Body: body,
+				Source: &sourceSpec{Channel: "conversation", Locator: fmt.Sprintf("urn:own:%s:%03d:%02d", ownSlug(topic), group, id),
+					OccurredAt: window.start.Add(time.Duration(index+1) * 10 * time.Minute), OriginKind: "user_utterance"}})
+		}
+	}
+	for index, members := range [][]string{
+		{ownKey(group, "s00"), ownKey(group, "s01"), ownKey(group, "s02"), ownKey(group, "s03")},
+		{ownKey(group, "s04"), ownKey(group, "s05"), ownKey(group, "s06"), ownKey(group, "s07")},
+		{ownKey(group, "s08"), ownKey(group, "s09"), ownKey(group, "s10"), ownKey(group, "s11")},
+	} {
+		summaryTopic := preparationTopic
+		if index == 2 {
+			summaryTopic = topic
+		}
+		contexts = append(contexts, contextSpec{Key: ownKey(group, fmt.Sprintf("d%d", index)), Layer: "derived",
+			Body:    summaryTopic + " 회차별 기록을 묶은 요약이다. 핵심 항목과 결정 흐름을 정리했다.",
+			Derived: &derivedSpec{Kind: "summary", SummaryScope: "local", DerivedFrom: members, EvidenceState: "observation"}})
+	}
+	eventTimes := []struct {
+		key   string
+		start time.Time
+	}{
+		{"e1", base.Add(time.Hour)},
+		{"e2", base.Add(25 * time.Hour)},
+		{"ew", base.Add(time.Hour)},
+		{"ef", base.Add(49 * time.Hour)},
+	}
+	eventMembers := map[string][]string{
+		"e1": {ownKey(group, "s00"), ownKey(group, "s01"), ownKey(group, "s02"), ownKey(group, "s03")},
+		"e2": {ownKey(group, "s04"), ownKey(group, "s05"), ownKey(group, "s06"), ownKey(group, "s07")},
+		"ew": {ownKey(group, "s00"), ownKey(group, "s01"), ownKey(group, "s02"), ownKey(group, "s03"), ownKey(group, "s04"), ownKey(group, "s05"), ownKey(group, "s06"), ownKey(group, "s07")},
+		"ef": {ownKey(group, "s08"), ownKey(group, "s09"), ownKey(group, "s10"), ownKey(group, "s11")},
+	}
+	eventBodies := map[string]string{
+		"e1": preparationTopic + " 초기 논의 회차다. 요구사항과 제약을 다뤘다.",
+		"e2": preparationTopic + " 중간 조율 회차다. 구현 방향과 일정을 확정했다.",
+		"ew": preparationTopic + " 준비 과정을 묶은 전체 회차다. 초기 논의와 중간 조율을 함께 다룬다.",
+		"ef": ownMarker(group) + "를 붙인 " + topic + " 안정화 회차다. 후속 조치와 재정리를 마무리했다.",
+	}
+	for _, event := range eventTimes {
+		end := event.start.Add(time.Hour)
+		if event.key == "ew" {
+			end = base.Add(26 * time.Hour)
+		}
+		contexts = append(contexts, contextSpec{Key: ownKey(group, event.key), Layer: "event", Body: eventBodies[event.key],
+			Event: &eventSpec{Members: eventMembers[event.key], Start: event.start, End: &end}})
+	}
+	return contexts
+}
+
 // hippoQuestion은 HippoRAG 2 재현 세트의 질의 하나다. 쓰지 않는 필드는 읽지 않는다.
 type hippoQuestion struct {
 	ID            string           `json:"id"`

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"agent_context_sharing/internal/index"
+	"agent_context_sharing/internal/plan"
 	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
 )
@@ -58,15 +59,16 @@ func main() {
 }
 
 func run() error {
+	defaultLimits := plan.Default()
 	contextsPath := flag.String("contexts", "", "컨텍스트 집합 파일 경로")
 	queriesPath := flag.String("queries", "", "질의 집합 파일 경로")
 	stageList := flag.String("stages", "baseline,references,relations,global", "누적 비교 단계를 순서대로 지정한다")
 	repeats := flag.Int("repeat", minimumRepeats, "단계마다 반복할 회차 수")
 	budget := flag.Int("budget", 4000, "검색 예산 문자 수. 0은 한도 없음이다")
-	maxHops := flag.Int("max-hops", 2, "그래프 확장 최대 홉 수")
-	maxHopNodes := flag.Int("max-hop-nodes", 50, "그래프 확장 최대 노드 수")
+	maxHops := flag.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
+	maxHopNodes := flag.Int("max-hop-nodes", defaultLimits.MaxHopNodes, "그래프 확장 최대 노드 수")
 	indexTargets := flag.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
-	convert := flag.String("convert", "", "공개 벤치마크를 데이터셋으로 변환한다. 지금은 hipporag만 받는다")
+	convert := flag.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag 또는 own")
 	convertSource := flag.String("convert-source", "", "변환할 벤치마크 파일 경로")
 	convertName := flag.String("convert-name", "", "데이터셋 판에 넣을 세트 이름")
 	convertLimit := flag.Int("convert-questions", 0, "변환에 쓸 질의 수. 0이면 전부 쓴다")
@@ -163,12 +165,12 @@ func run() error {
 		}
 		for repeat := 1; repeat <= *repeats; repeat++ {
 			started := time.Now()
-			metrics, err := measure(ctx, service, graph, queries, *budget, *maxHops, *maxHopNodes)
+			measured, err := measure(ctx, service, graph, queries, *budget, *maxHops, *maxHopNodes)
 			if err != nil {
 				return fmt.Errorf("단계 %q 회차 %d: %w", stage, repeat, err)
 			}
 			elapsed := time.Since(started)
-			run := runMetrics{Stage: stage, Repeat: repeat, DurationMS: elapsed.Milliseconds(), UseCases: metrics}
+			run := runMetrics{Stage: stage, Repeat: repeat, DurationMS: elapsed.Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples}
 			runs[stage] = append(runs[stage], run)
 			result.Runs = append(result.Runs, run)
 			slog.Info("회차 완료", "stage", stage, "repeat", repeat, "duration", elapsed.String())
@@ -180,13 +182,23 @@ func run() error {
 
 // runConvert는 공개 벤치마크를 데이터셋 두 파일로 옮기고 끝낸다.
 func runConvert(format, source, name string, limit int, contextsPath, queriesPath string) error {
-	if format != convertHippoRAG {
+	var contexts contextSet
+	var queries querySet
+	var err error
+	switch format {
+	case convertHippoRAG:
+		if source == "" || name == "" {
+			return fmt.Errorf("-convert-source와 -convert-name이 필요하다")
+		}
+		contexts, queries, err = convertHippoRAGSet(source, name, limit)
+	case convertOwn:
+		if name == "" {
+			return fmt.Errorf("-convert-name이 필요하다")
+		}
+		contexts, queries, err = convertOwnSet(name, limit)
+	default:
 		return fmt.Errorf("변환 형식 %q를 알 수 없다", format)
 	}
-	if source == "" || name == "" {
-		return fmt.Errorf("-convert-source와 -convert-name이 필요하다")
-	}
-	contexts, queries, err := convertHippoRAGSet(source, name, limit)
 	if err != nil {
 		return err
 	}

@@ -34,6 +34,7 @@ type estimate struct {
 // comparison은 한 단계를 이전 단계와 견준 결과다.
 type comparison struct {
 	Metric      string  `json:"metric"`
+	Samples     int     `json:"samples"`
 	Baseline    float64 `json:"baseline_mean"`
 	Current     float64 `json:"current_mean"`
 	Difference  float64 `json:"difference"`
@@ -56,8 +57,10 @@ type stageJudgement struct {
 func judge(stages []string, runs map[string][]runMetrics) []stageJudgement {
 	judgements := make([]stageJudgement, 0, len(stages))
 	samples := map[string]map[string]map[string][]float64{}
+	querySamples := map[string]map[string]map[string]map[string]float64{}
 	for _, stage := range stages {
 		samples[stage] = collectSamples(runs[stage])
+		querySamples[stage] = collectQuerySamples(runs[stage])
 	}
 	for index, stage := range stages {
 		judgement := stageJudgement{Stage: stage, Estimates: map[string]map[string]estimate{}}
@@ -70,11 +73,52 @@ func judge(stages []string, runs map[string][]runMetrics) []stageJudgement {
 		if index > 0 {
 			previous := stages[index-1]
 			judgement.ComparedTo = previous
-			judgement.Comparisons = compareStages(samples[previous], samples[stage])
+			judgement.Comparisons = compareStages(querySamples[previous], querySamples[stage])
 		}
 		judgements = append(judgements, judgement)
 	}
 	return judgements
+}
+
+// collectQuerySamples는 같은 질의의 반복값을 먼저 평균내 하나의 독립 표본으로 만든다.
+// 반복값을 그대로 쌓으면 결정적인 검색에서 같은 값을 여러 번 복제해 표본 수를 부풀린다.
+func collectQuerySamples(runs []runMetrics) map[string]map[string]map[string]float64 {
+	type values struct {
+		total float64
+		count int
+	}
+	totals := map[string]map[string]map[string]values{}
+	for _, run := range runs {
+		for _, sample := range run.QuerySamples {
+			if _, present := totals[sample.UseCase]; !present {
+				totals[sample.UseCase] = map[string]map[string]values{}
+			}
+			if _, present := totals[sample.UseCase][sample.ID]; !present {
+				totals[sample.UseCase][sample.ID] = map[string]values{}
+			}
+			for _, metric := range metricNames {
+				value := metric.value(useCaseMetrics{Recall: sample.Recall, ReciprocalRank: sample.ReciprocalRank, BudgetPerHit: sample.BudgetPerHit})
+				if metric.lowerIsBetter && value < 0 {
+					continue
+				}
+				current := totals[sample.UseCase][sample.ID][metric.name]
+				current.total += value
+				current.count++
+				totals[sample.UseCase][sample.ID][metric.name] = current
+			}
+		}
+	}
+	result := map[string]map[string]map[string]float64{}
+	for useCase, queries := range totals {
+		result[useCase] = map[string]map[string]float64{}
+		for id, metrics := range queries {
+			result[useCase][id] = map[string]float64{}
+			for name, value := range metrics {
+				result[useCase][id][name] = value.total / float64(value.count)
+			}
+		}
+	}
+	return result
 }
 
 // collectSamples는 회차별 측정값을 사용 사례와 지표별 표본으로 옮긴다.
@@ -98,25 +142,36 @@ func collectSamples(runs []runMetrics) map[string]map[string][]float64 {
 	return samples
 }
 
-func compareStages(baseline, current map[string]map[string][]float64) map[string][]comparison {
+func compareStages(baseline, current map[string]map[string]map[string]float64) map[string][]comparison {
 	comparisons := map[string][]comparison{}
-	for useCase, metrics := range current {
+	for useCase, queries := range current {
 		previous, present := baseline[useCase]
 		if !present {
 			continue
 		}
 		for _, metric := range metricNames {
-			left, right := previous[metric.name], metrics[metric.name]
-			if len(left) < 2 || len(right) < 2 {
+			left, right := make([]float64, 0, len(queries)), make([]float64, 0, len(queries))
+			for id, values := range queries {
+				currentValue, currentPresent := values[metric.name]
+				previousValues, previousPresent := previous[id]
+				previousValue, metricPresent := previousValues[metric.name]
+				if !currentPresent || !previousPresent || !metricPresent {
+					continue
+				}
+				left = append(left, previousValue)
+				right = append(right, currentValue)
+			}
+			if len(left) < 2 {
 				continue
 			}
-			difference, interval := welch(left, right)
+			difference, interval := pairedInterval(left, right)
 			improved := difference > 0
 			if metric.lowerIsBetter {
 				improved = difference < 0
 			}
 			comparisons[useCase] = append(comparisons[useCase], comparison{
 				Metric:     metric.name,
+				Samples:    len(left),
 				Baseline:   mean(left),
 				Current:    mean(right),
 				Difference: difference,
@@ -140,20 +195,15 @@ func estimateOf(values []float64) estimate {
 	return result
 }
 
-// welch는 분산이 다를 수 있는 두 표본의 평균 차이와 95% 신뢰구간 반폭을 낸다.
-// 단계마다 질의 수가 같아도 회차 수와 흩어짐이 다를 수 있어 등분산을 가정하지 않는다.
-func welch(baseline, current []float64) (float64, float64) {
-	leftN, rightN := float64(len(baseline)), float64(len(current))
-	leftVar, rightVar := variance(baseline), variance(current)
-	standardError := math.Sqrt(leftVar/leftN + rightVar/rightN)
-	difference := mean(current) - mean(baseline)
-	if standardError == 0 {
-		return difference, 0
+// pairedInterval은 같은 질의의 단계별 차이로 평균 개선폭과 95% 신뢰구간 반폭을 낸다.
+func pairedInterval(baseline, current []float64) (float64, float64) {
+	differences := make([]float64, len(baseline))
+	for index := range baseline {
+		differences[index] = current[index] - baseline[index]
 	}
-	numerator := math.Pow(leftVar/leftN+rightVar/rightN, 2)
-	denominator := math.Pow(leftVar/leftN, 2)/(leftN-1) + math.Pow(rightVar/rightN, 2)/(rightN-1)
-	degrees := int(numerator / denominator)
-	return difference, criticalValue(degrees) * standardError
+	difference := mean(differences)
+	standardError := math.Sqrt(variance(differences) / float64(len(differences)))
+	return difference, criticalValue(len(differences)-1) * standardError
 }
 
 func mean(values []float64) float64 {

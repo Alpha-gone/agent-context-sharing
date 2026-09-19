@@ -31,16 +31,32 @@ const channelDisabled = "disabled"
 // runMetrics는 한 회차 전체의 측정값이다. 소요 시간을 밀리초 정수로 두는 이유는
 // time.Duration에 JSON 표현이 정해져 있지 않기 때문이다.
 type runMetrics struct {
-	Stage      string                    `json:"stage"`
-	Repeat     int                       `json:"repeat"`
-	DurationMS int64                     `json:"duration_ms"`
-	UseCases   map[string]useCaseMetrics `json:"use_cases"`
+	Stage        string                    `json:"stage"`
+	Repeat       int                       `json:"repeat"`
+	DurationMS   int64                     `json:"duration_ms"`
+	UseCases     map[string]useCaseMetrics `json:"use_cases"`
+	QuerySamples []queryMetrics            `json:"query_samples"`
+}
+
+// queryMetrics는 반복이 결정적인 실행에서도 질의 사이의 차이로 단계 효과를 판정할 수
+// 있게 하는 표본이다. 본문은 싣지 않고 데이터셋 식별자와 지표만 남긴다.
+type queryMetrics struct {
+	ID             string  `json:"id"`
+	UseCase        string  `json:"use_case"`
+	Recall         float64 `json:"recall"`
+	ReciprocalRank float64 `json:"reciprocal_rank"`
+	BudgetPerHit   float64 `json:"budget_per_hit"`
+}
+
+type measurement struct {
+	UseCases     map[string]useCaseMetrics
+	QuerySamples []queryMetrics
 }
 
 // measure는 질의를 하나씩 돌려 사용 사례별로 묶는다. 질의문과 컨텍스트 본문은
 // 어디에도 남기지 않는다. 「로그에서 제외하는 것」이 `body`를 지표에 넣지 못하게
 // 했고 「업무 효과 평가」가 같은 제외를 평가에도 요구한다.
-func measure(ctx context.Context, service *search.Service, graph loadedGraph, queries querySet, budget, maxHops, maxHopNodes int) (map[string]useCaseMetrics, error) {
+func measure(ctx context.Context, service *search.Service, graph loadedGraph, queries querySet, budget, maxHops, maxHopNodes int) (measurement, error) {
 	type accumulator struct {
 		queries        int
 		recall         float64
@@ -54,6 +70,7 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 	for _, useCase := range useCases {
 		totals[useCase] = &accumulator{channels: map[string]int{}, failures: map[string]int{}}
 	}
+	querySamples := make([]queryMetrics, 0, len(queries.Queries))
 	for _, query := range queries.Queries {
 		input := search.Input{
 			GraphID:     graph.GraphID,
@@ -68,7 +85,7 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		}
 		flow, err := service.Flow(ctx, input)
 		if err != nil {
-			return nil, fmt.Errorf("질의 %q 검색: %w", query.ID, err)
+			return measurement{}, fmt.Errorf("질의 %q 검색: %w", query.ID, err)
 		}
 		total := totals[query.UseCase]
 		total.queries++
@@ -80,6 +97,14 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 			total.reciprocalRank += 1 / float64(best)
 		}
 		total.budgetUsed += flow.BudgetUsed
+		sample := queryMetrics{ID: query.ID, UseCase: query.UseCase, Recall: float64(hits) / float64(len(answers)), BudgetPerHit: -1}
+		if best > 0 {
+			sample.ReciprocalRank = 1 / float64(best)
+		}
+		if hits > 0 {
+			sample.BudgetPerHit = float64(flow.BudgetUsed) / float64(hits)
+		}
+		querySamples = append(querySamples, sample)
 		for _, name := range slices.Sorted(maps.Keys(flow.Channels)) {
 			channel := flow.Channels[name]
 			total.channels[name] += channel.Contribution
@@ -108,7 +133,7 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		}
 		result[useCase] = metrics
 	}
-	return result, nil
+	return measurement{UseCases: result, QuerySamples: querySamples}, nil
 }
 
 // countsAsFailure는 채널 상태를 실패로 셀지 정한다. 비교 단계가 끈 채널은 실패가

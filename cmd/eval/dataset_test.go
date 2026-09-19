@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeFile은 검사할 데이터셋을 임시 파일로 남긴다.
@@ -33,6 +34,52 @@ func TestLoadContextSet(t *testing.T) {
 	}
 	if set.Version != "test-1" || len(set.Contexts) != 3 {
 		t.Fatalf("판 또는 개수가 다르다: %q %d", set.Version, len(set.Contexts))
+	}
+}
+
+// ownEventFixture는 관계 검증에 쓸 최소 집합을 만든다.
+func ownEventFixture() contextSet {
+	source := contextSpec{Key: "s1", Layer: "source", Body: "원천", Source: &sourceSpec{Channel: "conversation", Locator: "urn:test:1", OccurredAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), OriginKind: "user_utterance"}}
+	first := contextSpec{Key: "e1", Layer: "event", Body: "사건1", Event: &eventSpec{Members: []string{"s1"}, Start: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}}
+	second := contextSpec{Key: "e2", Layer: "event", Body: "사건2", Event: &eventSpec{Members: []string{"s1"}, Start: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)}}
+	return contextSet{Version: "v", Contexts: []contextSpec{source, first, second}, Relations: []relationSpec{{Type: "precedes", From: "e1", To: "e2"}}}
+}
+
+func TestLoadContextSetRelations(t *testing.T) {
+	path := writeFile(t, "contexts.json", "")
+	if err := writeDataset(path, ownEventFixture()); err != nil {
+		t.Fatalf("집합 기록: %v", err)
+	}
+	loaded, err := loadContextSet(path)
+	if err != nil {
+		t.Fatalf("관계 집합 읽기 준비: %v", err)
+	}
+	if len(loaded.Relations) != 1 || loaded.Relations[0].Type != "precedes" {
+		t.Fatalf("관계가 다르다: %#v", loaded.Relations)
+	}
+}
+
+func TestLoadContextSetRejectsRelations(t *testing.T) {
+	tests := map[string]func(set *contextSet){
+		"허용되지 않은 유형":  func(set *contextSet) { set.Relations[0].Type = "follows" },
+		"양 끝이 사건이 아님": func(set *contextSet) { set.Relations[0].From = "s1" },
+		"없는 끝":        func(set *contextSet) { set.Relations[0].To = "없음" },
+		"중복 관계": func(set *contextSet) {
+			set.Relations = append(set.Relations, set.Relations[0])
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			set := ownEventFixture()
+			mutate(&set)
+			path := writeFile(t, "contexts.json", "")
+			if err := writeDataset(path, set); err != nil {
+				t.Fatalf("집합 기록: %v", err)
+			}
+			if _, err := loadContextSet(path); err == nil {
+				t.Fatal("잘못된 관계가 허용됐다")
+			}
+		})
 	}
 }
 

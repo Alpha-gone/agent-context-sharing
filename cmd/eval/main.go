@@ -66,11 +66,20 @@ func run() error {
 	maxHops := flag.Int("max-hops", 2, "그래프 확장 최대 홉 수")
 	maxHopNodes := flag.Int("max-hop-nodes", 50, "그래프 확장 최대 노드 수")
 	indexTargets := flag.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
+	convert := flag.String("convert", "", "공개 벤치마크를 데이터셋으로 변환한다. 지금은 hipporag만 받는다")
+	convertSource := flag.String("convert-source", "", "변환할 벤치마크 파일 경로")
+	convertName := flag.String("convert-name", "", "데이터셋 판에 넣을 세트 이름")
+	convertLimit := flag.Int("convert-questions", 0, "변환에 쓸 질의 수. 0이면 전부 쓴다")
 	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
 	flag.Parse()
 
 	if *contextsPath == "" || *queriesPath == "" {
 		return fmt.Errorf("-contexts와 -queries가 필요하다")
+	}
+	// 변환은 데이터베이스에 닿지 않는다. 같은 두 경로를 출력 자리로 쓰므로 변환한
+	// 파일을 그대로 측정에 넘길 수 있다.
+	if *convert != "" {
+		return runConvert(*convert, *convertSource, *convertName, *convertLimit, *contextsPath, *queriesPath)
 	}
 	if *repeats < minimumRepeats {
 		return fmt.Errorf("반복 회차는 %d 이상이어야 한다. 「검증」이 최소 세 번으로 정했다", minimumRepeats)
@@ -167,6 +176,37 @@ func run() error {
 	}
 	result.Judgements = judge(stages, runs)
 	return writeReport(*outPath, result)
+}
+
+// runConvert는 공개 벤치마크를 데이터셋 두 파일로 옮기고 끝낸다.
+func runConvert(format, source, name string, limit int, contextsPath, queriesPath string) error {
+	if format != convertHippoRAG {
+		return fmt.Errorf("변환 형식 %q를 알 수 없다", format)
+	}
+	if source == "" || name == "" {
+		return fmt.Errorf("-convert-source와 -convert-name이 필요하다")
+	}
+	contexts, queries, err := convertHippoRAGSet(source, name, limit)
+	if err != nil {
+		return err
+	}
+	if err := writeDataset(contextsPath, contexts); err != nil {
+		return err
+	}
+	if err := writeDataset(queriesPath, queries); err != nil {
+		return err
+	}
+	// 만든 파일을 바로 읽어 적재 전 검증을 통과하는지 확인한다. 변환이 형식을 어기면
+	// 측정 단계가 아니라 여기에서 드러나야 한다.
+	loaded, err := loadContextSet(contextsPath)
+	if err != nil {
+		return err
+	}
+	if _, err := loadQuerySet(queriesPath, loaded); err != nil {
+		return err
+	}
+	slog.Info("변환 완료", "version", contexts.Version, "contexts", len(contexts.Contexts), "queries", len(queries.Queries))
+	return nil
 }
 
 func parseStages(raw string) ([]string, error) {

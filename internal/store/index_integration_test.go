@@ -20,9 +20,9 @@ func TestIndexAndNonGraphSearchIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("색인 대상 생성: %v", err)
 	}
-	if _, err := database.pool.Exec(t.Context(), `UPDATE public.index_task SET enqueued_at = to_timestamp(0), next_attempt_at = to_timestamp(0) WHERE context_id = $1`, stored.ID.String()); err != nil {
-		t.Fatalf("테스트 색인 작업 우선순위 설정: %v", err)
-	}
+	// 자기 작업만 앞으로 당기면 다른 테스트가 남긴 행이 더 앞선 시각일 때 그쪽이 먼저
+	// 잡힌다. readyIndexTasks가 나머지를 함께 미뤄 확보 순서를 고정한다.
+	readyIndexTasks(t, database, stored.ID)
 	vector := make([]float64, 1024)
 	vector[0] = 1
 	processed, err := database.ProcessNextIndexTask(t.Context(), func(_ context.Context, task IndexTask) IndexTaskResult {

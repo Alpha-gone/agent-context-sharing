@@ -28,8 +28,8 @@ type Operations interface {
 	CreateContextWithOperation(context.Context, model.ID, model.Context, []model.ID, *store.OperationRecord, store.WriteLimits) (model.Context, error)
 	CreateSupersedingContextWithOperation(context.Context, model.ID, model.Context, []model.ID, model.ID, *store.OperationRecord, store.WriteLimits) (model.Context, error)
 	UpdateContextWithOperation(context.Context, model.ID, int64, model.Context, *store.OperationRecord, store.WriteLimits) (model.Context, error)
-	DiscardContext(context.Context, model.ID, model.ID, *store.OperationRecord) (model.Context, error)
-	RestoreContext(context.Context, model.ID, model.ID, *store.OperationRecord) (model.Context, error)
+	DiscardContext(context.Context, model.ID, model.ID, *store.OperationRecord, store.WriteLimits) (model.Context, error)
+	RestoreContext(context.Context, model.ID, model.ID, *store.OperationRecord, store.WriteLimits) (model.Context, error)
 	KeepContext(context.Context, model.ID, model.ID, int64, *store.OperationRecord) (model.Context, error)
 	ListContextRelations(context.Context, model.ID, model.ID, []model.RelationState, []model.RelationType, string, int) ([]model.Relation, string, error)
 	ConfirmRelation(context.Context, model.ID, model.Relation, *store.OperationRecord) (model.Relation, error)
@@ -37,7 +37,6 @@ type Operations interface {
 	HasAppliedDiscard(context.Context, model.ID, model.ID) (bool, error)
 	RecordRejectedOperation(context.Context, store.OperationRecord, string) error
 	OwnedGraphCount(context.Context, model.ID) (int, error)
-	TryIncrementRequestRate(context.Context, model.ID, time.Time, int) (int, bool, error)
 }
 
 // NewHandler는 전송 계층이 검증한 tools/call을 핵심 그래프·노드 연산으로 분배한다.
@@ -163,7 +162,7 @@ func (h handler) createGraph(ctx context.Context, accountID model.ID, arguments 
 	graph, err := h.operations.CreateGraphWithOwner(ctx, model.Graph{
 		ID: graphID, Name: arguments["name"].(string), Description: optionalString(arguments, "description"), CreatedBy: accountID,
 		CreatedAt: now, LastActivityAt: now, Version: 1,
-	}, h.writeLimits())
+	}, h.writeLimits(accountID))
 	if err != nil {
 		return ToolResult{}, mapError(err)
 	}
@@ -214,9 +213,6 @@ func (h handler) createNode(ctx context.Context, accountID model.ID, arguments m
 			return ToolResult{}, invalidArgument(err)
 		}
 	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
-		return ToolResult{}, err
-	}
 	if err := h.checkStoredCharacters(graph, int64(len([]rune(value.Body)))); err != nil {
 		return ToolResult{}, err
 	}
@@ -227,9 +223,9 @@ func (h handler) createNode(ctx context.Context, accountID model.ID, arguments m
 			return ToolResult{}, &Error{Code: "invalid_argument", Data: map[string]any{"field": "supersedes_context_id"}}
 		}
 		operation.Kind = store.OperationSupersede
-		stored, err = h.operations.CreateSupersedingContextWithOperation(ctx, graphID, value, references, supersededID, &operation, h.writeLimits())
+		stored, err = h.operations.CreateSupersedingContextWithOperation(ctx, graphID, value, references, supersededID, &operation, h.writeLimits(accountID))
 	} else {
-		stored, err = h.operations.CreateContextWithOperation(ctx, graphID, value, references, &operation, h.writeLimits())
+		stored, err = h.operations.CreateContextWithOperation(ctx, graphID, value, references, &operation, h.writeLimits(accountID))
 	}
 	if err != nil {
 		h.recordRejectedCreation(ctx, operation, err)
@@ -287,9 +283,8 @@ func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments m
 		if hasUpdateFields(arguments) {
 			return ToolResult{}, &Error{Code: "invalid_argument", Data: map[string]any{"field": "management_action"}}
 		}
-		if err := h.checkWrite(ctx, accountID); err != nil {
-			return ToolResult{}, err
-		}
+		// 유지는 상태를 바꾸지 않고 판단만 기록하므로 컨텍스트를 만들거나 고치는 연산이
+		// 아니다. `TBD-AGENT_CONTEXT-062`가 요청 빈도의 적용 대상을 그 둘로 한정했다.
 		agentID := argumentID(arguments, "created_by_agent")
 		operation := operationRecord(store.OperationKeep, graphID, contextID, accountID, agentID, arguments)
 		operation.TargetVersion = previous.Version
@@ -307,16 +302,13 @@ func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments m
 	if err := model.ValidateUpdate(previous, next); err != nil {
 		return ToolResult{}, invalidArgument(err)
 	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
-		return ToolResult{}, err
-	}
 	if err := h.checkStoredCharacters(graph, int64(len([]rune(next.Body))-len([]rune(previous.Body)))); err != nil {
 		return ToolResult{}, err
 	}
 	agentID := argumentID(arguments, "created_by_agent")
 	operation := operationRecord(store.OperationUpdate, graphID, contextID, accountID, agentID, arguments)
 	operation.TargetVersion = previous.Version
-	stored, err := h.operations.UpdateContextWithOperation(ctx, graphID, int64(arguments["expected_version"].(float64)), next, &operation, h.writeLimits())
+	stored, err := h.operations.UpdateContextWithOperation(ctx, graphID, int64(arguments["expected_version"].(float64)), next, &operation, h.writeLimits(accountID))
 	if err != nil {
 		h.recordRejected(ctx, operation, err)
 		return ToolResult{}, mapError(err)
@@ -354,12 +346,12 @@ func (h handler) listRelations(ctx context.Context, accountID model.ID, argument
 	return result(map[string]any{"relations": values, "next_cursor": cursor}), nil
 }
 
+// confirmRelation은 관계를 확정한다. 요청 빈도 한도는 소비하지 않는다.
+// `TBD-AGENT_CONTEXT-062`가 그 적용 대상을 컨텍스트를 만들거나 고치는 연산으로 한정했고,
+// 관계 확정은 컨텍스트를 만들지도 고치지도 않는다.
 func (h handler) confirmRelation(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID := argumentID(arguments, "graph_id")
 	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
-		return ToolResult{}, err
-	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
 		return ToolResult{}, err
 	}
 	relationID, err := model.NewID()
@@ -378,12 +370,10 @@ func (h handler) confirmRelation(ctx context.Context, accountID model.ID, argume
 	return result(relationValue(stored)), nil
 }
 
+// discardRelation은 관계를 폐기한다. 확정과 같은 이유로 요청 빈도 한도를 소비하지 않는다.
 func (h handler) discardRelation(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID, relationID := argumentID(arguments, "graph_id"), argumentID(arguments, "relation_id")
 	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
-		return ToolResult{}, err
-	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
 		return ToolResult{}, err
 	}
 	agentID := argumentID(arguments, "created_by_agent")
@@ -412,10 +402,7 @@ func (h handler) discardNode(ctx context.Context, accountID model.ID, arguments 
 		h.recordRejected(ctx, operation, errors.New("컨텍스트가 이미 폐기됐다"))
 		return ToolResult{}, &Error{Code: "invalid_argument"}
 	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
-		return ToolResult{}, err
-	}
-	stored, err := h.operations.DiscardContext(ctx, graphID, contextID, &operation)
+	stored, err := h.operations.DiscardContext(ctx, graphID, contextID, &operation, h.writeLimits(accountID))
 	if err != nil {
 		h.recordRejected(ctx, operation, err)
 		return ToolResult{}, mapError(err)
@@ -448,10 +435,7 @@ func (h handler) restoreNode(ctx context.Context, accountID model.ID, arguments 
 		h.recordRejected(ctx, operation, rejected)
 		return ToolResult{}, rejected
 	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
-		return ToolResult{}, err
-	}
-	stored, err := h.operations.RestoreContext(ctx, graphID, contextID, &operation)
+	stored, err := h.operations.RestoreContext(ctx, graphID, contextID, &operation, h.writeLimits(accountID))
 	if err != nil {
 		h.recordRejected(ctx, operation, err)
 		return ToolResult{}, mapError(err)
@@ -477,10 +461,12 @@ func (h handler) requireActiveGraph(ctx context.Context, graphID, accountID mode
 
 // writeLimits는 저장 트랜잭션 안에서 강제할 누적 한도를 접근 계층 플랜에서 만든다.
 // 트랜잭션 밖의 사전 검사는 빠른 거부일 뿐이고, 실제 강제는 쓰기와 같은 트랜잭션이 한다.
-func (h handler) writeLimits() store.WriteLimits {
+func (h handler) writeLimits(accountID model.ID) store.WriteLimits {
 	return store.WriteLimits{
 		StoredCharsPerGraph: int64(h.limits.StoredCharactersPerGraph),
 		GraphsPerAccount:    int64(h.limits.GraphsPerAccount),
+		WritesPerMinute:     int64(h.limits.WritesPerMinute),
+		ActorID:             accountID,
 	}
 }
 
@@ -496,17 +482,6 @@ func (h handler) checkGraphCount(ctx context.Context, accountID model.ID) error 
 		return limitError(err)
 	}
 	return nil
-}
-
-func (h handler) checkWrite(ctx context.Context, accountID model.ID) error {
-	count, allowed, err := h.operations.TryIncrementRequestRate(ctx, accountID, time.Now().UTC(), h.limits.WritesPerMinute)
-	if err != nil {
-		return mapError(err)
-	}
-	if allowed {
-		return nil
-	}
-	return &Error{Code: "limit_exceeded", Data: map[string]any{"limit": "writes_per_minute", "current": count, "allowed": h.limits.WritesPerMinute}}
 }
 
 func (h handler) checkStoredCharacters(graph model.Graph, delta int64) error {

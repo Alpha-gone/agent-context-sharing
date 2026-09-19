@@ -170,7 +170,7 @@ func TestWriteResultsCarryReferencesWithoutRereadIntegration(t *testing.T) {
 		t.Fatalf("갱신 응답의 근거 = %v, want [%s]", got, source.ID)
 	}
 
-	discarded, err := database.DiscardContext(t.Context(), graphID, derived.ID, nil)
+	discarded, err := database.DiscardContext(t.Context(), graphID, derived.ID, nil, WriteLimits{})
 	if err != nil {
 		t.Fatalf("파생 폐기: %v", err)
 	}
@@ -185,4 +185,91 @@ func TestWriteResultsCarryReferencesWithoutRereadIntegration(t *testing.T) {
 	if got := event.Event.MemberIDs; len(got) != 1 || got[0] != source.ID {
 		t.Fatalf("사건 생성 응답의 구성원 = %v, want [%s]", got, source.ID)
 	}
+}
+
+// TestRejectedWriteDoesNotConsumeRateIntegration은 거부된 쓰기가 요청 빈도 한도를
+// 소비하지 않는지 확인한다. 「계정 플랜 값」이 카운터 갱신을 이미 열려 있는 저장
+// 트랜잭션 안에서 하기로 확정했으므로, 되돌아간 요청은 세지 않아야 한다.
+func TestRejectedWriteDoesNotConsumeRateIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, database, actorID)
+	graphID := createTestGraph(t, database, actorID)
+	source, err := database.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "https://example.test/rate-"+graphID.String()), nil)
+	if err != nil {
+		t.Fatalf("원천 생성: %v", err)
+	}
+	derived, err := database.CreateContext(t.Context(), graphID, testDerivedContext(t, graphID, actorID), []model.ID{source.ID})
+	if err != nil {
+		t.Fatalf("파생 생성: %v", err)
+	}
+
+	limits := WriteLimits{WritesPerMinute: 10, ActorID: actorID}
+	// 판 번호를 틀려 거부되는 수정을 여러 번 보낸다.
+	for range 5 {
+		next := derived
+		next.Body = "충돌하는 본문"
+		next.Version = derived.Version + 1
+		if _, err := database.UpdateContextWithOperation(t.Context(), graphID, derived.Version+7, next, nil, limits); err == nil {
+			t.Fatal("판 번호가 틀린 수정이 통과했다")
+		}
+	}
+	if count := currentRateCount(t, database, actorID); count != 0 {
+		t.Fatalf("거부된 요청 뒤 카운터 = %d, want 0", count)
+	}
+
+	// 성공한 쓰기만 카운터를 올린다.
+	next := derived
+	next.Body = "적용되는 본문"
+	next.Version = derived.Version + 1
+	if _, err := database.UpdateContextWithOperation(t.Context(), graphID, derived.Version, next, nil, limits); err != nil {
+		t.Fatalf("정상 수정: %v", err)
+	}
+	if count := currentRateCount(t, database, actorID); count != 1 {
+		t.Fatalf("성공한 요청 뒤 카운터 = %d, want 1", count)
+	}
+}
+
+// TestWriteRateLimitRejectsOverLimitIntegration은 한도를 넘는 쓰기가 한도 초과로
+// 거부되는지 확인한다.
+func TestWriteRateLimitRejectsOverLimitIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, database, actorID)
+	graphID := createTestGraph(t, database, actorID)
+
+	limits := WriteLimits{WritesPerMinute: 2, ActorID: actorID}
+	succeeded := 0
+	var limitErr error
+	for index := range 4 {
+		value := testSourceContext(t, graphID, actorID, "https://example.test/rate-limit-"+graphID.String()+"-"+string(rune('a'+index)))
+		_, err := database.CreateContextWithOperation(t.Context(), graphID, value, nil, nil, limits)
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.As(err, new(plan.LimitError)):
+			limitErr = err
+		default:
+			t.Fatalf("예상 밖 오류: %v", err)
+		}
+	}
+	if succeeded != 2 {
+		t.Fatalf("성공한 쓰기 = %d, want 2", succeeded)
+	}
+	limit, _ := errors.AsType[plan.LimitError](limitErr)
+	if limit.Name != "writes_per_minute" {
+		t.Fatalf("한도 이름 = %q, want writes_per_minute", limit.Name)
+	}
+}
+
+// currentRateCount는 현재 창의 요청 빈도 카운터를 읽는다. 행이 없으면 0이다.
+func currentRateCount(t *testing.T, database *Store, accountID model.ID) int {
+	t.Helper()
+	var count int
+	err := database.pool.QueryRow(t.Context(), `
+		SELECT COALESCE(sum(count), 0) FROM public.request_rate WHERE account_id = $1`, accountID.String()).Scan(&count)
+	if err != nil {
+		t.Fatalf("요청 빈도 조회: %v", err)
+	}
+	return count
 }

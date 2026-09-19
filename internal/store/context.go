@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"agent_context_sharing/internal/model"
@@ -79,6 +80,9 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	}
 	defer tx.Rollback(ctx)
 
+	if err := consumeWriteRate(ctx, tx, limits); err != nil {
+		return model.Context{}, err
+	}
 	previous, err := s.context(ctx, tx, graphID, value.ID)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("갱신 전 컨텍스트 조회: %w", err)
@@ -152,13 +156,13 @@ func previousReferences(previous model.Context) []model.ID {
 }
 
 // DiscardContext는 활성 컨텍스트에 폐기 시각을 표시하고 적용 기록을 함께 남긴다.
-func (s *Store) DiscardContext(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord) (model.Context, error) {
-	return s.changeContextDeletion(ctx, graphID, contextID, operation, nil, true)
+func (s *Store) DiscardContext(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord, limits WriteLimits) (model.Context, error) {
+	return s.changeContextDeletion(ctx, graphID, contextID, operation, nil, limits, true)
 }
 
 // RestoreContext는 연산으로 폐기한 컨텍스트의 폐기 시각을 지우고 적용 기록을 함께 남긴다.
-func (s *Store) RestoreContext(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord) (model.Context, error) {
-	return s.changeContextDeletion(ctx, graphID, contextID, operation, nil, false)
+func (s *Store) RestoreContext(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord, limits WriteLimits) (model.Context, error) {
+	return s.changeContextDeletion(ctx, graphID, contextID, operation, nil, limits, false)
 }
 
 // KeepContext는 대상 판 번호를 확인하고 상태를 바꾸지 않은 유지 판단을 기록한다.
@@ -195,7 +199,7 @@ func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, ex
 //
 // webAudit이 있으면 상태 변경과 같은 트랜잭션에 웹 감사 기록을 남긴다. 따로 커밋하면
 // 그 사이의 취소나 오류로 변경만 남고 기록이 사라진다.
-func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord, webAudit *webAuditRecord, discard bool) (model.Context, error) {
+func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord, webAudit *webAuditRecord, limits WriteLimits, discard bool) (model.Context, error) {
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
@@ -205,6 +209,9 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	}
 	defer tx.Rollback(ctx)
 
+	if err := consumeWriteRate(ctx, tx, limits); err != nil {
+		return model.Context{}, err
+	}
 	previous, err := s.context(ctx, tx, graphID, contextID)
 	if err != nil {
 		return model.Context{}, err
@@ -365,6 +372,9 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	}
 	defer tx.Rollback(ctx)
 
+	if err := consumeWriteRate(ctx, tx, limits); err != nil {
+		return model.Context{}, err
+	}
 	if value.Layer == model.LayerSource {
 		existing, err := s.findSourceWith(ctx, tx, graphID, value.Source.Reference.Locator)
 		if err == nil {
@@ -455,6 +465,22 @@ func (s *Store) createSupersedesEdge(ctx context.Context, tx pgx.Tx, graphID, ne
 		" CREATE (next)-[:SUPERSEDES {graph_id: " + cypherString(graphID.String()) + "}]->(previous)"
 	if _, err := tx.Exec(ctx, s.cypherSQL(query, "created agtype")); err != nil {
 		return fmt.Errorf("SUPERSEDES 참조 간선 생성: %w", err)
+	}
+	return nil
+}
+
+// consumeWriteRate는 저장 트랜잭션 안에서 쓰기 요청 빈도를 센다. 한도를 넘으면 오류를
+// 돌려 트랜잭션이 되돌아가므로, 거부된 요청은 한도를 소비하지 않는다.
+func consumeWriteRate(ctx context.Context, tx pgx.Tx, limits WriteLimits) error {
+	if limits.WritesPerMinute == 0 || !limits.ActorID.IsV7() {
+		return nil
+	}
+	count, allowed, err := tryIncrementRequestRate(ctx, tx, limits.ActorID, time.Now().UTC(), int(limits.WritesPerMinute))
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return plan.LimitError{Name: "writes_per_minute", Current: int64(count), Allowed: limits.WritesPerMinute}
 	}
 	return nil
 }

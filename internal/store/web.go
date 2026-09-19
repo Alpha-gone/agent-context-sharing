@@ -509,7 +509,8 @@ func (s *Store) SetContextDeleted(ctx context.Context, graphID, contextID, actor
 		action = "delete"
 	}
 	audit := webAuditRecord{TargetKind: "web_delete", Action: action, ActorID: actorID, GraphID: graphID, TargetContextID: contextID}
-	return s.changeContextDeletion(ctx, graphID, contextID, nil, &audit, deleted)
+	// 웹 화면의 삭제·복구는 MCP 연산이 아니므로 요청 빈도 한도의 대상이 아니다.
+	return s.changeContextDeletion(ctx, graphID, contextID, nil, &audit, WriteLimits{}, deleted)
 }
 
 // ListRestoreEligibleGraphs는 요청 계정이 소유자였던 자동 삭제 그래프만 반환한다.

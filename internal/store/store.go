@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"time"
 
+	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -65,6 +66,10 @@ type WriteLimits struct {
 	StoredCharsPerGraph int64
 	// GraphsPerAccount는 한 계정이 소유자 등급으로 가질 수 있는 최대 활성 그래프 수다.
 	GraphsPerAccount int64
+	// WritesPerMinute는 1분 고정 창에서 허용할 쓰기 요청 수다.
+	WritesPerMinute int64
+	// ActorID는 요청 빈도를 셀 계정이다. 비어 있으면 빈도를 세지 않는다.
+	ActorID model.ID
 }
 
 // RelationProposalConfig는 사건 관계 후보 제안에 쓰는 검증된 배포 구성이다.

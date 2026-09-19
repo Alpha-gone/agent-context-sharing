@@ -167,7 +167,7 @@ func TestReconfirmDiscardedRelationChecksCycleIntegration(t *testing.T) {
 func TestRelationRejectsDiscardedEventIntegration(t *testing.T) {
 	database := newIntegrationStore(t)
 	graphID, first, second := relationTestEvents(t, database)
-	if _, err := database.DiscardContext(t.Context(), graphID, second.ID, nil); err != nil {
+	if _, err := database.DiscardContext(t.Context(), graphID, second.ID, nil, WriteLimits{}); err != nil {
 		t.Fatalf("사건 폐기: %v", err)
 	}
 	err := func() error {

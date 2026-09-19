@@ -39,7 +39,7 @@ func TestConcurrentDiscardAppliesOnceIntegration(t *testing.T) {
 		for range requests {
 			waitGroup.Go(func() {
 				<-start
-				_, err := database.DiscardContext(t.Context(), graphID, source.ID, nil)
+				_, err := database.DiscardContext(t.Context(), graphID, source.ID, nil, WriteLimits{})
 				results <- err
 			})
 		}

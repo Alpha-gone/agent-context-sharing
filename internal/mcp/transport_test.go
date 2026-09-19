@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"agent_context_sharing/internal/model"
@@ -547,3 +548,56 @@ var errUnauthorized = &unauthorizedError{}
 type unauthorizedError struct{}
 
 func (*unauthorizedError) Error() string { return "unauthenticated" }
+
+// TestRequestIDMustBeStringOrNumber는 JSON-RPC 요청 식별자를 문자열이나 숫자로 제한하는지
+// 확인한다. 받아 주면 결과에 "id":null을 실어 클라이언트가 응답을 요청과 잇지 못한다.
+func TestRequestIDMustBeStringOrNumber(t *testing.T) {
+	called := false
+	server := testServer(t, func(context.Context, model.ID, string, map[string]any) (ToolResult, error) {
+		called = true
+		return ToolResult{}, nil
+	})
+	for name, id := range map[string]any{
+		"id 없음": nil,
+		"객체 id": map[string]any{"value": 1},
+		"배열 id": []any{1},
+	} {
+		payload := map[string]any{
+			"jsonrpc": "2.0", "method": "tools/list",
+			"params": map[string]any{"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": ProtocolVersion}},
+		}
+		if id != nil {
+			payload["id"] = id
+		}
+		request := httptest.NewRequest(http.MethodPost, "/mcp", jsonBody(t, payload))
+		request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
+		request.Header.Set("Mcp-Method", "tools/list")
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%s 응답 상태 = %d, want %d", name, recorder.Code, http.StatusBadRequest)
+		}
+		if !strings.Contains(recorder.Body.String(), "-32600") {
+			t.Fatalf("%s 응답 본문 = %s", name, recorder.Body.String())
+		}
+	}
+	if called {
+		t.Fatal("식별자가 올바르지 않은 요청이 처리기까지 갔다")
+	}
+
+	// 문자열과 숫자 식별자는 통과한다.
+	for _, id := range []any{"call-1", float64(7)} {
+		payload := map[string]any{
+			"jsonrpc": "2.0", "id": id, "method": "tools/list",
+			"params": map[string]any{"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": ProtocolVersion}},
+		}
+		request := httptest.NewRequest(http.MethodPost, "/mcp", jsonBody(t, payload))
+		request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
+		request.Header.Set("Mcp-Method", "tools/list")
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, request)
+		if recorder.Code == http.StatusBadRequest {
+			t.Fatalf("식별자 %v를 거부했다: %s", id, recorder.Body.String())
+		}
+	}
+}

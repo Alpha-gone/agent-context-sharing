@@ -56,3 +56,61 @@ func TestStoreCursorErrorMapsToInvalidArgument(t *testing.T) {
 		t.Fatalf("field = %q, want cursor", field)
 	}
 }
+
+// TestNodeCreateRejectsOtherLayerArguments는 계층에 맞지 않는 인자를 조용히 버리지 않고
+// 거부하는지 확인한다. 버리면 호출자가 보낸 값이 저장되지 않았다는 사실을 알 수 없다.
+func TestNodeCreateRejectsOtherLayerArguments(t *testing.T) {
+	base := func(layer string) map[string]any {
+		return map[string]any{
+			"graph_id": newTestID(t), "created_by_agent": newTestID(t),
+			"layer": layer, "body": "본문",
+		}
+	}
+	cases := map[string]struct {
+		layer string
+		name  string
+		value any
+	}{
+		"원천에 붙인 derived_from":   {"source", "derived_from", []any{newTestID(t)}},
+		"원천에 붙인 member_refs":    {"source", "member_refs", []any{newTestID(t)}},
+		"원천에 붙인 start":          {"source", "start", "2026-09-19T00:00:00Z"},
+		"파생에 붙인 source_channel": {"derived", "source_channel", "api"},
+		"파생에 붙인 occurred_at":    {"derived", "occurred_at", "2026-09-19T00:00:00Z"},
+		"사건에 붙인 evidence_state": {"event", "evidence_state", "observation"},
+	}
+	for name, testCase := range cases {
+		arguments := base(testCase.layer)
+		arguments[testCase.name] = testCase.value
+		err := validateToolCall("node_create", arguments)
+		if err == nil {
+			t.Fatalf("%s이 통과했다", name)
+		}
+		if err.Field != testCase.name {
+			t.Fatalf("%s의 거부 필드 = %q, want %q", name, err.Field, testCase.name)
+		}
+	}
+	// 계층에 맞는 인자는 그대로 통과한다.
+	source := base("source")
+	source["source_channel"] = "api"
+	source["occurred_at"] = "2026-09-19T00:00:00Z"
+	if err := validateToolCall("node_create", source); err != nil {
+		t.Fatalf("계층에 맞는 인자를 거부했다: %#v", err)
+	}
+}
+
+// TestIntegerArgumentsHaveUpperBound는 정수 인자에 상한이 있는지 확인한다. 상한이 없으면
+// 한도를 풀어 둔 플랜에서 저장소가 상한에 1을 더하는 자리가 넘쳐 음수가 된다.
+func TestIntegerArgumentsHaveUpperBound(t *testing.T) {
+	for _, value := range []float64{maxIntegerArgument + 1, 1 << 62, 1 << 63} {
+		if err := validateToolCall("graph_list", map[string]any{"page_size": value}); err == nil {
+			t.Fatalf("page_size %v가 통과했다", value)
+		}
+		arguments := map[string]any{"graph_id": newTestID(t), "context_id": newTestID(t), "hops": value}
+		if err := validateToolCall("node_get", arguments); err == nil {
+			t.Fatalf("hops %v가 통과했다", value)
+		}
+	}
+	if err := validateToolCall("graph_list", map[string]any{"page_size": float64(maxIntegerArgument)}); err != nil {
+		t.Fatalf("상한 값을 거부했다: %#v", err)
+	}
+}

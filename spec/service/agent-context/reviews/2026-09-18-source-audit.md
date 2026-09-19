@@ -291,7 +291,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 판독.
 
-#### - [ ] 27. 계층에 맞지 않는 인자를 오류 없이 버린다
+#### - [x] 27. 계층에 맞지 않는 인자를 오류 없이 버린다
 
 `internal/mcp/handler.go:834`~`:859`, `:880`~`:915`
 
@@ -299,7 +299,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 판독.
 
-#### - [ ] 28. JSON-RPC 입력과 정수 인자를 느슨하게 검증한다
+#### - [x] 28. JSON-RPC 입력과 정수 인자를 느슨하게 검증한다
 
 `internal/mcp/transport.go:102`~`:110`, `internal/mcp/schema.go:240`~`:243`, `internal/model/id.go:44`
 

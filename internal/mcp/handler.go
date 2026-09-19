@@ -278,6 +278,11 @@ func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments m
 	if previous.DeletedAt != nil {
 		return ToolResult{}, &Error{Code: "not_found"}
 	}
+	// 저장된 계층에서 고칠 수 없는 인자는 조용히 버리지 않고 거부한다. 「갱신 권한」이
+	// 계층마다 가변 속성을 확정했으므로 그 밖의 값은 이 요청에 의미가 없다.
+	if err := validateLayerArguments(string(previous.Layer), updatableArguments[string(previous.Layer)], arguments); err != nil {
+		return ToolResult{}, invalidArgument(err)
+	}
 	if optionalString(arguments, "management_action") == "keep" {
 		if hasUpdateFields(arguments) {
 			return ToolResult{}, &Error{Code: "invalid_argument", Data: map[string]any{"field": "management_action"}}

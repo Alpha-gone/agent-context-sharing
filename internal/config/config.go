@@ -64,6 +64,15 @@ const (
 	SearchGraphStageGlobal     SearchGraphStage = "global"
 )
 
+// IndexTargetLayers는 색인 작업으로 등록할 계층 범위다. 「색인 대상 비교」가 원천을
+// 포함한 구성과 파생·사건만 담은 구성을 비교하라고 확정했다.
+type IndexTargetLayers string
+
+const (
+	IndexTargetLayersAll           IndexTargetLayers = "all_layers"
+	IndexTargetLayersWithoutSource IndexTargetLayers = "without_source"
+)
+
 // Config는 실행 중 필요한 배포 구성의 검증된 묶음이다. 비밀값은 로그로 전달하지 않는다.
 type Config struct {
 	// HTTPAddr 필드에는 HTTP 서버가 수신할 TCP 주소를 둔다.
@@ -88,6 +97,8 @@ type Config struct {
 	SearchFoldThreshold float64
 	// SearchGraphStage 필드에는 그래프 검색 비교에서 활성화할 누적 단계를 둔다.
 	SearchGraphStage SearchGraphStage
+	// IndexTargetLayers 필드에는 색인 작업으로 등록할 계층 범위를 둔다.
+	IndexTargetLayers IndexTargetLayers
 	// OAuthClients 필드에는 클라이언트별로 사전 등록한 OAuth 콜백 주소 목록을 둔다.
 	OAuthClients map[string][]*url.URL
 	// ResourceServerURL 필드에는 보호 리소스 서버의 고정 MCP 엔드포인트 주소를 둔다.
@@ -140,6 +151,7 @@ func Load(env Environment) (Config, error) {
 		EmbeddingVectorType:          strings.TrimSpace(env("EMBEDDING_VECTOR_TYPE")),
 		SearchExecution:              SearchExecution(strings.TrimSpace(env("SEARCH_CHANNEL_EXECUTION"))),
 		SearchGraphStage:             SearchGraphStage(strings.TrimSpace(env("SEARCH_GRAPH_STAGE"))),
+		IndexTargetLayers:            IndexTargetLayers(strings.TrimSpace(env("INDEX_TARGET_LAYERS"))),
 		IndexWorkerPlacement:         ComponentPlacement(strings.TrimSpace(env("INDEX_WORKER_PLACEMENT"))),
 		AuthorizationServerPlacement: ComponentPlacement(strings.TrimSpace(env("AUTHORIZATION_SERVER_PLACEMENT"))),
 		TLSMode:                      TLSMode(strings.TrimSpace(env("TLS_TERMINATION"))),
@@ -194,6 +206,14 @@ func Load(env Environment) (Config, error) {
 	cfg.SearchFoldThreshold = foldThreshold
 	if !slices.Contains([]SearchGraphStage{SearchGraphStageBaseline, SearchGraphStageReferences, SearchGraphStageRelations, SearchGraphStageGlobal}, cfg.SearchGraphStage) {
 		return Config{}, fmt.Errorf("SEARCH_GRAPH_STAGE %q가 baseline, references, relations, global 중 하나가 아니다", cfg.SearchGraphStage)
+	}
+	// 「색인 대상 비교」의 판정을 아직 하지 않았으므로 비어 있으면 원천을 포함한다.
+	// 측정으로 원천 제외 구성의 재현율 손실이 유의하지 않다는 것이 확인되면 기본값을 바꾼다.
+	if cfg.IndexTargetLayers == "" {
+		cfg.IndexTargetLayers = IndexTargetLayersAll
+	}
+	if !slices.Contains([]IndexTargetLayers{IndexTargetLayersAll, IndexTargetLayersWithoutSource}, cfg.IndexTargetLayers) {
+		return Config{}, fmt.Errorf("INDEX_TARGET_LAYERS %q가 all_layers 또는 without_source가 아니다", cfg.IndexTargetLayers)
 	}
 	// 「배치 조합」이 둘 다 내장을 기본값으로 확정했으므로 비어 있으면 내장으로 읽는다.
 	placements := map[string]*ComponentPlacement{

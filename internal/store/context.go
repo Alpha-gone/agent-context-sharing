@@ -125,7 +125,7 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 		}
 	}
 	if previous.Body != value.Body {
-		if err := s.enqueueIndexTask(ctx, tx, graphID, value.ID); err != nil {
+		if err := s.enqueueIndexTask(ctx, tx, graphID, value.ID, value.Layer); err != nil {
 			return model.Context{}, err
 		}
 	}
@@ -422,7 +422,7 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 			return model.Context{}, err
 		}
 	}
-	if err := s.enqueueIndexTask(ctx, tx, graphID, value.ID); err != nil {
+	if err := s.enqueueIndexTask(ctx, tx, graphID, value.ID, value.Layer); err != nil {
 		return model.Context{}, err
 	}
 	if err := s.updateGraphActivity(ctx, tx, graphID, utf8.RuneCountInString(value.Body), limits.StoredCharsPerGraph); err != nil {

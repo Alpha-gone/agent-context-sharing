@@ -73,7 +73,7 @@ func run() error {
 		AdjacencyWindow:     cfg.RelationAdjacencyWindow,
 		SimilarityThreshold: cfg.RelationSimilarityThreshold,
 		Limit:               cfg.RelationProposalLimit,
-	}, func(accountID model.ID) int { return cfg.AccountPlans.For(accountID).GraceDays })
+	}, func(accountID model.ID) int { return cfg.AccountPlans.For(accountID).GraceDays }, store.IndexTargets(cfg.IndexTargetLayers))
 	if err != nil {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}

@@ -47,6 +47,7 @@ type conditions struct {
 	CandidateLimit int      `json:"channel_candidate_limit"`
 	FoldThreshold  float64  `json:"fold_threshold"`
 	EmbeddingModel string   `json:"embedding_model"`
+	IndexTargets   string   `json:"index_targets"`
 }
 
 func main() {
@@ -64,6 +65,7 @@ func run() error {
 	budget := flag.Int("budget", 4000, "검색 예산 문자 수. 0은 한도 없음이다")
 	maxHops := flag.Int("max-hops", 2, "그래프 확장 최대 홉 수")
 	maxHopNodes := flag.Int("max-hop-nodes", 50, "그래프 확장 최대 노드 수")
+	indexTargets := flag.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
 	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
 	flag.Parse()
 
@@ -94,7 +96,10 @@ func run() error {
 	// 관계 후보 제안과 유예 기간을 주지 않는다. 제안은 확정되기 전까지 그래프 경로
 	// 채널에 쓰이지 않으므로 측정에 들어가지 않고, 끄면 회차마다 같은 그래프 상태에서
 	// 재는 것이 보장된다. 유예 판정은 주기 작업의 몫이며 평가는 그 경로를 타지 않는다.
-	database, err := store.New(ctx, settings.databaseURL, settings.graphName, nil, nil)
+	// 색인 대상 계층은 적재 시점의 등록 조건이므로 그래프를 만들기 전에 정해야 한다.
+	// 「색인 대상 비교」는 이 값만 바꾼 두 실행의 결과를 견주는 것이며, 단계 비교처럼
+	// 한 실행 안에서 바꿀 수 있는 축이 아니다.
+	database, err := store.New(ctx, settings.databaseURL, settings.graphName, nil, nil, store.IndexTargets(*indexTargets))
 	if err != nil {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
@@ -133,6 +138,7 @@ func run() error {
 			CandidateLimit: settings.candidateLimit,
 			FoldThreshold:  settings.foldThreshold,
 			EmbeddingModel: worker.ModelID(),
+			IndexTargets:   *indexTargets,
 		},
 	}
 	runs := map[string][]runMetrics{}

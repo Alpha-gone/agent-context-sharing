@@ -28,7 +28,7 @@ func TestWorkerProposesSimilarEventRelationsAfterIndexIntegration(t *testing.T) 
 		graphName = "agent_context"
 	}
 	proposals := &store.RelationProposalConfig{AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 10}
-	database, err := store.New(t.Context(), databaseURL, graphName, proposals, nil)
+	database, err := store.New(t.Context(), databaseURL, graphName, proposals, nil, "")
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}

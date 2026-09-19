@@ -277,27 +277,41 @@ func (s *Store) OutdatedEmbeddingCount(ctx context.Context, modelID string) (int
 	return count, nil
 }
 
-// ReindexGraph는 그래프의 모든 컨텍스트를 기존 upsert 규칙으로 다시 등록한다.
+// ReindexGraph는 그래프의 컨텍스트를 현재 색인 대상 구성에 맞게 다시 맞춘다.
+//
+// 대상인 계층은 기존 upsert 규칙으로 다시 등록하고, 대상에서 빠진 계층은 남아 있던
+// 임베딩과 대기 작업을 지운다. 지우지 않으면 「색인 대상 비교」의 원천 제외 구성으로
+// 바꿔도 예전 구성이 남긴 원천 임베딩이 의미 유사도 채널에 계속 올라와 두 구성이
+// 등록 조건 말고도 달라진다.
 func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 	if !graphID.IsV7() {
 		return fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
 	}
-	rows, err := s.pool.Query(ctx, `SELECT properties ->> 'context_id'::text FROM `+s.contextTable()+` WHERE properties ->> 'graph_id'::text = $1`, graphID.String())
+	rows, err := s.pool.Query(ctx, `SELECT properties ->> 'context_id'::text, properties ->> 'layer'::text FROM `+s.contextTable()+` WHERE properties ->> 'graph_id'::text = $1`, graphID.String())
 	if err != nil {
 		return fmt.Errorf("재색인 대상 조회: %w", err)
 	}
 	defer rows.Close()
-	ids := make([]model.ID, 0)
+	type reindexTarget struct {
+		id    model.ID
+		layer model.Layer
+	}
+	targets := make([]reindexTarget, 0)
+	excluded := make([]string, 0)
 	for rows.Next() {
-		var rawID string
-		if err := rows.Scan(&rawID); err != nil {
+		var rawID, rawLayer string
+		if err := rows.Scan(&rawID, &rawLayer); err != nil {
 			return fmt.Errorf("재색인 대상 행 해석: %w", err)
 		}
 		contextID, err := model.ParseID(rawID)
 		if err != nil {
 			return fmt.Errorf("재색인 대상 식별자 해석: %w", err)
 		}
-		ids = append(ids, contextID)
+		if s.indexTargets.indexes(model.Layer(rawLayer)) {
+			targets = append(targets, reindexTarget{id: contextID, layer: model.Layer(rawLayer)})
+			continue
+		}
+		excluded = append(excluded, contextID.String())
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("재색인 대상 행 읽기: %w", err)
@@ -307,9 +321,17 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 		return fmt.Errorf("재색인 등록 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	for _, contextID := range ids {
-		if err := s.enqueueIndexTask(ctx, tx, graphID, contextID); err != nil {
+	for _, target := range targets {
+		if err := s.enqueueIndexTask(ctx, tx, graphID, target.id, target.layer); err != nil {
 			return err
+		}
+	}
+	if len(excluded) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM public.context_embedding WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded); err != nil {
+			return fmt.Errorf("색인 대상에서 빠진 임베딩 제거: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM public.index_task WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded); err != nil {
+			return fmt.Errorf("색인 대상에서 빠진 대기 작업 제거: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

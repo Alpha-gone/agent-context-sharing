@@ -26,9 +26,11 @@
 
 | 상태 | 건수 | 뜻 |
 |------|------|-----|
-| 구현 | 141 | 요구사항이 요구하는 동작을 수행하는 코드가 있다 |
+| 구현 | 142 | 요구사항이 요구하는 동작을 수행하는 코드가 있다 |
 | 평가 대기 | 6 | 측정 값을 내는 자리는 있으나 평가를 수행하지 않아 요구사항이 닫히지 않았다 |
-| 미구현 | 2 | 대응하는 코드가 없다 |
+| 미구현 | 1 | 대응하는 코드가 없다 |
+
+검사 뒤 `FR-AGENT_CONTEXT-122`의 등록 조건 분기를 구현해 미구현이 둘에서 하나로 줄었다. 위 표는 그 처리를 반영한 값이며, 처리 내용은 「발견 사항」 1번에 있다.
 
 의도적 미구현으로 분류된 `TBD-AGENT_CONTEXT-048`·`-049`·`-052`·`-060`·`-061`은 기능 요구사항이 아니므로 이 표에 없다. 그 다섯 건은 선행 감사 6번이 확인했다.
 
@@ -157,7 +159,7 @@
 | `FR-AGENT_CONTEXT-119` | 한도 초과 | `internal/plan/plan.go`의 `LimitError`와 `internal/mcp/handler.go`의 `limitError` | 구현 |
 | `FR-AGENT_CONTEXT-120` | 기록 보존 하한 | `internal/store/periodic.go`의 `CleanupAuditRecords`가 종류별 보존 기간을 나눈다 | 구현 |
 | `FR-AGENT_CONTEXT-121` | 벡터 압축 | `internal/config/config.go`의 `EMBEDDING_VECTOR_TYPE`·`EMBEDDING_DIMENSION`과 `internal/store/index.go`의 `ReindexGraph` | 구현 |
-| `FR-AGENT_CONTEXT-122` | 색인 대상 비교 | 없다. `internal/store/operation.go`의 `enqueueIndexTask`가 계층과 무관하게 모든 컨텍스트를 등록하고 원천 제외 구성을 고를 자리가 없다 | 미구현 |
+| `FR-AGENT_CONTEXT-122` | 색인 대상 비교 | `internal/config/config.go`의 `INDEX_TARGET_LAYERS`와 `internal/store/operation.go`의 `enqueueIndexTask` 계층 분기. 비교 자체는 평가에서 수행한다 | 구현 |
 | `FR-AGENT_CONTEXT-123` | 저장 계층화 | 없다. `internal/plan/plan.go`의 `TierMoveAfterDays`만 있고 이를 읽는 곳이 없으며 `context_embedding`에 파티셔닝이 없다 | 미구현 |
 | `FR-AGENT_CONTEXT-124` | 출처 구분 | `internal/model/context.go`의 `OriginKind`와 `ValidateUpdate` | 구현 |
 | `FR-AGENT_CONTEXT-125` | 출처 전달 | `internal/store/index.go`의 `ContextOriginKinds`와 `internal/search/search.go`의 출처 전파 | 구현 |
@@ -188,14 +190,14 @@
 
 ## 발견 사항
 
-### 1. `FR-AGENT_CONTEXT-122` 색인 대상 비교를 고를 자리가 없다
+### 1. `FR-AGENT_CONTEXT-122` 색인 대상 비교를 고를 자리가 없었다 (해소)
 
 요구사항은 원천을 포함한 색인과 파생·사건만 색인한 구성을 비교하라고 한다. `SDD.md` 「검증을 가능하게 하는 설계」는 색인 작업 등록 조건에 계층 분기를 두는 것으로 설계했다.
 
-실제로는 `internal/store/operation.go`의 `enqueueIndexTask`가 계층을 보지 않고 저장되는 모든 컨텍스트를 등록한다. 두 구성을 고를 구성 값도 없다. 배포 구성 26개 이름을 전수로 확인했다.
+검사 시점에는 `internal/store/operation.go`의 `enqueueIndexTask`가 계층을 보지 않고 저장되는 모든 컨텍스트를 등록했고, 두 구성을 고를 구성 값도 없었다. 배포 구성 26개 이름을 전수로 확인했다.
 
 - 근거: 판독. `enqueueIndexTask`의 삽입문과 `internal/config/config.go`의 구성 이름 전수.
-- 영향: 평가 없이도 닫을 수 있는 항목이 아니다. 비교를 하려면 등록 조건의 분기를 먼저 만들어야 한다.
+- 처리: 같은 날 등록 조건에 계층 분기를 넣고 배포 구성 `INDEX_TARGET_LAYERS`를 열었다. 기본값은 판정 전이므로 원천을 포함하는 `all_layers`이며 `without_source`가 대조군이다. 재색인이 대상에서 빠진 계층의 임베딩과 대기 작업을 함께 지우므로 구성을 바꾼 뒤에도 두 구성이 등록 조건 말고는 같다. 비교 측정 자체는 데이터셋이 있어야 하므로 아직 수행하지 않았다.
 
 ### 2. `FR-AGENT_CONTEXT-123` 저장 계층 이동이 값만 있고 동작이 없다
 

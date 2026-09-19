@@ -63,6 +63,33 @@ func TestLoadPlacementDefaultsToEmbedded(t *testing.T) {
 
 // TestLoadAcceptsFourPlacementCombinations는 「배치 조합」의 네 조합이 모두 구성으로
 // 표현되는지 확인한다. 어느 조합이든 같은 코드로 성립해야 한다.
+// TestLoadIndexTargetsDefaultsToAllLayers는 「색인 대상 비교」의 판정 전 기본값을
+// 확인한다. 비어 있을 때 원천이 빠지면 아직 하지 않은 판정을 구성이 먼저 내리는 셈이다.
+func TestLoadIndexTargetsDefaultsToAllLayers(t *testing.T) {
+	values := validValues()
+	delete(values, "INDEX_TARGET_LAYERS")
+	cfg, err := Load(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("구성 읽기: %v", err)
+	}
+	if cfg.IndexTargetLayers != IndexTargetLayersAll {
+		t.Fatalf("기본 색인 대상 = %q; all_layers여야 한다", cfg.IndexTargetLayers)
+	}
+}
+
+// TestLoadIndexTargetsAcceptsWithoutSource는 비교에 쓸 다른 구성이 실제로 읽히는지 본다.
+func TestLoadIndexTargetsAcceptsWithoutSource(t *testing.T) {
+	values := validValues()
+	values["INDEX_TARGET_LAYERS"] = string(IndexTargetLayersWithoutSource)
+	cfg, err := Load(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("구성 읽기: %v", err)
+	}
+	if cfg.IndexTargetLayers != IndexTargetLayersWithoutSource {
+		t.Fatalf("색인 대상 = %q; without_source여야 한다", cfg.IndexTargetLayers)
+	}
+}
+
 func TestLoadAcceptsFourPlacementCombinations(t *testing.T) {
 	for _, worker := range []ComponentPlacement{PlacementEmbedded, PlacementExternal} {
 		for _, authorization := range []ComponentPlacement{PlacementEmbedded, PlacementExternal} {
@@ -91,6 +118,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		"검색 채널 실행 방식 오류":  func(values map[string]string) { values["SEARCH_CHANNEL_EXECUTION"] = "unknown" },
 		"검색 후보 수 상한 오류":   func(values map[string]string) { values["SEARCH_CHANNEL_CANDIDATE_LIMIT"] = "0" },
 		"그래프 검색 단계 오류":    func(values map[string]string) { values["SEARCH_GRAPH_STAGE"] = "unknown" },
+		"색인 대상 계층 오류":     func(values map[string]string) { values["INDEX_TARGET_LAYERS"] = "derived_only" },
 		"관계 시간 인접 임계값 오류": func(values map[string]string) { values["RELATION_ADJACENCY_WINDOW"] = "0" },
 		"관계 유사도 임계값 오류":   func(values map[string]string) { values["RELATION_SIMILARITY_THRESHOLD"] = "1.1" },
 		"관계 후보 수 상한 오류":   func(values map[string]string) { values["RELATION_PROPOSAL_LIMIT"] = "0" },

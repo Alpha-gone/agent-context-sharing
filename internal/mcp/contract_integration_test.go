@@ -55,7 +55,7 @@ func TestOperationContractIntegration(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	database, err := store.New(t.Context(), databaseURL, graphName, nil, nil)
+	database, err := store.New(t.Context(), databaseURL, graphName, nil, nil, "")
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}

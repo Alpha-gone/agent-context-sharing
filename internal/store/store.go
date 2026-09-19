@@ -59,6 +59,37 @@ type Store struct {
 	// graceDays 필드는 유예를 시작할 때 생성 계정 플랜의 유예 일수를 돌려준다. nil이면
 	// 만료 시각을 남기지 않아 유예가 만료되지 않는다.
 	graceDays RetentionDays
+	// indexTargets 필드는 색인 작업으로 등록할 계층 범위다. 비어 있으면 모든 계층을
+	// 등록한다.
+	indexTargets IndexTargets
+}
+
+// IndexTargets는 색인 작업 등록 조건의 계층 범위다.
+//
+// 「색인 대상 비교」가 원천을 포함한 색인과 파생·사건만 색인한 구성을 비교하고, 재현율
+// 손실이 유의하지 않으면 원천 제외 구성을 기본으로 삼으라고 확정했다. 비교가 성립하려면
+// 등록 조건만 달라지고 나머지 조건은 그대로여야 하므로 범위를 배포 구성으로 둔다.
+//
+// 기본값이 원천 포함인 이유는 그 판정을 아직 하지 않았기 때문이다. 측정으로 손실이
+// 유의하지 않다는 것이 확인되면 그때 기본값을 바꾼다.
+type IndexTargets string
+
+const (
+	// IndexTargetsAllLayers는 원천·파생·사건을 모두 색인한다.
+	IndexTargetsAllLayers IndexTargets = "all_layers"
+	// IndexTargetsWithoutSource는 파생과 사건만 색인한다. 원천을 빼도 DERIVED_FROM
+	// 간선이 남아 근거 추적은 유지된다.
+	IndexTargetsWithoutSource IndexTargets = "without_source"
+)
+
+// indexes는 계층이 색인 대상인지 판정한다.
+func (targets IndexTargets) indexes(layer model.Layer) bool {
+	return targets != IndexTargetsWithoutSource || layer != model.LayerSource
+}
+
+// valid는 열린 값 집합만 받아들인다. 빈 값은 호출부가 기본값으로 바꾼다.
+func (targets IndexTargets) valid() bool {
+	return targets == IndexTargetsAllLayers || targets == IndexTargetsWithoutSource
 }
 
 // WriteLimits는 저장 트랜잭션 안에서 강제할 누적 한도다. 0은 한도 없음이다.
@@ -105,9 +136,16 @@ func (config RelationProposalConfig) validate() error {
 // relationProposals는 생략할 수 없고 nil을 명시해야 자동 후보 제안이 꺼진다. 가변 인자로
 // 두면 호출부가 빠뜨려도 조용히 통과해, 제안이 꺼진 저장소로 검증이 지나간다.
 // graceDays도 같은 이유로 생략할 수 없으며 nil이면 유예 만료 시각을 남기지 않는다.
-func New(ctx context.Context, databaseURL, graphName string, relationProposals *RelationProposalConfig, graceDays RetentionDays) (*Store, error) {
+// indexTargets는 빈 값이면 모든 계층을 색인하는 기본 구성으로 읽는다.
+func New(ctx context.Context, databaseURL, graphName string, relationProposals *RelationProposalConfig, graceDays RetentionDays, indexTargets IndexTargets) (*Store, error) {
 	if !graphNamePattern.MatchString(graphName) {
 		return nil, fmt.Errorf("AGE 그래프 이름 %q가 영문 소문자, 숫자와 밑줄 형식이 아니다", graphName)
+	}
+	if indexTargets == "" {
+		indexTargets = IndexTargetsAllLayers
+	}
+	if !indexTargets.valid() {
+		return nil, fmt.Errorf("색인 대상 계층 %q를 알 수 없다", indexTargets)
 	}
 	var proposalConfig *RelationProposalConfig
 	if relationProposals != nil {
@@ -141,7 +179,7 @@ func New(ctx context.Context, databaseURL, graphName string, relationProposals *
 	if err != nil {
 		return nil, fmt.Errorf("연결 풀 생성: %w", err)
 	}
-	return &Store{pool: pool, graphName: graphName, relationProposals: proposalConfig, graceDays: graceDays}, nil
+	return &Store{pool: pool, graphName: graphName, relationProposals: proposalConfig, graceDays: graceDays, indexTargets: indexTargets}, nil
 }
 
 // Ping은 데이터베이스 연결과 AGE 준비가 현재 요청을 받을 수 있는지 확인한다.

@@ -139,9 +139,14 @@ func (s *Store) recordAppliedRelationOperation(ctx context.Context, tx pgx.Tx, o
 
 // enqueueIndexTask는 색인 대기 작업을 컨텍스트 변경과 같은 트랜잭션에서 등록한다.
 // 컨텍스트마다 한 행만 두므로 같은 행이 있으면 대기 상태로 되돌린다.
-func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contextID model.ID) error {
+func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contextID model.ID, layer model.Layer) error {
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return fmt.Errorf("색인 작업 식별자가 UUIDv7이 아니다")
+	}
+	// 「색인 대상 비교」의 원천 제외 구성에서는 등록하지 않는다. 등록 조건만 달라지고
+	// 저장·간선·기록은 그대로이므로 두 구성이 나머지 조건에서 같다.
+	if !s.indexTargets.indexes(layer) {
+		return nil
 	}
 	taskID, err := model.NewID()
 	if err != nil {

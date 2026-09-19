@@ -3,6 +3,7 @@ package store
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -374,7 +375,18 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	if !graphID.IsV7() || modelID == "" || len(embedding) == 0 || !current.UTC().Equal(current) || limit < 1 {
 		return nil, fmt.Errorf("의미 유사도 검색 인자가 올바르지 않다")
 	}
-	rows, err := s.pool.Query(ctx, `
+	// 후보 식별자만 트랜잭션 안에서 읽고, 조립은 트랜잭션을 닫은 뒤에 한다. 반복 탐색
+	// 설정이 트랜잭션 범위라 질의가 그 안에 있어야 하고, 조립까지 안에 두면 연결을 오래
+	// 쥔 채 정점 조회가 같은 풀에서 연결을 하나 더 잡는다.
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("의미 유사도 검색 트랜잭션 시작: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := enableIterativeScan(ctx, tx); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
 		SELECT candidate.context_id::text
 		FROM public.context_embedding AS candidate
 		JOIN `+s.contextTable()+` AS node ON (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
@@ -392,6 +404,9 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	ids, err := searchCandidateIDs(rows)
 	if err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("의미 유사도 검색 커밋: %w", err)
 	}
 	return s.searchCandidates(ctx, graphID, ids)
 }
@@ -517,42 +532,55 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 	if target.Layer != model.LayerEvent || target.DeletedAt != nil {
 		return nil
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT candidate.context_id::text, target.embedding <=> candidate.embedding
-		FROM public.context_embedding AS target
-		JOIN public.context_embedding AS candidate ON candidate.graph_id = target.graph_id
+	// 대상 벡터를 먼저 한 행으로 읽어 파라미터로 넘긴다. 임베딩끼리 조인해 두 열의 연산으로
+	// 정렬하면 정렬 기준이 열이 아니라서 벡터 인덱스를 쓸 수 없고, 같은 그래프의 모든 임베딩과
+	// 거리를 계산한다. 파라미터에 타입을 박지 않는 이유는 「임베딩 저장」이 열 타입을 배포
+	// 구성으로 두었기 때문이며, 거리 연산자가 왼쪽 열 타입으로 파라미터 타입을 결정한다.
+	var targetVector string
+	err = s.pool.QueryRow(ctx, `
+		SELECT embedding::text FROM public.context_embedding
+		WHERE context_id = $1 AND graph_id = $2 AND model_id = $3`,
+		eventID.String(), graphID.String(), modelID).Scan(&targetVector)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// 색인이 아직 없거나 모델이 다르면 비교할 벡터가 없다. 제안도 없다.
+			return nil
+		}
+		return fmt.Errorf("의미 관계 대상 벡터 조회: %w", err)
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fmt.Errorf("의미 관계 후보 트랜잭션 시작: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := enableIterativeScan(ctx, tx); err != nil {
+		return err
+	}
+	// 유사도 하한을 질의의 조건으로 내린다. Go에서 걸러내면 상한까지 뽑은 후보가 모두 임계값
+	// 미달일 때 기준을 넘는 후보가 더 있어도 놓친다. 코사인 거리는 1에서 유사도를 뺀 값이다.
+	rows, err := tx.Query(ctx, `
+		SELECT candidate.context_id::text
+		FROM public.context_embedding AS candidate
 		JOIN `+s.contextTable()+` AS node ON (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
-		WHERE target.context_id = $1 AND target.graph_id = $2 AND target.model_id = $3
-			AND candidate.context_id <> target.context_id AND candidate.model_id = $3
+		WHERE candidate.graph_id = $2 AND candidate.model_id = $3
+			AND candidate.context_id <> $1::uuid
+			AND candidate.embedding <=> $4 <= $5
 			AND node.properties ->> 'layer'::text = 'event' AND node.properties ->> 'deleted_at'::text IS NULL
-		ORDER BY target.embedding <=> candidate.embedding, candidate.context_id
-		LIMIT $4`, eventID.String(), graphID.String(), modelID, s.relationProposals.Limit)
+		ORDER BY candidate.embedding <=> $4, candidate.context_id
+		LIMIT $6`,
+		eventID.String(), graphID.String(), modelID, targetVector,
+		1-s.relationProposals.SimilarityThreshold, s.relationProposals.Limit)
 	if err != nil {
 		return fmt.Errorf("의미 관계 후보 조회: %w", err)
 	}
-	// 후보를 먼저 모아 행을 놓아준다. 행을 연 채 관계를 만들면 같은 풀에서 트랜잭션용
-	// 연결을 하나 더 잡아 색인 작업자와 요청 경로가 서로의 연결을 기다린다.
-	similar := make([]model.ID, 0)
-	for rows.Next() {
-		var rawID string
-		var distance float64
-		if err := rows.Scan(&rawID, &distance); err != nil {
-			rows.Close()
-			return fmt.Errorf("의미 관계 후보 행 해석: %w", err)
-		}
-		if 1-distance < s.relationProposals.SimilarityThreshold {
-			continue
-		}
-		otherID, err := model.ParseID(rawID)
-		if err != nil {
-			rows.Close()
-			return fmt.Errorf("의미 관계 후보 식별자 해석: %w", err)
-		}
-		similar = append(similar, otherID)
+	// 후보를 먼저 모아 행과 트랜잭션을 놓아준다. 행을 연 채 관계를 만들면 같은 풀에서
+	// 트랜잭션용 연결을 하나 더 잡아 색인 작업자와 요청 경로가 서로의 연결을 기다린다.
+	similar, err := searchCandidateIDs(rows)
+	if err != nil {
+		return err
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("의미 관계 후보 행 읽기: %w", err)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("의미 관계 후보 커밋: %w", err)
 	}
 	for _, otherID := range similar {
 		relation := normalizeRelation(proposedRelation(graphID, model.RelationTypeRelatesTo, eventID, otherID))
@@ -571,4 +599,24 @@ func vectorText(values []float64) string {
 		parts[index] = fmt.Sprintf("%g", value)
 	}
 	return "[" + strings.Join(parts, ",") + "]"
+}
+
+// enableIterativeScan은 이 트랜잭션의 벡터 인덱스 질의가 조건에 걸러진 만큼 더 훑게 한다.
+//
+// HNSW는 조건을 보지 않고 전역 근접 이웃을 먼저 꺼내므로, graph_id·model_id·삭제·유효 기간
+// 조건이 뒤에서 걸러내면 상한을 채우지 못하거나 0건이 될 수 있다. 여러 그래프를 한 테이블에
+// 논리로 격리하는 이 배포에서는 그래프가 작을수록 잘 걸린다. pgvector의 반복 탐색은 상한을
+// 채울 때까지 인덱스를 이어 훑고, strict_order는 그러면서도 거리 순서를 정확히 지킨다.
+//
+// 반복 탐색은 pgvector 0.8.0에서 들어왔고 「버전 요구」의 하한은 0.7.0이다. 그래서 설정이
+// 없는 배포에서는 아무것도 하지 않도록 WHERE로 막는다. SET LOCAL 대신 set_config를 쓰는
+// 이유가 이것이며, 없는 설정에 SET을 보내면 오류로 트랜잭션이 끊긴다. is_local을 참으로
+// 두어 설정이 이 트랜잭션에서만 살고 풀의 연결에 남지 않게 한다.
+func enableIterativeScan(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, `
+		SELECT set_config('hnsw.iterative_scan', 'strict_order', true)
+		WHERE current_setting('hnsw.iterative_scan', true) IS NOT NULL`); err != nil {
+		return fmt.Errorf("벡터 반복 탐색 설정: %w", err)
+	}
+	return nil
 }

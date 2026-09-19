@@ -30,6 +30,15 @@ func TestIndexProviderCallDoesNotBlockSavesIntegration(t *testing.T) {
 
 	// 공유 개발 데이터베이스에는 다른 테스트가 남긴 대기 작업이 있다. 확보 순서가
 	// enqueued_at이므로 대상 작업을 맨 앞으로 옮겨 첫 회차에 잡히게 한다.
+	//
+	// 옮긴 표식은 실패한 회차가 남기면 다음 회차를 가로채므로 반드시 되돌린다. 이 테스트가
+	// 만든 컨텍스트의 행만 지우므로 다른 테스트의 대기 작업은 건드리지 않는다.
+	t.Cleanup(func() {
+		ctx := context.WithoutCancel(t.Context())
+		if _, err := database.pool.Exec(ctx, `DELETE FROM public.index_task WHERE context_id = ANY($1::uuid[])`, []string{source.ID.String(), target.ID.String()}); err != nil {
+			t.Errorf("색인 작업 정리: %v", err)
+		}
+	})
 	if _, err := database.pool.Exec(t.Context(), `UPDATE public.index_task SET enqueued_at = $2 WHERE context_id = $1`, target.ID.String(), time.Date(1800, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("확보 순서 준비: %v", err)
 	}

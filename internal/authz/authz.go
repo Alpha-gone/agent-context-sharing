@@ -52,6 +52,8 @@ type Service struct {
 	store             authStore
 	config            Config
 	dummyPasswordHash string
+	// cache는 「토큰 검증」이 요청마다 가져오지 않기로 한 서명 키와 폐기 목록을 담는다.
+	cache *verificationCache
 }
 
 // authStore는 인가 서버가 데이터베이스 접근 계층에 요구하는 최소 계약이다.
@@ -63,7 +65,7 @@ type authStore interface {
 	AuthorizationCodeForExchange(context.Context, string, time.Time) (store.AuthorizationCode, error)
 	ConsumeAuthorizationCode(context.Context, string, string, time.Time, time.Time) (store.AuthorizationCode, error)
 	RevokeToken(context.Context, string, time.Time) error
-	IsTokenRevoked(context.Context, string, time.Time) (bool, error)
+	RevokedTokenIDs(context.Context, time.Time) ([]string, error)
 	ActiveSigningKey(context.Context) (store.SigningKey, error)
 	SigningKey(context.Context, string) (store.SigningKey, error)
 	SigningKeys(context.Context) ([]store.SigningKey, error)
@@ -93,7 +95,7 @@ func New(source authStore, config Config) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("더미 비밀번호 해시 생성: %w", err)
 	}
-	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash}, nil
+	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash, cache: newVerificationCache()}, nil
 }
 
 // Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.
@@ -313,19 +315,15 @@ func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (tok
 	if len(parsed.Headers) != 1 || parsed.Headers[0].KeyID == "" {
 		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
-	key, err := s.store.SigningKey(ctx, parsed.Headers[0].KeyID)
+	public, err := s.cache.publicKey(ctx, s.store, parsed.Headers[0].KeyID)
 	if err != nil {
-		return tokenClaims{}, fmt.Errorf("unauthenticated")
-	}
-	var public jose.JSONWebKey
-	if err := json.Unmarshal([]byte(key.PublicKey), &public); err != nil {
 		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
 	var claims tokenClaims
 	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil {
 		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
-	revoked, err := s.store.IsTokenRevoked(ctx, claims.ID, time.Now().UTC())
+	revoked, err := s.cache.isRevoked(ctx, s.store, claims.ID, time.Now().UTC())
 	if err != nil || revoked {
 		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
@@ -359,7 +357,12 @@ func (s *Service) renewFromClaims(ctx context.Context, accountID model.ID, claim
 
 // Revoke는 로그아웃 또는 인가 코드 재사용 처리에서 jti를 만료 시각까지 막는다.
 func (s *Service) Revoke(ctx context.Context, token Token) error {
-	return s.store.RevokeToken(ctx, token.ID, token.ExpiresAt)
+	if err := s.store.RevokeToken(ctx, token.ID, token.ExpiresAt); err != nil {
+		return err
+	}
+	// 이 인스턴스가 방금 폐기한 토큰은 다음 적재를 기다리지 않고 곧바로 막는다.
+	s.cache.invalidateRevocations(token.ID)
+	return nil
 }
 
 // JWKS는 검증자에게 비공개 키 없이 공개 키 목록을 제공한다.
@@ -385,6 +388,8 @@ func (s *Service) RotateSigningKey(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// 새 키는 그 키로 서명된 토큰이 처음 도착할 때 캐시에 들어오고, 은퇴한 키는 검증에
+	// 계속 쓰이므로 캐시에서 지우지 않는다.
 	return s.store.RotateSigningKey(ctx, key)
 }
 

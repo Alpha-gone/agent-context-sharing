@@ -240,6 +240,33 @@ func (s *Store) RevokeToken(ctx context.Context, tokenID string, expiresAt time.
 }
 
 // IsTokenRevoked는 아직 만료되지 않은 폐기 목록 항목을 확인한다.
+// RevokedTokenIDs는 아직 만료되지 않은 폐기 토큰 식별자를 모두 읽는다.
+//
+// 「토큰 검증」이 폐기 목록을 요청마다 가져오지 않기로 했으므로 접근 계층이 이 목록을
+// 메모리에 두고 쓴다. 폐기 행은 토큰 만료까지만 남으므로 목록의 크기가 제한된다.
+func (s *Store) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("폐기 목록 조회 시각이 비어 있다")
+	}
+	rows, err := s.pool.Query(ctx, `SELECT token_id FROM public.revoked_token WHERE expires_at > $1`, now)
+	if err != nil {
+		return nil, fmt.Errorf("폐기 목록 조회: %w", err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("폐기 목록 행 해석: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("폐기 목록 행 읽기: %w", err)
+	}
+	return ids, nil
+}
+
 func (s *Store) IsTokenRevoked(ctx context.Context, tokenID string, now time.Time) (bool, error) {
 	if tokenID == "" || now.IsZero() {
 		return false, fmt.Errorf("토큰 폐기 조회 인자가 올바르지 않다")

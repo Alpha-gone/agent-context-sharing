@@ -579,6 +579,17 @@ func (s *memoryStore) IsTokenRevoked(_ context.Context, tokenID string, now time
 	expiresAt, ok := s.revoked[tokenID]
 	return ok && expiresAt.After(now), nil
 }
+func (s *memoryStore) RevokedTokenIDs(_ context.Context, now time.Time) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]string, 0, len(s.revoked))
+	for id, expiresAt := range s.revoked {
+		if expiresAt.After(now) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
 func (s *memoryStore) ActiveSigningKey(_ context.Context) (store.SigningKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -12,6 +12,18 @@ services:
       # PostgreSQL 18부터 공식 이미지가 /var/lib/postgresql 아래 판별 하위 디렉터리에
       # 데이터를 두므로 /var/lib/postgresql/data가 아니라 상위를 마운트한다.
       - db_data:/var/lib/postgresql
+    # 베이스 이미지의 CMD를 덮으므로 shared_preload_libraries=age를 그대로 다시 준다.
+    # WAL 보관을 켜는 이유는 「백업과 복구」가 시점 복구를 백업 방식으로 확정했고, AGE가
+    # 그래프를 스키마 OID로 기록해 논리 덤프로는 복원이 성립하지 않기 때문이다. 보관 경로는
+    # 데이터 볼륨 안에 두어 기본 백업과 함께 남는다.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=age
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_context} -d ${POSTGRES_DB:-agent_context}"]
       interval: 5s

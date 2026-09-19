@@ -40,11 +40,11 @@ var loginIDPattern = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
 
 // Config는 인가 서버의 고정된 배포 경계를 모은다.
 type Config struct {
-	Issuer       string
-	Resource     string
-	Clients      []string
-	RedirectURIs []*url.URL
-	BcryptCost   int
+	Issuer   string
+	Resource string
+	// Clients 필드에는 클라이언트별로 사전 등록한 redirect_uri 허용 목록을 둔다.
+	Clients    map[string][]*url.URL
+	BcryptCost int
 }
 
 // Service는 데이터 접근 계층 위에서 인증·인가 계약을 수행한다.
@@ -88,8 +88,13 @@ func New(source authStore, config Config) (*Service, error) {
 	if source == nil || config.Issuer == "" || config.Resource == "" || config.BcryptCost < bcrypt.MinCost || config.BcryptCost > bcrypt.MaxCost {
 		return nil, fmt.Errorf("인가 서비스 구성이 올바르지 않다")
 	}
-	if len(config.Clients) == 0 || len(config.RedirectURIs) == 0 {
+	if len(config.Clients) == 0 {
 		return nil, fmt.Errorf("등록 OAuth 클라이언트와 redirect_uri가 필요하다")
+	}
+	for clientID, allowed := range config.Clients {
+		if clientID == "" || len(allowed) == 0 {
+			return nil, fmt.Errorf("등록 OAuth 클라이언트와 redirect_uri가 필요하다")
+		}
 	}
 	dummyPasswordHash, err := hashPassword("", config.BcryptCost)
 	if err != nil {
@@ -186,14 +191,15 @@ func passwordMaterial(password string) string {
 // 3단계 이후의 실패는 redirect_uri로 알리기로 확정했으므로 그 전에 주소를 신뢰할 수
 // 있어야 한다. 두 단계를 따로 부를 수 있게 나눠 두고 전체 검증은 이 함수를 재사용한다.
 func (s *Service) ValidateRedirectTarget(request AuthorizeRequest) (*url.URL, error) {
-	if !slices.Contains(s.config.Clients, request.ClientID) {
+	allowed, registered := s.config.Clients[request.ClientID]
+	if !registered {
 		return nil, fmt.Errorf("등록되지 않은 client_id")
 	}
 	redirect, err := url.Parse(request.RedirectURI)
 	if err != nil {
 		return nil, fmt.Errorf("redirect_uri 해석: %w", err)
 	}
-	if !slices.ContainsFunc(s.config.RedirectURIs, func(allowed *url.URL) bool { return redirectMatches(allowed, redirect) }) {
+	if !slices.ContainsFunc(allowed, func(candidate *url.URL) bool { return redirectMatches(candidate, redirect) }) {
 		return nil, fmt.Errorf("허용되지 않은 redirect_uri")
 	}
 	return redirect, nil

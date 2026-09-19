@@ -18,7 +18,7 @@ func TestLoad(t *testing.T) {
 	if cfg.HTTPAddr != ":8080" || cfg.EmbeddingDimension != 1024 || cfg.SearchExecution != SearchExecutionParallel || cfg.SearchGraphStage != SearchGraphStageBaseline || cfg.SearchCandidateLimit != 50 || cfg.RelationAdjacencyWindow != time.Hour || cfg.RelationSimilarityThreshold != 0.8 || cfg.RelationProposalLimit != 10 {
 		t.Fatalf("핵심 구성 값이 다르다: %+v", cfg)
 	}
-	if len(cfg.OAuthClientIDs) != 1 || len(cfg.OAuthRedirectURIs) != 1 || cfg.ResourceServerURL.String() != "https://service.test/mcp" || cfg.AuthorizationServerURL.String() != "https://issuer.test" || len(cfg.MCPAllowedOrigins) != 1 {
+	if len(cfg.OAuthClients) != 1 || len(cfg.OAuthClients["agent-context-dev"]) != 1 || cfg.ResourceServerURL.String() != "https://service.test/mcp" || cfg.AuthorizationServerURL.String() != "https://issuer.test" || len(cfg.MCPAllowedOrigins) != 1 {
 		t.Fatalf("OAuth 목록이 다르다: %+v", cfg)
 	}
 }
@@ -82,10 +82,16 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		"플랜 구성 키 오류": func(values map[string]string) {
 			values["ACCOUNT_PLAN_LIMITS"] = `{"0198e7c0-0000-7000-8000-000000000001":{"unknown":1}}`
 		},
-		"보호 리소스 경로 오류":    func(values map[string]string) { values["RESOURCE_SERVER_URL"] = "https://service.test/other" },
-		"인가 서버 origin 오류": func(values map[string]string) { values["AUTHORIZATION_SERVER_URL"] = "https://issuer.test/oauth" },
-		"허용 Origin 경로 오류": func(values map[string]string) { values["MCP_ALLOWED_ORIGINS"] = "https://client.test/callback" },
-		"접기 임계값 범위 오류":    func(values map[string]string) { values["SEARCH_FOLD_SIMILARITY_THRESHOLD"] = "1.5" },
+		"보호 리소스 경로 오류":     func(values map[string]string) { values["RESOURCE_SERVER_URL"] = "https://service.test/other" },
+		"인가 서버 origin 오류":  func(values map[string]string) { values["AUTHORIZATION_SERVER_URL"] = "https://issuer.test/oauth" },
+		"허용 Origin 경로 오류":  func(values map[string]string) { values["MCP_ALLOWED_ORIGINS"] = "https://client.test/callback" },
+		"접기 임계값 범위 오류":     func(values map[string]string) { values["SEARCH_FOLD_SIMILARITY_THRESHOLD"] = "1.5" },
+		"클라이언트 구성 누락":      func(values map[string]string) { values["OAUTH_CLIENTS"] = "" },
+		"클라이언트 구성 JSON 오류": func(values map[string]string) { values["OAUTH_CLIENTS"] = "agent-context-dev" },
+		"클라이언트 빈 목록":       func(values map[string]string) { values["OAUTH_CLIENTS"] = `{"agent-context-dev":[]}` },
+		"클라이언트 redirect_uri 오류": func(values map[string]string) {
+			values["OAUTH_CLIENTS"] = `{"agent-context-dev":["ftp://127.0.0.1/callback"]}`
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -160,8 +166,7 @@ func validValues() map[string]string {
 		"SEARCH_CHANNEL_CANDIDATE_LIMIT":   "50",
 		"SEARCH_GRAPH_STAGE":               "baseline",
 		"SEARCH_FOLD_SIMILARITY_THRESHOLD": "0.90",
-		"OAUTH_CLIENT_IDS":                 "agent-context-dev",
-		"OAUTH_REDIRECT_URIS":              "http://127.0.0.1/callback",
+		"OAUTH_CLIENTS":                    `{"agent-context-dev":["http://127.0.0.1/callback"]}`,
 		"RESOURCE_SERVER_URL":              "https://service.test/mcp",
 		"AUTHORIZATION_SERVER_URL":         "https://issuer.test",
 		"MCP_ALLOWED_ORIGINS":              "https://client.test",

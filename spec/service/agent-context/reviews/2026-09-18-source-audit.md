@@ -316,7 +316,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 판독.
 
-#### - [ ] 30. `redirect_uri` 허용 목록이 클라이언트별이 아니다
+#### - [x] 30. `redirect_uri` 허용 목록이 클라이언트별이 아니다
 
 `internal/authz/authz.go:184`~`:193`, `internal/config/config.go:178`~`:187`
 
@@ -324,6 +324,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 판독.
 - 보류 사유: 고치려면 배포 구성 형식을 바꿔야 한다. `OAUTH_CLIENT_IDS`와 `OAUTH_REDIRECT_URIS`가 서로 독립한 목록이라 둘의 교차곱이 허용 집합이 되므로, 클라이언트별 목록을 두려면 `OAUTH_REDIRECT_URIS`를 클라이언트를 키로 하는 객체로 받아야 하고 「배포 구성」 표를 함께 고쳐야 한다. 등록 클라이언트가 하나인 배포에서는 전역 목록이 그 클라이언트의 목록과 같아 증상이 없고, 둘 이상일 때만 A의 코드가 B의 콜백으로 갈 수 있다. 구성 호환성을 깨는 변경이라 사용자 판단을 받는다.
+- 처리: `OAUTH_CLIENT_IDS`와 `OAUTH_REDIRECT_URIS`를 폐지하고 클라이언트를 키로 하는 `OAUTH_CLIENTS` JSON 객체 하나로 통합했다. `ValidateRedirectTarget`이 요청 `client_id`의 목록만 대조하므로 교차곱 허용 집합이 구조적으로 사라졌다. 클라이언트 간 redirect_uri 격리 회귀 테스트와 구성 거부 사례를 함께 뒀다.
 
 #### - [x] 31. 색인 작업자의 제공자 응답 처리에 상한과 원인 기록이 없다
 

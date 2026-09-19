@@ -336,6 +336,31 @@ func TestValidateAuthorizeRequestAllowsLoopbackDynamicPort(t *testing.T) {
 	}
 }
 
+// TestValidateAuthorizeRequestScopesRedirectURIsPerClient는 한 클라이언트의 redirect_uri가
+// 다른 클라이언트의 요청에서 거부되는지 확인한다.
+func TestValidateAuthorizeRequestScopesRedirectURIsPerClient(t *testing.T) {
+	primary, err := url.Parse("http://127.0.0.1/callback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondary, err := url.Parse("http://localhost:8123/callback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(newMemoryStore(), Config{Issuer: "https://service.test", Resource: "https://service.test/mcp", Clients: map[string][]*url.URL{"test-client": {primary}, "other-client": {secondary}}, BcryptCost: 4})
+	if err != nil {
+		t.Fatalf("인가 서비스 생성: %v", err)
+	}
+	request := AuthorizeRequest{ClientID: "other-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: "challenge", CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"}
+	if err := service.ValidateAuthorizeRequest(request); err == nil {
+		t.Fatal("다른 클라이언트의 redirect_uri가 허용됐다")
+	}
+	request.RedirectURI = "http://localhost:8123/callback"
+	if err := service.ValidateAuthorizeRequest(request); err != nil {
+		t.Fatalf("자기 클라이언트의 redirect_uri가 거부됐다: %v", err)
+	}
+}
+
 func TestRegisterValidatesPasswordLengthAndAuthenticatesLongUnicodePassword(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -439,7 +464,7 @@ func testService(t *testing.T, backend authStore) *Service {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := New(backend, Config{Issuer: "https://service.test", Resource: "https://service.test/mcp", Clients: []string{"test-client"}, RedirectURIs: []*url.URL{redirect}, BcryptCost: 4})
+	service, err := New(backend, Config{Issuer: "https://service.test", Resource: "https://service.test/mcp", Clients: map[string][]*url.URL{"test-client": {redirect}}, BcryptCost: 4})
 	if err != nil {
 		t.Fatalf("인가 서비스 생성: %v", err)
 	}

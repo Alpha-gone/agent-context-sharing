@@ -101,11 +101,10 @@ func run() error {
 		return fmt.Errorf("검색 실행기 준비: %w", err)
 	}
 	authorization, err := authz.New(database, authz.Config{
-		Issuer:       cfg.AuthorizationServerURL.String(),
-		Resource:     cfg.ResourceServerURL.String(),
-		Clients:      cfg.OAuthClientIDs,
-		RedirectURIs: cfg.OAuthRedirectURIs,
-		BcryptCost:   cfg.BcryptCost,
+		Issuer:     cfg.AuthorizationServerURL.String(),
+		Resource:   cfg.ResourceServerURL.String(),
+		Clients:    cfg.OAuthClients,
+		BcryptCost: cfg.BcryptCost,
 	})
 	if err != nil {
 		return fmt.Errorf("인가 서버 준비: %w", err)

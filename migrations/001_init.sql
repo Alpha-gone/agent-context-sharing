@@ -59,7 +59,9 @@ CREATE TABLE IF NOT EXISTS public.account (
     created_at    timestamptz NOT NULL
 );
 
--- 「컨텍스트 그래프 속성」의 10개 열
+-- 「컨텍스트 그래프 속성」의 10개 열에 「소프트 삭제 수명주기」의 내부 열
+-- grace_expires_at을 더한다. 만료 시각을 유예 시작 트랜잭션에서 계산해 남겨야
+-- 유예 중에 바뀐 보관 기간이 이미 시작된 유예에 소급되지 않는다.
 CREATE TABLE IF NOT EXISTS public.context_graph (
     graph_id         uuid        PRIMARY KEY,
     name             text        NOT NULL CHECK (name <> ''),
@@ -68,6 +70,7 @@ CREATE TABLE IF NOT EXISTS public.context_graph (
     created_at       timestamptz NOT NULL,
     last_activity_at timestamptz NOT NULL,
     grace_started_at timestamptz,
+    grace_expires_at timestamptz,
     stored_chars     bigint      NOT NULL DEFAULT 0 CHECK (stored_chars >= 0),
     version          integer     NOT NULL DEFAULT 1 CHECK (version >= 1),
     deleted_at       timestamptz
@@ -196,9 +199,6 @@ CREATE TABLE IF NOT EXISTS public.revoked_token (
     expires_at timestamptz NOT NULL
 );
 
--- 「인가 코드 흐름」의 10개 열. 코드 원문을 저장하지 않고 해시를 기본 키로 둔다.
--- consumed_at을 두고 행을 지우지 않는 이유는 재사용과 없는 코드를 구분하고 폐기할
--- 토큰을 찾기 위해서다. code_challenge_method는 S256만 받으므로 열로 두지 않는다.
 -- 「계정 플랜 값」의 1분 고정 창 카운터. 한도를 켠 계정만 행을 가지므로 기본
 -- 배포에서는 비어 있다. 지난 창의 행은 「주기 작업」이 지운다.
 CREATE TABLE IF NOT EXISTS public.request_rate (
@@ -208,20 +208,26 @@ CREATE TABLE IF NOT EXISTS public.request_rate (
     PRIMARY KEY (account_id, window_started_at)
 );
 
+-- 「인가 코드 흐름」의 10개 열에 발급 토큰의 만료 시각을 더한다. 코드 원문을 저장하지
+-- 않고 해시를 기본 키로 둔다. consumed_at을 두고 행을 지우지 않는 이유는 재사용과 없는
+-- 코드를 구분하고 폐기할 토큰을 찾기 위해서다. code_challenge_method는 S256만 받으므로
+-- 열로 두지 않는다. issued_token_expires_at은 재사용을 만났을 때 원 토큰을 그 만료
+-- 시각까지 정확히 폐기하려고 둔다.
 CREATE TABLE IF NOT EXISTS public.authorization_code (
-    code_hash       text        PRIMARY KEY,
-    client_id       text        NOT NULL,
-    account_id      uuid        NOT NULL,
-    redirect_uri    text        NOT NULL,
-    code_challenge  text        NOT NULL,
-    resource        text        NOT NULL,
-    issued_at       timestamptz NOT NULL,
-    expires_at      timestamptz NOT NULL,
-    consumed_at     timestamptz,
-    issued_token_id text
+    code_hash                text        PRIMARY KEY,
+    client_id                text        NOT NULL,
+    account_id               uuid        NOT NULL,
+    redirect_uri             text        NOT NULL,
+    code_challenge           text        NOT NULL,
+    resource                 text        NOT NULL,
+    issued_at                timestamptz NOT NULL,
+    expires_at               timestamptz NOT NULL,
+    consumed_at              timestamptz,
+    issued_token_id          text,
+    issued_token_expires_at  timestamptz
 );
 
--- 5. 인덱스. 「인덱스」의 13건이다.
+-- 5. 인덱스. 「인덱스」가 정한 인덱스를 만든다.
 
 -- 로그인 조회와 중복 등록 거부. 「로그인 아이디의 유일성」이 유일성을 기능의 전제로
 -- 확정했고, 접근 계층의 검사만으로는 같은 아이디를 동시에 등록하는 두 요청을 막지
@@ -246,8 +252,11 @@ CREATE INDEX IF NOT EXISTS team_member_account_idx
 CREATE INDEX IF NOT EXISTS context_embedding_graph_idx
     ON public.context_embedding (graph_id);
 
--- 벡터 인덱스는 「인덱스」가 방식을 배포 구성으로 남겼으므로 여기에서 만들지 않는다.
--- 방식을 정한 뒤 별도 마이그레이션으로 더한다.
+-- 의미 유사도 채널. 0단계가 이 배포의 벡터 인덱스로 HNSW와 코사인 거리를 확정했다.
+-- 연산자 클래스는 열 타입에 따라 달라지므로 열과 같은 배포 구성 값을 쓴다. 고정하면
+-- vector가 아닌 배포에서 이 파일이 실패한다.
+CREATE INDEX IF NOT EXISTS context_embedding_embedding_hnsw_idx
+    ON public.context_embedding USING hnsw (embedding public.{{.VectorType}}_cosine_ops);
 
 -- 색인 작업자의 대기 작업 조회
 CREATE INDEX IF NOT EXISTS index_task_state_next_attempt_idx
@@ -265,6 +274,27 @@ CREATE INDEX IF NOT EXISTS operation_log_relation_idx
     ON public.operation_log (relation_id, applied_at)
     WHERE relation_id IS NOT NULL;
 
+-- 감사 기록 화면과 그래프별 보존 정리. 두 기록 모두 graph_id로 거르며, 보존 정리는
+-- 그래프마다 삭제문을 반복하므로 인덱스가 없으면 비용이 그래프 수와 테이블 크기의
+-- 곱으로 커진다.
+CREATE INDEX IF NOT EXISTS operation_log_graph_applied_idx
+    ON public.operation_log (graph_id, applied_at);
+
+CREATE INDEX IF NOT EXISTS web_audit_log_graph_occurred_idx
+    ON public.web_audit_log (graph_id, occurred_at DESC);
+
+-- 팀 감사 기록 정리는 graph_id가 없는 행만 대상이다. 부분 인덱스로 계정 조회와 계정별
+-- 삭제가 같은 인덱스를 쓰게 한다.
+CREATE INDEX IF NOT EXISTS web_audit_log_team_actor_idx
+    ON public.web_audit_log (actor_account_id, occurred_at)
+    WHERE graph_id IS NULL;
+
+-- 서명용 활성 키는 하나만 둔다. 둘 이상이 활성이면 어느 키로 서명했는지가 발급
+-- 시점의 조회 순서에 달리게 된다.
+CREATE UNIQUE INDEX IF NOT EXISTS signing_key_active_idx
+    ON public.signing_key (state)
+    WHERE state = 'active';
+
 -- 만료된 인가 코드의 주기 정리
 CREATE INDEX IF NOT EXISTS authorization_code_expires_idx
     ON public.authorization_code (expires_at);
@@ -276,8 +306,10 @@ CREATE INDEX IF NOT EXISTS request_rate_window_idx
 -- 격리 필터와 탐색 시작점 탐색, 키워드 채널
 -- AGE의 label 테이블은 일반 PostgreSQL 테이블이므로 property를 꺼내는 표현식에
 -- 인덱스를 걸 수 있다.
-CREATE INDEX IF NOT EXISTS context_graph_id_idx
-    ON "{{.GraphName}}"."Context" ((properties -> 'graph_id'::text));
+-- 표현식은 저장소 질의와 같은 ->> 여야 한다. -> 는 agtype을 내므로 표현식이 달라
+-- 인덱스를 쓰지 못하고 label 테이블 전체를 훑는다.
+CREATE INDEX IF NOT EXISTS context_graph_id_text_idx
+    ON "{{.GraphName}}"."Context" ((properties ->> 'graph_id'::text));
 
 -- 키워드 채널. 「채널 구현」이 텍스트 검색 구성을 simple로 확정했다. PostgreSQL이
 -- 기본 제공하는 구성 중 한국어를 다루는 것이 없고 형태소 분석을 붙이려면 확장

@@ -28,12 +28,18 @@ func TestIndexProviderCallDoesNotBlockSavesIntegration(t *testing.T) {
 		t.Fatalf("파생 생성: %v", err)
 	}
 
+	// 공유 개발 데이터베이스에는 다른 테스트가 남긴 대기 작업이 있다. 확보 순서가
+	// enqueued_at이므로 대상 작업을 맨 앞으로 옮겨 첫 회차에 잡히게 한다.
+	if _, err := database.pool.Exec(t.Context(), `UPDATE public.index_task SET enqueued_at = $2 WHERE context_id = $1`, target.ID.String(), time.Date(1800, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("확보 순서 준비: %v", err)
+	}
+
 	const providerDelay = 2 * time.Second
 	saved := make(chan time.Duration, 1)
 	processor := func(ctx context.Context, task IndexTask) IndexTaskResult {
 		if task.ContextID != target.ID {
-			// 공유 개발 DB에 남은 다른 작업은 건드리지 않고 넘긴다.
-			return IndexTaskResult{Failure: "다른 작업", Retryable: true}
+			t.Errorf("대상이 아닌 작업을 잡았다: %s", task.ContextID)
+			return IndexTaskResult{Failure: "대상 아님", Retryable: true}
 		}
 		// 제공자가 응답하는 동안 같은 컨텍스트의 수정이 진행되는지 잰다. 수정은 색인
 		// 작업을 다시 등록하므로 작업 행 잠금을 쥐고 있으면 여기에서 막힌다.
@@ -54,17 +60,12 @@ func TestIndexProviderCallDoesNotBlockSavesIntegration(t *testing.T) {
 		return IndexTaskResult{Embedding: embedding, ModelID: "lease-test"}
 	}
 
-	for range 200 {
-		result, err := database.ProcessNextIndexTask(t.Context(), processor)
-		if err != nil {
-			t.Fatalf("색인 작업 처리: %v", err)
-		}
-		if !result.Found {
-			t.Fatal("대기 중인 색인 작업을 찾지 못했다")
-		}
-		if result.Task.ContextID == target.ID {
-			break
-		}
+	result, err := database.ProcessNextIndexTask(t.Context(), processor)
+	if err != nil {
+		t.Fatalf("색인 작업 처리: %v", err)
+	}
+	if !result.Found || result.Task.ContextID != target.ID {
+		t.Fatalf("확보한 작업 = %#v; 대상 %s를 잡아야 한다", result, target.ID)
 	}
 
 	select {

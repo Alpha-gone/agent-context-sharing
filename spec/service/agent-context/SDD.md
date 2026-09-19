@@ -1474,6 +1474,8 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 
 저장 타입을 고정하지 않는 이유는 「임베딩 모델」이 저장 정밀도와 차원 축소를 배포 구성 값으로 확정했기 때문이다. `SUG-AGENT_CONTEXT-9`가 채택한 대로 pgvector의 `vector`, `halfvec`, `bit` 중에서 고르며 차원당 각각 4바이트, 2바이트, 8분의 1바이트를 쓴다. 이진 양자화를 고르면 원본 벡터로 재순위화해 재현율을 회복한다.
 
+`bit`는 아직 받지 않는다. 재현율을 회복하는 재순위화 경로가 없고, 「인덱스」가 확정한 코사인 연산자 클래스가 pgvector의 bit에 없어 003이 만드는 인덱스가 성립하지 않는다. 배포 구성 검증과 마이그레이션 실행기가 같은 이유로 각각 거부하며, 실행기는 배포 구성 검증을 지나지 않고 환경 변수를 직접 읽으므로 두 곳에 둔다. 재순위화 경로가 생기면 함께 연다.
+
 ### 색인 작업 큐
 
 색인 대기 작업을 데이터베이스 테이블에 둔다. 이것으로 `TBD-AGENT_CONTEXT-043`을 확정한다.
@@ -1518,7 +1520,7 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 | `team_member`                      | `account_id`                                         | 유효 등급 계산                             |
 | `context_embedding`                | `graph_id`와 벡터 인덱스                             | 의미 유사도 채널                           |
 | `Context` 정점의 `body`            | 전문 검색 인덱스                                     | 키워드 채널                                |
-| `Context` 정점의 `graph_id`        | 속성 인덱스                                          | 격리 필터와 탐색 시작점 탐색               |
+| `Context` 정점의 `graph_id`        | `properties ->> 'graph_id'` 표현식 인덱스            | 격리 필터와 탐색 시작점 탐색               |
 | `Context` 정점의 원천 `source_ref` | `graph_id`와 `source_ref_locator`의 부분 유일 인덱스 | 원천 중복 판정                             |
 | `index_task`                       | `state`와 `next_attempt_at`                          | 색인 작업자의 대기 작업 조회               |
 | `index_task`                       | `context_id` 유일 인덱스                             | 컨텍스트당 한 작업과 등록 upsert           |

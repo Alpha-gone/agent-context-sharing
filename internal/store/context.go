@@ -739,10 +739,21 @@ func dollarString(value string) string {
 }
 
 // cypherString은 openCypher 문자열 리터럴을 JSON 방식으로 이스케이프한다.
+//
+// 변환이 실패하는 경우는 값이 올바른 UTF-8이 아닐 때뿐이다. 빈 문자열을 돌려주면 문법이
+// 깨진 질의가 만들어져 invalid_argument가 아니라 internal로 끝나므로, 대신 어떤 질의에도
+// 넣을 수 있는 안전한 리터럴을 돌려주고 그 값과 일치하는 행이 없게 둔다.
 func cypherString(value string) string {
-	encoded, _ := json.Marshal(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return invalidUTF8Literal
+	}
 	return string(encoded)
 }
+
+// invalidUTF8Literal은 올바른 UTF-8이 아닌 값을 대신하는 리터럴이다. 저장되는 값은 모두
+// JSON을 지나 들어오므로 어떤 행과도 일치하지 않는다.
+const invalidUTF8Literal = `"\u0000invalid-utf8"`
 
 // encodeProperties는 값은 JSON으로 이스케이프하고 고정 property 이름은 Cypher map key로 조립한다.
 func encodeProperties(properties map[string]any) (string, error) {

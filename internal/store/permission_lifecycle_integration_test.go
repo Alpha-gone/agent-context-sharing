@@ -323,3 +323,45 @@ func TestTeamGraphLockRereadsAffectedGraphsIntegration(t *testing.T) {
 		}
 	}
 }
+
+// TestOwnershipTransferAuditMatchesSpecIntegration은 소유권 이전 감사 분류가 명세와 같은
+// 방향인지 확인한다. 「권한과 팀 관리 절차」는 다른 계정에 소유자 등급을 주는 것을
+// 이전으로 보며, 소유자에서 내리는 것은 그 계정의 등급을 바꾸는 부여다.
+func TestOwnershipTransferAuditMatchesSpecIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	ownerID, otherID := newTestID(t), newTestID(t)
+	createTestAccount(t, database, ownerID)
+	createTestAccount(t, database, otherID)
+	graphID := createTestGraph(t, database, ownerID)
+	grantAccount(t, database, graphID, ownerID, model.GraphGradeOwner)
+
+	// 다른 계정에 소유자 등급을 준다. 이것이 이전이다.
+	if err := database.GrantGraph(t.Context(), graphID, ownerID, otherID, GrantSubjectAccount, model.GraphGradeOwner); err != nil {
+		t.Fatalf("소유자 등급 부여: %v", err)
+	}
+	if kind, action := lastGrantAudit(t, database, graphID, otherID); kind != "ownership_transfer" || action != "transfer" {
+		t.Fatalf("소유자 등급 부여 기록 = %s/%s, want ownership_transfer/transfer", kind, action)
+	}
+
+	// 소유자를 편집자로 내린다. 이것은 부여다.
+	if err := database.GrantGraph(t.Context(), graphID, ownerID, otherID, GrantSubjectAccount, model.GraphGradeEditor); err != nil {
+		t.Fatalf("등급 강등: %v", err)
+	}
+	if kind, action := lastGrantAudit(t, database, graphID, otherID); kind != "grant" || action != "grant" {
+		t.Fatalf("강등 기록 = %s/%s, want grant/grant", kind, action)
+	}
+}
+
+// lastGrantAudit은 대상에 대한 가장 최근 등급 기록의 분류를 읽는다.
+func lastGrantAudit(t *testing.T, database *Store, graphID, subjectID model.ID) (string, string) {
+	t.Helper()
+	var kind, action string
+	err := database.pool.QueryRow(t.Context(), `
+		SELECT target_kind, action FROM public.web_audit_log
+		WHERE graph_id = $1 AND subject_id = $2
+		ORDER BY occurred_at DESC, audit_id DESC LIMIT 1`, graphID.String(), subjectID.String()).Scan(&kind, &action)
+	if err != nil {
+		t.Fatalf("등급 감사 기록 조회: %v", err)
+	}
+	return kind, action
+}

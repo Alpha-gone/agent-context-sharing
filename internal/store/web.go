@@ -51,8 +51,10 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 	if err := cancelGraceForConnectedGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
+	// 「권한과 팀 관리 절차」는 다른 계정에 소유자 등급을 주는 것을 소유권 이전으로 본다.
+	// 소유자에서 내리는 것은 그 계정의 등급을 바꾸는 부여일 뿐이다.
 	action, targetKind := "grant", "grant"
-	if demotesOwner {
+	if grade == model.GraphGradeOwner && subjectType == GrantSubjectAccount && subjectID != actorID {
 		action, targetKind = "transfer", "ownership_transfer"
 	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: targetKind, Action: action, ActorID: actorID, GraphID: graphID, SubjectType: subjectType, SubjectID: subjectID, BeforeGrade: nullableGrade(before), AfterGrade: grade})

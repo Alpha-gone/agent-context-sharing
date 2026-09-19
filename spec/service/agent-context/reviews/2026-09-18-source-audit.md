@@ -360,7 +360,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 판독.
 
-#### - [ ] 35. 소유권 이전 감사 분류가 명세와 반대다
+#### - [x] 35. 소유권 이전 감사 분류가 명세와 반대다
 
 `internal/store/web.go:42`~`:45`
 
@@ -368,7 +368,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 판독.
 
-#### - [ ] 36. 컨텍스트 `graph_id` 인덱스를 저장소 질의가 쓰지 못한다
+#### - [x] 36. 컨텍스트 `graph_id` 인덱스를 저장소 질의가 쓰지 못한다
 
 `migrations/001_init.sql:279`~`:280`
 
@@ -376,7 +376,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 재현. `enable_seqscan=off`에서도 Seq Scan.
 
-#### - [ ] 37. `EMBEDDING_VECTOR_TYPE=bit`로 배포하면 마이그레이션이 실패한다
+#### - [x] 37. `EMBEDDING_VECTOR_TYPE=bit`로 배포하면 마이그레이션이 실패한다
 
 `internal/migrate/migrate.go:37`, `migrations/003_context_embedding_hnsw.sql:7`
 
@@ -392,7 +392,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 - 근거: 판독.
 
-#### - [ ] 39. `cypherString`이 JSON 변환 오류를 무시한다
+#### - [x] 39. `cypherString`이 JSON 변환 오류를 무시한다
 
 `internal/store/context.go:663`~`:666`
 

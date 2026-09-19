@@ -34,8 +34,12 @@ type Config struct {
 
 var (
 	graphNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
-	vectorTypes      = []string{"vector", "halfvec", "bit"}
-	fileNamePattern  = regexp.MustCompile(`^(\d+)_([a-z0-9_]+)\.sql$`)
+	// bit를 빼는 이유는 003이 만드는 코사인 연산자 클래스가 bit에 없기 때문이다. pgvector는
+	// bit에 해밍과 자카드만 두므로 `bit_cosine_ops`로는 인덱스를 만들 수 없고, 벡터 문자열
+	// 표기도 bit 열에 맞지 않는다. 배포 구성 검증이 같은 이유로 이미 거부하지만, 이 실행기는
+	// 그 검증을 지나지 않고 환경 변수를 직접 읽으므로 여기에도 둔다.
+	vectorTypes     = []string{"vector", "halfvec"}
+	fileNamePattern = regexp.MustCompile(`^(\d+)_([a-z0-9_]+)\.sql$`)
 )
 
 // Validate는 구성 값이 치환해도 안전한 형태인지 확인한다.

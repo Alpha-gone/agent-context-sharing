@@ -6,6 +6,7 @@ import (
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -34,6 +35,12 @@ type DimensionError struct{ Got, Want int }
 func (error DimensionError) Error() string {
 	return fmt.Sprintf("임베딩 차원이 다르다: %d, 기대값 %d", error.Got, error.Want)
 }
+
+// maxEmbeddingResponseBytes는 제공자 응답 본문에서 읽을 최대 크기다.
+//
+// 상한이 없으면 잘못 설정된 제공자가 보낸 큰 응답이 작업자와 검색 경로의 메모리를 그대로
+// 늘린다. 차원 상한인 4096개의 float를 넉넉히 담을 수 있는 크기로 둔다.
+const maxEmbeddingResponseBytes = 8 << 20
 
 // Worker는 작업 행 잠금 안에서 임베딩 제공자를 호출하는 비동기 소비자다.
 type Worker struct {
@@ -85,12 +92,12 @@ func (worker *Worker) Start(parent context.Context) {
 }
 
 // Close는 처리 중인 작업의 컨텍스트를 취소하고 작업자 종료를 기다린다.
+// 시작하지 않은 작업자는 시작 기회를 먼저 소비해, 이후 Start가 done을 다시 닫지 않게 한다.
 func (worker *Worker) Close(ctx context.Context) error {
+	worker.startOnce.Do(func() { close(worker.done) })
 	worker.stopOnce.Do(func() {
 		if worker.cancel != nil {
 			worker.cancel()
-		} else {
-			close(worker.done)
 		}
 	})
 	select {
@@ -151,8 +158,17 @@ func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
 	result, err := worker.store.ProcessNextIndexTask(ctx, func(ctx context.Context, task store.IndexTask) store.IndexTaskResult {
 		embedding, err := worker.Embed(ctx, task.Body)
 		if err != nil {
-			failure := "임베딩 제공자 호출 실패"
-			_, dimensionMismatch := errors.AsType[DimensionError](err)
+			// 사유를 그대로 남긴다. 고정 문구만 남기면 「색인 재시도」가 운영자 개입이
+			// 필요하다고 한 차원 불일치를 실패한 행에서 구분할 수 없다.
+			mismatch, dimensionMismatch := errors.AsType[DimensionError](err)
+			failure := err.Error()
+			if dimensionMismatch {
+				failure = mismatch.Error()
+			}
+			worker.logger.ErrorContext(ctx, "임베딩 제공자 호출 실패",
+				"context_id", task.ContextID.String(), "graph_id", task.GraphID.String(),
+				"correlation_id", task.CorrelationID, "attempts", task.Attempts,
+				"dimension_mismatch", dimensionMismatch, "error", err.Error())
 			return store.IndexTaskResult{Failure: failure, Retryable: !dimensionMismatch}
 		}
 		return store.IndexTaskResult{Embedding: embedding, ModelID: worker.ModelID()}
@@ -195,8 +211,16 @@ func (worker *Worker) Embed(ctx context.Context, input string) ([]float64, error
 	var decoded struct {
 		Embeddings [][]float64 `json:"embeddings"`
 	}
-	if err := json.UnmarshalRead(response.Body, &decoded); err != nil {
+	// 본문을 상한까지만 읽는다. 상한에 정확히 닿으면 잘린 것이므로 해석 결과를 믿지 않는다.
+	limited := &io.LimitedReader{R: response.Body, N: maxEmbeddingResponseBytes + 1}
+	if err := json.UnmarshalRead(limited, &decoded); err != nil {
+		if limited.N <= 0 {
+			return nil, fmt.Errorf("임베딩 응답이 %d바이트 상한을 넘었다", maxEmbeddingResponseBytes)
+		}
 		return nil, fmt.Errorf("임베딩 응답 해석: %w", err)
+	}
+	if limited.N <= 0 {
+		return nil, fmt.Errorf("임베딩 응답이 %d바이트 상한을 넘었다", maxEmbeddingResponseBytes)
 	}
 	if len(decoded.Embeddings) != 1 {
 		return nil, fmt.Errorf("임베딩 응답 벡터 개수가 올바르지 않다")

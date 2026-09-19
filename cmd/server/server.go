@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -97,7 +98,34 @@ func (app *application) handler() http.Handler {
 	mux.HandleFunc("GET /healthz", app.health)
 	mux.HandleFunc("GET /readyz", app.ready)
 	mux.Handle("/", app.requireTLS(gated))
-	return app.logRequests(mux)
+	return app.logRequests(app.recoverPanics(mux))
+}
+
+// recoverPanics는 처리기에서 빠져나온 panic을 500으로 바꾸고 원인을 로그에 남긴다.
+//
+// 차단막이 없으면 net/http이 연결을 끊어 클라이언트는 응답 대신 끊긴 연결을 받고, 구조화
+// 로그에도 요청이 남지 않는다. MCP 처리기가 스키마 검증을 믿고 타입 단언을 쓰므로, 스키마와
+// 처리기가 어긋나는 순간이 곧 이 자리다. 바깥의 logRequests가 상태를 기록할 수 있도록 이
+// 미들웨어를 그 안쪽에 둔다.
+func (app *application) recoverPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		defer func() {
+			cause := recover()
+			if cause == nil {
+				return
+			}
+			// http.ErrAbortHandler은 처리기가 의도적으로 연결을 끊는 신호이므로 그대로 둔다.
+			if cause == http.ErrAbortHandler {
+				panic(cause)
+			}
+			app.logger.Error("요청 처리 중 panic",
+				"correlation_id", requestID(request.Context()),
+				"method", request.Method, "path", request.URL.Path,
+				"panic", fmt.Sprint(cause), "stack", string(debug.Stack()))
+			writeStatus(writer, http.StatusInternalServerError, "internal_error")
+		}()
+		next.ServeHTTP(writer, request)
+	})
 }
 
 // requireTLS는 배포가 정한 신뢰 경계에서 확인되지 않은 평문 요청을 처리하지 않는다.

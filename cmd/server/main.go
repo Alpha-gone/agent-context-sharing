@@ -25,6 +25,10 @@ import (
 // shutdownTimeout은 종료 신호 뒤 진행 중인 요청을 기다리는 최대 시간이다.
 const shutdownTimeout = 30 * time.Second
 
+// workerShutdownTimeout은 요청 대기가 끝난 뒤 작업자 종료를 기다리는 최대 시간이다.
+// 요청 대기와 예산을 나눠 두어야 그쪽이 시간을 다 써도 작업자를 닫을 수 있다.
+const workerShutdownTimeout = 10 * time.Second
+
 const (
 	// readHeaderTimeout은 요청 헤더를 모두 받기까지 기다리는 최대 시간이다.
 	readHeaderTimeout = 10 * time.Second
@@ -160,14 +164,23 @@ func run() error {
 	// 쓰지 않게 된 다음에 defer가 풀을 닫는다.
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := app.shutdown(shutdownContext, server); err != nil {
-		return err
+	shutdownErr := app.shutdown(shutdownContext, server)
+	if shutdownErr != nil {
+		slog.Error("진행 요청 종료 대기", "error", shutdownErr)
 	}
-	if err := periodic.Close(shutdownContext); err != nil {
+	// 요청 대기가 실패해도 작업자 종료를 건너뛰지 않는다. 건너뛰면 defer된 풀 닫기가
+	// 작업자가 빌려 간 연결이 돌아오기를 기다리며 막힌다. 요청 대기에서 이미 예산을 다
+	// 썼을 수 있으므로 작업자에는 새 기한을 준다.
+	workerContext, cancelWorkers := context.WithTimeout(context.Background(), workerShutdownTimeout)
+	defer cancelWorkers()
+	if err := periodic.Close(workerContext); err != nil {
 		slog.Error("주기 작업 종료", "error", err)
 	}
-	if err := indexer.Close(shutdownContext); err != nil {
+	if err := indexer.Close(workerContext); err != nil {
 		slog.Error("색인 작업자 종료", "error", err)
+	}
+	if shutdownErr != nil {
+		return shutdownErr
 	}
 	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("HTTP 서버 종료: %w", err)

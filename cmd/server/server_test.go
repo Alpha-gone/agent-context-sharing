@@ -280,3 +280,45 @@ func TestHTTPServerSetsReadTimeouts(t *testing.T) {
 		t.Fatalf("쓰기 제한 = %v, want 0", server.WriteTimeout)
 	}
 }
+
+// TestPanicBecomesInternalError는 처리기에서 빠져나온 panic이 연결을 끊지 않고 500으로
+// 응답하는지 확인한다. 차단막이 없으면 클라이언트가 응답 대신 끊긴 연결을 받고 구조화
+// 로그에도 요청이 남지 않는다.
+func TestPanicBecomesInternalError(t *testing.T) {
+	var logs bytes.Buffer
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(&logs, nil)), proxyTransport(), nil)
+	panicking := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("처리기 내부 오류")
+	})
+	recorder := httptest.NewRecorder()
+	app.logRequests(app.recoverPanics(panicking)).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/mcp", nil))
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("panic 응답 상태 = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(recorder.Body.String(), "internal_error") {
+		t.Fatalf("panic 응답 본문 = %s", recorder.Body.String())
+	}
+	// 원인과 요청 흐름을 이을 상관 식별자가 로그에 남아야 한다.
+	for _, want := range []string{"요청 처리 중 panic", "처리기 내부 오류", "correlation_id"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("로그에 %q가 없다: %s", want, logs.String())
+		}
+	}
+}
+
+// TestAbortHandlerPanicStaysUnhandled는 의도적인 연결 끊기 신호는 가로채지 않는지
+// 확인한다. 가로채면 net/http이 그 신호로 하던 처리를 하지 못한다.
+func TestAbortHandlerPanicStaysUnhandled(t *testing.T) {
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
+	defer func() {
+		if cause := recover(); cause != http.ErrAbortHandler {
+			t.Fatalf("복구한 panic = %v, want http.ErrAbortHandler", cause)
+		}
+	}()
+	aborting := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	})
+	app.recoverPanics(aborting).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/mcp", nil))
+	t.Fatal("ErrAbortHandler가 전달되지 않았다")
+}

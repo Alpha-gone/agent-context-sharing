@@ -482,7 +482,7 @@ CREATE INDEX web_audit_log_team_actor_idx ON public.web_audit_log (actor_account
 - 근거: 판독.
 - 처리: `derivedFromIDs`와 `eventMemberIDs`가 `RETURN evidence.context_id`, `RETURN member.context_id`로 식별자만 받고 `parseAnchorID`로 해석한다. 두 함수가 label과 오류 메시지만 다른 같은 질의였으므로 `edgeTargetIDs` 하나에 위임하게 묶었고 오류 메시지의 대상 이름은 이전과 같게 유지했다. `parseAnchorID`의 오류 문구는 홉 기준 정점 전용이 아니게 되어 "정점 식별자 해석"으로 넓혔다.
 
-### - [ ] 46. 홉 탐색이 깊이마다 label과 방향으로 질의를 쪼갠다
+### - [x] 46. 홉 탐색이 깊이마다 label과 방향으로 질의를 쪼갠다
 
 `internal/store/hop.go:84`~`:113`
 
@@ -491,6 +491,7 @@ CREATE INDEX web_audit_log_team_actor_idx ON public.web_audit_log (actor_account
 openCypher의 label 교대와 무방향 패턴으로 묶으면 깊이마다 한두 번으로 줄고, 상한에 닿으면 반복을 빠져나가는 조건만 더해도 낭비가 사라진다. 20번을 고칠 때 이 함수를 같이 손대게 되므로 함께 처리하는 편이 낫다.
 
 - 근거: 판독. AGE 배포 버전이 label 교대를 지원하는지 먼저 확인해야 한다.
+- 처리: 깊이마다 label과 방향으로 쪼개던 질의를 label당 한 질의로 줄였다. 양방향은 무방향 패턴 하나로 묻고 간선의 실제 방향은 `id(anchor) = id(startNode(edge))`로 판정한다. 배포한 AGE 1.8.0이 무방향 패턴에서 같은 간선을 양쪽 방향으로 한 번씩 돌려주므로 방향별 두 질의와 결과가 같고, 필터를 비우는 시각화 경로가 깊이마다 14회에서 7회로 줄어든다. label 교대는 쓰지 않았다. 같은 배포가 `[e:A|B]`를 문법 오류로 거부하며 근거는 `reference.md`에 기록했다. 상한에 닿았을 때 반복을 빠져나가는 조건은 넣지 않았다. `SRS.md`의 「홉 범위 조회」가 방문한 노드 사이의 참조와 관계를 모두 반환하라고 확정했으므로, 남은 label의 질의를 내지 않으면 이미 담은 노드를 잇는 간선이 빠져 부분 그래프를 복원할 수 없다. 대신 그 이유를 코드에 남겼다. 세 방향이 같은 간선을 같은 방향으로 돌려주는지 확인하는 통합 테스트를 더했다.
 
 ### - [ ] 47. 색인 작업자가 유휴 상태에서도 초당 한 번씩 데이터베이스를 친다
 

@@ -87,32 +87,33 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 	for depth := 1; depth <= hops && len(frontier) > 0; depth++ {
 		next := make([]model.ID, 0)
 		for _, label := range labels {
-			for _, reverse := range traversalDirections(direction) {
-				neighbors, err := s.hopNeighbors(ctx, graphID, frontier, label, reverse)
-				if err != nil {
-					return HopResult{}, err
+			neighbors, err := s.hopNeighbors(ctx, graphID, frontier, label, direction)
+			if err != nil {
+				return HopResult{}, err
+			}
+			for _, neighbor := range neighbors {
+				if neighbor.context.DeletedAt != nil {
+					continue
 				}
-				for _, neighbor := range neighbors {
-					if neighbor.context.DeletedAt != nil {
-						continue
-					}
-					edgeKey := neighbor.fromID.String() + "|" + neighbor.toID.String() + "|" + label.kind
-					edges[edgeKey] = HopEdge{FromID: neighbor.fromID, ToID: neighbor.toID, Kind: label.kind}
-					if _, found := distances[neighbor.context.ID]; found {
-						continue
-					}
-					if limit > 0 && len(result.Contexts) == limit {
-						// 경계는 처음 자른 깊이다. 덮어쓰면 마지막 깊이가 남아 어디에서
-						// 잘렸는지 알 수 없다.
-						if !result.Truncated {
-							result.Truncated, result.Boundary = true, depth
-						}
-						continue
-					}
-					distances[neighbor.context.ID] = depth
-					result.Contexts = append(result.Contexts, neighbor.context)
-					next = append(next, neighbor.context.ID)
+				edgeKey := neighbor.fromID.String() + "|" + neighbor.toID.String() + "|" + label.kind
+				edges[edgeKey] = HopEdge{FromID: neighbor.fromID, ToID: neighbor.toID, Kind: label.kind}
+				if _, found := distances[neighbor.context.ID]; found {
+					continue
 				}
+				if limit > 0 && len(result.Contexts) == limit {
+					// 경계는 처음 자른 깊이다. 덮어쓰면 마지막 깊이가 남아 어디에서
+					// 잘렸는지 알 수 없다. 상한에 닿아도 남은 label의 질의를 계속 내는
+					// 이유는 「홉 범위 조회」가 방문한 노드 사이의 참조와 관계를 모두
+					// 반환하라고 확정했기 때문이다. 여기에서 빠져나가면 이미 담은 노드를
+					// 잇는 간선이 빠져 부분 그래프를 복원할 수 없다.
+					if !result.Truncated {
+						result.Truncated, result.Boundary = true, depth
+					}
+					continue
+				}
+				distances[neighbor.context.ID] = depth
+				result.Contexts = append(result.Contexts, neighbor.context)
+				next = append(next, neighbor.context.ID)
 			}
 		}
 		frontier = next
@@ -190,53 +191,54 @@ func traversalLabels(filter []string) ([]traversalLabel, error) {
 	return labels, nil
 }
 
-func traversalDirections(direction string) []bool {
-	switch direction {
-	case "in":
-		return []bool{true}
-	case "out":
-		return []bool{false}
-	default:
-		return []bool{false, true}
-	}
-}
-
 type hopNeighbor struct {
 	context      model.Context
 	fromID, toID model.ID
 }
 
-// hopNeighbors는 한 깊이의 기준 정점 전체를 한 질의로 확장한다. 정점마다 따로 물으면
-// 왕복이 기준 정점 수만큼 늘어나므로 IN 목록으로 묶고, 어느 정점에서 나온 이웃인지는
-// 기준 정점의 context_id를 함께 받아 구분한다.
-func (s *Store) hopNeighbors(ctx context.Context, graphID model.ID, anchorIDs []model.ID, label traversalLabel, reverse bool) ([]hopNeighbor, error) {
+// hopNeighbors는 한 깊이의 기준 정점 전체를 label마다 한 질의로 확장한다.
+//
+// 정점마다 따로 물으면 왕복이 기준 정점 수만큼 늘어나므로 IN 목록으로 묶고, 어느 정점에서
+// 나온 이웃인지는 기준 정점의 context_id를 함께 받아 구분한다. 양방향은 방향마다 질의를
+// 나누지 않고 무방향 패턴 하나로 묻는다. AGE는 무방향 패턴에서 같은 간선을 양쪽 방향으로
+// 한 번씩 돌려주므로 결과가 방향별 두 질의와 같고, 깊이마다 왕복이 절반으로 줄어든다.
+// label 교대는 쓰지 않는다. 배포한 AGE 1.8.0이 `[e:A|B]` 문법을 문법 오류로 거부한다.
+//
+// 간선의 실제 방향은 기준 정점이 간선의 시작인지로 판정한다. 무방향 패턴에서는 패턴의
+// from과 to가 기준 정점과 이웃 중 어느 쪽인지 고정되지 않기 때문이다.
+func (s *Store) hopNeighbors(ctx context.Context, graphID model.ID, anchorIDs []model.ID, label traversalLabel, direction string) ([]hopNeighbor, error) {
 	if len(anchorIDs) == 0 {
 		return nil, nil
 	}
-	anchor, neighbor := "from", "to"
-	if reverse {
+	anchor, neighbor, pattern := "anchor", "neighbor", "-[edge:"+label.label+"]-"
+	switch direction {
+	case "out":
+		pattern = "-[edge:" + label.label + "]->"
+	case "in":
 		anchor, neighbor = neighbor, anchor
+		pattern = "-[edge:" + label.label + "]->"
 	}
 	identifiers := make([]string, 0, len(anchorIDs))
 	for _, anchorID := range anchorIDs {
 		identifiers = append(identifiers, cypherString(anchorID.String()))
 	}
-	query := "MATCH (from:Context)-[edge:" + label.label + "]->(to:Context) WHERE " + anchor + ".context_id IN [" + strings.Join(identifiers, ", ") + "]" +
+	query := "MATCH (anchor:Context)" + pattern + "(neighbor:Context) WHERE " + anchor + ".context_id IN [" + strings.Join(identifiers, ", ") + "]" +
 		" AND " + anchor + ".graph_id = " + cypherString(graphID.String()) +
 		" AND " + neighbor + ".graph_id = " + cypherString(graphID.String()) + " AND edge.graph_id = " + cypherString(graphID.String())
 	if label.confirmed {
 		query += " AND edge.state = 'confirmed'"
 	}
-	query += " RETURN " + anchor + ".context_id, " + neighbor + " ORDER BY " + anchor + ".context_id, " + neighbor + ".context_id"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype"), pgx.QueryExecModeExec)
+	query += " RETURN " + anchor + ".context_id, " + neighbor + ", id(" + anchor + ") = id(startNode(edge))" +
+		" ORDER BY " + anchor + ".context_id, " + neighbor + ".context_id"
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype, forward agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("홉 이웃 조회: %w", err)
 	}
 	defer rows.Close()
 	neighbors := make([]hopNeighbor, 0)
 	for rows.Next() {
-		var rawAnchor, raw string
-		if err := rows.Scan(&rawAnchor, &raw); err != nil {
+		var rawAnchor, raw, rawForward string
+		if err := rows.Scan(&rawAnchor, &raw, &rawForward); err != nil {
 			return nil, fmt.Errorf("홉 이웃 행 해석: %w", err)
 		}
 		anchorID, err := parseAnchorID(rawAnchor)
@@ -247,8 +249,12 @@ func (s *Store) hopNeighbors(ctx context.Context, graphID model.ID, anchorIDs []
 		if err != nil {
 			return nil, err
 		}
+		var forward bool
+		if err := json.Unmarshal([]byte(rawForward), &forward); err != nil {
+			return nil, fmt.Errorf("홉 이웃 간선 방향 해석: %w", err)
+		}
 		fromID, toID := anchorID, value.ID
-		if reverse {
+		if !forward {
 			fromID, toID = value.ID, anchorID
 		}
 		neighbors = append(neighbors, hopNeighbor{context: value, fromID: fromID, toID: toID})

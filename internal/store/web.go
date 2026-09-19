@@ -459,7 +459,7 @@ func (s *Store) confirmedRelationCount(ctx context.Context, graphID, contextID m
 
 func (s *Store) agtypeCount(ctx context.Context, query string) (int, error) {
 	var raw string
-	if err := s.pool.QueryRow(ctx, s.cypherSQL(query, "count agtype")).Scan(&raw); err != nil {
+	if err := s.pool.QueryRow(ctx, s.cypherSQL(query, "count agtype"), pgx.QueryExecModeExec).Scan(&raw); err != nil {
 		return 0, err
 	}
 	value, err := strconv.Atoi(strings.Trim(raw, `"`))
@@ -782,7 +782,7 @@ func (s *Store) graphContextsOrdered(ctx context.Context, graphID model.ID, pred
 	if limit > 0 {
 		query += " LIMIT " + strconv.Itoa(limit)
 	}
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"))
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("그래프 정점 목록 조회: %w", err)
 	}

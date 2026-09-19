@@ -266,7 +266,7 @@ func (s *Store) proposeEventRelationsAfterSave(ctx context.Context, graphID mode
 func (s *Store) activeEventContexts(ctx context.Context, graphID model.ID) ([]model.Context, error) {
 	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) +
 		" AND node.layer = 'event' AND node.deleted_at IS NULL RETURN node ORDER BY node.context_id ASC"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"))
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("활성 사건 조회: %w", err)
 	}
@@ -306,7 +306,7 @@ func (s *Store) eventMembersByEvent(ctx context.Context, graphID model.ID) (map[
 		" AND edge.graph_id = " + cypherString(graphID.String()) +
 		" AND member.graph_id = " + cypherString(graphID.String()) +
 		" RETURN event.context_id, member.context_id ORDER BY event.context_id, member.context_id"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "event agtype, member agtype"))
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "event agtype, member agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("활성 사건 구성원 조회: %w", err)
 	}
@@ -516,7 +516,7 @@ func (s *Store) listRelations(ctx context.Context, queryer cypherQueryer, graphI
 		query += " AND edge.relation_id < " + cypherString(relationID.String())
 	}
 	query += " RETURN edge ORDER BY edge.relation_id DESC LIMIT " + fmt.Sprint(limit+1)
-	rows, err := queryer.Query(ctx, s.cypherSQL(query, "edge agtype"))
+	rows, err := queryer.Query(ctx, s.cypherSQL(query, "edge agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, "", fmt.Errorf("관계 목록 조회: %w", err)
 	}
@@ -719,7 +719,7 @@ func joinRelationValues(values []string) string {
 // relationFromCypher는 사건 관계 간선을 받는 모든 AGE 질의의 응답 조립 지점이다.
 func (s *Store) relationFromCypher(ctx context.Context, queryer cypherQueryer, graphID model.ID, query string) (model.Relation, error) {
 	var raw string
-	if err := queryer.QueryRow(ctx, s.cypherSQL(query, "edge agtype")).Scan(&raw); err != nil {
+	if err := queryer.QueryRow(ctx, s.cypherSQL(query, "edge agtype"), pgx.QueryExecModeExec).Scan(&raw); err != nil {
 		return model.Relation{}, err
 	}
 	return parseRelation(raw, graphID)

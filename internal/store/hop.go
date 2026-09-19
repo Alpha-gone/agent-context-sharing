@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"agent_context_sharing/internal/model"
+	"github.com/jackc/pgx/v5"
 )
 
 // HopEdge는 반환한 부분 그래프 안의 참조 또는 확정 사건 관계다.
@@ -227,7 +228,7 @@ func (s *Store) hopNeighbors(ctx context.Context, graphID model.ID, anchorIDs []
 		query += " AND edge.state = 'confirmed'"
 	}
 	query += " RETURN " + anchor + ".context_id, " + neighbor + " ORDER BY " + anchor + ".context_id, " + neighbor + ".context_id"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype"))
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("홉 이웃 조회: %w", err)
 	}

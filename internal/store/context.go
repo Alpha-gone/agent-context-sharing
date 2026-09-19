@@ -317,7 +317,7 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 		" AND evidence.graph_id = " + cypherString(graphID.String()) +
 		" AND derived.graph_id = " + cypherString(graphID.String()) +
 		" AND edge.graph_id = " + cypherString(graphID.String()) + " RETURN derived"
-	rows, err := tx.Query(ctx, s.cypherSQL(query, "derived agtype"))
+	rows, err := tx.Query(ctx, s.cypherSQL(query, "derived agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return fmt.Errorf("근거 무효 전파 대상 조회: %w", err)
 	}
@@ -357,7 +357,7 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 			" AND node.graph_id = " + cypherString(graphID.String()) +
 			" AND node.version = " + fmt.Sprint(previous.Version) +
 			" AND node.evidence_invalidated <> true SET node = " + properties
-		if _, err := tx.Exec(ctx, s.cypherSQL(update, "updated agtype")); err != nil {
+		if _, err := tx.Exec(ctx, s.cypherSQL(update, "updated agtype"), pgx.QueryExecModeExec); err != nil {
 			return fmt.Errorf("근거 무효 표시 전파: %w", err)
 		}
 	}
@@ -463,7 +463,7 @@ func (s *Store) createSupersedesEdge(ctx context.Context, tx pgx.Tx, graphID, ne
 		" AND previous.context_id = " + cypherString(previousID.String()) +
 		" AND previous.graph_id = " + cypherString(graphID.String()) +
 		" CREATE (next)-[:SUPERSEDES {graph_id: " + cypherString(graphID.String()) + "}]->(previous)"
-	if _, err := tx.Exec(ctx, s.cypherSQL(query, "created agtype")); err != nil {
+	if _, err := tx.Exec(ctx, s.cypherSQL(query, "created agtype"), pgx.QueryExecModeExec); err != nil {
 		return fmt.Errorf("SUPERSEDES 참조 간선 생성: %w", err)
 	}
 	return nil
@@ -547,7 +547,7 @@ func (s *Store) createReferenceEdges(ctx context.Context, tx pgx.Tx, graphID mod
 			" AND to.context_id = " + cypherString(targetID.String()) +
 			" AND to.graph_id = " + cypherString(graphID.String()) +
 			" CREATE (from)-[:" + label + " {graph_id: " + cypherString(graphID.String()) + "}]->(to)"
-		if _, err := tx.Exec(ctx, s.cypherSQL(query, "created agtype")); err != nil {
+		if _, err := tx.Exec(ctx, s.cypherSQL(query, "created agtype"), pgx.QueryExecModeExec); err != nil {
 			return fmt.Errorf("%s 참조 간선 생성: %w", label, err)
 		}
 	}
@@ -559,7 +559,7 @@ func (s *Store) replaceEventMembers(ctx context.Context, tx pgx.Tx, graphID mode
 	deleteQuery := "MATCH (event:Context)-[edge:HAS_MEMBER]->() WHERE event.context_id = " + cypherString(event.ID.String()) +
 		" AND event.graph_id = " + cypherString(graphID.String()) +
 		" AND edge.graph_id = " + cypherString(graphID.String()) + " DELETE edge"
-	if _, err := tx.Exec(ctx, s.cypherSQL(deleteQuery, "deleted agtype")); err != nil {
+	if _, err := tx.Exec(ctx, s.cypherSQL(deleteQuery, "deleted agtype"), pgx.QueryExecModeExec); err != nil {
 		return fmt.Errorf("사건 구성원 간선 삭제: %w", err)
 	}
 	return s.createReferenceEdges(ctx, tx, graphID, event, nil)
@@ -612,7 +612,7 @@ func (s *Store) derivedFromIDs(ctx context.Context, queryer cypherQueryer, graph
 		" AND derived.graph_id = " + cypherString(graphID.String()) +
 		" AND edge.graph_id = " + cypherString(graphID.String()) +
 		" AND evidence.graph_id = " + cypherString(graphID.String()) + " RETURN evidence"
-	rows, err := queryer.Query(ctx, s.cypherSQL(query, "evidence agtype"))
+	rows, err := queryer.Query(ctx, s.cypherSQL(query, "evidence agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("파생 근거 조회: %w", err)
 	}
@@ -641,7 +641,7 @@ func (s *Store) eventMemberIDs(ctx context.Context, queryer cypherQueryer, graph
 		" AND event.graph_id = " + cypherString(graphID.String()) +
 		" AND edge.graph_id = " + cypherString(graphID.String()) +
 		" AND member.graph_id = " + cypherString(graphID.String()) + " RETURN member"
-	rows, err := queryer.Query(ctx, s.cypherSQL(query, "member agtype"))
+	rows, err := queryer.Query(ctx, s.cypherSQL(query, "member agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("사건 구성원 조회: %w", err)
 	}
@@ -667,7 +667,7 @@ func (s *Store) eventMemberIDs(ctx context.Context, queryer cypherQueryer, graph
 // contextFromCypher는 정점 하나를 받는 모든 AGE 질의의 응답 조립 지점이다.
 func (s *Store) contextFromCypher(ctx context.Context, queryer cypherQueryer, graphID model.ID, query string) (model.Context, error) {
 	var raw string
-	if err := queryer.QueryRow(ctx, s.cypherSQL(query, "node agtype")).Scan(&raw); err != nil {
+	if err := queryer.QueryRow(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecModeExec).Scan(&raw); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return model.Context{}, ErrNotFound
 		}
@@ -743,6 +743,12 @@ type cypherQueryer interface {
 }
 
 // cypherSQL은 검증된 graphName과 이스케이프한 openCypher 문자열로 AGE 호출 SQL을 만든다.
+//
+// 결과 질의 텍스트는 식별자와 본문을 직접 박으므로 요청마다 달라진다. 그래서 이 함수로
+// 만든 질의를 실행하는 호출부는 pgx.QueryExecModeExec를 함께 넘겨야 한다. 기본 실행
+// 방식인 QueryExecModeCacheStatement는 질의마다 PREPARE를 먼저 보내 왕복이 두 배가 되고
+// PostgreSQL 문 캐시를 적중률 0 항목으로 채우기 때문이다. public 테이블 질의는 파라미터로
+// 텍스트가 고정되므로 기본 방식의 이득을 그대로 받는다.
 func (s *Store) cypherSQL(query, columns string) string {
 	return "SELECT * FROM ag_catalog.cypher(" + sqlString(s.graphName) + ", " + dollarString(query) + ") AS (" + columns + ")"
 }
@@ -848,7 +854,7 @@ func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs 
 
 	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) +
 		" AND node.context_id IN " + list + " RETURN node ORDER BY node.context_id"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"))
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("컨텍스트 묶음 조회: %w", err)
 	}
@@ -906,7 +912,7 @@ func (s *Store) edgeTargetsBySource(ctx context.Context, graphID model.ID, label
 		" AND edge.graph_id = " + cypherString(graphID.String()) +
 		" AND target.graph_id = " + cypherString(graphID.String()) +
 		" RETURN source.context_id, target.context_id ORDER BY source.context_id, target.context_id"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "source agtype, target agtype"))
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "source agtype, target agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("%s 간선 묶음 조회: %w", label, err)
 	}

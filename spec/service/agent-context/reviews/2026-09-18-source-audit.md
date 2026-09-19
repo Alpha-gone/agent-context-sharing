@@ -419,7 +419,7 @@ proposed 또는 discarded 상태의 기존 관계를 confirmed로 바꾸는 분�
 
 결함이 아니라 같은 동작을 더 적은 왕복과 자원으로 할 수 있는 자리다. 계약을 바꾸지 않으므로 발견 사항과 나누고, 번호는 이어서 붙인다. 효과가 큰 순서다.
 
-### - [ ] 42. 모든 AGE 질의가 요청마다 서버 측 PREPARE를 유발한다
+### - [x] 42. 모든 AGE 질의가 요청마다 서버 측 PREPARE를 유발한다
 
 `internal/store/store.go:100`~`:113`, `internal/store/context.go:634`~`:636`
 
@@ -436,6 +436,7 @@ rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecM
 openCypher 파라미터로 질의 텍스트 자체를 고정하는 방법도 있으며, 그 경우 39번의 이스케이프 문제도 함께 사라진다.
 
 - 근거: 판독. 기본 실행 방식과 캐시 용량은 `github.com/jackc/pgx/v5@v5.10.0`의 `conn.go:191`, `:288`, `:898`에서 확인했다.
+- 처리: AGE 질의 18곳에 pgx.QueryExecModeExec를 호출 인자로 붙였다. 제안대로 호출 단위 실행 방식이므로 public 테이블 질의는 기본 방식의 문 캐시 이득을 그대로 유지한다. cypherSQL 주석에 호출부가 실행 방식을 함께 넘겨야 하는 근거를 문서화해 이후 AGE 호출 지점이 규칙을 놓치지 않게 했다.
 
 ### - [ ] 43. `operation_log`와 `web_audit_log`에 `graph_id` 인덱스가 없다
 

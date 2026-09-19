@@ -2,8 +2,11 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"errors"
@@ -30,6 +33,9 @@ const (
 //
 //go:embed assets/cytoscape.min.js
 var webAssets embed.FS
+
+// visualizationAssetPath는 내장 자산의 경로이며 같은 값이 HTTP 경로의 뒤쪽이 된다.
+const visualizationAssetPath = "assets/cytoscape.min.js"
 
 // Session은 현재 요청 안에서만 쓰는 검증된 웹 세션의 최소 정보다.
 type Session struct {
@@ -90,7 +96,25 @@ type Server struct {
 	graphs    GraphStore
 	config    Config
 	templates *template.Template
+	asset     staticAsset
 }
+
+// staticAsset은 빌드에 고정된 시각화 자산과 조건부 요청에 쓸 내용 해시다.
+//
+// embed.FS의 파일은 수정 시각이 제로 값이라 http.ServeFileFS가 Last-Modified를 싣지 않고
+// ETag도 붙지 않는다. 조건부 요청이 성립하지 않으므로 그래프 상세 화면을 열 때마다 자산
+// 전체가 다시 내려간다. 내용이 빌드에 고정되므로 해시를 한 번 계산해 두고 ETag로 쓴다.
+type staticAsset struct {
+	content []byte
+	etag    string
+	// modTime은 조건부 요청 비교에서 제외하려고 제로 값으로 둔다.
+	modTime time.Time
+}
+
+// assetCacheControl은 자산 경로에 판이 들어 있지 않으므로 무기한 보관을 지시하지 않는다.
+// 같은 경로가 다음 배포에서 다른 내용을 가리키기 때문이다. 하루 뒤부터는 ETag 재검증으로
+// 바뀐 자산이 브라우저에 닿고, 재검증은 304 응답 한 번이라 본문 전송이 없다.
+const assetCacheControl = "public, max-age=86400"
 
 // New는 웹 화면에 필요한 인가·조회 경계를 확인하고 템플릿을 준비한다.
 func New(auth Authentication, graphs GraphStore, config Config) (*Server, error) {
@@ -103,14 +127,36 @@ func New(auth Authentication, graphs GraphStore, config Config) (*Server, error)
 	if err != nil {
 		return nil, fmt.Errorf("웹 템플릿 해석: %w", err)
 	}
-	return &Server{auth: auth, graphs: graphs, config: config, templates: templates}, nil
+	asset, err := loadAsset(visualizationAssetPath)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{auth: auth, graphs: graphs, config: config, templates: templates, asset: asset}, nil
+}
+
+// loadAsset은 내장 자산을 한 번 읽고 내용 해시로 ETag를 만든다.
+func loadAsset(name string) (staticAsset, error) {
+	content, err := webAssets.ReadFile(name)
+	if err != nil {
+		return staticAsset{}, fmt.Errorf("시각화 자산 읽기: %w", err)
+	}
+	digest := sha256.Sum256(content)
+	return staticAsset{content: content, etag: `"` + hex.EncodeToString(digest[:]) + `"`}, nil
+}
+
+// serveAsset은 내용 해시 ETag와 보관 지시를 실어 조건부 요청이 성립하게 한다.
+// http.ServeContent가 If-None-Match를 대조해 바뀌지 않았으면 304로 끝낸다.
+func (server *Server) serveAsset(writer http.ResponseWriter, request *http.Request, name string) {
+	writer.Header().Set("ETag", server.asset.etag)
+	writer.Header().Set("Cache-Control", assetCacheControl)
+	http.ServeContent(writer, request, name, server.asset.modTime, bytes.NewReader(server.asset.content))
 }
 
 // ServeHTTP는 계약에 있는 로그인·등록·로그아웃과 웹 관리 경로를 처리한다.
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch request.URL.Path {
-	case "/assets/cytoscape.min.js":
-		http.ServeFileFS(writer, request, webAssets, "assets/cytoscape.min.js")
+	case "/" + visualizationAssetPath:
+		server.serveAsset(writer, request, visualizationAssetPath)
 	case "/login":
 		server.login(writer, request)
 	case "/register":

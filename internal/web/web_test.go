@@ -61,6 +61,35 @@ func TestCytoscapeAssetIsServedLocally(t *testing.T) {
 	}
 }
 
+// TestCytoscapeAssetRevalidatesWithETag는 자산 응답이 조건부 요청을 성립시키는지 확인한다.
+// 내장 파일의 수정 시각이 제로 값이라 ETag가 없으면 화면을 열 때마다 자산 전체가 다시
+// 내려간다.
+func TestCytoscapeAssetRevalidatesWithETag(t *testing.T) {
+	server := newTestServer(t, model.ID{}, model.ID{})
+	first := httptest.NewRecorder()
+	server.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/assets/cytoscape.min.js", nil))
+
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("자산 응답에 ETag가 없다")
+	}
+	if cacheControl := first.Header().Get("Cache-Control"); cacheControl == "" {
+		t.Fatal("자산 응답에 Cache-Control이 없다")
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/assets/cytoscape.min.js", nil)
+	request.Header.Set("If-None-Match", etag)
+	second := httptest.NewRecorder()
+	server.ServeHTTP(second, request)
+
+	if second.Code != http.StatusNotModified {
+		t.Fatalf("조건부 요청 응답 = %d, want %d", second.Code, http.StatusNotModified)
+	}
+	if second.Body.Len() != 0 {
+		t.Fatalf("조건부 요청이 본문 %d바이트를 다시 내려보냈다", second.Body.Len())
+	}
+}
+
 func newTestServer(t *testing.T, accountID, graphID model.ID) *Server {
 	t.Helper()
 	return newTestServerWith(t, accountID, &fakeGraphStore{accountID: accountID, graphID: graphID})

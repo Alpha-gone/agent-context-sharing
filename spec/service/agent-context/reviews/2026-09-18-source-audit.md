@@ -473,13 +473,14 @@ CREATE INDEX web_audit_log_team_actor_idx ON public.web_audit_log (actor_account
 - 근거: 판독.
 - 처리: 근거 검증은 정점만 한 질의로 묶어 읽어 없는 근거를 지목하고, 구성원 검증은 ContextsByIDs의 묶음 조립을 트랜잭션에서 재사용한다. 구성원 검증이 파생의 근거와 사건의 구성원까지 포함한 전체 조립을 요구하므로 정점 조회만으로는 안 되고, 묶음 조회가 없는 식별자를 알려 주는 missingContextError를 더해 오류 사상과 대상 식별자 메시지를 이전과 같게 유지했다. 참조 간선 생성은 UNWIND로 한 문장에 묶었다. 근거 20개짜리 파생 저장이 검증 40여 회·생성 20회에서 검증 1~3회·생성 1회로 줄어든다.
 
-### - [ ] 45. 근거·구성원 식별자만 필요한데 정점 전체를 받아 해석한다
+### - [x] 45. 근거·구성원 식별자만 필요한데 정점 전체를 받아 해석한다
 
 `internal/store/context.go:527`~`:534`, `:551`~`:558`
 
 `derivedFromIDs`와 `eventMemberIDs`가 `RETURN evidence`, `RETURN member`로 본문을 포함한 정점 전체를 받아 `parseContext`로 조립한 뒤 `.ID`만 쓰고 버린다. 같은 파일의 `edgeTargetsBySource`(`:764`)는 이미 식별자만 받는다. `RETURN evidence.context_id`로 맞추면 전송량과 해석 비용이 근거 수에 비례해 줄어든다.
 
 - 근거: 판독.
+- 처리: `derivedFromIDs`와 `eventMemberIDs`가 `RETURN evidence.context_id`, `RETURN member.context_id`로 식별자만 받고 `parseAnchorID`로 해석한다. 두 함수가 label과 오류 메시지만 다른 같은 질의였으므로 `edgeTargetIDs` 하나에 위임하게 묶었고 오류 메시지의 대상 이름은 이전과 같게 유지했다. `parseAnchorID`의 오류 문구는 홉 기준 정점 전용이 아니게 되어 "정점 식별자 해석"으로 넓혔다.
 
 ### - [ ] 46. 홉 탐색이 깊이마다 label과 방향으로 질의를 쪼갠다
 

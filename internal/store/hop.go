@@ -259,15 +259,16 @@ func (s *Store) hopNeighbors(ctx context.Context, graphID model.ID, anchorIDs []
 	return neighbors, nil
 }
 
-// parseAnchorID는 agtype 문자열로 돌아온 기준 정점의 context_id를 식별자로 바꾼다.
+// parseAnchorID는 agtype 문자열로 돌아온 정점의 context_id를 식별자로 바꾼다.
+// 홉 탐색의 기준 정점뿐 아니라 간선 목록 질의가 받은 양쪽 정점의 식별자도 이 함수를 지난다.
 func parseAnchorID(raw string) (model.ID, error) {
 	var text string
 	if err := json.Unmarshal([]byte(raw), &text); err != nil {
-		return model.ID{}, fmt.Errorf("홉 기준 정점 식별자 해석: %w", err)
+		return model.ID{}, fmt.Errorf("정점 식별자 해석: %w", err)
 	}
 	anchorID, err := model.ParseID(text)
 	if err != nil {
-		return model.ID{}, fmt.Errorf("홉 기준 정점 식별자 해석: %w", err)
+		return model.ID{}, fmt.Errorf("정점 식별자 해석: %w", err)
 	}
 	return anchorID, nil
 }

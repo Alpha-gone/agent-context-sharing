@@ -623,60 +623,64 @@ func (s *Store) context(ctx context.Context, queryer cypherQueryer, graphID, con
 
 // derivedFromIDs는 DERIVED_FROM 간선에서 파생의 근거 식별자를 다시 조립한다.
 func (s *Store) derivedFromIDs(ctx context.Context, queryer cypherQueryer, graphID, derivedID model.ID) ([]model.ID, error) {
-	query := "MATCH (derived:Context)-[edge:DERIVED_FROM]->(evidence:Context) WHERE derived.context_id = " + cypherString(derivedID.String()) +
-		" AND derived.graph_id = " + cypherString(graphID.String()) +
-		" AND edge.graph_id = " + cypherString(graphID.String()) +
-		" AND evidence.graph_id = " + cypherString(graphID.String()) + " RETURN evidence"
-	rows, err := queryer.Query(ctx, s.cypherSQL(query, "evidence agtype"), pgx.QueryExecModeExec)
-	if err != nil {
-		return nil, fmt.Errorf("파생 근거 조회: %w", err)
-	}
-	defer rows.Close()
-	referenceIDs := make([]model.ID, 0)
-	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
-			return nil, fmt.Errorf("파생 근거 행 해석: %w", err)
-		}
-		evidence, err := parseContext(raw, graphID)
-		if err != nil {
-			return nil, err
-		}
-		referenceIDs = append(referenceIDs, evidence.ID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("파생 근거 행 읽기: %w", err)
-	}
-	return referenceIDs, nil
+	return s.edgeTargetIDs(ctx, queryer, graphID, edgeTargetQuery{
+		label:    "DERIVED_FROM",
+		source:   "derived",
+		target:   "evidence",
+		sourceID: derivedID,
+		name:     "파생 근거",
+	})
 }
 
 // eventMemberIDs는 HAS_MEMBER 간선에서 사건 구성원 식별자를 다시 조립한다.
 func (s *Store) eventMemberIDs(ctx context.Context, queryer cypherQueryer, graphID, eventID model.ID) ([]model.ID, error) {
-	query := "MATCH (event:Context)-[edge:HAS_MEMBER]->(member:Context) WHERE event.context_id = " + cypherString(eventID.String()) +
-		" AND event.graph_id = " + cypherString(graphID.String()) +
+	return s.edgeTargetIDs(ctx, queryer, graphID, edgeTargetQuery{
+		label:    "HAS_MEMBER",
+		source:   "event",
+		target:   "member",
+		sourceID: eventID,
+		name:     "사건 구성원",
+	})
+}
+
+// edgeTargetQuery는 정점 하나에서 나가는 한 label의 간선을 읽는 데 필요한 값이다.
+// name은 오류 메시지에 쓰는 대상 이름이다.
+type edgeTargetQuery struct {
+	label, source, target string
+	sourceID              model.ID
+	name                  string
+}
+
+// edgeTargetIDs는 시작 정점에서 나가는 간선의 도착 정점 식별자만 읽는다.
+//
+// 도착 정점 전체를 받아 parseContext로 조립한 뒤 식별자만 쓰면 본문까지 전송·해석하는
+// 비용이 간선 수에 비례해 든다. 호출자가 쓰는 값이 식별자뿐이므로 속성 하나만 받는다.
+func (s *Store) edgeTargetIDs(ctx context.Context, queryer cypherQueryer, graphID model.ID, spec edgeTargetQuery) ([]model.ID, error) {
+	query := "MATCH (" + spec.source + ":Context)-[edge:" + spec.label + "]->(" + spec.target + ":Context) WHERE " + spec.source + ".context_id = " + cypherString(spec.sourceID.String()) +
+		" AND " + spec.source + ".graph_id = " + cypherString(graphID.String()) +
 		" AND edge.graph_id = " + cypherString(graphID.String()) +
-		" AND member.graph_id = " + cypherString(graphID.String()) + " RETURN member"
-	rows, err := queryer.Query(ctx, s.cypherSQL(query, "member agtype"), pgx.QueryExecModeExec)
+		" AND " + spec.target + ".graph_id = " + cypherString(graphID.String()) + " RETURN " + spec.target + ".context_id"
+	rows, err := queryer.Query(ctx, s.cypherSQL(query, spec.target+" agtype"), pgx.QueryExecModeExec)
 	if err != nil {
-		return nil, fmt.Errorf("사건 구성원 조회: %w", err)
+		return nil, fmt.Errorf("%s 조회: %w", spec.name, err)
 	}
 	defer rows.Close()
-	memberIDs := make([]model.ID, 0)
+	targetIDs := make([]model.ID, 0)
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
-			return nil, fmt.Errorf("사건 구성원 행 해석: %w", err)
+			return nil, fmt.Errorf("%s 행 해석: %w", spec.name, err)
 		}
-		member, err := parseContext(raw, graphID)
+		targetID, err := parseAnchorID(raw)
 		if err != nil {
 			return nil, err
 		}
-		memberIDs = append(memberIDs, member.ID)
+		targetIDs = append(targetIDs, targetID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("사건 구성원 행 읽기: %w", err)
+		return nil, fmt.Errorf("%s 행 읽기: %w", spec.name, err)
 	}
-	return memberIDs, nil
+	return targetIDs, nil
 }
 
 // contextFromCypher는 정점 하나를 받는 모든 AGE 질의의 응답 조립 지점이다.

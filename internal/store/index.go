@@ -65,8 +65,31 @@ type SearchCandidate struct {
 // 컨텍스트의 저장이 제공자 응답까지 막혀 대역이 늦어질 때 저장 지연이 함께 늘어난다.
 // 확보한 작업은 next_attempt_at을 미뤄 다른 작업자에게 숨긴다.
 func (s *Store) ProcessNextIndexTask(ctx context.Context, processor IndexTaskProcessor) (IndexProcessResult, error) {
+	return s.processNextIndexTask(ctx, model.ID{}, processor)
+}
+
+// ProcessNextIndexTaskInGraph는 확보 대상을 그래프 하나로 좁힌다.
+//
+// 「검증」의 측정은 잰 그래프의 색인이 끝난 상태에서 시작해야 하고, 그 판정에 다른
+// 그래프의 대기 작업이 섞이면 회차마다 시작 상태가 달라진다. 좁혀서 확보하면 평가가
+// 남의 작업을 대신 처리하지 않고 자기 그래프만 비운다. 운영 경로의 색인 작업자는
+// 그래프를 가리지 않으므로 이 함수를 쓰지 않는다.
+func (s *Store) ProcessNextIndexTaskInGraph(ctx context.Context, graphID model.ID, processor IndexTaskProcessor) (IndexProcessResult, error) {
+	if !graphID.IsV7() {
+		return IndexProcessResult{}, fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
+	}
+	return s.processNextIndexTask(ctx, graphID, processor)
+}
+
+// processNextIndexTask는 확보 범위만 다른 두 진입점의 공통 구현이다. scope가 비어
+// 있으면 그래프를 가리지 않는다.
+func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, processor IndexTaskProcessor) (IndexProcessResult, error) {
 	if processor == nil {
 		return IndexProcessResult{}, fmt.Errorf("색인 작업 처리기가 없다")
+	}
+	scopeValue := any(nil)
+	if scope.IsV7() {
+		scopeValue = scope.String()
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -81,9 +104,10 @@ func (s *Store) ProcessNextIndexTask(ctx context.Context, processor IndexTaskPro
 		SELECT task_id::text, context_id::text, graph_id::text, attempts, COALESCE(correlation_id, ''), enqueued_at
 		FROM public.index_task
 		WHERE state = 'pending' AND next_attempt_at <= now()
+		  AND ($1::uuid IS NULL OR graph_id = $1::uuid)
 		ORDER BY enqueued_at, task_id
 		LIMIT 1
-		FOR UPDATE SKIP LOCKED`).Scan(&rawID, &rawContextID, &rawGraphID, &attempts, &correlationID, &enqueuedAt)
+		FOR UPDATE SKIP LOCKED`, scopeValue).Scan(&rawID, &rawContextID, &rawGraphID, &attempts, &correlationID, &enqueuedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return IndexProcessResult{}, tx.Commit(ctx)

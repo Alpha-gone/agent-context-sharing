@@ -18,7 +18,7 @@ var packageBoundaries = map[string][]string{
 	"plan":   {"model"},
 	"store":  {"model", "plan"},
 	"perm":   {"model"},
-	"index":  {"store"},
+	"index":  {"model", "store"},
 	"authz":  {"model", "store"},
 	"search": {"model", "store"},
 	"mcp":    {"model", "perm", "plan", "search", "store"},

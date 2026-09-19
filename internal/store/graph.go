@@ -103,6 +103,11 @@ func (s *Store) Graph(ctx context.Context, graphID model.ID) (model.Graph, error
 }
 
 // ListGraphs는 요청 계정에 유효한 등급이 있는 그래프만 최근 활동 순서로 읽는다.
+//
+// 정렬 키 last_activity_at은 쓰기로 커지는 값이므로 페이지를 넘기는 동안 활동한
+// 그래프는 앞 페이지로 이동해 이번 페이징의 뒤 페이지에는 나타나지 않는다. 중복은
+// 나지 않으며 옮겨간 그래프는 새 조회의 첫 페이지에 다시 보인다. 「페이지 처리」가
+// 최근 활동순을 유지하기 위해 감수하기로 확정한 귀결이다.
 func (s *Store) ListGraphs(ctx context.Context, accountID model.ID, filter model.GraphListFilter, cursor string, limit int) ([]model.GraphListItem, string, error) {
 	if !accountID.IsV7() {
 		return nil, "", fmt.Errorf("요청 계정 식별자가 UUIDv7이 아니다")

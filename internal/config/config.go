@@ -41,6 +41,19 @@ const (
 	SearchExecutionSequential SearchExecution = "sequential"
 )
 
+// ComponentPlacement는 「배치 조합」이 선택으로 연 구성 요소의 배치다.
+//
+// 배치가 바뀌어도 코드는 같다. 내장이면 이 인스턴스가 그 구성 요소를 함께 돌리고,
+// 분리면 다른 배포 단위가 맡으므로 이 인스턴스는 시작하거나 경로를 등록하지 않는다.
+type ComponentPlacement string
+
+const (
+	// PlacementEmbedded는 이 인스턴스가 구성 요소를 함께 돌린다. 기본값이다.
+	PlacementEmbedded ComponentPlacement = "embedded"
+	// PlacementExternal은 다른 배포 단위가 구성 요소를 맡는다.
+	PlacementExternal ComponentPlacement = "external"
+)
+
 // SearchGraphStage는 그래프 효과를 비교할 때 누적해서 켜는 검색 범위다.
 type SearchGraphStage string
 
@@ -93,6 +106,12 @@ type Config struct {
 	RelationProposalLimit int
 	// AccountPlans 필드에는 계정별로 배정한 플랜 값을 둔다.
 	AccountPlans plan.AccountPlans
+	// IndexWorkerPlacement 필드에는 색인 작업자의 배치를 둔다. 분리면 이 인스턴스가
+	// 작업 큐를 소비하지 않는다. 질의 임베딩은 요청 경로에 있으므로 배치와 무관하다.
+	IndexWorkerPlacement ComponentPlacement
+	// AuthorizationServerPlacement 필드에는 인가 서버의 배치를 둔다. 분리면 이 인스턴스가
+	// 발급 경로를 등록하지 않는다. 이미 발급된 토큰의 검증은 배치와 무관하게 계속된다.
+	AuthorizationServerPlacement ComponentPlacement
 	// TLSMode 필드에는 TLS 종단 배치를 둔다.
 	TLSMode TLSMode
 	// TrustedProxies 필드에는 전달 헤더를 신뢰할 역방향 프록시의 주소 대역을 둔다.
@@ -114,16 +133,18 @@ func Load(env Environment) (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:            strings.TrimSpace(env("HTTP_ADDR")),
-		DatabaseURL:         strings.TrimSpace(env("DATABASE_URL")),
-		GraphName:           strings.TrimSpace(env("AGE_GRAPH_NAME")),
-		EmbeddingModel:      strings.TrimSpace(env("EMBEDDING_MODEL")),
-		EmbeddingVectorType: strings.TrimSpace(env("EMBEDDING_VECTOR_TYPE")),
-		SearchExecution:     SearchExecution(strings.TrimSpace(env("SEARCH_CHANNEL_EXECUTION"))),
-		SearchGraphStage:    SearchGraphStage(strings.TrimSpace(env("SEARCH_GRAPH_STAGE"))),
-		TLSMode:             TLSMode(strings.TrimSpace(env("TLS_TERMINATION"))),
-		TLSCertFile:         strings.TrimSpace(env("TLS_CERT_FILE")),
-		TLSKeyFile:          strings.TrimSpace(env("TLS_KEY_FILE")),
+		HTTPAddr:                     strings.TrimSpace(env("HTTP_ADDR")),
+		DatabaseURL:                  strings.TrimSpace(env("DATABASE_URL")),
+		GraphName:                    strings.TrimSpace(env("AGE_GRAPH_NAME")),
+		EmbeddingModel:               strings.TrimSpace(env("EMBEDDING_MODEL")),
+		EmbeddingVectorType:          strings.TrimSpace(env("EMBEDDING_VECTOR_TYPE")),
+		SearchExecution:              SearchExecution(strings.TrimSpace(env("SEARCH_CHANNEL_EXECUTION"))),
+		SearchGraphStage:             SearchGraphStage(strings.TrimSpace(env("SEARCH_GRAPH_STAGE"))),
+		IndexWorkerPlacement:         ComponentPlacement(strings.TrimSpace(env("INDEX_WORKER_PLACEMENT"))),
+		AuthorizationServerPlacement: ComponentPlacement(strings.TrimSpace(env("AUTHORIZATION_SERVER_PLACEMENT"))),
+		TLSMode:                      TLSMode(strings.TrimSpace(env("TLS_TERMINATION"))),
+		TLSCertFile:                  strings.TrimSpace(env("TLS_CERT_FILE")),
+		TLSKeyFile:                   strings.TrimSpace(env("TLS_KEY_FILE")),
 	}
 
 	if err := validateAddress(cfg.HTTPAddr); err != nil {
@@ -173,6 +194,19 @@ func Load(env Environment) (Config, error) {
 	cfg.SearchFoldThreshold = foldThreshold
 	if !slices.Contains([]SearchGraphStage{SearchGraphStageBaseline, SearchGraphStageReferences, SearchGraphStageRelations, SearchGraphStageGlobal}, cfg.SearchGraphStage) {
 		return Config{}, fmt.Errorf("SEARCH_GRAPH_STAGE %q가 baseline, references, relations, global 중 하나가 아니다", cfg.SearchGraphStage)
+	}
+	// 「배치 조합」이 둘 다 내장을 기본값으로 확정했으므로 비어 있으면 내장으로 읽는다.
+	placements := map[string]*ComponentPlacement{
+		"INDEX_WORKER_PLACEMENT":         &cfg.IndexWorkerPlacement,
+		"AUTHORIZATION_SERVER_PLACEMENT": &cfg.AuthorizationServerPlacement,
+	}
+	for name, placement := range placements {
+		if *placement == "" {
+			*placement = PlacementEmbedded
+		}
+		if !slices.Contains([]ComponentPlacement{PlacementEmbedded, PlacementExternal}, *placement) {
+			return Config{}, fmt.Errorf("%s %q가 embedded 또는 external이 아니다", name, *placement)
+		}
 	}
 
 	clients, err := parseOAuthClients("OAUTH_CLIENTS", env("OAUTH_CLIENTS"))

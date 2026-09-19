@@ -46,12 +46,48 @@ func TestLoadAccountPlanLimits(t *testing.T) {
 	}
 }
 
+// TestLoadPlacementDefaultsToEmbedded는 「배치 조합」이 기본값으로 삼은 둘 다 내장이
+// 구성 값을 비워 두었을 때 그대로 나오는지 확인한다.
+func TestLoadPlacementDefaultsToEmbedded(t *testing.T) {
+	values := validValues()
+	delete(values, "INDEX_WORKER_PLACEMENT")
+	delete(values, "AUTHORIZATION_SERVER_PLACEMENT")
+	cfg, err := Load(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("구성 읽기: %v", err)
+	}
+	if cfg.IndexWorkerPlacement != PlacementEmbedded || cfg.AuthorizationServerPlacement != PlacementEmbedded {
+		t.Fatalf("기본 배치 = %q, %q; 둘 다 embedded여야 한다", cfg.IndexWorkerPlacement, cfg.AuthorizationServerPlacement)
+	}
+}
+
+// TestLoadAcceptsFourPlacementCombinations는 「배치 조합」의 네 조합이 모두 구성으로
+// 표현되는지 확인한다. 어느 조합이든 같은 코드로 성립해야 한다.
+func TestLoadAcceptsFourPlacementCombinations(t *testing.T) {
+	for _, worker := range []ComponentPlacement{PlacementEmbedded, PlacementExternal} {
+		for _, authorization := range []ComponentPlacement{PlacementEmbedded, PlacementExternal} {
+			values := validValues()
+			values["INDEX_WORKER_PLACEMENT"] = string(worker)
+			values["AUTHORIZATION_SERVER_PLACEMENT"] = string(authorization)
+			cfg, err := Load(func(name string) string { return values[name] })
+			if err != nil {
+				t.Fatalf("색인 %s, 인가 %s 구성 읽기: %v", worker, authorization, err)
+			}
+			if cfg.IndexWorkerPlacement != worker || cfg.AuthorizationServerPlacement != authorization {
+				t.Fatalf("배치 = %q, %q; want %q, %q", cfg.IndexWorkerPlacement, cfg.AuthorizationServerPlacement, worker, authorization)
+			}
+		}
+	}
+}
+
 // TestLoadRejectsInvalidValues은 기동 전에 잘못된 배포 구성이 거부되는지 확인한다.
 func TestLoadRejectsInvalidValues(t *testing.T) {
 	tests := map[string]func(map[string]string){
 		"수신 주소 누락":        func(values map[string]string) { values["HTTP_ADDR"] = "" },
 		"그래프 이름 형식 오류":    func(values map[string]string) { values["AGE_GRAPH_NAME"] = "bad-name" },
 		"벡터 차원 오류":        func(values map[string]string) { values["EMBEDDING_DIMENSION"] = "0" },
+		"색인 작업자 배치 오류":    func(values map[string]string) { values["INDEX_WORKER_PLACEMENT"] = "detached" },
+		"인가 서버 배치 오류":     func(values map[string]string) { values["AUTHORIZATION_SERVER_PLACEMENT"] = "detached" },
 		"검색 채널 실행 방식 오류":  func(values map[string]string) { values["SEARCH_CHANNEL_EXECUTION"] = "unknown" },
 		"검색 후보 수 상한 오류":   func(values map[string]string) { values["SEARCH_CHANNEL_CANDIDATE_LIMIT"] = "0" },
 		"그래프 검색 단계 오류":    func(values map[string]string) { values["SEARCH_GRAPH_STAGE"] = "unknown" },

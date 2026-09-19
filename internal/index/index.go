@@ -20,6 +20,15 @@ import (
 // reindexProgressInterval은 재색인이 남아 있는 동안 진행률을 구조화 로그에 남기는 간격이다.
 const reindexProgressInterval = time.Minute
 
+// 대기 작업이 없는 회차의 간격이다. 회차마다 트랜잭션을 열어 대기 작업을 찾으므로 간격이
+// 고정이면 유휴 상태에서도 쉬지 않고 초당 한 트랜잭션을 낸다. 빈 회차가 이어지면 간격을 두
+// 배로 늘리고 작업을 처리한 회차에서 최소값으로 되돌려, 유휴 부하를 줄이면서 작업이 들어온
+// 뒤의 처리 지연은 idleIntervalMax 안으로 묶는다.
+const (
+	idleIntervalMin = time.Second
+	idleIntervalMax = 30 * time.Second
+)
+
 // Config는 하나의 배포가 쓰는 임베딩 제공자와 벡터 계약이다.
 type Config struct {
 	BaseURL    *url.URL
@@ -118,8 +127,9 @@ func (worker *Worker) run(ctx context.Context) {
 		remaining = worker.logReindexProgress(ctx)
 	}
 	nextProgress := time.Now().Add(reindexProgressInterval)
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	idleInterval := idleIntervalMin
+	timer := time.NewTimer(idleInterval)
+	defer timer.Stop()
 	for {
 		// 남은 행이 0이 되면 더 늘지 않으므로 그때부터 진행률 조회를 멈춘다.
 		if remaining != 0 && !time.Now().Before(nextProgress) {
@@ -131,13 +141,16 @@ func (worker *Worker) run(ctx context.Context) {
 			worker.logger.ErrorContext(ctx, "색인 작업 처리 실패", "error", err)
 		}
 		if processed {
+			idleInterval = idleIntervalMin
 			continue
 		}
+		timer.Reset(idleInterval)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		}
+		idleInterval = min(idleInterval*2, idleIntervalMax)
 	}
 }
 

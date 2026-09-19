@@ -248,7 +248,7 @@ func (s *Store) deleteProposedRelation(ctx context.Context, graphID, relationID 
 		" AND edge.relation_id = " + cypherString(relationID.String()) +
 		" AND edge.state = 'proposed' DELETE edge RETURN 1"
 	var ignored string
-	err := s.pool.QueryRow(ctx, s.cypherSQL(query, "deleted agtype")).Scan(&ignored)
+	err := s.pool.QueryRow(ctx, s.cypherSQL(query, "deleted agtype"), pgx.QueryExecModeExec).Scan(&ignored)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

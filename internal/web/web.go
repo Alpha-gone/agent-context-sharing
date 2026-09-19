@@ -2,15 +2,18 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
-	"slices"
+	"net/url"
 	"strings"
 	"time"
 
@@ -30,6 +33,9 @@ const (
 //
 //go:embed assets/cytoscape.min.js
 var webAssets embed.FS
+
+// visualizationAssetPath는 내장 자산의 경로이며 같은 값이 HTTP 경로의 뒤쪽이 된다.
+const visualizationAssetPath = "assets/cytoscape.min.js"
 
 // Session은 현재 요청 안에서만 쓰는 검증된 웹 세션의 최소 정보다.
 type Session struct {
@@ -53,8 +59,9 @@ type GraphStore interface {
 	ListGraphs(context.Context, model.ID, model.GraphListFilter, string, int) ([]model.GraphListItem, string, error)
 	Graph(context.Context, model.ID) (model.Graph, error)
 	GraphVisualization(context.Context, model.ID, int, int) (store.HopResult, error)
-	ListActiveContexts(context.Context, model.ID, int) ([]model.Context, error)
-	ListDeletedContexts(context.Context, model.ID, int) ([]model.Context, error)
+	Context(context.Context, model.ID, model.ID) (model.Context, error)
+	ListActiveContexts(context.Context, model.ID, int) ([]model.Context, bool, error)
+	ListDeletedContexts(context.Context, model.ID, int) ([]model.Context, bool, error)
 	ListGraphGrants(context.Context, model.ID) ([]model.GrantSubject, error)
 	ListManagedTeams(context.Context, model.ID) ([]model.Team, error)
 	AccountByLoginID(context.Context, string) (store.Account, error)
@@ -89,7 +96,25 @@ type Server struct {
 	graphs    GraphStore
 	config    Config
 	templates *template.Template
+	asset     staticAsset
 }
+
+// staticAsset은 빌드에 고정된 시각화 자산과 조건부 요청에 쓸 내용 해시다.
+//
+// embed.FS의 파일은 수정 시각이 제로 값이라 http.ServeFileFS가 Last-Modified를 싣지 않고
+// ETag도 붙지 않는다. 조건부 요청이 성립하지 않으므로 그래프 상세 화면을 열 때마다 자산
+// 전체가 다시 내려간다. 내용이 빌드에 고정되므로 해시를 한 번 계산해 두고 ETag로 쓴다.
+type staticAsset struct {
+	content []byte
+	etag    string
+	// modTime은 조건부 요청 비교에서 제외하려고 제로 값으로 둔다.
+	modTime time.Time
+}
+
+// assetCacheControl은 자산 경로에 판이 들어 있지 않으므로 무기한 보관을 지시하지 않는다.
+// 같은 경로가 다음 배포에서 다른 내용을 가리키기 때문이다. 하루 뒤부터는 ETag 재검증으로
+// 바뀐 자산이 브라우저에 닿고, 재검증은 304 응답 한 번이라 본문 전송이 없다.
+const assetCacheControl = "public, max-age=86400"
 
 // New는 웹 화면에 필요한 인가·조회 경계를 확인하고 템플릿을 준비한다.
 func New(auth Authentication, graphs GraphStore, config Config) (*Server, error) {
@@ -102,14 +127,36 @@ func New(auth Authentication, graphs GraphStore, config Config) (*Server, error)
 	if err != nil {
 		return nil, fmt.Errorf("웹 템플릿 해석: %w", err)
 	}
-	return &Server{auth: auth, graphs: graphs, config: config, templates: templates}, nil
+	asset, err := loadAsset(visualizationAssetPath)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{auth: auth, graphs: graphs, config: config, templates: templates, asset: asset}, nil
+}
+
+// loadAsset은 내장 자산을 한 번 읽고 내용 해시로 ETag를 만든다.
+func loadAsset(name string) (staticAsset, error) {
+	content, err := webAssets.ReadFile(name)
+	if err != nil {
+		return staticAsset{}, fmt.Errorf("시각화 자산 읽기: %w", err)
+	}
+	digest := sha256.Sum256(content)
+	return staticAsset{content: content, etag: `"` + hex.EncodeToString(digest[:]) + `"`}, nil
+}
+
+// serveAsset은 내용 해시 ETag와 보관 지시를 실어 조건부 요청이 성립하게 한다.
+// http.ServeContent가 If-None-Match를 대조해 바뀌지 않았으면 304로 끝낸다.
+func (server *Server) serveAsset(writer http.ResponseWriter, request *http.Request, name string) {
+	writer.Header().Set("ETag", server.asset.etag)
+	writer.Header().Set("Cache-Control", assetCacheControl)
+	http.ServeContent(writer, request, name, server.asset.modTime, bytes.NewReader(server.asset.content))
 }
 
 // ServeHTTP는 계약에 있는 로그인·등록·로그아웃과 웹 관리 경로를 처리한다.
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch request.URL.Path {
-	case "/assets/cytoscape.min.js":
-		http.ServeFileFS(writer, request, webAssets, "assets/cytoscape.min.js")
+	case "/" + visualizationAssetPath:
+		server.serveAsset(writer, request, visualizationAssetPath)
 	case "/login":
 		server.login(writer, request)
 	case "/register":
@@ -166,24 +213,29 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Query().Get("registered") == "1" {
 			message = "계정이 등록되었습니다. 로그인해 주세요."
 		}
-		server.render(writer, http.StatusOK, "login", pageData{Title: "로그인", Message: message})
+		server.render(writer, http.StatusOK, "login", pageData{Title: "로그인", Message: message, Next: localRedirect(request.URL.Query().Get("next"))})
 	case http.MethodPost:
 		if err := request.ParseForm(); err != nil {
 			server.render(writer, http.StatusBadRequest, "login", pageData{Title: "로그인", Error: "입력을 처리할 수 없습니다."})
 			return
 		}
+		next := localRedirect(request.PostForm.Get("next"))
 		loginID := request.PostForm.Get("login_id")
 		accountID, err := server.auth.Authenticate(request.Context(), loginID, request.PostForm.Get("password"))
 		if err != nil {
-			server.render(writer, http.StatusUnauthorized, "login", pageData{Title: "로그인", LoginID: loginID, Error: "로그인 아이디 또는 비밀번호가 올바르지 않습니다."})
+			server.render(writer, http.StatusUnauthorized, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "로그인 아이디 또는 비밀번호가 올바르지 않습니다."})
 			return
 		}
 		session, err := server.auth.WebSession(request.Context(), accountID, SessionAudience)
 		if err != nil {
-			server.render(writer, http.StatusInternalServerError, "login", pageData{Title: "로그인", LoginID: loginID, Error: "세션을 만들 수 없습니다."})
+			server.render(writer, http.StatusInternalServerError, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "세션을 만들 수 없습니다."})
 			return
 		}
 		server.setSessionCookie(writer, request, session)
+		if next != "" {
+			http.Redirect(writer, request, next, http.StatusSeeOther)
+			return
+		}
 		http.Redirect(writer, request, "/graphs", http.StatusSeeOther)
 	default:
 		writer.Header().Set("Allow", "GET, POST")
@@ -281,7 +333,7 @@ func (server *Server) graphList(writer http.ResponseWriter, request *http.Reques
 		server.render(writer, http.StatusInternalServerError, "graphs", pageData{Title: "그래프", Error: "삭제한 그래프 목록을 읽을 수 없습니다."})
 		return
 	}
-	server.render(writer, http.StatusOK, "graphs", pageData{Title: "그래프", Graphs: graphs, NameFilter: filter.Name, Grades: filter.Grades, NextCursor: cursor, RestoreGraphs: restoreGraphs, DeletedGraphs: deletedGraphs})
+	server.render(writer, http.StatusOK, "graphs", pageData{Title: "그래프", Graphs: graphs, NameFilter: filter.Name, Grades: filter.Grades, NextCursor: cursor, NextPage: graphListPage(filter, cursor), RestoreGraphs: restoreGraphs, DeletedGraphs: deletedGraphs})
 }
 
 func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Request, graphID model.ID) {
@@ -529,25 +581,27 @@ func (server *Server) renderDeletion(writer http.ResponseWriter, request *http.R
 		return
 	}
 	pageSize := server.config.Plans.For(accountID).GraphPage.Default
-	active, err := server.graphs.ListActiveContexts(ctx, graphID, pageSize)
+	active, activeTruncated, err := server.graphs.ListActiveContexts(ctx, graphID, pageSize)
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "컨텍스트 목록을 읽을 수 없습니다."})
 		return
 	}
-	deleted, err := server.graphs.ListDeletedContexts(ctx, graphID, pageSize)
+	deleted, deletedTruncated, err := server.graphs.ListDeletedContexts(ctx, graphID, pageSize)
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "삭제된 컨텍스트 목록을 읽을 수 없습니다."})
 		return
 	}
-	value := pageData{Title: "삭제와 복구", GraphID: graphID, Graph: graph, Impact: impact, ActiveContexts: active, DeletedContexts: deleted}
+	value := pageData{Title: "삭제와 복구", GraphID: graphID, Graph: graph, Impact: impact, ActiveContexts: active, DeletedContexts: deleted, ContextsTruncated: activeTruncated || deletedTruncated}
 	if raw := request.URL.Query().Get("context_id"); raw != "" {
 		contextID, err := model.ParseID(raw)
 		if err != nil {
 			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "삭제와 복구", Error: "컨텍스트 식별자가 올바르지 않습니다."})
 			return
 		}
-		index := slices.IndexFunc(active, func(candidate model.Context) bool { return candidate.ID == contextID })
-		if index == -1 {
+		// 목록에 없어도 직접 읽는다. 목록은 상한으로 잘리므로 목록 안에서만 찾으면
+		// 그래프에 컨텍스트가 많을 때 화면에서 삭제도 복구도 할 수 없다.
+		selected, err := server.graphs.Context(ctx, graphID, contextID)
+		if err != nil || selected.DeletedAt != nil {
 			server.render(writer, http.StatusNotFound, "message", pageData{Title: "삭제와 복구", Error: "활성 컨텍스트를 찾을 수 없습니다."})
 			return
 		}
@@ -556,7 +610,7 @@ func (server *Server) renderDeletion(writer http.ResponseWriter, request *http.R
 			server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "삭제 영향을 읽을 수 없습니다."})
 			return
 		}
-		value.Selected, value.SelectedImpact = &active[index], selectedImpact
+		value.Selected, value.SelectedImpact = &selected, selectedImpact
 	}
 	server.render(writer, http.StatusOK, "deletion", value)
 }
@@ -634,9 +688,27 @@ func methodNotAllowed(writer http.ResponseWriter, allow string) {
 	writer.WriteHeader(http.StatusMethodNotAllowed)
 }
 
+// graphListPage는 현재 필터에 커서를 더한 다음 쪽 주소를 만든다.
+func graphListPage(filter model.GraphListFilter, cursor string) string {
+	values := url.Values{}
+	if filter.Name != "" {
+		values.Set("name", filter.Name)
+	}
+	for _, grade := range filter.Grades {
+		values.Add("grade", string(grade))
+	}
+	values.Set("cursor", cursor)
+	return "/graphs?" + values.Encode()
+}
+
 func graphFilter(request *http.Request) (model.GraphListFilter, error) {
 	filter := model.GraphListFilter{Name: strings.TrimSpace(request.URL.Query().Get("name"))}
 	for _, value := range request.URL.Query()["grade"] {
+		// 기본 선택지인 "모든 등급"은 빈 값을 보낸다. 거르지 않으면 이름만으로 필터를
+		// 적용하는 것도 400이 된다.
+		if value == "" {
+			continue
+		}
 		grade := model.GraphGrade(value)
 		if !grade.Valid() {
 			return model.GraphListFilter{}, fmt.Errorf("등급 필터 %q가 올바르지 않다", value)
@@ -644,6 +716,28 @@ func graphFilter(request *http.Request) (model.GraphListFilter, error) {
 		filter.Grades = append(filter.Grades, grade)
 	}
 	return filter, nil
+}
+
+// localRedirect는 로그인 뒤 돌아갈 주소를 이 서버 안의 절대 경로로 좁힌다.
+//
+// 값이 사용자 입력이므로 그대로 쓰면 열린 리다이렉션이 된다. scheme과 host가 붙은
+// 주소와 `//host` 형태를 모두 버리고 경로로 시작하는 값만 남긴다.
+func localRedirect(value string) string {
+	if !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") {
+		return ""
+	}
+	target, err := url.Parse(value)
+	if err != nil || target.Scheme != "" || target.Host != "" {
+		return ""
+	}
+	return target.RequestURI()
+}
+
+// SessionAccount는 현재 요청의 검증된 웹 세션 계정을 돌려준다. 세션 쿠키의 이름과
+// 수명은 이 패키지가 소유하므로, 인가 서버의 `/authorize`는 판정 결과만 받아 쓴다.
+func (server *Server) SessionAccount(request *http.Request) (model.ID, bool) {
+	accountID, _, ok := server.session(request)
+	return accountID, ok
 }
 
 func (server *Server) session(request *http.Request) (model.ID, Session, bool) {
@@ -691,10 +785,13 @@ func (server *Server) render(writer http.ResponseWriter, status int, name string
 }
 
 type pageData struct {
-	Title             string
-	Message           string
-	Error             string
-	LoginID           string
+	Title   string
+	Message string
+	Error   string
+	LoginID string
+	// Next에는 로그인 뒤 돌아갈 저장소 안의 경로를 둔다. 「인가 코드 흐름」 5단계가
+	// 인가 요청으로 되돌아오는 유일한 통로다.
+	Next              string
 	AccountID         model.ID
 	GraphID           model.ID
 	Graph             model.Graph
@@ -711,6 +808,8 @@ type pageData struct {
 	MaxHops           int
 	// HopBoundary에는 결과 상한이 그래프 확장을 자른 홉 경계를 둔다.
 	HopBoundary *int
+	// ContextsTruncated에는 컨텍스트 목록이 상한으로 잘렸는지를 둔다.
+	ContextsTruncated bool
 	// Owner에는 요청 계정이 이 그래프의 소유자인지를 둔다.
 	Owner           bool
 	Grants          []model.GrantSubject
@@ -721,6 +820,9 @@ type pageData struct {
 	NameFilter      string
 	Grades          []model.GraphGrade
 	NextCursor      string
+	// NextPage에는 현재 필터를 유지한 다음 쪽 주소를 둔다. 커서만 실으면 2쪽부터
+	// 필터가 풀린 전체 목록이 나온다.
+	NextPage string
 }
 
 type visualizationData struct {
@@ -774,13 +876,13 @@ const pageTemplates = `{{define "head"}}<!doctype html><html lang="ko"><head><me
 body { margin: 0; } main { max-width: 1120px; margin: 32px auto; padding: 0 16px; } h1 { margin: 0 0 16px; font-size: 24px; } section, form, table { margin: 16px 0; } .panel { padding: 16px; background: #fff; border: 1px solid #d9dee5; } label { display: block; margin: 8px 0; } input, select, button { box-sizing: border-box; padding: 8px; font: inherit; } input { width: 100%; } button { cursor: pointer; } .notice { padding: 8px; background: #e8f3ee; } .error { padding: 8px; background: #fdecec; } table { width: 100%; border-collapse: collapse; background: #fff; } th, td { padding: 8px; text-align: left; border: 1px solid #d9dee5; } nav { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; } .inline { display: inline; } .actions { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } .actions label { min-width: 140px; flex: 1; } .graph-layout { display: grid; grid-template-columns: 1fr 260px; gap: 16px; } #context-graph { min-height: 540px; border: 1px solid #d9dee5; } #node-details { white-space: pre-wrap; } @media (max-width: 720px) { .graph-layout { grid-template-columns: 1fr; } #context-graph { min-height: 420px; } }
 </style></head><body><main>{{if .Message}}<p class="notice">{{.Message}}</p>{{end}}{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{end}}
 {{define "foot"}}</main></body></html>{{end}}
-{{define "login"}}{{template "head" .}}<h1>로그인</h1><form class="panel" method="post" action="/login"><label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" required></label><label>비밀번호<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">로그인</button></form><p><a href="/register">계정 등록</a></p>{{template "foot" .}}{{end}}
+{{define "login"}}{{template "head" .}}<h1>로그인</h1><form class="panel" method="post" action="/login">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}<label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" required></label><label>비밀번호<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">로그인</button></form><p><a href="/register">계정 등록</a></p>{{template "foot" .}}{{end}}
 {{define "register"}}{{template "head" .}}<h1>계정 등록</h1><form class="panel" method="post" action="/register"><label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" pattern="[a-z0-9_]{3,32}" required></label><p>영문 소문자, 숫자, 밑줄을 사용해 3~32자로 입력합니다.</p><label>비밀번호<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="128" required></label><p>비밀번호는 8~128자입니다.</p><button type="submit">등록</button></form><p><a href="/login">로그인으로 돌아가기</a></p>{{template "foot" .}}{{end}}
 {{define "logout"}}{{template "head" .}}<h1>로그아웃</h1><form class="panel" method="post" action="/logout"><p>이 브라우저의 세션을 종료합니다.</p><button type="submit">로그아웃</button></form>{{template "foot" .}}{{end}}
 {{define "message"}}{{template "head" .}}<h1>{{.Title}}</h1><p><a href="/graphs">그래프 목록</a></p>{{template "foot" .}}{{end}}
-{{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav><form class="panel actions" method="get" action="/graphs"><label>이름 필터<input name="name" value="{{.NameFilter}}"></label><label>등급<select name="grade"><option value="">모든 등급</option><option value="owner">소유자</option><option value="editor">편집자</option><option value="viewer">열람자</option></select></label><button type="submit">적용</button></form>{{if .Graphs}}<table><thead><tr><th>이름</th><th>설명</th><th>마지막 활동</th><th>내 등급</th></tr></thead><tbody>{{range .Graphs}}<tr><td><a href="/graphs/{{.ID}}">{{.Name}}</a></td><td>{{.Description}}</td><td>{{formatTime .LastActivityAt}}</td><td>{{.Grade}}</td></tr>{{end}}</tbody></table>{{else}}<p>접근 가능한 그래프가 없습니다.</p>{{end}}{{if .NextCursor}}<p><a href="/graphs?cursor={{.NextCursor}}">더 보기</a></p>{{end}}{{if .DeletedGraphs}}<section class="panel"><h2>내가 삭제한 그래프</h2>{{range .DeletedGraphs}}<p><a href="/graphs/{{.ID}}/deletion">{{.Name}} 복구</a></p>{{end}}</section>{{end}}{{if .RestoreGraphs}}<section class="panel"><h2>자동 삭제된 그래프</h2>{{range .RestoreGraphs}}<form class="inline" method="post" action="/graphs"><input type="hidden" name="restore_graph_id" value="{{.ID}}"><button type="submit">{{.Name}} 복구 요청</button></form>{{end}}</section>{{end}}{{template "foot" .}}{{end}}
+{{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav><form class="panel actions" method="get" action="/graphs"><label>이름 필터<input name="name" value="{{.NameFilter}}"></label><label>등급<select name="grade"><option value="">모든 등급</option><option value="owner">소유자</option><option value="editor">편집자</option><option value="viewer">열람자</option></select></label><button type="submit">적용</button></form>{{if .Graphs}}<table><thead><tr><th>이름</th><th>설명</th><th>마지막 활동</th><th>내 등급</th></tr></thead><tbody>{{range .Graphs}}<tr><td><a href="/graphs/{{.ID}}">{{.Name}}</a></td><td>{{.Description}}</td><td>{{formatTime .LastActivityAt}}</td><td>{{.Grade}}</td></tr>{{end}}</tbody></table>{{else}}<p>접근 가능한 그래프가 없습니다.</p>{{end}}{{if .NextCursor}}<p><a href="{{.NextPage}}">더 보기</a></p>{{end}}{{if .DeletedGraphs}}<section class="panel"><h2>내가 삭제한 그래프</h2>{{range .DeletedGraphs}}<p><a href="/graphs/{{.ID}}/deletion">{{.Name}} 복구</a></p>{{end}}</section>{{end}}{{if .RestoreGraphs}}<section class="panel"><h2>자동 삭제된 그래프</h2>{{range .RestoreGraphs}}<form class="inline" method="post" action="/graphs"><input type="hidden" name="restore_graph_id" value="{{.ID}}"><button type="submit">{{.Name}} 복구 요청</button></form>{{end}}</section>{{end}}{{template "foot" .}}{{end}}
 {{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p>{{.Graph.Description}}</p><p>전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다.</p><label>국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section><section class="graph-layout"><div id="context-graph" aria-label="컨텍스트 그래프"></div><aside class="panel"><h2>선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code><p>{{.Body}}</p>{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){const elements={{.VisualizationJSON}};const details=document.getElementById('node-details');const range=document.getElementById('hop-range');const cy=cytoscape({container:document.getElementById('context-graph'),elements:elements,style:[{selector:'node',style:{'label':'data(label)','color':'#fff','text-valign':'center','text-halign':'center','width':42,'height':42,'font-size':10}},{selector:'node.source',style:{'background-color':'#2563eb'}},{selector:'node.derived',style:{'background-color':'#7c3aed'}},{selector:'node.event',style:{'background-color':'#047857'}},{selector:'node.disputed',style:{'border-width':4,'border-color':'#f59e0b'}},{selector:'node.evidence-invalidated',style:{'shape':'diamond'}},{selector:'edge',style:{'curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'#64748b','line-color':'#64748b','width':2,'label':'data(kind)','font-size':8,'text-rotation':'autorotate'}},{selector:'edge.evidence',style:{'line-color':'#dc2626','target-arrow-color':'#dc2626','width':5}}],layout:{name:'cose',animate:false}});let selected=null;function applyScope(){cy.elements().show();if(!selected)return;const hops=Number(range.value);if(hops===0){cy.elements().hide();selected.show();return;}let scope=selected;for(let i=0;i<hops;i++)scope=scope.closedNeighborhood();cy.elements().hide();scope.show();}function showDetails(node){selected=node;cy.edges().removeClass('evidence');/* DERIVED_FROM은 파생에서 근거로 향하므로 나가는 간선만 따라가면 근거 원천에 닿는다. 들어오는 간선까지 따르면 이 노드에 기대는 파생 후손까지 강조된다. */let frontier=node;const seen={};seen[node.id()]=true;while(frontier.length){const edges=frontier.outgoers('edge[kind = "derived_from"]');edges.addClass('evidence');frontier=edges.targets().filter(function(n){if(seen[n.id()])return false;seen[n.id()]=true;return true;});}details.textContent=node.data('layer')+'\n'+node.data('body');applyScope();}cy.on('tap','node',function(event){showDetails(event.target);});range.addEventListener('input',applyScope);})();</script>{{template "foot" .}}{{end}}
 {{define "access"}}{{template "head" .}}<nav><h1>권한과 팀 관리</h1>{{if .GraphID.IsV7}}<a href="/graphs/{{.GraphID}}">그래프 상세</a>{{end}}<a href="/graphs">그래프 목록</a></nav>{{if .Owner}}<section class="panel"><h2>현재 등급</h2><table><thead><tr><th>대상</th><th>종류</th><th>등급</th><th>부여 방식</th><th>회수</th></tr></thead><tbody>{{range .Grants}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td>{{.Grade}}</td><td>{{if .Inherited}}팀 상속{{else}}직접{{end}}</td><td>{{if .Inherited}}상속 등급{{else if .CanRevoke}}<form class="inline" method="post"><input type="hidden" name="action" value="revoke"><input type="hidden" name="subject_id" value="{{.ID}}"><input type="hidden" name="subject_type" value="{{.Type}}"><button type="submit">회수</button></form>{{else}}<button disabled title="그래프에는 소유자가 최소 하나 필요합니다.">마지막 소유자</button>{{end}}</td></tr>{{end}}</tbody></table><form method="post" class="actions"><input type="hidden" name="action" value="grant_account"><label>계정 로그인 아이디<input name="login_id" required></label><label>등급<select name="grade"><option value="viewer">열람자</option><option value="editor">편집자</option><option value="owner">소유자</option></select></label><button type="submit">계정 등급 부여</button></form></section>{{else if .GraphID.IsV7}}<p class="notice">등급 부여와 회수는 이 그래프의 소유자만 할 수 있습니다.</p>{{end}}<section class="panel"><h2>관리 팀</h2><form method="post" class="actions"><input type="hidden" name="action" value="create_team"><label>새 팀 이름<input name="team_name" required></label><button type="submit">팀 생성</button></form>{{range .Teams}}<article><h3>{{.Name}} {{if .DeletedAt}}(삭제됨){{end}}</h3><form class="inline" method="post"><input type="hidden" name="team_id" value="{{.ID}}">{{if .DeletedAt}}<input type="hidden" name="action" value="restore_team"><button type="submit">팀 복구</button>{{else}}<input type="hidden" name="action" value="delete_team"><button type="submit">팀 삭제</button>{{end}}</form><form method="post" class="actions"><input type="hidden" name="team_id" value="{{.ID}}"><input type="hidden" name="action" value="add_member"><label>구성원 로그인 아이디<input name="login_id" required></label><button type="submit">추가</button></form><form method="post" class="actions"><input type="hidden" name="team_id" value="{{.ID}}"><input type="hidden" name="action" value="remove_member"><label>제거할 구성원 로그인 아이디<input name="login_id" required></label><button type="submit">제거</button></form></article>{{else}}<p>관리하는 팀이 없습니다.</p>{{end}}</section>{{template "foot" .}}{{end}}
-{{define "deletion"}}{{template "head" .}}<nav><h1>삭제와 복구</h1><a href="/graphs/{{.GraphID}}">그래프 상세</a><a href="/graphs">그래프 목록</a></nav><section class="panel"><h2>{{.Graph.Name}}</h2><p>영향: 활성 컨텍스트 {{.Impact.Contexts}}개, 확정 관계 {{.Impact.Relations}}개, 접근이 차단될 계정 {{.Impact.Accounts}}개</p>{{if .Graph.DeletedAt}}<form method="post"><input type="hidden" name="action" value="restore"><button type="submit">그래프 복구</button></form>{{else}}<form method="post"><input type="hidden" name="action" value="delete"><label>그래프 이름 확인<input name="graph_name" required></label><button type="submit">소프트 삭제</button></form>{{end}}</section><section class="panel"><h2>노드 삭제</h2>{{if .Selected}}<article><strong>{{.Selected.Layer}}</strong> <code>{{.Selected.ID}}</code><p>{{.Selected.Body}}</p><p>영향: 이 컨텍스트를 근거로 둔 파생 {{.SelectedImpact.Derived}}개, 확정 관계 {{.SelectedImpact.Relations}}개</p><p>연쇄 삭제는 하지 않습니다. 파생에는 근거 무효 표시만 남습니다.</p><form method="post"><input type="hidden" name="action" value="delete_context"><input type="hidden" name="context_id" value="{{.Selected.ID}}"><button type="submit">이 노드 소프트 삭제</button></form></article>{{end}}{{range .ActiveContexts}}<p><a href="/graphs/{{$.GraphID}}/deletion?context_id={{.ID}}">{{.Layer}} · {{.ID}}</a></p>{{else}}<p>삭제할 활성 컨텍스트가 없습니다.</p>{{end}}</section><section class="panel"><h2>삭제된 노드</h2>{{range .DeletedContexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code><p>{{.Body}}</p><form class="inline" method="post"><input type="hidden" name="action" value="restore_context"><input type="hidden" name="context_id" value="{{.ID}}"><button type="submit">복구</button></form></article>{{else}}<p>삭제된 컨텍스트가 없습니다.</p>{{end}}</section>{{template "foot" .}}{{end}}
+{{define "deletion"}}{{template "head" .}}<nav><h1>삭제와 복구</h1><a href="/graphs/{{.GraphID}}">그래프 상세</a><a href="/graphs">그래프 목록</a></nav><section class="panel"><h2>{{.Graph.Name}}</h2><p>영향: 활성 컨텍스트 {{.Impact.Contexts}}개, 확정 관계 {{.Impact.Relations}}개, 접근이 차단될 계정 {{.Impact.Accounts}}개</p>{{if .Graph.DeletedAt}}<form method="post"><input type="hidden" name="action" value="restore"><button type="submit">그래프 복구</button></form>{{else}}<form method="post"><input type="hidden" name="action" value="delete"><label>그래프 이름 확인<input name="graph_name" required></label><button type="submit">소프트 삭제</button></form>{{end}}</section><section class="panel"><h2>노드 삭제</h2>{{if .ContextsTruncated}}<p class="notice">컨텍스트가 많아 최근 것만 표시했습니다. 목록에 없는 컨텍스트는 <code>?context_id=</code>로 직접 열 수 있습니다.</p>{{end}}{{if .Selected}}<article><strong>{{.Selected.Layer}}</strong> <code>{{.Selected.ID}}</code><p>{{.Selected.Body}}</p><p>영향: 이 컨텍스트를 근거로 둔 파생 {{.SelectedImpact.Derived}}개, 확정 관계 {{.SelectedImpact.Relations}}개</p><p>연쇄 삭제는 하지 않습니다. 파생에는 근거 무효 표시만 남습니다.</p><form method="post"><input type="hidden" name="action" value="delete_context"><input type="hidden" name="context_id" value="{{.Selected.ID}}"><button type="submit">이 노드 소프트 삭제</button></form></article>{{end}}{{range .ActiveContexts}}<p><a href="/graphs/{{$.GraphID}}/deletion?context_id={{.ID}}">{{.Layer}} · {{.ID}}</a></p>{{else}}<p>삭제할 활성 컨텍스트가 없습니다.</p>{{end}}</section><section class="panel"><h2>삭제된 노드</h2>{{range .DeletedContexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code><p>{{.Body}}</p><form class="inline" method="post"><input type="hidden" name="action" value="restore_context"><input type="hidden" name="context_id" value="{{.ID}}"><button type="submit">복구</button></form></article>{{else}}<p>삭제된 컨텍스트가 없습니다.</p>{{end}}</section>{{template "foot" .}}{{end}}
 {{define "audit"}}{{template "head" .}}<nav><h1>감사 기록</h1><a href="/graphs/{{.GraphID}}">그래프 상세</a></nav><table><thead><tr><th>시각</th><th>종류</th><th>동작</th><th>대상</th><th>상세</th></tr></thead><tbody>{{range .AuditEntries}}<tr><td>{{formatTime .OccurredAt}}</td><td>{{.Kind}}</td><td>{{.Action}}</td><td>{{.Target}}</td><td>{{.Detail}}</td></tr>{{end}}</tbody></table>{{template "foot" .}}{{end}}
 {{define "operator_restores"}}{{template "head" .}}<nav><h1>운영자 복구</h1><a href="/graphs">그래프 목록</a></nav><p>대기 중인 요청만 표시하며 컨텍스트 본문은 조회하지 않습니다.</p><table><thead><tr><th>그래프</th><th>요청 계정</th><th>요청 시각</th><th>처리</th></tr></thead><tbody>{{range .RestoreRequests}}<tr><td>{{.GraphName}}</td><td>{{.RequestedBy}}</td><td>{{formatTime .RequestedAt}}</td><td><form class="inline" method="post"><input type="hidden" name="graph_id" value="{{.GraphID}}"><button type="submit">복구</button></form></td></tr>{{else}}<tr><td colspan="4">대기 중인 요청이 없습니다.</td></tr>{{end}}</tbody></table>{{template "foot" .}}{{end}}`

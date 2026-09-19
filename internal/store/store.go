@@ -6,11 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
+	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// minPoolConns는 접속 문자열이 값을 정하지 않았을 때 쓸 연결 수 하한이다.
+// 근거는 New의 설정 지점에 있다.
+const minPoolConns = 16
 
 // ErrNotFound는 지정한 그래프 안에서 대상을 찾지 못했음을 나타낸다.
 var ErrNotFound = errors.New("대상을 찾지 못했다")
@@ -53,6 +59,22 @@ type Store struct {
 	// graceDays 필드는 유예를 시작할 때 생성 계정 플랜의 유예 일수를 돌려준다. nil이면
 	// 만료 시각을 남기지 않아 유예가 만료되지 않는다.
 	graceDays RetentionDays
+}
+
+// WriteLimits는 저장 트랜잭션 안에서 강제할 누적 한도다. 0은 한도 없음이다.
+//
+// 접근 계층이 트랜잭션 밖에서 읽은 값으로만 판정하면 한도 직전의 그래프에 생성이 동시에
+// 와도 둘 다 통과한다. 「계정 플랜 값」의 누적 단위 한도는 값을 늘리는 쓰기와 같은
+// 트랜잭션에서 판정되어야 하므로 한도를 여기까지 넘긴다.
+type WriteLimits struct {
+	// StoredCharsPerGraph는 그래프 하나가 담을 수 있는 최대 문자 수다.
+	StoredCharsPerGraph int64
+	// GraphsPerAccount는 한 계정이 소유자 등급으로 가질 수 있는 최대 활성 그래프 수다.
+	GraphsPerAccount int64
+	// WritesPerMinute는 1분 고정 창에서 허용할 쓰기 요청 수다.
+	WritesPerMinute int64
+	// ActorID는 요청 빈도를 셀 계정이다. 비어 있으면 빈도를 세지 않는다.
+	ActorID model.ID
 }
 
 // RelationProposalConfig는 사건 관계 후보 제안에 쓰는 검증된 배포 구성이다.
@@ -98,6 +120,13 @@ func New(ctx context.Context, databaseURL, graphName string, relationProposals *
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("접속 문자열 해석: %w", err)
+	}
+	// 연결 수의 하한을 코드에서 정한다. pgxpool의 기본값은 CPU 수와 4 중 큰 값이라 코어가
+	// 적은 배포에서 네 개가 되는데, 웹·MCP·색인 작업자·주기 작업자가 이 풀 하나를 나눠 쓰고
+	// 홉 확장이나 후보 조립처럼 한 요청이 연결을 겹쳐 잡는 경로가 있어 그만큼이면 서로를
+	// 기다린다. 접속 문자열에 pool_max_conns가 있으면 배포가 정한 값을 그대로 둔다.
+	if !strings.Contains(databaseURL, "pool_max_conns") {
+		cfg.MaxConns = max(cfg.MaxConns, minPoolConns)
 	}
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		for _, statement := range []string{"LOAD 'age'", `SET search_path = ag_catalog, "$user", public`} {

@@ -40,11 +40,11 @@ var loginIDPattern = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
 
 // Config는 인가 서버의 고정된 배포 경계를 모은다.
 type Config struct {
-	Issuer       string
-	Resource     string
-	Clients      []string
-	RedirectURIs []*url.URL
-	BcryptCost   int
+	Issuer   string
+	Resource string
+	// Clients 필드에는 클라이언트별로 사전 등록한 redirect_uri 허용 목록을 둔다.
+	Clients    map[string][]*url.URL
+	BcryptCost int
 }
 
 // Service는 데이터 접근 계층 위에서 인증·인가 계약을 수행한다.
@@ -52,6 +52,8 @@ type Service struct {
 	store             authStore
 	config            Config
 	dummyPasswordHash string
+	// cache는 「토큰 검증」이 요청마다 가져오지 않기로 한 서명 키와 폐기 목록을 담는다.
+	cache *verificationCache
 }
 
 // authStore는 인가 서버가 데이터베이스 접근 계층에 요구하는 최소 계약이다.
@@ -63,7 +65,7 @@ type authStore interface {
 	AuthorizationCodeForExchange(context.Context, string, time.Time) (store.AuthorizationCode, error)
 	ConsumeAuthorizationCode(context.Context, string, string, time.Time, time.Time) (store.AuthorizationCode, error)
 	RevokeToken(context.Context, string, time.Time) error
-	IsTokenRevoked(context.Context, string, time.Time) (bool, error)
+	RevokedTokenIDs(context.Context, time.Time) ([]string, error)
 	ActiveSigningKey(context.Context) (store.SigningKey, error)
 	SigningKey(context.Context, string) (store.SigningKey, error)
 	SigningKeys(context.Context) ([]store.SigningKey, error)
@@ -86,14 +88,19 @@ func New(source authStore, config Config) (*Service, error) {
 	if source == nil || config.Issuer == "" || config.Resource == "" || config.BcryptCost < bcrypt.MinCost || config.BcryptCost > bcrypt.MaxCost {
 		return nil, fmt.Errorf("인가 서비스 구성이 올바르지 않다")
 	}
-	if len(config.Clients) == 0 || len(config.RedirectURIs) == 0 {
+	if len(config.Clients) == 0 {
 		return nil, fmt.Errorf("등록 OAuth 클라이언트와 redirect_uri가 필요하다")
+	}
+	for clientID, allowed := range config.Clients {
+		if clientID == "" || len(allowed) == 0 {
+			return nil, fmt.Errorf("등록 OAuth 클라이언트와 redirect_uri가 필요하다")
+		}
 	}
 	dummyPasswordHash, err := hashPassword("", config.BcryptCost)
 	if err != nil {
 		return nil, fmt.Errorf("더미 비밀번호 해시 생성: %w", err)
 	}
-	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash}, nil
+	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash, cache: newVerificationCache()}, nil
 }
 
 // Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.
@@ -179,17 +186,29 @@ func passwordMaterial(password string) string {
 	return base64.RawStdEncoding.EncodeToString(digest[:])
 }
 
-// ValidateAuthorizeRequest는 사전 등록 클라이언트, 완전 일치 redirect_uri, PKCE와 리소스를 확인한다.
-func (s *Service) ValidateAuthorizeRequest(request AuthorizeRequest) error {
-	if !slices.Contains(s.config.Clients, request.ClientID) {
-		return fmt.Errorf("등록되지 않은 client_id")
+// ValidateRedirectTarget은 「인가 코드 흐름」의 1~2단계만 확인하고 돌려보낼 주소를 만든다.
+//
+// 3단계 이후의 실패는 redirect_uri로 알리기로 확정했으므로 그 전에 주소를 신뢰할 수
+// 있어야 한다. 두 단계를 따로 부를 수 있게 나눠 두고 전체 검증은 이 함수를 재사용한다.
+func (s *Service) ValidateRedirectTarget(request AuthorizeRequest) (*url.URL, error) {
+	allowed, registered := s.config.Clients[request.ClientID]
+	if !registered {
+		return nil, fmt.Errorf("등록되지 않은 client_id")
 	}
 	redirect, err := url.Parse(request.RedirectURI)
 	if err != nil {
-		return fmt.Errorf("redirect_uri 해석: %w", err)
+		return nil, fmt.Errorf("redirect_uri 해석: %w", err)
 	}
-	if !slices.ContainsFunc(s.config.RedirectURIs, func(allowed *url.URL) bool { return redirectMatches(allowed, redirect) }) {
-		return fmt.Errorf("허용되지 않은 redirect_uri")
+	if !slices.ContainsFunc(allowed, func(candidate *url.URL) bool { return redirectMatches(candidate, redirect) }) {
+		return nil, fmt.Errorf("허용되지 않은 redirect_uri")
+	}
+	return redirect, nil
+}
+
+// ValidateAuthorizeRequest는 사전 등록 클라이언트, 완전 일치 redirect_uri, PKCE와 리소스를 확인한다.
+func (s *Service) ValidateAuthorizeRequest(request AuthorizeRequest) error {
+	if _, err := s.ValidateRedirectTarget(request); err != nil {
+		return err
 	}
 	if request.CodeChallenge == "" || request.CodeChallengeMethod != "S256" {
 		return fmt.Errorf("PKCE S256 code_challenge이 필요하다")
@@ -270,6 +289,30 @@ func (s *Service) Verify(ctx context.Context, raw, audience string) (model.ID, T
 	return id, Token{Raw: raw, ID: claims.ID, ExpiresAt: claims.Expiry.Time()}, nil
 }
 
+// VerifyAndRenew는 MCP 요청 하나에 필요한 검증과 「토큰 갱신」 판정을 함께 수행한다.
+//
+// Verify와 Renew를 이어 부르지 않는 이유는 왕복 때문이다. 두 함수가 각각 서명 키와
+// 폐기 목록을 읽으므로 이어 부르면 요청마다 그 조회가 두 배가 된다. 갱신 조건에 들지
+// 않거나 발급이 실패하면 renewed가 비고, 「토큰 갱신」대로 요청 자체는 정상 처리한다.
+func (s *Service) VerifyAndRenew(ctx context.Context, raw, audience string) (model.ID, Token, error) {
+	claims, err := s.verifiedClaims(ctx, raw, audience)
+	if err != nil {
+		return model.ID{}, Token{}, err
+	}
+	id, err := model.ParseID(claims.Subject)
+	if err != nil {
+		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
+	}
+	if audience != s.config.Resource {
+		return id, Token{}, nil
+	}
+	renewed, ok, err := s.renewFromClaims(ctx, id, claims)
+	if err != nil || !ok {
+		return id, Token{}, nil
+	}
+	return id, renewed, nil
+}
+
 func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (tokenClaims, error) {
 	parsed, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
 	if err != nil {
@@ -278,19 +321,15 @@ func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (tok
 	if len(parsed.Headers) != 1 || parsed.Headers[0].KeyID == "" {
 		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
-	key, err := s.store.SigningKey(ctx, parsed.Headers[0].KeyID)
+	public, err := s.cache.publicKey(ctx, s.store, parsed.Headers[0].KeyID)
 	if err != nil {
-		return tokenClaims{}, fmt.Errorf("unauthenticated")
-	}
-	var public jose.JSONWebKey
-	if err := json.Unmarshal([]byte(key.PublicKey), &public); err != nil {
 		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
 	var claims tokenClaims
 	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil {
 		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
-	revoked, err := s.store.IsTokenRevoked(ctx, claims.ID, time.Now().UTC())
+	revoked, err := s.cache.isRevoked(ctx, s.store, claims.ID, time.Now().UTC())
 	if err != nil || revoked {
 		return tokenClaims{}, fmt.Errorf("unauthenticated")
 	}
@@ -303,6 +342,12 @@ func (s *Service) Renew(ctx context.Context, accountID model.ID, token Token) (T
 	if err != nil || claims.Subject != accountID.String() {
 		return Token{}, false, nil
 	}
+	return s.renewFromClaims(ctx, accountID, claims)
+}
+
+// renewFromClaims는 이미 검증한 클레임으로 갱신 조건만 판정한다. 호출자가 클레임을
+// 들고 있으면 서명 키와 폐기 목록을 다시 읽지 않는다.
+func (s *Service) renewFromClaims(ctx context.Context, accountID model.ID, claims tokenClaims) (Token, bool, error) {
 	now := time.Now().UTC()
 	expiresAt := claims.Expiry.Time()
 	if !expiresAt.After(now) || expiresAt.Sub(now) > 10*time.Second {
@@ -318,7 +363,12 @@ func (s *Service) Renew(ctx context.Context, accountID model.ID, token Token) (T
 
 // Revoke는 로그아웃 또는 인가 코드 재사용 처리에서 jti를 만료 시각까지 막는다.
 func (s *Service) Revoke(ctx context.Context, token Token) error {
-	return s.store.RevokeToken(ctx, token.ID, token.ExpiresAt)
+	if err := s.store.RevokeToken(ctx, token.ID, token.ExpiresAt); err != nil {
+		return err
+	}
+	// 이 인스턴스가 방금 폐기한 토큰은 다음 적재를 기다리지 않고 곧바로 막는다.
+	s.cache.invalidateRevocations(token.ID)
+	return nil
 }
 
 // JWKS는 검증자에게 비공개 키 없이 공개 키 목록을 제공한다.
@@ -344,6 +394,8 @@ func (s *Service) RotateSigningKey(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// 새 키는 그 키로 서명된 토큰이 처음 도착할 때 캐시에 들어오고, 은퇴한 키는 검증에
+	// 계속 쓰이므로 캐시에서 지우지 않는다.
 	return s.store.RotateSigningKey(ctx, key)
 }
 

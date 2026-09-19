@@ -3,9 +3,11 @@ package store
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +16,14 @@ import (
 )
 
 const maxIndexAttempts = 5
+
+// indexTaskLease는 확보한 작업을 다른 작업자에게 숨겨 두는 시간이다.
+//
+// 제공자 호출을 트랜잭션 밖으로 빼면 그동안 작업 행의 잠금이 없으므로, 대기 조건인
+// next_attempt_at을 미뤄 소유를 표현한다. 「색인 작업 큐」가 처리 중 상태를 두지 않기로
+// 했으므로 열을 더하지 않고 이미 있는 열을 쓴다. 제공자 타임아웃보다 넉넉해야 같은 작업이
+// 겹쳐 처리되지 않고, 작업자가 죽어도 이 시간이 지나면 저절로 다시 대기가 된다.
+const indexTaskLease = 2 * time.Minute
 
 // IndexTask는 외부 임베딩 제공자에 넘길 색인 대기 작업이다.
 type IndexTask struct {
@@ -33,7 +43,7 @@ type IndexTaskResult struct {
 	Retryable bool
 }
 
-// IndexTaskProcessor는 행 잠금을 유지하는 동안 임베딩 제공자를 호출하는 경계다.
+// IndexTaskProcessor는 트랜잭션 밖에서 임베딩 제공자를 호출하는 경계다.
 type IndexTaskProcessor func(context.Context, IndexTask) IndexTaskResult
 
 // IndexProcessResult는 한 번의 작업자 회차 결과다.
@@ -48,8 +58,12 @@ type SearchCandidate struct {
 	Context model.Context
 }
 
-// ProcessNextIndexTask는 대기 중인 작업 하나를 잠금으로 확보하고 제공자 결과를 저장한다.
-// 처리 상태를 따로 저장하지 않고 트랜잭션 잠금이 살아 있는 동안만 작업을 소유한다.
+// ProcessNextIndexTask는 대기 중인 작업 하나를 확보하고 제공자 결과를 저장한다.
+//
+// 확보와 저장을 서로 다른 짧은 트랜잭션으로 나누고 제공자 호출은 그 사이에서 한다.
+// 「색인 처리」가 임베딩 생성을 트랜잭션 밖으로 빼기로 했고, 잠금을 쥔 채 부르면 같은
+// 컨텍스트의 저장이 제공자 응답까지 막혀 대역이 늦어질 때 저장 지연이 함께 늘어난다.
+// 확보한 작업은 next_attempt_at을 미뤄 다른 작업자에게 숨긴다.
 func (s *Store) ProcessNextIndexTask(ctx context.Context, processor IndexTaskProcessor) (IndexProcessResult, error) {
 	if processor == nil {
 		return IndexProcessResult{}, fmt.Errorf("색인 작업 처리기가 없다")
@@ -62,13 +76,14 @@ func (s *Store) ProcessNextIndexTask(ctx context.Context, processor IndexTaskPro
 
 	var rawID, rawContextID, rawGraphID, correlationID string
 	var attempts int
+	var enqueuedAt time.Time
 	err = tx.QueryRow(ctx, `
-		SELECT task_id::text, context_id::text, graph_id::text, attempts, COALESCE(correlation_id, '')
+		SELECT task_id::text, context_id::text, graph_id::text, attempts, COALESCE(correlation_id, ''), enqueued_at
 		FROM public.index_task
 		WHERE state = 'pending' AND next_attempt_at <= now()
 		ORDER BY enqueued_at, task_id
 		LIMIT 1
-		FOR UPDATE SKIP LOCKED`).Scan(&rawID, &rawContextID, &rawGraphID, &attempts, &correlationID)
+		FOR UPDATE SKIP LOCKED`).Scan(&rawID, &rawContextID, &rawGraphID, &attempts, &correlationID, &enqueuedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return IndexProcessResult{}, tx.Commit(ctx)
@@ -98,32 +113,75 @@ func (s *Store) ProcessNextIndexTask(ctx context.Context, processor IndexTaskPro
 		return IndexProcessResult{}, fmt.Errorf("색인 대상 조회: %w", err)
 	}
 	task := IndexTask{ID: taskID, ContextID: contextID, GraphID: graphID, Body: value.Body, Attempts: attempts, CorrelationID: correlationID}
+	// 확보를 커밋하면서 대기 시각을 미뤄 다른 작업자가 같은 작업을 집지 않게 한다.
+	if _, err := tx.Exec(ctx, `UPDATE public.index_task SET next_attempt_at = $2 WHERE task_id = $1`, rawID, time.Now().UTC().Add(indexTaskLease)); err != nil {
+		return IndexProcessResult{}, fmt.Errorf("색인 작업 확보 표시: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return IndexProcessResult{}, fmt.Errorf("색인 작업 확보 커밋: %w", err)
+	}
+
+	// 트랜잭션 밖에서 제공자를 부른다. 이 구간에는 어떤 행 잠금도 쥐고 있지 않다.
 	result := processor(ctx, task)
+
 	if result.Failure != "" {
-		if err := s.recordIndexFailure(ctx, tx, task, result); err != nil {
+		if err := s.storeIndexFailure(ctx, task, result); err != nil {
 			return IndexProcessResult{}, err
 		}
-		return IndexProcessResult{Found: true, Task: task}, tx.Commit(ctx)
+		return IndexProcessResult{Found: true, Task: task}, nil
 	}
 	if len(result.Embedding) == 0 || result.ModelID == "" {
 		return IndexProcessResult{}, fmt.Errorf("색인 처리기가 빈 임베딩 또는 모델 식별자를 반환했다")
 	}
+	if err := s.storeIndexResult(ctx, task, enqueuedAt, result); err != nil {
+		return IndexProcessResult{}, err
+	}
+	return IndexProcessResult{Found: true, Succeeded: true, Task: task}, nil
+}
+
+// storeIndexResult는 제공자 결과를 저장하고 처리한 작업을 지운다.
+//
+// 지울 때 등록 시각을 함께 대조하는 이유는 확보한 뒤 본문이 바뀌었을 수 있기 때문이다.
+// 그 경우 enqueueIndexTask의 upsert가 등록 시각을 새로 쓰므로 여기에서 지우지 않고 남겨
+// 다음 회차가 새 본문으로 다시 색인한다.
+func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, enqueuedAt time.Time, result IndexTaskResult) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("색인 결과 트랜잭션 시작: %w", err)
+	}
+	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO public.context_embedding (context_id, graph_id, embedding, model_id, indexed_at)
 		VALUES ($1, $2, $3, $4, now())
 		ON CONFLICT (context_id) DO UPDATE SET
 			graph_id = EXCLUDED.graph_id, embedding = EXCLUDED.embedding,
 			model_id = EXCLUDED.model_id, indexed_at = EXCLUDED.indexed_at`,
-		contextID.String(), graphID.String(), vectorText(result.Embedding), result.ModelID); err != nil {
-		return IndexProcessResult{}, fmt.Errorf("임베딩 저장: %w", err)
+		task.ContextID.String(), task.GraphID.String(), vectorText(result.Embedding), result.ModelID); err != nil {
+		return fmt.Errorf("임베딩 저장: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1`, rawID); err != nil {
-		return IndexProcessResult{}, fmt.Errorf("완료 색인 작업 제거: %w", err)
+	if _, err := tx.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1 AND enqueued_at = $2`, task.ID.String(), enqueuedAt); err != nil {
+		return fmt.Errorf("완료 색인 작업 제거: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 커밋: %w", err)
+		return fmt.Errorf("색인 작업 커밋: %w", err)
 	}
-	return IndexProcessResult{Found: true, Succeeded: true, Task: task}, nil
+	return nil
+}
+
+// storeIndexFailure는 제공자 실패를 작업 행에 기록한다.
+func (s *Store) storeIndexFailure(ctx context.Context, task IndexTask, result IndexTaskResult) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("색인 실패 트랜잭션 시작: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := s.recordIndexFailure(ctx, tx, task, result); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("색인 실패 커밋: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) recordIndexFailure(ctx context.Context, tx pgx.Tx, task IndexTask, result IndexTaskResult) error {
@@ -154,22 +212,30 @@ func (s *Store) ReindexOutdatedEmbeddings(ctx context.Context, modelID string) e
 	if err != nil {
 		return fmt.Errorf("재색인 그래프 조회: %w", err)
 	}
-	defer rows.Close()
+	// 행을 끝까지 읽어 연결을 놓아준 뒤에 재등록한다. 행을 연 채 부르면 같은 풀에서
+	// 연결을 하나 더 잡아 기동과 요청이 겹칠 때 서로의 연결을 기다린다.
+	graphIDs := make([]model.ID, 0)
 	for rows.Next() {
 		var rawGraphID string
 		if err := rows.Scan(&rawGraphID); err != nil {
+			rows.Close()
 			return fmt.Errorf("재색인 그래프 행 해석: %w", err)
 		}
 		graphID, err := model.ParseID(rawGraphID)
 		if err != nil {
+			rows.Close()
 			return fmt.Errorf("재색인 그래프 식별자 해석: %w", err)
 		}
+		graphIDs = append(graphIDs, graphID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("재색인 그래프 행 읽기: %w", err)
+	}
+	for _, graphID := range graphIDs {
 		if err := s.ReindexGraph(ctx, graphID); err != nil {
 			return err
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("재색인 그래프 행 읽기: %w", err)
 	}
 	return nil
 }
@@ -310,7 +376,18 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	if !graphID.IsV7() || modelID == "" || len(embedding) == 0 || !current.UTC().Equal(current) || limit < 1 {
 		return nil, fmt.Errorf("의미 유사도 검색 인자가 올바르지 않다")
 	}
-	rows, err := s.pool.Query(ctx, `
+	// 후보 식별자만 트랜잭션 안에서 읽고, 조립은 트랜잭션을 닫은 뒤에 한다. 반복 탐색
+	// 설정이 트랜잭션 범위라 질의가 그 안에 있어야 하고, 조립까지 안에 두면 연결을 오래
+	// 쥔 채 정점 조회가 같은 풀에서 연결을 하나 더 잡는다.
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("의미 유사도 검색 트랜잭션 시작: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := enableIterativeScan(ctx, tx); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
 		SELECT candidate.context_id::text
 		FROM public.context_embedding AS candidate
 		JOIN `+s.contextTable()+` AS node ON (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
@@ -328,6 +405,9 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	ids, err := searchCandidateIDs(rows)
 	if err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("의미 유사도 검색 커밋: %w", err)
 	}
 	return s.searchCandidates(ctx, graphID, ids)
 }
@@ -453,42 +533,55 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 	if target.Layer != model.LayerEvent || target.DeletedAt != nil {
 		return nil
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT candidate.context_id::text, target.embedding <=> candidate.embedding
-		FROM public.context_embedding AS target
-		JOIN public.context_embedding AS candidate ON candidate.graph_id = target.graph_id
+	// 대상 벡터를 먼저 한 행으로 읽어 파라미터로 넘긴다. 임베딩끼리 조인해 두 열의 연산으로
+	// 정렬하면 정렬 기준이 열이 아니라서 벡터 인덱스를 쓸 수 없고, 같은 그래프의 모든 임베딩과
+	// 거리를 계산한다. 파라미터에 타입을 박지 않는 이유는 「임베딩 저장」이 열 타입을 배포
+	// 구성으로 두었기 때문이며, 거리 연산자가 왼쪽 열 타입으로 파라미터 타입을 결정한다.
+	var targetVector string
+	err = s.pool.QueryRow(ctx, `
+		SELECT embedding::text FROM public.context_embedding
+		WHERE context_id = $1 AND graph_id = $2 AND model_id = $3`,
+		eventID.String(), graphID.String(), modelID).Scan(&targetVector)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// 색인이 아직 없거나 모델이 다르면 비교할 벡터가 없다. 제안도 없다.
+			return nil
+		}
+		return fmt.Errorf("의미 관계 대상 벡터 조회: %w", err)
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fmt.Errorf("의미 관계 후보 트랜잭션 시작: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := enableIterativeScan(ctx, tx); err != nil {
+		return err
+	}
+	// 유사도 하한을 질의의 조건으로 내린다. Go에서 걸러내면 상한까지 뽑은 후보가 모두 임계값
+	// 미달일 때 기준을 넘는 후보가 더 있어도 놓친다. 코사인 거리는 1에서 유사도를 뺀 값이다.
+	rows, err := tx.Query(ctx, `
+		SELECT candidate.context_id::text
+		FROM public.context_embedding AS candidate
 		JOIN `+s.contextTable()+` AS node ON (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
-		WHERE target.context_id = $1 AND target.graph_id = $2 AND target.model_id = $3
-			AND candidate.context_id <> target.context_id AND candidate.model_id = $3
+		WHERE candidate.graph_id = $2 AND candidate.model_id = $3
+			AND candidate.context_id <> $1::uuid
+			AND candidate.embedding <=> $4 <= $5
 			AND node.properties ->> 'layer'::text = 'event' AND node.properties ->> 'deleted_at'::text IS NULL
-		ORDER BY target.embedding <=> candidate.embedding, candidate.context_id
-		LIMIT $4`, eventID.String(), graphID.String(), modelID, s.relationProposals.Limit)
+		ORDER BY candidate.embedding <=> $4, candidate.context_id
+		LIMIT $6`,
+		eventID.String(), graphID.String(), modelID, targetVector,
+		1-s.relationProposals.SimilarityThreshold, s.relationProposals.Limit)
 	if err != nil {
 		return fmt.Errorf("의미 관계 후보 조회: %w", err)
 	}
-	// 후보를 먼저 모아 행을 놓아준다. 행을 연 채 관계를 만들면 같은 풀에서 트랜잭션용
-	// 연결을 하나 더 잡아 색인 작업자와 요청 경로가 서로의 연결을 기다린다.
-	similar := make([]model.ID, 0)
-	for rows.Next() {
-		var rawID string
-		var distance float64
-		if err := rows.Scan(&rawID, &distance); err != nil {
-			rows.Close()
-			return fmt.Errorf("의미 관계 후보 행 해석: %w", err)
-		}
-		if 1-distance < s.relationProposals.SimilarityThreshold {
-			continue
-		}
-		otherID, err := model.ParseID(rawID)
-		if err != nil {
-			rows.Close()
-			return fmt.Errorf("의미 관계 후보 식별자 해석: %w", err)
-		}
-		similar = append(similar, otherID)
+	// 후보를 먼저 모아 행과 트랜잭션을 놓아준다. 행을 연 채 관계를 만들면 같은 풀에서
+	// 트랜잭션용 연결을 하나 더 잡아 색인 작업자와 요청 경로가 서로의 연결을 기다린다.
+	similar, err := searchCandidateIDs(rows)
+	if err != nil {
+		return err
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("의미 관계 후보 행 읽기: %w", err)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("의미 관계 후보 커밋: %w", err)
 	}
 	for _, otherID := range similar {
 		relation := normalizeRelation(proposedRelation(graphID, model.RelationTypeRelatesTo, eventID, otherID))
@@ -501,10 +594,39 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 
 func (s *Store) contextTable() string { return `"` + s.graphName + `"."Context"` }
 
+// vectorText는 float64 목록을 pgvector 리터럴로 만든다.
+//
+// 검색 한 번과 색인 한 번마다 차원 수만큼 도는 자리다. 값마다 문자열을 만들지 않고 버퍼
+// 하나에 이어 붙인다. %g와 같은 표현을 얻으려면 AppendFloat의 정밀도를 -1로 둔다.
 func vectorText(values []float64) string {
-	parts := make([]string, len(values))
+	// 값 하나에 부호와 소수점, 지수까지 넉넉히 잡아 재할당을 없앤다.
+	buffer := make([]byte, 0, len(values)*24+2)
+	buffer = append(buffer, '[')
 	for index, value := range values {
-		parts[index] = fmt.Sprintf("%g", value)
+		if index > 0 {
+			buffer = append(buffer, ',')
+		}
+		buffer = strconv.AppendFloat(buffer, value, 'g', -1, 64)
 	}
-	return "[" + strings.Join(parts, ",") + "]"
+	return string(append(buffer, ']'))
+}
+
+// enableIterativeScan은 이 트랜잭션의 벡터 인덱스 질의가 조건에 걸러진 만큼 더 훑게 한다.
+//
+// HNSW는 조건을 보지 않고 전역 근접 이웃을 먼저 꺼내므로, graph_id·model_id·삭제·유효 기간
+// 조건이 뒤에서 걸러내면 상한을 채우지 못하거나 0건이 될 수 있다. 여러 그래프를 한 테이블에
+// 논리로 격리하는 이 배포에서는 그래프가 작을수록 잘 걸린다. pgvector의 반복 탐색은 상한을
+// 채울 때까지 인덱스를 이어 훑고, strict_order는 그러면서도 거리 순서를 정확히 지킨다.
+//
+// 반복 탐색은 pgvector 0.8.0에서 들어왔고 「버전 요구」의 하한은 0.7.0이다. 그래서 설정이
+// 없는 배포에서는 아무것도 하지 않도록 WHERE로 막는다. SET LOCAL 대신 set_config를 쓰는
+// 이유가 이것이며, 없는 설정에 SET을 보내면 오류로 트랜잭션이 끊긴다. is_local을 참으로
+// 두어 설정이 이 트랜잭션에서만 살고 풀의 연결에 남지 않게 한다.
+func enableIterativeScan(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, `
+		SELECT set_config('hnsw.iterative_scan', 'strict_order', true)
+		WHERE current_setting('hnsw.iterative_scan', true) IS NOT NULL`); err != nil {
+		return fmt.Errorf("벡터 반복 탐색 설정: %w", err)
+	}
+	return nil
 }

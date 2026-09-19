@@ -61,6 +61,35 @@ func TestCytoscapeAssetIsServedLocally(t *testing.T) {
 	}
 }
 
+// TestCytoscapeAssetRevalidatesWithETag는 자산 응답이 조건부 요청을 성립시키는지 확인한다.
+// 내장 파일의 수정 시각이 제로 값이라 ETag가 없으면 화면을 열 때마다 자산 전체가 다시
+// 내려간다.
+func TestCytoscapeAssetRevalidatesWithETag(t *testing.T) {
+	server := newTestServer(t, model.ID{}, model.ID{})
+	first := httptest.NewRecorder()
+	server.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/assets/cytoscape.min.js", nil))
+
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("자산 응답에 ETag가 없다")
+	}
+	if cacheControl := first.Header().Get("Cache-Control"); cacheControl == "" {
+		t.Fatal("자산 응답에 Cache-Control이 없다")
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/assets/cytoscape.min.js", nil)
+	request.Header.Set("If-None-Match", etag)
+	second := httptest.NewRecorder()
+	server.ServeHTTP(second, request)
+
+	if second.Code != http.StatusNotModified {
+		t.Fatalf("조건부 요청 응답 = %d, want %d", second.Code, http.StatusNotModified)
+	}
+	if second.Body.Len() != 0 {
+		t.Fatalf("조건부 요청이 본문 %d바이트를 다시 내려보냈다", second.Body.Len())
+	}
+}
+
 func newTestServer(t *testing.T, accountID, graphID model.ID) *Server {
 	t.Helper()
 	return newTestServerWith(t, accountID, &fakeGraphStore{accountID: accountID, graphID: graphID})
@@ -128,6 +157,10 @@ type fakeGraphStore struct {
 	teamCreated  string
 	contextSet   *model.ID
 	contextState bool
+	truncated    bool
+	cursor       string
+	// outside에는 목록에는 실리지 않지만 그래프에는 있는 컨텍스트를 둔다.
+	outside []model.Context
 }
 
 func (fake fakeGraphStore) EffectiveGrade(context.Context, model.ID, model.ID) (model.GraphGrade, bool, error) {
@@ -137,8 +170,8 @@ func (fake fakeGraphStore) EffectiveGrade(context.Context, model.ID, model.ID) (
 	}
 	return grade, fake.graphID.IsV7(), nil
 }
-func (fakeGraphStore) ListGraphs(context.Context, model.ID, model.GraphListFilter, string, int) ([]model.GraphListItem, string, error) {
-	return nil, "", nil
+func (fake fakeGraphStore) ListGraphs(context.Context, model.ID, model.GraphListFilter, string, int) ([]model.GraphListItem, string, error) {
+	return nil, fake.cursor, nil
 }
 func (store fakeGraphStore) Graph(_ context.Context, graphID model.ID) (model.Graph, error) {
 	return model.Graph{ID: graphID, Name: "테스트 그래프"}, nil
@@ -156,11 +189,21 @@ func (fake fakeGraphStore) GraphVisualization(_ context.Context, graphID model.I
 	}
 	return result, nil
 }
-func (fake fakeGraphStore) ListActiveContexts(context.Context, model.ID, int) ([]model.Context, error) {
-	return fake.active, nil
+func (fake fakeGraphStore) Context(_ context.Context, graphID, contextID model.ID) (model.Context, error) {
+	candidates := append(append([]model.Context{}, fake.active...), fake.deleted...)
+	for _, value := range append(candidates, fake.outside...) {
+		if value.GraphID == graphID && value.ID == contextID {
+			return value, nil
+		}
+	}
+	return model.Context{}, store.ErrNotFound
 }
-func (fake fakeGraphStore) ListDeletedContexts(context.Context, model.ID, int) ([]model.Context, error) {
-	return fake.deleted, nil
+
+func (fake fakeGraphStore) ListActiveContexts(context.Context, model.ID, int) ([]model.Context, bool, error) {
+	return fake.active, fake.truncated, nil
+}
+func (fake fakeGraphStore) ListDeletedContexts(context.Context, model.ID, int) ([]model.Context, bool, error) {
+	return fake.deleted, fake.truncated, nil
 }
 func (fake fakeGraphStore) ListOwnedDeletedGraphs(context.Context, model.ID) ([]model.Graph, error) {
 	return fake.ownedDeleted, nil
@@ -348,5 +391,105 @@ func TestGraphListLinksRestoreForOwnDeletedGraphs(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "/graphs/"+graphID.String()+"/deletion") {
 		t.Fatal("직접 삭제한 그래프의 복구 링크가 없다")
+	}
+}
+
+// TestLoginReturnsToAuthorizeRequest는 로그인 뒤 원래의 인가 요청으로 돌아가는지
+// 확인한다. 「인가 코드 흐름」 5단계가 인가 요청으로 되돌아오는 유일한 통로다.
+func TestLoginReturnsToAuthorizeRequest(t *testing.T) {
+	server := newTestServer(t, model.ID{1}, model.ID{2})
+	next := "/authorize?client_id=test-client&resource=https%3A%2F%2Fservice.test%2Fmcp"
+	form := url.Values{"login_id": {"tester"}, "password": {"correct horse battery staple"}, "next": {next}}
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("로그인 응답 상태 = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if location := recorder.Header().Get("Location"); location != next {
+		t.Fatalf("로그인 뒤 이동 = %q, want %q", location, next)
+	}
+}
+
+// TestLoginRejectsExternalReturnTarget은 복귀 주소가 이 서버 밖을 가리키면 버리는지
+// 확인한다. 값이 사용자 입력이므로 그대로 쓰면 열린 리다이렉션이 된다.
+func TestLoginRejectsExternalReturnTarget(t *testing.T) {
+	server := newTestServer(t, model.ID{1}, model.ID{2})
+	for _, target := range []string{"https://evil.test/steal", "//evil.test/steal", "javascript:alert(1)"} {
+		form := url.Values{"login_id": {"tester"}, "password": {"correct horse battery staple"}, "next": {target}}
+		request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, request)
+		if location := recorder.Header().Get("Location"); location != "/graphs" {
+			t.Fatalf("%s 복귀 주소 = %q, want /graphs", target, location)
+		}
+	}
+}
+
+// TestGraphListAcceptsEmptyGradeFilter는 "모든 등급"을 고른 필터 적용이 통과하는지
+// 확인한다. 기본 선택지가 빈 값을 보내므로 거르지 않으면 이름 필터만 쓰는 것도 400이 된다.
+func TestGraphListAcceptsEmptyGradeFilter(t *testing.T) {
+	accountID, graphID := testID(t), testID(t)
+	server := newTestServerWith(t, accountID, &fakeGraphStore{accountID: accountID, graphID: graphID})
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, sessionRequest(http.MethodGet, "/graphs?name=&grade=", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("빈 등급 필터 응답 = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
+// TestGraphListNextPageKeepsFilters는 다음 쪽 링크가 현재 필터를 유지하는지 확인한다.
+// 커서만 실으면 2쪽부터 필터가 풀린 전체 목록이 나온다.
+func TestGraphListNextPageKeepsFilters(t *testing.T) {
+	accountID, graphID := testID(t), testID(t)
+	graphs := &fakeGraphStore{accountID: accountID, graphID: graphID, cursor: "next-cursor"}
+	server := newTestServerWith(t, accountID, graphs)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, sessionRequest(http.MethodGet, "/graphs?name=검색어&grade=owner&grade=editor", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("응답 상태 = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, want := range []string{"cursor=next-cursor", "name=%EA%B2%80%EC%83%89%EC%96%B4", "grade=owner", "grade=editor"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("더 보기 링크에 %q가 없다: %s", want, nextPageLink(body))
+		}
+	}
+}
+
+// nextPageLink는 실패 메시지에 실을 더 보기 링크만 뽑는다.
+func nextPageLink(body string) string {
+	start := strings.Index(body, "더 보기")
+	if start == -1 {
+		return "더 보기 링크가 없다"
+	}
+	prefix := strings.LastIndex(body[:start], "<a href=")
+	if prefix == -1 {
+		return body[max(0, start-120):start]
+	}
+	return body[prefix:start]
+}
+
+// TestDeletionScreenOpensContextOutsideList는 목록에 없는 활성 컨텍스트도 context_id로
+// 열 수 있는지 확인한다. 목록이 상한으로 잘리므로 목록 안에서만 찾으면 그래프에
+// 컨텍스트가 많을 때 화면에서 삭제도 복구도 할 수 없다.
+func TestDeletionScreenOpensContextOutsideList(t *testing.T) {
+	accountID, graphID := testID(t), testID(t)
+	outside := model.Context{ID: testID(t), GraphID: graphID, Layer: model.LayerSource, Body: "목록 밖 본문"}
+	graphs := &fakeGraphStore{
+		accountID: accountID, graphID: graphID, grade: model.GraphGradeOwner,
+		// 목록에는 없지만 그래프에는 있는 컨텍스트다.
+		active: nil, outside: []model.Context{outside}, truncated: true,
+	}
+	server := newTestServerWith(t, accountID, graphs)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, sessionRequest(http.MethodGet, "/graphs/"+graphID.String()+"/deletion?context_id="+outside.ID.String(), nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("목록 밖 컨텍스트 응답 = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(recorder.Body.String(), "목록 밖 본문") {
+		t.Fatal("선택한 컨텍스트가 화면에 없다")
 	}
 }

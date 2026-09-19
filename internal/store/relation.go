@@ -71,6 +71,15 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	}
 	defer tx.Rollback(ctx)
 
+	// 정체성 조회와 생성 사이를 그래프 행 잠금으로 직렬화한다. AGE 간선에는 유일
+	// 인덱스가 없어 같은 (유형, from, to)의 동시 확정이 간선을 여러 개 만들고, 순환
+	// 검사도 서로의 미커밋 간선을 보지 못해 A→B와 B→A가 함께 통과한다. 「판정의
+	// 직렬화」가 같은 행을 이미 쓰기 경로의 직렬화 지점으로 두었으므로 새 경합 지점은
+	// 아니며, 이 트랜잭션도 외부 호출 없이 끝난다.
+	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return model.Relation{}, err
+	}
+
 	from, err := s.context(ctx, tx, graphID, relation.FromContextID)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 시작 사건 조회: %w", err)
@@ -88,12 +97,8 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		return model.Relation{}, err
 	}
 	if errors.Is(err, ErrNotFound) {
-		pathExists, err := s.hasConfirmedRelationPath(ctx, tx, graphID, relation.Type, relation.ToContextID, relation.FromContextID)
-		if err != nil {
-			return model.Relation{}, fmt.Errorf("관계 순환 경로 조회: %w", err)
-		}
-		if err := model.ValidateRelationCycle(relation, func(_, _ model.ID) bool { return pathExists }); err != nil {
-			return model.Relation{}, fmt.Errorf("관계 순환 검증: %w", errors.Join(ErrInvalidRelation, err))
+		if err := s.validateRelationCycle(ctx, tx, graphID, relation); err != nil {
+			return model.Relation{}, err
 		}
 		stored, err := s.createRelation(ctx, tx, graphID, relation)
 		if err != nil {
@@ -109,6 +114,12 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	}
 
 	if existing.State != model.RelationStateConfirmed {
+		// 폐기하거나 제안 상태인 관계를 확정으로 되돌리는 것도 새 확정 간선을 만드는
+		// 것과 같다. A→B를 폐기하고 B→A를 확정한 뒤 A→B를 재확정하면 순환이 확정되므로
+		// 새 관계와 같은 검사를 지나야 한다.
+		if err := s.validateRelationCycle(ctx, tx, graphID, relation); err != nil {
+			return model.Relation{}, err
+		}
 		existing.State = model.RelationStateConfirmed
 		existing.DeletedAt = nil
 		existing.ConfirmedBy = relation.ConfirmedBy
@@ -139,6 +150,13 @@ func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.I
 		return model.Relation{}, fmt.Errorf("관계 폐기 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// 확정과 같은 그래프 행을 잠근다. 관계에는 판 번호가 없어 낙관적 잠금으로 거를 수
+	// 없으므로, 같은 관계에 폐기가 동시에 오면 읽은 상태가 둘 다 통과해 AGE가 동시 갱신
+	// 오류를 낸다. 잠금이 조회와 갱신 사이를 직렬화해 뒤에 온 요청이 이미 폐기된 상태를
+	// 보고 정상적으로 거부된다.
+	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return model.Relation{}, err
+	}
 	stored, err := s.relationByID(ctx, tx, graphID, relationID)
 	if err != nil {
 		return model.Relation{}, err
@@ -248,7 +266,7 @@ func (s *Store) proposeEventRelationsAfterSave(ctx context.Context, graphID mode
 func (s *Store) activeEventContexts(ctx context.Context, graphID model.ID) ([]model.Context, error) {
 	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) +
 		" AND node.layer = 'event' AND node.deleted_at IS NULL RETURN node ORDER BY node.context_id ASC"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"))
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("활성 사건 조회: %w", err)
 	}
@@ -288,7 +306,7 @@ func (s *Store) eventMembersByEvent(ctx context.Context, graphID model.ID) (map[
 		" AND edge.graph_id = " + cypherString(graphID.String()) +
 		" AND member.graph_id = " + cypherString(graphID.String()) +
 		" RETURN event.context_id, member.context_id ORDER BY event.context_id, member.context_id"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "event agtype, member agtype"))
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "event agtype, member agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("활성 사건 구성원 조회: %w", err)
 	}
@@ -419,6 +437,19 @@ func (s *Store) proposeRankedRelations(ctx context.Context, graphID model.ID, ca
 	return nil
 }
 
+// validateRelationCycle은 확정으로 가는 모든 경로가 쓰는 순환 검사다. 새 관계의 확정과
+// 기존 관계의 재확정이 같은 규칙을 지나야 한 쪽으로만 순환이 들어오지 않는다.
+func (s *Store) validateRelationCycle(ctx context.Context, tx pgx.Tx, graphID model.ID, relation model.Relation) error {
+	pathExists, err := s.hasConfirmedRelationPath(ctx, tx, graphID, relation.Type, relation.ToContextID, relation.FromContextID)
+	if err != nil {
+		return fmt.Errorf("관계 순환 경로 조회: %w", err)
+	}
+	if err := model.ValidateRelationCycle(relation, func(_, _ model.ID) bool { return pathExists }); err != nil {
+		return fmt.Errorf("관계 순환 검증: %w", errors.Join(ErrInvalidRelation, err))
+	}
+	return nil
+}
+
 func (s *Store) createProposedRelation(ctx context.Context, graphID model.ID, relation model.Relation) (bool, error) {
 	relationID, err := model.NewID()
 	if err != nil {
@@ -430,6 +461,11 @@ func (s *Store) createProposedRelation(ctx context.Context, graphID model.ID, re
 		return false, fmt.Errorf("후보 관계 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// 확정 경로와 같은 이유로 정체성 조회와 생성 사이를 직렬화한다. 후보 제안이 확정과
+	// 겹쳐도 같은 정체성의 간선이 둘 생기지 않아야 한다.
+	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return false, err
+	}
 	if _, err := s.relationByIdentity(ctx, tx, graphID, relation.Type, relation.FromContextID, relation.ToContextID); err == nil {
 		return false, nil
 	} else if !errors.Is(err, ErrNotFound) {
@@ -480,7 +516,7 @@ func (s *Store) listRelations(ctx context.Context, queryer cypherQueryer, graphI
 		query += " AND edge.relation_id < " + cypherString(relationID.String())
 	}
 	query += " RETURN edge ORDER BY edge.relation_id DESC LIMIT " + fmt.Sprint(limit+1)
-	rows, err := queryer.Query(ctx, s.cypherSQL(query, "edge agtype"))
+	rows, err := queryer.Query(ctx, s.cypherSQL(query, "edge agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, "", fmt.Errorf("관계 목록 조회: %w", err)
 	}
@@ -683,7 +719,7 @@ func joinRelationValues(values []string) string {
 // relationFromCypher는 사건 관계 간선을 받는 모든 AGE 질의의 응답 조립 지점이다.
 func (s *Store) relationFromCypher(ctx context.Context, queryer cypherQueryer, graphID model.ID, query string) (model.Relation, error) {
 	var raw string
-	if err := queryer.QueryRow(ctx, s.cypherSQL(query, "edge agtype")).Scan(&raw); err != nil {
+	if err := queryer.QueryRow(ctx, s.cypherSQL(query, "edge agtype"), pgx.QueryExecModeExec).Scan(&raw); err != nil {
 		return model.Relation{}, err
 	}
 	return parseRelation(raw, graphID)

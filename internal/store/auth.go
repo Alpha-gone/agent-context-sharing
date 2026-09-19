@@ -129,11 +129,15 @@ func (s *Store) AuthorizationCodeForExchange(ctx context.Context, hash string, n
 	if err != nil {
 		return AuthorizationCode{}, err
 	}
-	if !code.ExpiresAt.After(now) {
-		return AuthorizationCode{}, ErrNotFound
-	}
+	// 소비 여부를 만료보다 먼저 본다. 코드 수명은 60초이고 접근 토큰은 1시간이므로,
+	// 만료를 먼저 보면 탈취한 코드를 60초 뒤에 다시 제시할 때 재사용이 아니라 없는
+	// 코드로 판정되어 그 코드로 발급한 토큰이 폐기되지 않는다. 「인가 코드 흐름」이
+	// 소비 행을 남겨 두는 이유가 재사용 감지와 폐기 대상 찾기다.
 	if code.ConsumedAt != nil {
 		return AuthorizationCode{}, codeUsedError(code)
+	}
+	if !code.ExpiresAt.After(now) {
+		return AuthorizationCode{}, ErrNotFound
 	}
 	return code, nil
 }
@@ -167,11 +171,15 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, hash, tokenID stri
 	if err != nil {
 		return AuthorizationCode{}, err
 	}
-	if !code.ExpiresAt.After(now) {
-		return AuthorizationCode{}, ErrNotFound
-	}
+	// 소비 여부를 만료보다 먼저 본다. 코드 수명은 60초이고 접근 토큰은 1시간이므로,
+	// 만료를 먼저 보면 탈취한 코드를 60초 뒤에 다시 제시할 때 재사용이 아니라 없는
+	// 코드로 판정되어 그 코드로 발급한 토큰이 폐기되지 않는다. 「인가 코드 흐름」이
+	// 소비 행을 남겨 두는 이유가 재사용 감지와 폐기 대상 찾기다.
 	if code.ConsumedAt != nil {
 		return AuthorizationCode{}, codeUsedError(code)
+	}
+	if !code.ExpiresAt.After(now) {
+		return AuthorizationCode{}, ErrNotFound
 	}
 	return AuthorizationCode{}, ErrNotFound
 }
@@ -232,6 +240,33 @@ func (s *Store) RevokeToken(ctx context.Context, tokenID string, expiresAt time.
 }
 
 // IsTokenRevoked는 아직 만료되지 않은 폐기 목록 항목을 확인한다.
+// RevokedTokenIDs는 아직 만료되지 않은 폐기 토큰 식별자를 모두 읽는다.
+//
+// 「토큰 검증」이 폐기 목록을 요청마다 가져오지 않기로 했으므로 접근 계층이 이 목록을
+// 메모리에 두고 쓴다. 폐기 행은 토큰 만료까지만 남으므로 목록의 크기가 제한된다.
+func (s *Store) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("폐기 목록 조회 시각이 비어 있다")
+	}
+	rows, err := s.pool.Query(ctx, `SELECT token_id FROM public.revoked_token WHERE expires_at > $1`, now)
+	if err != nil {
+		return nil, fmt.Errorf("폐기 목록 조회: %w", err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("폐기 목록 행 해석: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("폐기 목록 행 읽기: %w", err)
+	}
+	return ids, nil
+}
+
 func (s *Store) IsTokenRevoked(ctx context.Context, tokenID string, now time.Time) (bool, error) {
 	if tokenID == "" || now.IsZero() {
 		return false, fmt.Errorf("토큰 폐기 조회 인자가 올바르지 않다")

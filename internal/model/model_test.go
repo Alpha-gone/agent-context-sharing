@@ -2,6 +2,7 @@ package model
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 )
@@ -241,4 +242,32 @@ func newTestID(t *testing.T, at time.Time) ID {
 		t.Fatalf("시험 식별자 생성: %v", err)
 	}
 	return id
+}
+
+// TestParseIDRejectsNonStandardHyphens는 하이픈이 표준 배치가 아닌 UUID 표기를 거부하는지
+// 확인한다. 위치와 무관하게 지우면 같은 식별자가 여러 문자열로 들어와 기록과 응답의
+// 표기가 어긋난다.
+func TestParseIDRejectsNonStandardHyphens(t *testing.T) {
+	id, err := NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := id.String()
+	compact := strings.ReplaceAll(canonical, "-", "")
+	// 표준 표기와 하이픈 없는 표기는 받는다.
+	for _, raw := range []string{canonical, compact} {
+		if parsed, err := ParseID(raw); err != nil || parsed != id {
+			t.Fatalf("정상 표기 %q 해석 = %v, %v", raw, parsed, err)
+		}
+	}
+	// 자리를 옮긴 하이픈은 거부한다.
+	for _, raw := range []string{
+		compact[:1] + "-" + compact[1:],
+		compact[:4] + "-" + compact[4:12] + "-" + compact[12:16] + "-" + compact[16:20] + "-" + compact[20:],
+		"-" + compact,
+	} {
+		if _, err := ParseID(raw); err == nil {
+			t.Fatalf("비정규 표기 %q가 통과했다", raw)
+		}
+	}
 }

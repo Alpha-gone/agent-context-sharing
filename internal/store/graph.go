@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/plan"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -35,7 +36,7 @@ func (s *Store) CreateGraph(ctx context.Context, graph model.Graph) (model.Graph
 }
 
 // CreateGraphWithOwner는 그래프 생성과 생성 계정의 소유자 등급 부여를 한 트랜잭션에 묶는다.
-func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph) (model.Graph, error) {
+func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, limits WriteLimits) (model.Graph, error) {
 	if err := graph.Validate(); err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 검증: %w", err)
 	}
@@ -44,6 +45,17 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph) (mo
 		return model.Graph{}, fmt.Errorf("그래프 생성 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// 소유 그래프 수를 같은 트랜잭션에서 센다. 밖에서 읽은 값으로만 판정하면 한도 직전
+	// 계정의 동시 생성이 둘 다 통과한다.
+	if limits.GraphsPerAccount > 0 {
+		count, err := ownedGraphCount(ctx, tx, graph.CreatedBy)
+		if err != nil {
+			return model.Graph{}, err
+		}
+		if err := plan.CheckIncrease("graphs_per_account", count, 1, limits.GraphsPerAccount); err != nil {
+			return model.Graph{}, err
+		}
+	}
 	row := tx.QueryRow(ctx, `
 		INSERT INTO public.context_graph (
 			graph_id, name, description, created_by, created_at, last_activity_at,
@@ -91,6 +103,11 @@ func (s *Store) Graph(ctx context.Context, graphID model.ID) (model.Graph, error
 }
 
 // ListGraphs는 요청 계정에 유효한 등급이 있는 그래프만 최근 활동 순서로 읽는다.
+//
+// 정렬 키 last_activity_at은 쓰기로 커지는 값이므로 페이지를 넘기는 동안 활동한
+// 그래프는 앞 페이지로 이동해 이번 페이징의 뒤 페이지에는 나타나지 않는다. 중복은
+// 나지 않으며 옮겨간 그래프는 새 조회의 첫 페이지에 다시 보인다. 「페이지 처리」가
+// 최근 활동순을 유지하기 위해 감수하기로 확정한 귀결이다.
 func (s *Store) ListGraphs(ctx context.Context, accountID model.ID, filter model.GraphListFilter, cursor string, limit int) ([]model.GraphListItem, string, error) {
 	if !accountID.IsV7() {
 		return nil, "", fmt.Errorf("요청 계정 식별자가 UUIDv7이 아니다")

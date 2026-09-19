@@ -2,7 +2,9 @@
 package config
 
 import (
+	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -73,10 +75,8 @@ type Config struct {
 	SearchFoldThreshold float64
 	// SearchGraphStage 필드에는 그래프 검색 비교에서 활성화할 누적 단계를 둔다.
 	SearchGraphStage SearchGraphStage
-	// OAuthClientIDs 필드에는 사전 등록한 OAuth 클라이언트 식별자를 둔다.
-	OAuthClientIDs []string
-	// OAuthRedirectURIs 필드에는 허용된 OAuth 콜백 주소를 둔다.
-	OAuthRedirectURIs []*url.URL
+	// OAuthClients 필드에는 클라이언트별로 사전 등록한 OAuth 콜백 주소 목록을 둔다.
+	OAuthClients map[string][]*url.URL
 	// ResourceServerURL 필드에는 보호 리소스 서버의 고정 MCP 엔드포인트 주소를 둔다.
 	ResourceServerURL *url.URL
 	// AuthorizationServerURL 필드에는 인가 서버의 고정 issuer 주소를 둔다.
@@ -175,16 +175,11 @@ func Load(env Environment) (Config, error) {
 		return Config{}, fmt.Errorf("SEARCH_GRAPH_STAGE %q가 baseline, references, relations, global 중 하나가 아니다", cfg.SearchGraphStage)
 	}
 
-	clientIDs, err := parseList("OAUTH_CLIENT_IDS", env("OAUTH_CLIENT_IDS"))
+	clients, err := parseOAuthClients("OAUTH_CLIENTS", env("OAUTH_CLIENTS"))
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.OAuthClientIDs = clientIDs
-	redirects, err := parseURLs("OAUTH_REDIRECT_URIS", env("OAUTH_REDIRECT_URIS"))
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.OAuthRedirectURIs = redirects
+	cfg.OAuthClients = clients
 	resourceServerURL, err := parseResourceServerURL(env("RESOURCE_SERVER_URL"))
 	if err != nil {
 		return Config{}, err
@@ -392,6 +387,59 @@ func parseURLs(name, raw string) ([]*url.URL, error) {
 		urls = append(urls, parsed)
 	}
 	return urls, nil
+}
+
+// parseOAuthClients는 클라이언트를 키로 하는 JSON 객체를 클라이언트별 redirect_uri
+// 허용 목록으로 해석한다. 목록이 클라이언트별이어야 등록된 어떤 클라이언트도 다른
+// 클라이언트의 콜백으로 인가 코드를 받지 못한다.
+func parseOAuthClients(name, raw string) (map[string][]*url.URL, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("%s가 비어 있다", name)
+	}
+	var clients map[string][]string
+	if err := json.Unmarshal([]byte(raw), &clients); err != nil {
+		return nil, fmt.Errorf("%s JSON 해석: %w", name, err)
+	}
+	if len(clients) == 0 {
+		return nil, fmt.Errorf("%s가 비어 있다", name)
+	}
+	parsed := make(map[string][]*url.URL, len(clients))
+	for _, clientID := range slices.Sorted(maps.Keys(clients)) {
+		if clientID == "" {
+			return nil, fmt.Errorf("%s에 빈 client_id가 있다", name)
+		}
+		allowed, err := parseClientRedirectURIs(name, clientID, clients[clientID])
+		if err != nil {
+			return nil, err
+		}
+		parsed[clientID] = allowed
+	}
+	return parsed, nil
+}
+
+// parseClientRedirectURIs는 한 클라이언트의 redirect_uri 배열을 검증해 해석한다.
+func parseClientRedirectURIs(name, clientID string, values []string) ([]*url.URL, error) {
+	if len(values) == 0 {
+		return nil, fmt.Errorf("%s의 클라이언트 %q redirect_uri 목록이 비어 있다", name, clientID)
+	}
+	allowed := make([]*url.URL, 0, len(values))
+	var seen []string
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, fmt.Errorf("%s의 클라이언트 %q에 빈 redirect_uri가 있다", name, clientID)
+		}
+		if slices.Contains(seen, trimmed) {
+			return nil, fmt.Errorf("%s의 클라이언트 %q에 중복 redirect_uri %q가 있다", name, clientID, trimmed)
+		}
+		seen = append(seen, trimmed)
+		redirect, err := parseHTTPURL(name, trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("클라이언트 %q: %w", clientID, err)
+		}
+		allowed = append(allowed, redirect)
+	}
+	return allowed, nil
 }
 
 func parseOriginURLs(name, raw string) ([]*url.URL, error) {

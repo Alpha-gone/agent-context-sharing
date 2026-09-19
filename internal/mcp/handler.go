@@ -20,16 +20,16 @@ import (
 type Operations interface {
 	perm.GradeStore
 	ListGraphs(context.Context, model.ID, model.GraphListFilter, string, int) ([]model.GraphListItem, string, error)
-	CreateGraphWithOwner(context.Context, model.Graph) (model.Graph, error)
+	CreateGraphWithOwner(context.Context, model.Graph, store.WriteLimits) (model.Graph, error)
 	Graph(context.Context, model.ID) (model.Graph, error)
 	UpdateGraph(context.Context, model.ID, int64, string, string) (model.Graph, error)
 	Context(context.Context, model.ID, model.ID) (model.Context, error)
 	HopContexts(context.Context, model.ID, model.ID, int, string, []string, int) (store.HopResult, error)
-	CreateContextWithOperation(context.Context, model.ID, model.Context, []model.ID, *store.OperationRecord) (model.Context, error)
-	CreateSupersedingContextWithOperation(context.Context, model.ID, model.Context, []model.ID, model.ID, *store.OperationRecord) (model.Context, error)
-	UpdateContextWithOperation(context.Context, model.ID, int64, model.Context, *store.OperationRecord) (model.Context, error)
-	DiscardContext(context.Context, model.ID, model.ID, *store.OperationRecord) (model.Context, error)
-	RestoreContext(context.Context, model.ID, model.ID, *store.OperationRecord) (model.Context, error)
+	CreateContextWithOperation(context.Context, model.ID, model.Context, []model.ID, *store.OperationRecord, store.WriteLimits) (model.Context, error)
+	CreateSupersedingContextWithOperation(context.Context, model.ID, model.Context, []model.ID, model.ID, *store.OperationRecord, store.WriteLimits) (model.Context, error)
+	UpdateContextWithOperation(context.Context, model.ID, int64, model.Context, *store.OperationRecord, store.WriteLimits) (model.Context, error)
+	DiscardContext(context.Context, model.ID, model.ID, *store.OperationRecord, store.WriteLimits) (model.Context, error)
+	RestoreContext(context.Context, model.ID, model.ID, *store.OperationRecord, store.WriteLimits) (model.Context, error)
 	KeepContext(context.Context, model.ID, model.ID, int64, *store.OperationRecord) (model.Context, error)
 	ListContextRelations(context.Context, model.ID, model.ID, []model.RelationState, []model.RelationType, string, int) ([]model.Relation, string, error)
 	ConfirmRelation(context.Context, model.ID, model.Relation, *store.OperationRecord) (model.Relation, error)
@@ -37,7 +37,6 @@ type Operations interface {
 	HasAppliedDiscard(context.Context, model.ID, model.ID) (bool, error)
 	RecordRejectedOperation(context.Context, store.OperationRecord, string) error
 	OwnedGraphCount(context.Context, model.ID) (int, error)
-	TryIncrementRequestRate(context.Context, model.ID, time.Time, int) (int, bool, error)
 }
 
 // NewHandler는 전송 계층이 검증한 tools/call을 핵심 그래프·노드 연산으로 분배한다.
@@ -163,7 +162,7 @@ func (h handler) createGraph(ctx context.Context, accountID model.ID, arguments 
 	graph, err := h.operations.CreateGraphWithOwner(ctx, model.Graph{
 		ID: graphID, Name: arguments["name"].(string), Description: optionalString(arguments, "description"), CreatedBy: accountID,
 		CreatedAt: now, LastActivityAt: now, Version: 1,
-	})
+	}, h.writeLimits(accountID))
 	if err != nil {
 		return ToolResult{}, mapError(err)
 	}
@@ -214,9 +213,6 @@ func (h handler) createNode(ctx context.Context, accountID model.ID, arguments m
 			return ToolResult{}, invalidArgument(err)
 		}
 	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
-		return ToolResult{}, err
-	}
 	if err := h.checkStoredCharacters(graph, int64(len([]rune(value.Body)))); err != nil {
 		return ToolResult{}, err
 	}
@@ -227,9 +223,9 @@ func (h handler) createNode(ctx context.Context, accountID model.ID, arguments m
 			return ToolResult{}, &Error{Code: "invalid_argument", Data: map[string]any{"field": "supersedes_context_id"}}
 		}
 		operation.Kind = store.OperationSupersede
-		stored, err = h.operations.CreateSupersedingContextWithOperation(ctx, graphID, value, references, supersededID, &operation)
+		stored, err = h.operations.CreateSupersedingContextWithOperation(ctx, graphID, value, references, supersededID, &operation, h.writeLimits(accountID))
 	} else {
-		stored, err = h.operations.CreateContextWithOperation(ctx, graphID, value, references, &operation)
+		stored, err = h.operations.CreateContextWithOperation(ctx, graphID, value, references, &operation, h.writeLimits(accountID))
 	}
 	if err != nil {
 		h.recordRejectedCreation(ctx, operation, err)
@@ -278,13 +274,17 @@ func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments m
 	if previous.DeletedAt != nil {
 		return ToolResult{}, &Error{Code: "not_found"}
 	}
+	// 저장된 계층에서 고칠 수 없는 인자는 조용히 버리지 않고 거부한다. 「갱신 권한」이
+	// 계층마다 가변 속성을 확정했으므로 그 밖의 값은 이 요청에 의미가 없다.
+	if err := validateLayerArguments(string(previous.Layer), updatableArguments[string(previous.Layer)], arguments); err != nil {
+		return ToolResult{}, invalidArgument(err)
+	}
 	if optionalString(arguments, "management_action") == "keep" {
 		if hasUpdateFields(arguments) {
 			return ToolResult{}, &Error{Code: "invalid_argument", Data: map[string]any{"field": "management_action"}}
 		}
-		if err := h.checkWrite(ctx, accountID); err != nil {
-			return ToolResult{}, err
-		}
+		// 유지는 상태를 바꾸지 않고 판단만 기록하므로 컨텍스트를 만들거나 고치는 연산이
+		// 아니다. `TBD-AGENT_CONTEXT-062`가 요청 빈도의 적용 대상을 그 둘로 한정했다.
 		agentID := argumentID(arguments, "created_by_agent")
 		operation := operationRecord(store.OperationKeep, graphID, contextID, accountID, agentID, arguments)
 		operation.TargetVersion = previous.Version
@@ -302,16 +302,13 @@ func (h handler) updateNode(ctx context.Context, accountID model.ID, arguments m
 	if err := model.ValidateUpdate(previous, next); err != nil {
 		return ToolResult{}, invalidArgument(err)
 	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
-		return ToolResult{}, err
-	}
 	if err := h.checkStoredCharacters(graph, int64(len([]rune(next.Body))-len([]rune(previous.Body)))); err != nil {
 		return ToolResult{}, err
 	}
 	agentID := argumentID(arguments, "created_by_agent")
 	operation := operationRecord(store.OperationUpdate, graphID, contextID, accountID, agentID, arguments)
 	operation.TargetVersion = previous.Version
-	stored, err := h.operations.UpdateContextWithOperation(ctx, graphID, int64(arguments["expected_version"].(float64)), next, &operation)
+	stored, err := h.operations.UpdateContextWithOperation(ctx, graphID, int64(arguments["expected_version"].(float64)), next, &operation, h.writeLimits(accountID))
 	if err != nil {
 		h.recordRejected(ctx, operation, err)
 		return ToolResult{}, mapError(err)
@@ -331,11 +328,11 @@ func (h handler) listRelations(ctx context.Context, accountID model.ID, argument
 	if contextValue.DeletedAt != nil {
 		return ToolResult{}, &Error{Code: "not_found"}
 	}
-	pageSize := h.limits.GraphPage.Default
+	pageSize := h.limits.RelationPage.Default
 	if value, ok := arguments["page_size"]; ok {
 		pageSize = int(value.(float64))
 	}
-	if err := plan.CheckRequest("graph_page", int64(pageSize), int64(h.limits.GraphPage.Maximum)); err != nil {
+	if err := plan.CheckRequest("relation_page", int64(pageSize), int64(h.limits.RelationPage.Maximum)); err != nil {
 		return ToolResult{}, limitError(err)
 	}
 	relations, cursor, err := h.operations.ListContextRelations(ctx, graphID, contextID, relationStates(arguments["state_filter"]), relationTypes(arguments["type_filter"]), optionalString(arguments, "cursor"), pageSize)
@@ -349,12 +346,12 @@ func (h handler) listRelations(ctx context.Context, accountID model.ID, argument
 	return result(map[string]any{"relations": values, "next_cursor": cursor}), nil
 }
 
+// confirmRelation은 관계를 확정한다. 요청 빈도 한도는 소비하지 않는다.
+// `TBD-AGENT_CONTEXT-062`가 그 적용 대상을 컨텍스트를 만들거나 고치는 연산으로 한정했고,
+// 관계 확정은 컨텍스트를 만들지도 고치지도 않는다.
 func (h handler) confirmRelation(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID := argumentID(arguments, "graph_id")
 	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
-		return ToolResult{}, err
-	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
 		return ToolResult{}, err
 	}
 	relationID, err := model.NewID()
@@ -373,12 +370,10 @@ func (h handler) confirmRelation(ctx context.Context, accountID model.ID, argume
 	return result(relationValue(stored)), nil
 }
 
+// discardRelation은 관계를 폐기한다. 확정과 같은 이유로 요청 빈도 한도를 소비하지 않는다.
 func (h handler) discardRelation(ctx context.Context, accountID model.ID, arguments map[string]any) (ToolResult, error) {
 	graphID, relationID := argumentID(arguments, "graph_id"), argumentID(arguments, "relation_id")
 	if _, err := h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeEditor); err != nil {
-		return ToolResult{}, err
-	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
 		return ToolResult{}, err
 	}
 	agentID := argumentID(arguments, "created_by_agent")
@@ -407,10 +402,7 @@ func (h handler) discardNode(ctx context.Context, accountID model.ID, arguments 
 		h.recordRejected(ctx, operation, errors.New("컨텍스트가 이미 폐기됐다"))
 		return ToolResult{}, &Error{Code: "invalid_argument"}
 	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
-		return ToolResult{}, err
-	}
-	stored, err := h.operations.DiscardContext(ctx, graphID, contextID, &operation)
+	stored, err := h.operations.DiscardContext(ctx, graphID, contextID, &operation, h.writeLimits(accountID))
 	if err != nil {
 		h.recordRejected(ctx, operation, err)
 		return ToolResult{}, mapError(err)
@@ -443,10 +435,7 @@ func (h handler) restoreNode(ctx context.Context, accountID model.ID, arguments 
 		h.recordRejected(ctx, operation, rejected)
 		return ToolResult{}, rejected
 	}
-	if err := h.checkWrite(ctx, accountID); err != nil {
-		return ToolResult{}, err
-	}
-	stored, err := h.operations.RestoreContext(ctx, graphID, contextID, &operation)
+	stored, err := h.operations.RestoreContext(ctx, graphID, contextID, &operation, h.writeLimits(accountID))
 	if err != nil {
 		h.recordRejected(ctx, operation, err)
 		return ToolResult{}, mapError(err)
@@ -470,6 +459,17 @@ func (h handler) requireActiveGraph(ctx context.Context, graphID, accountID mode
 	return graph, nil
 }
 
+// writeLimits는 저장 트랜잭션 안에서 강제할 누적 한도를 접근 계층 플랜에서 만든다.
+// 트랜잭션 밖의 사전 검사는 빠른 거부일 뿐이고, 실제 강제는 쓰기와 같은 트랜잭션이 한다.
+func (h handler) writeLimits(accountID model.ID) store.WriteLimits {
+	return store.WriteLimits{
+		StoredCharsPerGraph: int64(h.limits.StoredCharactersPerGraph),
+		GraphsPerAccount:    int64(h.limits.GraphsPerAccount),
+		WritesPerMinute:     int64(h.limits.WritesPerMinute),
+		ActorID:             accountID,
+	}
+}
+
 func (h handler) checkGraphCount(ctx context.Context, accountID model.ID) error {
 	if h.limits.GraphsPerAccount == 0 {
 		return nil
@@ -482,17 +482,6 @@ func (h handler) checkGraphCount(ctx context.Context, accountID model.ID) error 
 		return limitError(err)
 	}
 	return nil
-}
-
-func (h handler) checkWrite(ctx context.Context, accountID model.ID) error {
-	count, allowed, err := h.operations.TryIncrementRequestRate(ctx, accountID, time.Now().UTC(), h.limits.WritesPerMinute)
-	if err != nil {
-		return mapError(err)
-	}
-	if allowed {
-		return nil
-	}
-	return &Error{Code: "limit_exceeded", Data: map[string]any{"limit": "writes_per_minute", "current": count, "allowed": h.limits.WritesPerMinute}}
 }
 
 func (h handler) checkStoredCharacters(graph model.Graph, delta int64) error {
@@ -584,6 +573,12 @@ func mapError(err error) error {
 	if errors.Is(err, store.ErrNotFound) {
 		return &Error{Code: "not_found"}
 	}
+	if _, ok := errors.AsType[plan.LimitError](err); ok {
+		return limitError(err)
+	}
+	if errors.Is(err, store.ErrInvalidCursor) {
+		return &Error{Code: "invalid_argument", Data: map[string]any{"field": "cursor"}}
+	}
 	if errors.Is(err, store.ErrInvalidState) {
 		return invalidArgument(err)
 	}
@@ -597,6 +592,11 @@ func mapError(err error) error {
 		return &Error{Code: "not_found"}
 	}
 	if conflict, ok := errors.AsType[store.VersionConflictError](err); ok {
+		// 현재 판 번호를 읽지 못한 충돌은 값을 싣지 않는다. 0을 실으면 호출자가 그 값을
+		// 기대 판으로 다시 보내 재시도가 반드시 실패한다.
+		if conflict.Current == 0 {
+			return &Error{Code: "version_conflict"}
+		}
 		return &Error{Code: "version_conflict", Data: map[string]any{"current_version": conflict.Current}}
 	}
 	return &Error{Code: "internal"}

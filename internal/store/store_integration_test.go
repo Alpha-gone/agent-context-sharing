@@ -112,7 +112,7 @@ func TestStoreIntegration(t *testing.T) {
 		Kind: OperationDiscard, GraphID: graphID, ContextID: createdSource.ID, TargetVersion: 1,
 		JudgmentInput: "integration discard", AccountID: actorID, AgentID: actorID,
 	}
-	discarded, err := store.DiscardContext(t.Context(), graphID, createdSource.ID, &operation)
+	discarded, err := store.DiscardContext(t.Context(), graphID, createdSource.ID, &operation, WriteLimits{})
 	if err != nil {
 		t.Fatalf("컨텍스트 폐기: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestStoreIntegration(t *testing.T) {
 		t.Fatalf("근거 폐기가 파생에 무효 표시를 전파하지 않았다: %#v", invalidated.Derived)
 	}
 	operation.Kind = OperationUpdate
-	restored, err := store.RestoreContext(t.Context(), graphID, createdSource.ID, &operation)
+	restored, err := store.RestoreContext(t.Context(), graphID, createdSource.ID, &operation, WriteLimits{})
 	if err != nil {
 		t.Fatalf("컨텍스트 복구: %v", err)
 	}

@@ -1,8 +1,11 @@
 package mcp
 
 import (
+	"encoding/base64"
+	"maps"
 	"math"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,6 +19,9 @@ const (
 	maxBodyRunes        = 8_000
 	maxReferences       = 100
 	maxMembers          = 1_000
+	// maxCursorRunes는 저장소가 만드는 가장 긴 커서보다 넉넉한 상한이다. 그래프 목록
+	// 커서가 RFC3339Nano 시각과 UUID를 base64로 담아 가장 길다.
+	maxCursorRunes = 256
 )
 
 // argumentError는 MCP 입력 계층에서 거절할 인자의 이름만 노출한다.
@@ -26,6 +32,58 @@ func (error argumentError) Error() string { return "invalid MCP tool argument" }
 
 // validateToolCall은 tools/call에 허용한 도구와 연산 표면의 형식·상한을 확인한다.
 // 계층별 필수 속성과 속성 사이의 규칙은 model 패키지가 맡는다.
+// layerArguments는 `node_create`에서 계층마다 쓸 수 있는 인자를 정한다.
+//
+// 「컨텍스트 모델」이 계층별 속성을 나눠 두었으므로 다른 계층의 속성은 그 요청에 의미가
+// 없다. 조용히 버리면 호출자가 보낸 값이 저장되지 않았다는 사실을 알 수 없고,
+// `FR-AGENT_CONTEXT-078`이 부적용 속성을 거부하기로 한 것과도 어긋난다.
+var layerArguments = map[string][]string{
+	"source":  {"source_channel", "locator", "occurred_at", "origin_kind"},
+	"derived": {"derivation_kind", "summary_scope", "evidence_state", "confidence_state", "valid_from", "valid_to", "derived_from", "supersedes_context_id"},
+	"event":   {"member_refs", "start", "end"},
+}
+
+// updatableArguments는 `node_update`에서 계층마다 고칠 수 있는 인자를 정한다.
+// 「갱신 권한」이 파생과 사건의 가변 속성을 확정했고 원천은 불변이다.
+var updatableArguments = map[string][]string{
+	"source":  {},
+	"derived": {"confidence_state", "valid_from", "valid_to"},
+	"event":   {"member_refs", "start", "end"},
+}
+
+// layerScopedArguments는 계층에 매인 인자 전체다. 어느 계층에도 속하지 않는 공통 인자는
+// 여기에 없으므로 계층 검사에서 그대로 통과한다.
+var layerScopedArguments = layerScoped()
+
+func layerScoped() map[string]struct{} {
+	all := make(map[string]struct{})
+	for _, sets := range []map[string][]string{layerArguments, updatableArguments} {
+		for _, names := range sets {
+			for _, name := range names {
+				all[name] = struct{}{}
+			}
+		}
+	}
+	return all
+}
+
+// validateLayerArguments는 지정한 계층에 적용되지 않는 인자를 찾아낸다.
+func validateLayerArguments(layer string, allowed []string, arguments map[string]any) *argumentError {
+	if allowed == nil {
+		return &argumentError{Field: "layer"}
+	}
+	names := slices.Sorted(maps.Keys(arguments))
+	for _, name := range names {
+		if _, scoped := layerScopedArguments[name]; !scoped {
+			continue
+		}
+		if !slices.Contains(allowed, name) {
+			return &argumentError{Field: name}
+		}
+	}
+	return nil
+}
+
 func validateToolCall(name string, arguments map[string]any) *argumentError {
 	if _, ok := toolSchemas[name]; !ok {
 		return &argumentError{Field: "name"}
@@ -36,6 +94,14 @@ func validateToolCall(name string, arguments map[string]any) *argumentError {
 	for key := range arguments {
 		if _, ok := toolSchemas[name][key]; !ok {
 			return &argumentError{Field: key}
+		}
+	}
+	if name == "node_create" {
+		layer, _ := arguments["layer"].(string)
+		if _, known := layerArguments[layer]; known {
+			if err := validateLayerArguments(layer, layerArguments[layer], arguments); err != nil {
+				return err
+			}
 		}
 	}
 	for key, rule := range toolSchemas[name] {
@@ -62,18 +128,18 @@ var toolSchemas = map[string]map[string]argumentRule{
 	"graph_list": {
 		"name_filter":  optional(textAtMost(maxNameRunes)),
 		"grade_filter": optional(stringArray("owner", "editor", "viewer")),
-		"cursor":       optional(stringValue),
+		"cursor":       optional(cursorString),
 		"page_size":    optional(positiveInteger),
 	},
 	"graph_create": {
-		"name":        required(textRange(1, maxNameRunes)),
+		"name":        required(nonBlankText(maxNameRunes)),
 		"description": optional(textAtMost(maxDescriptionRunes)),
 	},
 	"graph_get": graphIDRules(),
 	"graph_update": {
 		"graph_id":         required(idString),
 		"expected_version": required(positiveInteger),
-		"name":             required(textRange(1, maxNameRunes)),
+		"name":             required(nonBlankText(maxNameRunes)),
 		"description":      optional(textAtMost(maxDescriptionRunes)),
 	},
 	"node_create": {
@@ -144,7 +210,7 @@ var toolSchemas = map[string]map[string]argumentRule{
 		"context_id":   required(idString),
 		"state_filter": optional(stringArray("proposed", "confirmed", "discarded")),
 		"type_filter":  optional(stringArray("precedes", "causes", "part_of", "relates_to")),
-		"cursor":       optional(stringValue),
+		"cursor":       optional(cursorString),
 		"page_size":    optional(positiveInteger),
 	},
 	"relation_confirm": {
@@ -206,6 +272,19 @@ func oneOf(values ...string) func(any) bool {
 
 func stringValue(value any) bool { _, ok := value.(string); return ok }
 
+// cursorString은 목록 커서가 저장소가 만든 불투명 문자열의 형식인지 본다.
+//
+// 「입력 검증」이 커서 형식 검증을 이 패키지의 책임으로 두었다. 내용까지 해석하지는
+// 않는다. 그것은 커서를 만든 저장소의 몫이며, 그 해독 실패도 invalid_argument로 나간다.
+func cursorString(value any) bool {
+	text, ok := value.(string)
+	if !ok || text == "" || utf8.RuneCountInString(text) > maxCursorRunes {
+		return false
+	}
+	_, err := base64.RawURLEncoding.DecodeString(text)
+	return err == nil
+}
+
 func dateTimeString(value any) bool {
 	text, ok := value.(string)
 	if !ok {
@@ -237,9 +316,16 @@ func positiveInteger(value any) bool { return integer(value, 1) }
 
 func nonNegativeInteger(value any) bool { return integer(value, 0) }
 
+// maxIntegerArgument는 정수 인자의 상한이다.
+//
+// math.MaxInt까지 받으면 저장소가 상한에 1을 더하는 자리에서 넘쳐 음수가 되고, 한도를
+// 풀어 둔 플랜에서 페이지 크기나 홉이 그대로 내려간다. 어떤 플랜 값도 이 크기를 넘지
+// 않으므로 여기에서 자른다.
+const maxIntegerArgument = 1 << 31
+
 func integer(value any, minimum float64) bool {
 	number, ok := value.(float64)
-	return ok && number >= minimum && number <= math.MaxInt && math.Trunc(number) == number
+	return ok && number >= minimum && number <= maxIntegerArgument && math.Trunc(number) == number
 }
 
 func stringArray(values ...string) func(any) bool {

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 )
 
@@ -41,7 +40,16 @@ func newIDAt(at time.Time, reader io.Reader) (ID, error) {
 
 // ParseID는 표준 UUID 문자열을 UUIDv7 식별자로 해석한다.
 func ParseID(raw string) (ID, error) {
-	compact := strings.ReplaceAll(raw, "-", "")
+	// 하이픈을 위치와 무관하게 지우면 `0-1-2...`처럼 비정규 표기도 통과해, 같은 식별자가
+	// 여러 문자열로 들어오고 기록과 응답의 표기가 어긋난다. 표준 8-4-4-4-12 배치이거나
+	// 하이픈이 아예 없는 표기만 받는다.
+	compact := raw
+	if len(raw) == 36 {
+		if raw[8] != '-' || raw[13] != '-' || raw[18] != '-' || raw[23] != '-' {
+			return ID{}, fmt.Errorf("UUID 하이픈 위치가 표준 배치가 아니다")
+		}
+		compact = raw[:8] + raw[9:13] + raw[14:18] + raw[19:23] + raw[24:]
+	}
 	if len(compact) != 32 {
 		return ID{}, fmt.Errorf("UUID 길이가 32자 hex가 아니다")
 	}

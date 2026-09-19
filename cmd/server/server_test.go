@@ -221,3 +221,104 @@ func (fake *fakeReadiness) Ping(context.Context) error {
 func (fake *fakeReadiness) Close() {
 	fake.closed = true
 }
+
+// TestAuthorizationServerPathsAreRegistered는 인가 서버 메타데이터가 알리는 세 경로가
+// TLS 판정 뒤에 실제로 등록되어 있는지 확인한다. 등록되지 않으면 클라이언트가 접근
+// 토큰을 받을 수 없어 `/mcp` 전체를 쓸 수 없다.
+func TestAuthorizationServerPathsAreRegistered(t *testing.T) {
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
+	app.authz = stubAuthorizationRoutes{}
+	handler := app.handler()
+
+	for _, testCase := range []struct{ method, path string }{
+		{http.MethodGet, "/authorize"},
+		{http.MethodPost, "/token"},
+		{http.MethodGet, "/jwks.json"},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(testCase.method, testCase.path, nil)
+		request.Header.Set("X-Forwarded-Proto", "https")
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code == http.StatusNotFound {
+			t.Fatalf("%s %s가 등록되지 않았다", testCase.method, testCase.path)
+		}
+	}
+}
+
+// stubAuthorizationRoutes는 경로가 등록됐는지만 보기 위해 본문 없이 응답한다.
+type stubAuthorizationRoutes struct{}
+
+func (stubAuthorizationRoutes) Authorize(writer http.ResponseWriter, _ *http.Request) {
+	writer.WriteHeader(http.StatusSeeOther)
+}
+
+func (stubAuthorizationRoutes) Token(writer http.ResponseWriter, _ *http.Request) {
+	writer.WriteHeader(http.StatusOK)
+}
+
+func (stubAuthorizationRoutes) JWKS(writer http.ResponseWriter, _ *http.Request) {
+	writer.WriteHeader(http.StatusOK)
+}
+
+// TestHTTPServerSetsReadTimeouts는 수신 서버에 읽기·헤더·유휴 제한이 있는지 확인한다.
+// 제한이 없으면 헤더를 느리게 보내는 연결을 대량으로 열어 고루틴과 파일 디스크립터를
+// 고갈시킬 수 있고, 그 자리는 TLS 판정보다 앞이라 인증 없이 닿는다.
+func TestHTTPServerSetsReadTimeouts(t *testing.T) {
+	if readHeaderTimeout <= 0 || readTimeout <= 0 || idleTimeout <= 0 {
+		t.Fatalf("타임아웃 = 헤더 %v, 읽기 %v, 유휴 %v; 모두 양수여야 한다", readHeaderTimeout, readTimeout, idleTimeout)
+	}
+	if readHeaderTimeout > readTimeout {
+		t.Fatalf("헤더 제한 %v가 읽기 제한 %v보다 크다", readHeaderTimeout, readTimeout)
+	}
+	// 쓰기 제한은 두지 않는다. 흐름 검색이 외부 임베딩 제공자를 기다리는 동안 응답이
+	// 끊기면 안 되므로, 값이 생기면 그 판단을 다시 해야 한다.
+	server := newHTTPServer(":0", http.NewServeMux())
+	if server.ReadHeaderTimeout != readHeaderTimeout || server.ReadTimeout != readTimeout || server.IdleTimeout != idleTimeout {
+		t.Fatalf("서버 타임아웃 = %#v", server)
+	}
+	if server.WriteTimeout != 0 {
+		t.Fatalf("쓰기 제한 = %v, want 0", server.WriteTimeout)
+	}
+}
+
+// TestPanicBecomesInternalError는 처리기에서 빠져나온 panic이 연결을 끊지 않고 500으로
+// 응답하는지 확인한다. 차단막이 없으면 클라이언트가 응답 대신 끊긴 연결을 받고 구조화
+// 로그에도 요청이 남지 않는다.
+func TestPanicBecomesInternalError(t *testing.T) {
+	var logs bytes.Buffer
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(&logs, nil)), proxyTransport(), nil)
+	panicking := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("처리기 내부 오류")
+	})
+	recorder := httptest.NewRecorder()
+	app.logRequests(app.recoverPanics(panicking)).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/mcp", nil))
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("panic 응답 상태 = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(recorder.Body.String(), "internal_error") {
+		t.Fatalf("panic 응답 본문 = %s", recorder.Body.String())
+	}
+	// 원인과 요청 흐름을 이을 상관 식별자가 로그에 남아야 한다.
+	for _, want := range []string{"요청 처리 중 panic", "처리기 내부 오류", "correlation_id"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("로그에 %q가 없다: %s", want, logs.String())
+		}
+	}
+}
+
+// TestAbortHandlerPanicStaysUnhandled는 의도적인 연결 끊기 신호는 가로채지 않는지
+// 확인한다. 가로채면 net/http이 그 신호로 하던 처리를 하지 못한다.
+func TestAbortHandlerPanicStaysUnhandled(t *testing.T) {
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
+	defer func() {
+		if cause := recover(); cause != http.ErrAbortHandler {
+			t.Fatalf("복구한 panic = %v, want http.ErrAbortHandler", cause)
+		}
+	}()
+	aborting := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	})
+	app.recoverPanics(aborting).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/mcp", nil))
+	t.Fatal("ErrAbortHandler가 전달되지 않았다")
+}

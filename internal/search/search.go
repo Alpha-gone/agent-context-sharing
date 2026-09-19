@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -347,7 +348,16 @@ func (service *Service) graphCandidates(ctx context.Context, input Input, entryP
 	}
 	// 시작 노드를 한 번에 넘긴다. 진입점마다 따로 물으면 왕복이 진입점 수만큼 늘고
 	// 「채널 구현」이 하나로 두기로 한 결과 상한이 진입점마다 겹친다.
-	hops, err := service.store.HopContextsFrom(ctx, input.GraphID, entryPoints, input.MaxHops, "both", filters, input.MaxHopNodes)
+	//
+	// MaxHops 0은 「계정 플랜」이 선언한 대로 한도 없음이다. 그대로 탐색 깊이로 넘기면
+	// 시작 노드만 돌아오고 거리 0은 후보에서 빠져 이 채널이 실패 표시 없이 항상 0건이
+	// 된다. 예산과 MaxHopNodes의 0을 해석하는 곳과 같은 자리에서 해석한다. 탐색은
+	// 더 넓힐 곳이 없거나 결과 상한에 닿으면 끝난다.
+	depth := input.MaxHops
+	if depth == 0 {
+		depth = math.MaxInt
+	}
+	hops, err := service.store.HopContextsFrom(ctx, input.GraphID, entryPoints, depth, "both", filters, input.MaxHopNodes)
 	result.metric.Latency = time.Since(started)
 	if err != nil {
 		result.metric.Failure = failureReason(err)

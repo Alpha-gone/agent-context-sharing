@@ -137,3 +137,231 @@ func TestDeleteTeamStartsGraceIntegration(t *testing.T) {
 		t.Fatal("팀 삭제 뒤 마지막 접근 가능 계정 유예가 시작되지 않았다")
 	}
 }
+
+// TestGrantGraphKeepsOneOwnerIntegration은 유일한 소유자가 자기 등급을 낮추는 부여도
+// 마지막 소유자 판정을 지나는지 확인한다. upsert가 기존 등급을 덮어쓰므로 부여 경로도
+// 소유자를 없앨 수 있으며, FR-AGENT_CONTEXT-042는 소유자 계정을 최소 하나 요구한다.
+func TestGrantGraphKeepsOneOwnerIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	accountID := newTestID(t)
+	createTestAccount(t, database, accountID)
+	graphID := createTestGraph(t, database, accountID)
+	grantAccount(t, database, graphID, accountID, model.GraphGradeOwner)
+
+	err := database.GrantGraph(t.Context(), graphID, accountID, accountID, GrantSubjectAccount, model.GraphGradeEditor)
+	if !errors.Is(err, ErrLastOwner) {
+		t.Fatalf("마지막 소유자 강등 = %v, want ErrLastOwner", err)
+	}
+	var owners int
+	if err := database.pool.QueryRow(t.Context(), `SELECT count(*) FROM public.graph_grant WHERE graph_id = $1 AND grade = 'owner'`, graphID.String()).Scan(&owners); err != nil {
+		t.Fatalf("소유자 수 조회: %v", err)
+	}
+	if owners != 1 {
+		t.Fatalf("거부 뒤 소유자 수 = %d, want 1", owners)
+	}
+}
+
+// TestGrantGraphAllowsDemotionWithAnotherOwnerIntegration은 다른 소유자가 남아 있으면
+// 강등이 정상 처리되는지 확인한다. 판정이 부여 자체를 막아서는 안 된다.
+func TestGrantGraphAllowsDemotionWithAnotherOwnerIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	firstAccountID, secondAccountID := newTestID(t), newTestID(t)
+	createTestAccount(t, database, firstAccountID)
+	createTestAccount(t, database, secondAccountID)
+	graphID := createTestGraph(t, database, firstAccountID)
+	grantAccount(t, database, graphID, firstAccountID, model.GraphGradeOwner)
+	grantAccount(t, database, graphID, secondAccountID, model.GraphGradeOwner)
+
+	if err := database.GrantGraph(t.Context(), graphID, firstAccountID, secondAccountID, GrantSubjectAccount, model.GraphGradeEditor); err != nil {
+		t.Fatalf("다른 소유자가 있는 강등: %v", err)
+	}
+	grade, found, err := database.EffectiveGrade(t.Context(), graphID, secondAccountID)
+	if err != nil || !found || grade != model.GraphGradeEditor {
+		t.Fatalf("강등 뒤 등급 = %q, found %t, %v; want editor", grade, found, err)
+	}
+}
+
+// TestWebRestoreRejectsAutoDeletedGraphIntegration은 유예 만료로 자동 삭제된 그래프를
+// 웹 복구가 되살리지 못하는지 확인한다. FR-AGENT_CONTEXT-108이 자동 삭제의 복구를
+// 요청과 운영자 경로로만 한정했다.
+func TestWebRestoreRejectsAutoDeletedGraphIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	accountID := newTestID(t)
+	createTestAccount(t, database, accountID)
+	graphID := createTestGraph(t, database, accountID)
+	grantAccount(t, database, graphID, accountID, model.GraphGradeOwner)
+
+	now := time.Now().UTC()
+	if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_started_at = $2, grace_expires_at = $3 WHERE graph_id = $1`, graphID.String(), now.AddDate(0, 0, -30), now); err != nil {
+		t.Fatalf("유예 시작 시각 준비: %v", err)
+	}
+	if _, err := database.ExpireGrace(t.Context(), now); err != nil {
+		t.Fatalf("유예 만료: %v", err)
+	}
+
+	err := database.SetGraphDeleted(t.Context(), graphID, accountID, false)
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("자동 삭제 그래프의 웹 복구 = %v, want ErrInvalidState", err)
+	}
+	graph, err := database.Graph(t.Context(), graphID)
+	if err != nil || graph.DeletedAt == nil {
+		t.Fatalf("거부 뒤 그래프 상태 = %#v, %v; 삭제가 유지되어야 한다", graph, err)
+	}
+
+	// 운영자 경로는 여전히 복구할 수 있어야 한다.
+	if err := database.RequestGraphRestore(t.Context(), graphID, accountID); err != nil {
+		t.Fatalf("복구 요청: %v", err)
+	}
+	if err := database.OperatorRestoreGraph(t.Context(), graphID, accountID); err != nil {
+		t.Fatalf("운영자 복구: %v", err)
+	}
+	restored, err := database.Graph(t.Context(), graphID)
+	if err != nil || restored.DeletedAt != nil {
+		t.Fatalf("운영자 복구 뒤 상태 = %#v, %v", restored, err)
+	}
+}
+
+// TestWebRestoreAcceptsWebDeletedGraphIntegration은 웹에서 직접 삭제한 그래프의 복구가
+// 조건 추가 뒤에도 그대로 동작하는지 확인한다.
+func TestWebRestoreAcceptsWebDeletedGraphIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	accountID := newTestID(t)
+	createTestAccount(t, database, accountID)
+	graphID := createTestGraph(t, database, accountID)
+	grantAccount(t, database, graphID, accountID, model.GraphGradeOwner)
+
+	if err := database.SetGraphDeleted(t.Context(), graphID, accountID, true); err != nil {
+		t.Fatalf("웹 직접 삭제: %v", err)
+	}
+	if err := database.SetGraphDeleted(t.Context(), graphID, accountID, false); err != nil {
+		t.Fatalf("웹 복구: %v", err)
+	}
+	graph, err := database.Graph(t.Context(), graphID)
+	if err != nil || graph.DeletedAt != nil {
+		t.Fatalf("웹 복구 뒤 상태 = %#v, %v", graph, err)
+	}
+}
+
+// TestRequireOwnerCountsUsableAccountsIntegration은 마지막 소유자 판정이 부여된 등급이
+// 아니라 그 등급을 쓸 계정을 세는지 확인한다. 삭제된 팀의 owner 부여를 세면 계정 소유자를
+// 회수해도 통과해 FR-AGENT_CONTEXT-042가 요구한 소유자 계정이 사라진다.
+func TestRequireOwnerCountsUsableAccountsIntegration(t *testing.T) {
+	cases := map[string]func(t *testing.T, database *Store, graphID, accountID model.ID){
+		"삭제된 팀의 소유자 부여": func(t *testing.T, database *Store, graphID, accountID model.ID) {
+			teamID := newTestID(t)
+			createTestTeam(t, database, teamID, accountID, true)
+			addTestTeamMember(t, database, teamID, accountID)
+			grantTeam(t, database, graphID, teamID, model.GraphGradeOwner)
+		},
+		"구성원 없는 팀의 소유자 부여": func(t *testing.T, database *Store, graphID, accountID model.ID) {
+			teamID := newTestID(t)
+			createTestTeam(t, database, teamID, accountID, false)
+			grantTeam(t, database, graphID, teamID, model.GraphGradeOwner)
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			database := newIntegrationStore(t)
+			accountID := newTestID(t)
+			createTestAccount(t, database, accountID)
+			graphID := createTestGraph(t, database, accountID)
+			grantAccount(t, database, graphID, accountID, model.GraphGradeOwner)
+			setup(t, database, graphID, accountID)
+
+			err := database.RevokeGraphGrant(t.Context(), graphID, GrantSubjectAccount, accountID)
+			if !errors.Is(err, ErrLastOwner) {
+				t.Fatalf("계정 소유자 회수 = %v, want ErrLastOwner", err)
+			}
+		})
+	}
+}
+
+// TestRequireOwnerAcceptsUsableTeamOwnerIntegration은 쓸 수 있는 팀 소유자가 있으면
+// 계정 소유자 회수가 통과하는지 확인한다. 판정이 팀 등급을 아예 무시해서는 안 된다.
+func TestRequireOwnerAcceptsUsableTeamOwnerIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	accountID, memberID := newTestID(t), newTestID(t)
+	createTestAccount(t, database, accountID)
+	createTestAccount(t, database, memberID)
+	graphID := createTestGraph(t, database, accountID)
+	grantAccount(t, database, graphID, accountID, model.GraphGradeOwner)
+	teamID := newTestID(t)
+	createTestTeam(t, database, teamID, accountID, false)
+	addTestTeamMember(t, database, teamID, memberID)
+	grantTeam(t, database, graphID, teamID, model.GraphGradeOwner)
+
+	if err := database.RevokeGraphGrant(t.Context(), graphID, GrantSubjectAccount, accountID); err != nil {
+		t.Fatalf("쓸 수 있는 팀 소유자가 있는 회수: %v", err)
+	}
+}
+
+// TestTeamGraphLockRereadsAffectedGraphsIntegration은 팀 영향 그래프 목록을 잠근 뒤 다시
+// 읽어, 잠그기 직전에 추가된 팀 등급의 그래프도 판정 대상에 들어오는지 확인한다.
+func TestTeamGraphLockRereadsAffectedGraphsIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	database.graceDays = func(model.ID) int { return 30 }
+	accountID := newTestID(t)
+	createTestAccount(t, database, accountID)
+	teamID := newTestID(t)
+	createTestTeam(t, database, teamID, accountID, false)
+	addTestTeamMember(t, database, teamID, accountID)
+
+	// 두 그래프 모두 이 팀으로만 접근할 수 있다. 구성원을 빼면 둘 다 유예가 시작되어야 한다.
+	first := createTestGraph(t, database, accountID)
+	second := createTestGraph(t, database, accountID)
+	for _, graphID := range []model.ID{first, second} {
+		grantTeam(t, database, graphID, teamID, model.GraphGradeOwner)
+	}
+
+	if err := database.RemoveTeamMember(t.Context(), teamID, accountID); err != nil {
+		t.Fatalf("팀 구성원 제거: %v", err)
+	}
+	for _, graphID := range []model.ID{first, second} {
+		started, expires := graceTimes(t, database, graphID)
+		if started == nil || expires == nil {
+			t.Fatalf("그래프 %s의 유예가 시작되지 않았다: started:%v expires:%v", graphID, started, expires)
+		}
+	}
+}
+
+// TestOwnershipTransferAuditMatchesSpecIntegration은 소유권 이전 감사 분류가 명세와 같은
+// 방향인지 확인한다. 「권한과 팀 관리 절차」는 다른 계정에 소유자 등급을 주는 것을
+// 이전으로 보며, 소유자에서 내리는 것은 그 계정의 등급을 바꾸는 부여다.
+func TestOwnershipTransferAuditMatchesSpecIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	ownerID, otherID := newTestID(t), newTestID(t)
+	createTestAccount(t, database, ownerID)
+	createTestAccount(t, database, otherID)
+	graphID := createTestGraph(t, database, ownerID)
+	grantAccount(t, database, graphID, ownerID, model.GraphGradeOwner)
+
+	// 다른 계정에 소유자 등급을 준다. 이것이 이전이다.
+	if err := database.GrantGraph(t.Context(), graphID, ownerID, otherID, GrantSubjectAccount, model.GraphGradeOwner); err != nil {
+		t.Fatalf("소유자 등급 부여: %v", err)
+	}
+	if kind, action := lastGrantAudit(t, database, graphID, otherID); kind != "ownership_transfer" || action != "transfer" {
+		t.Fatalf("소유자 등급 부여 기록 = %s/%s, want ownership_transfer/transfer", kind, action)
+	}
+
+	// 소유자를 편집자로 내린다. 이것은 부여다.
+	if err := database.GrantGraph(t.Context(), graphID, ownerID, otherID, GrantSubjectAccount, model.GraphGradeEditor); err != nil {
+		t.Fatalf("등급 강등: %v", err)
+	}
+	if kind, action := lastGrantAudit(t, database, graphID, otherID); kind != "grant" || action != "grant" {
+		t.Fatalf("강등 기록 = %s/%s, want grant/grant", kind, action)
+	}
+}
+
+// lastGrantAudit은 대상에 대한 가장 최근 등급 기록의 분류를 읽는다.
+func lastGrantAudit(t *testing.T, database *Store, graphID, subjectID model.ID) (string, string) {
+	t.Helper()
+	var kind, action string
+	err := database.pool.QueryRow(t.Context(), `
+		SELECT target_kind, action FROM public.web_audit_log
+		WHERE graph_id = $1 AND subject_id = $2
+		ORDER BY occurred_at DESC, audit_id DESC LIMIT 1`, graphID.String(), subjectID.String()).Scan(&kind, &action)
+	if err != nil {
+		t.Fatalf("등급 감사 기록 조회: %v", err)
+	}
+	return kind, action
+}

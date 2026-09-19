@@ -25,6 +25,35 @@ import (
 // shutdownTimeout은 종료 신호 뒤 진행 중인 요청을 기다리는 최대 시간이다.
 const shutdownTimeout = 30 * time.Second
 
+// workerShutdownTimeout은 요청 대기가 끝난 뒤 작업자 종료를 기다리는 최대 시간이다.
+// 요청 대기와 예산을 나눠 두어야 그쪽이 시간을 다 써도 작업자를 닫을 수 있다.
+const workerShutdownTimeout = 10 * time.Second
+
+const (
+	// readHeaderTimeout은 요청 헤더를 모두 받기까지 기다리는 최대 시간이다.
+	readHeaderTimeout = 10 * time.Second
+	// readTimeout은 헤더와 본문을 모두 받기까지 기다리는 최대 시간이다.
+	readTimeout = 30 * time.Second
+	// idleTimeout은 keep-alive 연결에서 다음 요청을 기다리는 최대 시간이다.
+	idleTimeout = 120 * time.Second
+)
+
+// newHTTPServer는 수신 서버에 읽기 쪽 제한을 걸어 만든다.
+//
+// 헤더를 느리게 보내는 연결이 고루틴과 파일 디스크립터를 붙잡지 못하게 한다. TLS 판정보다
+// 앞이라 인증 없이도 열 수 있는 자리이며, 명세가 값을 정하지 않았으므로 여기에서 고른다.
+// 쓰기 제한은 두지 않는다. 흐름 검색이 외부 임베딩 제공자를 기다리는 동안 응답이 끊기면
+// 안 되기 때문이다.
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+}
+
 // main 함수는 구성 검증, 데이터베이스 풀 준비와 HTTP 서버의 정상 종료를 조립한다.
 func main() {
 	if err := run(); err != nil {
@@ -72,11 +101,10 @@ func run() error {
 		return fmt.Errorf("검색 실행기 준비: %w", err)
 	}
 	authorization, err := authz.New(database, authz.Config{
-		Issuer:       cfg.AuthorizationServerURL.String(),
-		Resource:     cfg.ResourceServerURL.String(),
-		Clients:      cfg.OAuthClientIDs,
-		RedirectURIs: cfg.OAuthRedirectURIs,
-		BcryptCost:   cfg.BcryptCost,
+		Issuer:     cfg.AuthorizationServerURL.String(),
+		Resource:   cfg.ResourceServerURL.String(),
+		Clients:    cfg.OAuthClients,
+		BcryptCost: cfg.BcryptCost,
 	})
 	if err != nil {
 		return fmt.Errorf("인가 서버 준비: %w", err)
@@ -85,10 +113,7 @@ func run() error {
 		ResourceURL:            cfg.ResourceServerURL,
 		AuthorizationServerURL: cfg.AuthorizationServerURL,
 		AllowedOrigins:         cfg.MCPAllowedOrigins,
-	}, func(ctx context.Context, raw, audience string) (model.ID, error) {
-		accountID, _, err := authorization.Verify(ctx, raw, audience)
-		return accountID, err
-	}, mcp.NewHandlerWithSearch(database, cfg.AccountPlans, searcher, slog.Default()))
+	}, verifyWithRenewal(authorization), mcp.NewHandlerWithSearch(database, cfg.AccountPlans, searcher, slog.Default()))
 	if err != nil {
 		return fmt.Errorf("MCP 리소스 서버 준비: %w", err)
 	}
@@ -103,9 +128,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("웹 서버 준비: %w", err)
 	}
+	// 인가 서버 경로는 로그인 화면과 세션 쿠키 판정을 웹에서 받아 쓴다. 쿠키의 이름과
+	// 수명은 web이 소유하므로 authz는 판정 결과만 주입받는다.
+	authorizationHandler, err := authz.NewHandler(authorization, webServer.SessionAccount, "/login")
+	if err != nil {
+		return fmt.Errorf("인가 서버 경로 준비: %w", err)
+	}
 	app := newApplication(database, slog.Default(), transport, resourceServer)
 	app.web = webServer
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: app.handler()}
+	app.authz = authorizationHandler
+	server := newHTTPServer(cfg.HTTPAddr, app.handler())
 
 	stopSignals := make(chan os.Signal, 1)
 	signal.Notify(stopSignals, os.Interrupt, syscall.SIGTERM)
@@ -131,14 +163,23 @@ func run() error {
 	// 쓰지 않게 된 다음에 defer가 풀을 닫는다.
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := app.shutdown(shutdownContext, server); err != nil {
-		return err
+	shutdownErr := app.shutdown(shutdownContext, server)
+	if shutdownErr != nil {
+		slog.Error("진행 요청 종료 대기", "error", shutdownErr)
 	}
-	if err := periodic.Close(shutdownContext); err != nil {
+	// 요청 대기가 실패해도 작업자 종료를 건너뛰지 않는다. 건너뛰면 defer된 풀 닫기가
+	// 작업자가 빌려 간 연결이 돌아오기를 기다리며 막힌다. 요청 대기에서 이미 예산을 다
+	// 썼을 수 있으므로 작업자에는 새 기한을 준다.
+	workerContext, cancelWorkers := context.WithTimeout(context.Background(), workerShutdownTimeout)
+	defer cancelWorkers()
+	if err := periodic.Close(workerContext); err != nil {
 		slog.Error("주기 작업 종료", "error", err)
 	}
-	if err := indexer.Close(shutdownContext); err != nil {
+	if err := indexer.Close(workerContext); err != nil {
 		slog.Error("색인 작업자 종료", "error", err)
+	}
+	if shutdownErr != nil {
+		return shutdownErr
 	}
 	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("HTTP 서버 종료: %w", err)

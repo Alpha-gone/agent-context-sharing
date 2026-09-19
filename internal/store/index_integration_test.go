@@ -45,6 +45,13 @@ func TestIndexAndNonGraphSearchIntegration(t *testing.T) {
 	if err != nil || len(keyword) != 1 || keyword[0].Context.ID != stored.ID {
 		t.Fatalf("키워드 후보 = %#v, err=%v", keyword, err)
 	}
+	// 자연어 질의는 본문에 없는 어휘를 함께 담는다. websearch_to_tsquery가 어휘를 OR로
+	// 묶으므로 일부 어휘만 겹쳐도 후보가 나와야 한다. plainto_tsquery의 AND는 이 조건에서
+	// 후보를 내지 못했다.
+	keyword, err = database.KeywordCandidates(t.Context(), graphID, "고유어 본문에 없는 어휘", time.Now().UTC(), 10)
+	if err != nil || len(keyword) != 1 || keyword[0].Context.ID != stored.ID {
+		t.Fatalf("자연어 키워드 후보 = %#v, err=%v", keyword, err)
+	}
 	timed, err := database.TimeCandidates(t.Context(), graphID, time.Now().UTC(), 10)
 	if err != nil || len(timed) != 1 || timed[0].Context.ID != stored.ID {
 		t.Fatalf("시간 후보 = %#v, err=%v", timed, err)

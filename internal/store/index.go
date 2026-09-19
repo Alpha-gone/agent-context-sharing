@@ -341,7 +341,17 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 }
 
 // KeywordCandidates는 PostgreSQL simple 전문 검색으로 활성 기본 검색 후보를 읽는다.
+// websearchOrQuery는 자연어 질의의 어휘를 websearch 구문의 OR로 묶는다.
+//
+// plainto와 websearch 모두 어휘를 AND로 묶는데 work_context는 문장 단위라 전부를 담은
+// 문단이 없으면 후보가 나오지 않는다. 후보를 내는 이 채널은 겹치는 어휘만으로도
+// 문단을 찾아야 하므로 어휘를 OR로 조립하고 구문 해석은 websearch_to_tsquery에 맡긴다.
+func websearchOrQuery(query string) string {
+	return strings.Join(strings.Fields(query), " OR ")
+}
+
 func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query string, current time.Time, limit int) ([]SearchCandidate, error) {
+	query = websearchOrQuery(query)
 	if !graphID.IsV7() || !current.UTC().Equal(current) || limit < 1 {
 		return nil, fmt.Errorf("키워드 검색 인자가 올바르지 않다")
 	}
@@ -353,8 +363,8 @@ func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query s
 			AND ((properties ->> 'layer'::text) <> 'derived'
 				OR NULLIF(properties ->> 'valid_to'::text, '') IS NULL
 				OR (properties ->> 'valid_to'::text)::timestamptz >= $3)
-			AND to_tsvector('simple', properties ->> 'body'::text) @@ plainto_tsquery('simple', $2)
-		ORDER BY ts_rank_cd(to_tsvector('simple', properties ->> 'body'::text), plainto_tsquery('simple', $2)) DESC,
+			AND to_tsvector('simple', properties ->> 'body'::text) @@ websearch_to_tsquery('simple', $2)
+		ORDER BY ts_rank_cd(to_tsvector('simple', properties ->> 'body'::text), websearch_to_tsquery('simple', $2)) DESC,
 			(properties ->> 'recorded_at'::text)::timestamptz DESC, properties ->> 'context_id'::text ASC
 		LIMIT $4`, graphID.String(), query, current, limit)
 	if err != nil {

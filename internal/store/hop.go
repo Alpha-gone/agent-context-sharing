@@ -142,11 +142,11 @@ func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, context
 		return nil
 	}
 	list := "[" + strings.Join(needs, ", ") + "]"
-	references, err := s.edgeTargetsBySource(ctx, graphID, "DERIVED_FROM", list)
+	references, err := s.edgeTargetsBySource(ctx, s.pool, graphID, "DERIVED_FROM", list)
 	if err != nil {
 		return err
 	}
-	members, err := s.edgeTargetsBySource(ctx, graphID, "HAS_MEMBER", list)
+	members, err := s.edgeTargetsBySource(ctx, s.pool, graphID, "HAS_MEMBER", list)
 	if err != nil {
 		return err
 	}

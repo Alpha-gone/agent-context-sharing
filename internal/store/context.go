@@ -504,24 +504,34 @@ func validateContextInput(graphID model.ID, value model.Context, derivedFrom []m
 }
 
 // validateReferences는 모든 파생 근거가 요청 그래프에 속하는지 확인한다.
+//
+// 근거마다 정점을 따로 읽으면 근거 수만큼 왕복이 늘므로 한 질의로 묶어 읽고 없는
+// 근거만 지목한다.
 func (s *Store) validateReferences(ctx context.Context, tx pgx.Tx, graphID model.ID, referenceIDs []model.ID) error {
+	vertices, err := s.contextVerticesByIDs(ctx, tx, graphID, referenceIDs)
+	if err != nil {
+		return err
+	}
 	for _, referenceID := range referenceIDs {
-		if _, err := s.context(ctx, tx, graphID, referenceID); err != nil {
-			return fmt.Errorf("파생 근거 %s 조회: %w", referenceID, err)
+		if _, found := vertices[referenceID]; !found {
+			return fmt.Errorf("파생 근거 %s 조회: %w", referenceID, ErrNotFound)
 		}
 	}
 	return nil
 }
 
 // validateEventMembers는 사건 구성원이 요청 그래프의 원천 또는 파생인지 검증한다.
+//
+// 구성원마다 Context를 부르지 않고 묶음 조립으로 읽는다. 구성원 검증이 파생의 근거와
+// 사건의 구성원까지 포함한 전체 컨텍스트를 요구하므로 정점만 읽어서는 안 된다.
 func (s *Store) validateEventMembers(ctx context.Context, tx pgx.Tx, graphID model.ID, event model.Context) error {
-	members := make([]model.Context, 0, len(event.Event.MemberIDs))
-	for _, memberID := range event.Event.MemberIDs {
-		member, err := s.context(ctx, tx, graphID, memberID)
-		if err != nil {
-			return fmt.Errorf("사건 구성원 %s 조회: %w", memberID, err)
+	members, err := s.contextsByIDs(ctx, tx, graphID, event.Event.MemberIDs)
+	if err != nil {
+		var missing missingContextError
+		if errors.As(err, &missing) {
+			return fmt.Errorf("사건 구성원 %s 조회: %w", missing.ID, ErrNotFound)
 		}
-		members = append(members, member)
+		return err
 	}
 	if err := model.ValidateEventMembers(event, members); err != nil {
 		return fmt.Errorf("사건 구성원 검증: %w", err)
@@ -530,6 +540,7 @@ func (s *Store) validateEventMembers(ctx context.Context, tx pgx.Tx, graphID mod
 }
 
 // createReferenceEdges는 파생 근거 또는 사건 구성원 edge를 정점과 같은 트랜잭션에서 만든다.
+// 대상마다 CREATE를 날리지 않고 UNWIND로 한 문장에 묶는다.
 func (s *Store) createReferenceEdges(ctx context.Context, tx pgx.Tx, graphID model.ID, value model.Context, derivedFrom []model.ID) error {
 	var label string
 	var targetIDs []model.ID
@@ -541,15 +552,19 @@ func (s *Store) createReferenceEdges(ctx context.Context, tx pgx.Tx, graphID mod
 	default:
 		return nil
 	}
-	for _, targetID := range targetIDs {
-		query := "MATCH (from:Context), (to:Context) WHERE from.context_id = " + cypherString(value.ID.String()) +
-			" AND from.graph_id = " + cypherString(graphID.String()) +
-			" AND to.context_id = " + cypherString(targetID.String()) +
-			" AND to.graph_id = " + cypherString(graphID.String()) +
-			" CREATE (from)-[:" + label + " {graph_id: " + cypherString(graphID.String()) + "}]->(to)"
-		if _, err := tx.Exec(ctx, s.cypherSQL(query, "created agtype"), pgx.QueryExecModeExec); err != nil {
-			return fmt.Errorf("%s 참조 간선 생성: %w", label, err)
-		}
+	if len(targetIDs) == 0 {
+		return nil
+	}
+	list, err := cypherIDList(targetIDs)
+	if err != nil {
+		return err
+	}
+	query := "UNWIND " + list + " AS target MATCH (from:Context), (to:Context) WHERE from.context_id = " + cypherString(value.ID.String()) +
+		" AND from.graph_id = " + cypherString(graphID.String()) +
+		" AND to.context_id = target AND to.graph_id = " + cypherString(graphID.String()) +
+		" CREATE (from)-[:" + label + " {graph_id: " + cypherString(graphID.String()) + "}]->(to)"
+	if _, err := tx.Exec(ctx, s.cypherSQL(query, "created agtype"), pgx.QueryExecModeExec); err != nil {
+		return fmt.Errorf("%s 참조 간선 생성: %w", label, err)
 	}
 	return nil
 }
@@ -832,29 +847,42 @@ func (s *Store) asVersionConflict(ctx context.Context, graphID, contextID model.
 	return VersionConflictError{Current: current.Version}
 }
 
-// ContextsByIDs는 여러 컨텍스트를 세 질의로 조립해 요청 순서대로 돌려준다.
-//
-// 후보마다 Context를 부르면 식별자 수만큼 왕복이 늘고, 결과 행을 연 채 부르면 같은 풀에서
-// 연결을 하나 더 잡아 동시 요청이 서로의 연결을 기다린다. 검색 채널은 이 함수를 쓴다.
-func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs []model.ID) ([]model.Context, error) {
+// cypherIDList는 컨텍스트 식별자 목록을 openCypher 리스트 리터럴로 만든다.
+func cypherIDList(contextIDs []model.ID) (string, error) {
+	identifiers := make([]string, 0, len(contextIDs))
+	for _, contextID := range contextIDs {
+		if !contextID.IsV7() {
+			return "", fmt.Errorf("컨텍스트 식별자는 UUIDv7이어야 한다")
+		}
+		identifiers = append(identifiers, cypherString(contextID.String()))
+	}
+	return "[" + strings.Join(identifiers, ", ") + "]", nil
+}
+
+// missingContextError는 묶음 조회에서 없는 컨텍스트를 지목한다. 오류 사상은 ErrNotFound와
+// 같고 어떤 식별자가 없었는지 알려 호출부의 오류 메시지가 대상을 밝히게 한다.
+type missingContextError struct{ ID model.ID }
+
+func (e missingContextError) Error() string { return "컨텍스트 " + e.ID.String() + "가 없다" }
+
+func (e missingContextError) Unwrap() error { return ErrNotFound }
+
+// contextVerticesByIDs는 여러 컨텍스트 정점을 한 질의로 읽어 식별자로 색인해 돌려준다.
+// 없는 식별자는 결과에 없으므로 없음 판정은 호출자가 한다.
+func (s *Store) contextVerticesByIDs(ctx context.Context, queryer cypherQueryer, graphID model.ID, contextIDs []model.ID) (map[model.ID]model.Context, error) {
 	if !graphID.IsV7() {
 		return nil, fmt.Errorf("그래프 식별자는 UUIDv7이어야 한다")
 	}
 	if len(contextIDs) == 0 {
-		return nil, nil
+		return map[model.ID]model.Context{}, nil
 	}
-	identifiers := make([]string, 0, len(contextIDs))
-	for _, contextID := range contextIDs {
-		if !contextID.IsV7() {
-			return nil, fmt.Errorf("컨텍스트 식별자는 UUIDv7이어야 한다")
-		}
-		identifiers = append(identifiers, cypherString(contextID.String()))
+	list, err := cypherIDList(contextIDs)
+	if err != nil {
+		return nil, err
 	}
-	list := "[" + strings.Join(identifiers, ", ") + "]"
-
 	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) +
 		" AND node.context_id IN " + list + " RETURN node ORDER BY node.context_id"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecModeExec)
+	rows, err := queryer.Query(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("컨텍스트 묶음 조회: %w", err)
 	}
@@ -876,12 +904,39 @@ func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("컨텍스트 묶음 행 읽기: %w", err)
 	}
+	return byID, nil
+}
 
-	references, err := s.edgeTargetsBySource(ctx, graphID, "DERIVED_FROM", list)
+// ContextsByIDs는 여러 컨텍스트를 세 질의로 조립해 요청 순서대로 돌려준다.
+//
+// 후보마다 Context를 부르면 식별자 수만큼 왕복이 늘고, 결과 행을 연 채 부르면 같은 풀에서
+// 연결을 하나 더 잡아 동시 요청이 서로의 연결을 기다린다. 검색 채널은 이 함수를 쓴다.
+func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs []model.ID) ([]model.Context, error) {
+	return s.contextsByIDs(ctx, s.pool, graphID, contextIDs)
+}
+
+// contextsByIDs는 묶음 조립을 연결 풀과 트랜잭션이 같은 계약으로 쓰게 한다. 검색은 풀로
+// 읽고 생성·갱신 트랜잭션의 구성원 검증은 그 트랜잭션으로 읽는다.
+func (s *Store) contextsByIDs(ctx context.Context, queryer cypherQueryer, graphID model.ID, contextIDs []model.ID) ([]model.Context, error) {
+	if !graphID.IsV7() {
+		return nil, fmt.Errorf("그래프 식별자는 UUIDv7이어야 한다")
+	}
+	if len(contextIDs) == 0 {
+		return nil, nil
+	}
+	byID, err := s.contextVerticesByIDs(ctx, queryer, graphID, contextIDs)
 	if err != nil {
 		return nil, err
 	}
-	members, err := s.edgeTargetsBySource(ctx, graphID, "HAS_MEMBER", list)
+	list, err := cypherIDList(contextIDs)
+	if err != nil {
+		return nil, err
+	}
+	references, err := s.edgeTargetsBySource(ctx, queryer, graphID, "DERIVED_FROM", list)
+	if err != nil {
+		return nil, err
+	}
+	members, err := s.edgeTargetsBySource(ctx, queryer, graphID, "HAS_MEMBER", list)
 	if err != nil {
 		return nil, err
 	}
@@ -889,7 +944,7 @@ func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs 
 	for _, contextID := range contextIDs {
 		value, found := byID[contextID]
 		if !found {
-			return nil, ErrNotFound
+			return nil, missingContextError{ID: contextID}
 		}
 		switch value.Layer {
 		case model.LayerDerived:
@@ -906,13 +961,13 @@ func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs 
 }
 
 // edgeTargetsBySource는 지정한 label의 간선을 시작 정점별로 모은다.
-func (s *Store) edgeTargetsBySource(ctx context.Context, graphID model.ID, label, sourceList string) (map[model.ID][]model.ID, error) {
+func (s *Store) edgeTargetsBySource(ctx context.Context, queryer cypherQueryer, graphID model.ID, label, sourceList string) (map[model.ID][]model.ID, error) {
 	query := "MATCH (source:Context)-[edge:" + label + "]->(target:Context) WHERE source.graph_id = " + cypherString(graphID.String()) +
 		" AND source.context_id IN " + sourceList +
 		" AND edge.graph_id = " + cypherString(graphID.String()) +
 		" AND target.graph_id = " + cypherString(graphID.String()) +
 		" RETURN source.context_id, target.context_id ORDER BY source.context_id, target.context_id"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "source agtype, target agtype"), pgx.QueryExecModeExec)
+	rows, err := queryer.Query(ctx, s.cypherSQL(query, "source agtype, target agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("%s 간선 묶음 조회: %w", label, err)
 	}

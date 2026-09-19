@@ -438,7 +438,7 @@ openCypher 파라미터로 질의 텍스트 자체를 고정하는 방법도 있
 - 근거: 판독. 기본 실행 방식과 캐시 용량은 `github.com/jackc/pgx/v5@v5.10.0`의 `conn.go:191`, `:288`, `:898`에서 확인했다.
 - 처리: AGE 질의 18곳에 pgx.QueryExecModeExec를 호출 인자로 붙였다. 제안대로 호출 단위 실행 방식이므로 public 테이블 질의는 기본 방식의 문 캐시 이득을 그대로 유지한다. cypherSQL 주석에 호출부가 실행 방식을 함께 넘겨야 하는 근거를 문서화해 이후 AGE 호출 지점이 규칙을 놓치지 않게 했다.
 
-### - [ ] 43. `operation_log`와 `web_audit_log`에 `graph_id` 인덱스가 없다
+### - [x] 43. `operation_log`와 `web_audit_log`에 `graph_id` 인덱스가 없다
 
 `migrations/001_init.sql:133`, `:160`, `:261`~`:266`
 
@@ -460,6 +460,7 @@ CREATE INDEX web_audit_log_team_actor_idx ON public.web_audit_log (actor_account
 ```
 
 - 근거: 판독.
+- 처리: 제안한 인덱스 3종을 006 마이그레이션으로 추가하고 SDD 「인덱스」 표에 등록했다. 그래프별 반복 삭제는 유지했다. 보존 기간이 계정 플랜의 Go 값에서 오므로 한 문장 조인으로 옮기려면 플랜을 SQL에 박아야 하는데, 인덱스로 매 삭제문이 색인 범위 탐색이 되어 그래프 수에 비례하는 호출 횟수만 남기 때문이다.
 
 ### - [ ] 44. 근거·구성원 검증과 참조 간선 생성이 대상 수만큼 왕복한다
 

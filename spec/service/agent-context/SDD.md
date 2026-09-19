@@ -1527,6 +1527,9 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 | `index_task`                       | `state`와 `next_attempt_at`                          | 색인 작업자의 대기 작업 조회               |
 | `index_task`                       | `context_id` 유일 인덱스                             | 컨텍스트당 한 작업과 등록 upsert           |
 | `operation_log`                    | `context_id`, `applied_at`                           | 복구 판정과 보존 기간 정리                 |
+| `operation_log`                    | `graph_id`, `applied_at`                             | 감사 기록 화면과 그래프별 보존 정리        |
+| `web_audit_log`                    | `graph_id`, `occurred_at` 내림차순                   | 감사 기록 화면, 대기 복구 요청과 보존 정리 |
+| `web_audit_log`                    | `graph_id`가 없는 행의 `actor_account_id`, `occurred_at` | 팀 감사 기록 정리                |
 | `authorization_code`               | `expires_at`                                         | 만료된 코드의 주기 정리                    |
 | `request_rate`                     | `window_started_at`                                  | 지난 창의 주기 정리                        |
 | `signing_key`                      | `state = 'active'`의 부분 유일 인덱스                | 서명용 활성 키를 하나로 제한               |

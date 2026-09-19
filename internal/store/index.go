@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -593,12 +594,21 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 
 func (s *Store) contextTable() string { return `"` + s.graphName + `"."Context"` }
 
+// vectorText는 float64 목록을 pgvector 리터럴로 만든다.
+//
+// 검색 한 번과 색인 한 번마다 차원 수만큼 도는 자리다. 값마다 문자열을 만들지 않고 버퍼
+// 하나에 이어 붙인다. %g와 같은 표현을 얻으려면 AppendFloat의 정밀도를 -1로 둔다.
 func vectorText(values []float64) string {
-	parts := make([]string, len(values))
+	// 값 하나에 부호와 소수점, 지수까지 넉넉히 잡아 재할당을 없앤다.
+	buffer := make([]byte, 0, len(values)*24+2)
+	buffer = append(buffer, '[')
 	for index, value := range values {
-		parts[index] = fmt.Sprintf("%g", value)
+		if index > 0 {
+			buffer = append(buffer, ',')
+		}
+		buffer = strconv.AppendFloat(buffer, value, 'g', -1, 64)
 	}
-	return "[" + strings.Join(parts, ",") + "]"
+	return string(append(buffer, ']'))
 }
 
 // enableIterativeScan은 이 트랜잭션의 벡터 인덱스 질의가 조건에 걸러진 만큼 더 훑게 한다.

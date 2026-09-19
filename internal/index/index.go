@@ -2,6 +2,7 @@
 package index
 
 import (
+	"bytes"
 	"context"
 	json "encoding/json/v2"
 	"errors"
@@ -208,7 +209,7 @@ func (worker *Worker) Embed(ctx context.Context, input string) ([]float64, error
 	}
 	endpoint := worker.config.BaseURL.Clone()
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/api/embed"
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(string(body)))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("임베딩 요청 생성: %w", err)
 	}

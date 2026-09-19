@@ -537,12 +537,13 @@ openCypher의 label 교대와 무방향 패턴으로 묶으면 깊이마다 한�
 - 근거: 판독. pgvector 배포 버전의 반복 탐색 지원 여부를 먼저 확인해야 한다.
 - 처리: 벡터 인덱스 질의를 짧은 트랜잭션에 넣고 그 안에서만 pgvector의 반복 탐색을 `strict_order`로 켰다. 반복 탐색이 상한을 채울 때까지 인덱스를 이어 훑으므로 조건이 뒤에서 걸러내도 결과가 짧아지지 않고 `strict_order`가 거리 순서를 정확히 지킨다. 반복 탐색은 0.8.0에 들어왔고 「버전 요구」의 하한은 0.7.0이므로 `SET LOCAL` 대신 `set_config`를 조건과 함께 써서 설정이 없는 배포에서는 아무것도 하지 않게 했다. 설정을 트랜잭션 범위로 둔 이유는 풀의 연결에 남으면 같은 연결의 다른 질의까지 바뀌기 때문이다. 배포 버전은 pgvector 0.8.6으로 확인했고 근거는 `reference.md`에 기록했다.
 
-### - [ ] 51. 작은 낭비
+### - [x] 51. 작은 낭비
 
 - `internal/index/index.go:180`: `strings.NewReader(string(body))`가 요청 본문을 한 번 더 복사한다. `bytes.NewReader(body)`면 된다.
 - `internal/store/index.go:521`~`:527`: `vectorText`가 차원 수만큼 `fmt.Sprintf("%g")`를 돈다. 검색 한 번과 색인 한 번마다 차원 수만큼이다. `strconv.AppendFloat`에 버퍼를 미리 잡으면 할당이 사실상 사라진다.
 - `internal/store/store.go:103`~`:113`: 풀의 연결 수와 수명을 설정하지 않는다. 접속 문자열로 덮을 수는 있으나 웹, MCP, 색인 작업자, 주기 작업자가 같은 풀을 나눠 쓰고 40번처럼 연결을 겹쳐 잡는 경로가 있으므로 기본값을 코드에서 정하는 편이 안전하다.
 - `internal/authz/authz.go:281`~`:287`: 29번이 지적한 요청마다의 조회와 같은 자리에서 JWK 해석과 공개 키 복원도 요청마다 반복한다. `kid` 기준 캐시를 만들 때 해석 결과까지 함께 담으면 된다.
+- 처리: 네 항목 중 셋을 고쳤고 마지막은 이미 해결되어 있었다. 요청 본문은 `bytes.NewReader(body)`로 바꿔 복사를 없앴다. `vectorText`는 `strconv.AppendFloat`로 버퍼 하나에 이어 붙이도록 바꿨으며 정밀도 -1이 `%g`와 같은 표현을 준다. 연결 풀은 접속 문자열에 `pool_max_conns`가 없을 때만 연결 수 하한을 16으로 올리고, 수명과 유휴 시간은 `pgxpool`이 이미 1시간과 30분을 기본값으로 정하므로 그대로 두었다. JWK 해석 캐시는 29번을 고칠 때 함께 해결됐다. `verificationCache`가 `json.Unmarshal`을 지난 `jose.JSONWebKey`를 `kid`별로 담으므로 요청마다 다시 해석하지 않는다.
 
 ## 남은 확인 한계
 

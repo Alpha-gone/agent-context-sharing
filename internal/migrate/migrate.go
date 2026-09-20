@@ -24,16 +24,18 @@ import (
 )
 
 // Config는 마이그레이션 파일에 치환할 배포 구성 값이다.
-// 세 값 모두 식별자나 타입 자리에 들어가 매개변수로 묶을 수 없으므로 Validate가
+// 네 값 모두 식별자나 타입 자리에 들어가 매개변수로 묶을 수 없으므로 Validate가
 // 통과한 값만 사용한다.
 type Config struct {
-	GraphName  string
-	VectorType string
-	VectorDim  int
+	GraphName      string
+	VectorType     string
+	VectorDim      int
+	ColdTablespace string
 }
 
 var (
-	graphNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+	graphNamePattern  = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+	tablespacePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 	// bit를 빼는 이유는 001이 만드는 코사인 연산자 클래스가 bit에 없기 때문이다. pgvector는
 	// bit에 해밍과 자카드만 두므로 `bit_cosine_ops`로는 인덱스를 만들 수 없고, 벡터 문자열
 	// 표기도 bit 열에 맞지 않는다. 배포 구성 검증이 같은 이유로 이미 거부하지만, 이 실행기는
@@ -53,7 +55,19 @@ func (c Config) Validate() error {
 	if c.VectorDim <= 0 {
 		return fmt.Errorf("벡터 차원 %d는 양의 정수여야 한다", c.VectorDim)
 	}
+	if c.ColdTablespace != "" && !tablespacePattern.MatchString(c.ColdTablespace) {
+		return fmt.Errorf("콜드 tablespace 이름 %q가 형식 %s에 맞지 않는다", c.ColdTablespace, tablespacePattern)
+	}
 	return nil
+}
+
+// ColdTablespaceClause는 콜드 임베딩 파티션에 붙일 검증된 TABLESPACE 절이다.
+// 비어 있으면 데이터베이스 기본 tablespace를 사용해 개발 환경에 별도 저장소를 요구하지 않는다.
+func (c Config) ColdTablespaceClause() string {
+	if c.ColdTablespace == "" {
+		return ""
+	}
+	return " TABLESPACE " + c.ColdTablespace
 }
 
 // Migration은 적용 대상 파일 하나다.

@@ -81,6 +81,29 @@ func TestGraphNameBoundary(t *testing.T) {
 	}
 }
 
+func TestColdTablespaceBoundary(t *testing.T) {
+	tests := []struct {
+		name   string
+		valid  bool
+		clause string
+	}{
+		{name: "", valid: true, clause: ""},
+		{name: "cold_storage", valid: true, clause: " TABLESPACE cold_storage"},
+		{name: "ColdStorage", valid: false},
+		{name: "cold-storage", valid: false},
+	}
+	for _, test := range tests {
+		cfg := migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: 1024, ColdTablespace: test.name}
+		err := cfg.Validate()
+		if got := err == nil; got != test.valid {
+			t.Errorf("콜드 tablespace %q 허용 결과 = %t, want %t: %v", test.name, got, test.valid, err)
+		}
+		if err == nil && cfg.ColdTablespaceClause() != test.clause {
+			t.Errorf("콜드 tablespace %q 절 = %q, want %q", test.name, cfg.ColdTablespaceClause(), test.clause)
+		}
+	}
+}
+
 // TestWithLockIsExclusive는 잠금이 실제로 배타적인지 확인한다.
 //
 // 하나가 잠근 동안 다른 하나가 진입하지 못하고, 앞이 끝난 뒤에 진입해 완료되며,

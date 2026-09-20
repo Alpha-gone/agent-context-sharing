@@ -105,14 +105,32 @@ CREATE TABLE IF NOT EXISTS public.team_member (
     PRIMARY KEY (team_id, account_id)
 );
 
--- 「임베딩 스키마」의 5개 열. 벡터 타입과 차원은 배포 구성이 정한다.
+-- 「임베딩 스키마」의 열. 벡터 타입과 차원은 배포 구성이 정한다. storage_tier를
+-- 파티션 키로 두어 활성 검색은 두 계층을 한 테이블처럼 읽고, 이동은 행 갱신으로 끝낸다.
 CREATE TABLE IF NOT EXISTS public.context_embedding (
-    context_id uuid        PRIMARY KEY,
+    context_id uuid        NOT NULL,
     graph_id   uuid        NOT NULL,
     embedding  {{.VectorType}}({{.VectorDim}}) NOT NULL,
     model_id   text        NOT NULL,
-    indexed_at timestamptz NOT NULL
-);
+    indexed_at timestamptz NOT NULL,
+    last_accessed_at timestamptz NOT NULL,
+    storage_tier text NOT NULL DEFAULT 'hot' CHECK (storage_tier IN ('hot', 'cold'))
+) PARTITION BY LIST (storage_tier);
+
+CREATE TABLE IF NOT EXISTS public.context_embedding_hot
+    PARTITION OF public.context_embedding FOR VALUES IN ('hot');
+
+CREATE TABLE IF NOT EXISTS public.context_embedding_cold
+    PARTITION OF public.context_embedding FOR VALUES IN ('cold'){{.ColdTablespaceClause}};
+
+-- PostgreSQL의 partitioned unique index는 파티션 키를 포함해야 한다. 컨텍스트 하나가
+-- 두 계층에 동시에 존재하지 않게 하는 책임은 단일 저장 경로의 delete-insert와 계층 이동
+-- 갱신이 맡고, 각 파티션 안에서는 context_id를 유일하게 유지한다.
+CREATE UNIQUE INDEX IF NOT EXISTS context_embedding_hot_context_idx
+    ON public.context_embedding_hot (context_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS context_embedding_cold_context_idx
+    ON public.context_embedding_cold (context_id);
 
 -- 「색인 작업 큐」의 9개 열. 컨텍스트마다 한 행만 두고 등록을 upsert로 처리하므로
 -- context_id에 유일 인덱스를 건다. 작업자는 next_attempt_at이 지난 행을

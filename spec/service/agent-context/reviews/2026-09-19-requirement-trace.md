@@ -160,7 +160,7 @@
 | `FR-AGENT_CONTEXT-120` | 기록 보존 하한 | `internal/store/periodic.go`의 `CleanupAuditRecords`가 종류별 보존 기간을 나눈다 | 구현 |
 | `FR-AGENT_CONTEXT-121` | 벡터 압축 | `internal/config/config.go`의 `EMBEDDING_VECTOR_TYPE`·`EMBEDDING_DIMENSION`과 `internal/store/index.go`의 `ReindexGraph` | 구현 |
 | `FR-AGENT_CONTEXT-122` | 색인 대상 비교 | `internal/config/config.go`의 `INDEX_TARGET_LAYERS`와 `internal/store/operation.go`의 `enqueueIndexTask` 계층 분기. 비교 자체는 평가에서 수행한다 | 구현 |
-| `FR-AGENT_CONTEXT-123` | 저장 계층화 | 없다. `internal/plan/plan.go`의 `TierMoveAfterDays`만 있고 이를 읽는 곳이 없으며 `context_embedding`에 파티셔닝이 없다 | 미구현 |
+| `FR-AGENT_CONTEXT-123` | 저장 계층화 | `internal/store/tier.go`의 계층 이동·되읽기와 `migrations/001_init.sql`의 `hot`·`cold` 파티션 | 구현 |
 | `FR-AGENT_CONTEXT-124` | 출처 구분 | `internal/model/context.go`의 `OriginKind`와 `ValidateUpdate` | 구현 |
 | `FR-AGENT_CONTEXT-125` | 출처 전달 | `internal/store/index.go`의 `ContextOriginKinds`와 `internal/search/search.go`의 출처 전파 | 구현 |
 | `FR-AGENT_CONTEXT-126` | 오염 사후 탐지 | `internal/store/web.go`의 `ListAuditEntries`가 `operation_log`와 `web_audit_log`를 함께 읽고 전파는 `internal/store/hop.go`의 `HopContexts`로 따라간다 | 구현 |
@@ -199,12 +199,13 @@
 - 근거: 판독. `enqueueIndexTask`의 삽입문과 `internal/config/config.go`의 구성 이름 전수.
 - 처리: 같은 날 등록 조건에 계층 분기를 넣고 배포 구성 `INDEX_TARGET_LAYERS`를 열었다. 재색인이 대상에서 빠진 계층의 임베딩과 대기 작업을 함께 지우므로 구성을 바꾼 뒤에도 두 구성이 등록 조건 말고는 같다. 후속 [검색 품질 본 측정](2026-09-20-search-quality-measurement.md)에서 `all_layers`와 `without_source`를 비교했고, 원천 제외의 재현율·순위 품질 손실이 유의해 `all_layers`를 기본으로 유지했다.
 
-### 2. `FR-AGENT_CONTEXT-123` 저장 계층 이동이 값만 있고 동작이 없다
+### 2. `FR-AGENT_CONTEXT-123` 저장 계층 이동이 값만 있고 동작이 없었다 (해소)
 
 `internal/plan/plan.go`가 `TierMoveAfterDays`를 플랜 항목으로 받고 검증까지 하지만 이 값을 읽는 곳이 어디에도 없다. `context_embedding`에도 파티셔닝이 없다. `SDD.md` 「저장 계층화」가 설계한 두 대상의 이동 경로가 구현에 없다.
 
 - 근거: 판독. `TierMoveAfterDays` 전수 검색이 `plan` 패키지 안 세 자리만 내고, `migrations/001_init.sql`에 `PARTITION`이 없다.
 - 영향: 기본값이 이동하지 않음이므로 현재 동작에는 문제가 없다. 플랜으로 기간을 주면 값이 조용히 무시된다.
+- 처리: `context_embedding`을 `storage_tier` 기준 `hot`·`cold` 파티션으로 나누고, 일곱 번째 주기 작업이 접근 차단 대상과 플랜 기간을 넘긴 활성 임베딩을 `cold`로 옮기게 했다. 실제 활성 조회는 접근 시각을 갱신하며 같은 문장으로 `hot`에 되읽는다. 기본값 0은 활성 임베딩을 이동하지 않는다.
 
 ### 3. 평가에 걸린 여섯 건
 

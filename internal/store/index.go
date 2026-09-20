@@ -176,12 +176,16 @@ func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, enqueuedAt
 		return fmt.Errorf("색인 결과 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// 파티션 키를 포함하지 않는 전역 unique index는 PostgreSQL이 허용하지 않는다.
+	// 단일 색인 저장 경로에서 기존 계층의 행을 먼저 지운 뒤 hot 파티션에 넣어,
+	// context_id가 두 파티션에 동시에 남지 않게 한다.
+	if _, err := tx.Exec(ctx, `DELETE FROM public.context_embedding WHERE context_id = $1`, task.ContextID.String()); err != nil {
+		return fmt.Errorf("기존 임베딩 제거: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO public.context_embedding (context_id, graph_id, embedding, model_id, indexed_at)
-		VALUES ($1, $2, $3, $4, now())
-		ON CONFLICT (context_id) DO UPDATE SET
-			graph_id = EXCLUDED.graph_id, embedding = EXCLUDED.embedding,
-			model_id = EXCLUDED.model_id, indexed_at = EXCLUDED.indexed_at`,
+		INSERT INTO public.context_embedding
+			(context_id, graph_id, embedding, model_id, indexed_at, last_accessed_at, storage_tier)
+		VALUES ($1, $2, $3, $4, now(), now(), 'hot')`,
 		task.ContextID.String(), task.GraphID.String(), vectorText(result.Embedding), result.ModelID); err != nil {
 		return fmt.Errorf("임베딩 저장: %w", err)
 	}

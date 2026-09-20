@@ -123,6 +123,15 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 	if err := s.fillHopReferences(ctx, graphID, result.Contexts); err != nil {
 		return HopResult{}, err
 	}
+	accessed := make([]model.ID, 0, len(result.Contexts))
+	for _, value := range result.Contexts {
+		if value.DeletedAt == nil {
+			accessed = append(accessed, value.ID)
+		}
+	}
+	if err := s.touchEmbeddings(ctx, graphID, accessed, nowUTC()); err != nil {
+		return HopResult{}, err
+	}
 	return result, nil
 }
 

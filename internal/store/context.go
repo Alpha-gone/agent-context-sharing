@@ -61,7 +61,16 @@ func (s *Store) Context(ctx context.Context, graphID, contextID model.ID) (model
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
-	return s.context(ctx, s.pool, graphID, contextID)
+	stored, err := s.context(ctx, s.pool, graphID, contextID)
+	if err != nil {
+		return model.Context{}, err
+	}
+	if stored.DeletedAt == nil {
+		if err := s.touchEmbeddings(ctx, graphID, []model.ID{contextID}, nowUTC()); err != nil {
+			return model.Context{}, err
+		}
+	}
+	return stored, nil
 }
 
 // UpdateContext는 조건부 openCypher 갱신으로 판 번호의 비교와 증가를 같은 트랜잭션에 둔다.
@@ -916,7 +925,20 @@ func (s *Store) contextVerticesByIDs(ctx context.Context, queryer cypherQueryer,
 // 후보마다 Context를 부르면 식별자 수만큼 왕복이 늘고, 결과 행을 연 채 부르면 같은 풀에서
 // 연결을 하나 더 잡아 동시 요청이 서로의 연결을 기다린다. 검색 채널은 이 함수를 쓴다.
 func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs []model.ID) ([]model.Context, error) {
-	return s.contextsByIDs(ctx, s.pool, graphID, contextIDs)
+	values, err := s.contextsByIDs(ctx, s.pool, graphID, contextIDs)
+	if err != nil {
+		return nil, err
+	}
+	active := make([]model.ID, 0, len(values))
+	for _, value := range values {
+		if value.DeletedAt == nil {
+			active = append(active, value.ID)
+		}
+	}
+	if err := s.touchEmbeddings(ctx, graphID, active, nowUTC()); err != nil {
+		return nil, err
+	}
+	return values, nil
 }
 
 // contextsByIDs는 묶음 조립을 연결 풀과 트랜잭션이 같은 계약으로 쓰게 한다. 검색은 풀로

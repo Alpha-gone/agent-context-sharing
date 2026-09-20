@@ -152,7 +152,7 @@
 | `FR-AGENT_CONTEXT-112` | 검증 원칙 | 판정에 필요한 통제 조건은 `internal/config/config.go`의 `SEARCH_GRAPH_STAGE`가 만들지만 판정을 수행하는 실행기가 없다 | 평가 대기 |
 | `FR-AGENT_CONTEXT-113` | 검색 품질 평가 | 측정 값은 `internal/search/search.go`의 `Flow`가 내지만 데이터셋과 실행기가 없다 | 평가 대기 |
 | `FR-AGENT_CONTEXT-114` | 그래프 효과 비교 | 단계 전환은 `internal/config/config.go`의 `SearchGraphStage`가 제공하나 비교를 수행하지 않았다 | 평가 대기 |
-| `FR-AGENT_CONTEXT-115` | 지속 평가 | 반복 측정과 `operation_log` 판단 입력은 있으나 시나리오 평가를 수행하지 않았다 | 평가 대기 |
+| `FR-AGENT_CONTEXT-115` | 지속 평가 | `cmd/eval -continual`의 여섯 시나리오, 품질 비악화 판정과 `operation_log` 판단 입력 재확인 | 구현·측정 완료 |
 | `FR-AGENT_CONTEXT-116` | 업무 효과 평가 | 집계 지표의 자리는 있으나 측정을 수행하지 않았다. 운영 후 집계로 미루기로 했다 | 평가 대기 |
 | `FR-AGENT_CONTEXT-117` | 플랜 항목 | `internal/plan/plan.go`의 `Limits`와 `Default` | 구현 |
 | `FR-AGENT_CONTEXT-118` | 플랜 변경 | `internal/plan/plan.go`의 `CheckIncrease` | 구현 |

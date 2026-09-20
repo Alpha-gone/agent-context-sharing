@@ -71,6 +71,24 @@ func (s *Store) HasAppliedDiscard(ctx context.Context, graphID, contextID model.
 	return found, nil
 }
 
+// HasOperationJudgment는 그래프의 관리 연산 기록에 같은 판단 입력이
+// 존재하는지 확인한다. 지속 평가는 본문 대신 시나리오 표식을 판단 입력에
+// 남겨 반복 강화 여부를 검증한다.
+func (s *Store) HasOperationJudgment(ctx context.Context, graphID model.ID, judgmentInput string) (bool, error) {
+	if !graphID.IsV7() || judgmentInput == "" {
+		return false, fmt.Errorf("관리 연산 판단 조회 인자가 올바르지 않다")
+	}
+	var found bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM public.operation_log
+			WHERE graph_id = $1 AND judgment_input = $2
+		)`, graphID.String(), judgmentInput).Scan(&found); err != nil {
+		return false, fmt.Errorf("관리 연산 판단 입력 조회: %w", err)
+	}
+	return found, nil
+}
+
 // valid는 적용과 거부의 대상 요구가 다르므로 기록 결과를 함께 본다. 추가와 확정의 거부는
 // 「기록 항목」이 대상을 비우기로 확정했고, 적용 기록은 언제나 대상을 하나 갖는다.
 func (operation OperationRecord) valid(result string) error {

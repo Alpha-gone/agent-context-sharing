@@ -122,6 +122,9 @@ func TestStoreIntegration(t *testing.T) {
 	if found, err := store.HasAppliedDiscard(t.Context(), graphID, createdSource.ID); err != nil || !found {
 		t.Fatalf("적용된 폐기 기록을 찾지 못했다: found=%t err=%v", found, err)
 	}
+	if found, err := store.HasOperationJudgment(t.Context(), graphID, "integration discard"); err != nil || !found {
+		t.Fatalf("관리 연산 판단 입력을 찾지 못했다: found=%t err=%v", found, err)
+	}
 	invalidated, err := store.Context(t.Context(), graphID, createdDerived.ID)
 	if err != nil {
 		t.Fatalf("근거 폐기 뒤 파생 조회: %v", err)

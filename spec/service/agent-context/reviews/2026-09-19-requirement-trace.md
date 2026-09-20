@@ -197,7 +197,7 @@
 검사 시점에는 `internal/store/operation.go`의 `enqueueIndexTask`가 계층을 보지 않고 저장되는 모든 컨텍스트를 등록했고, 두 구성을 고를 구성 값도 없었다. 배포 구성 26개 이름을 전수로 확인했다.
 
 - 근거: 판독. `enqueueIndexTask`의 삽입문과 `internal/config/config.go`의 구성 이름 전수.
-- 처리: 같은 날 등록 조건에 계층 분기를 넣고 배포 구성 `INDEX_TARGET_LAYERS`를 열었다. 기본값은 판정 전이므로 원천을 포함하는 `all_layers`이며 `without_source`가 대조군이다. 재색인이 대상에서 빠진 계층의 임베딩과 대기 작업을 함께 지우므로 구성을 바꾼 뒤에도 두 구성이 등록 조건 말고는 같다. 비교 측정 자체는 데이터셋이 있어야 하므로 아직 수행하지 않았다.
+- 처리: 같은 날 등록 조건에 계층 분기를 넣고 배포 구성 `INDEX_TARGET_LAYERS`를 열었다. 재색인이 대상에서 빠진 계층의 임베딩과 대기 작업을 함께 지우므로 구성을 바꾼 뒤에도 두 구성이 등록 조건 말고는 같다. 후속 [검색 품질 본 측정](2026-09-20-search-quality-measurement.md)에서 `all_layers`와 `without_source`를 비교했고, 원천 제외의 재현율·순위 품질 손실이 유의해 `all_layers`를 기본으로 유지했다.
 
 ### 2. `FR-AGENT_CONTEXT-123` 저장 계층 이동이 값만 있고 동작이 없다
 

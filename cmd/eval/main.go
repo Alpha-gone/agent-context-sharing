@@ -163,6 +163,7 @@ func run() error {
 			SemanticThreshold: settings.semanticThreshold,
 			FoldThreshold:     settings.foldThreshold,
 			GraphStage:        search.GraphStage(stage),
+			GlobalFallback:    stage == string(search.GraphStageGlobal),
 		}, slog.Default())
 		if err != nil {
 			return fmt.Errorf("단계 %q 검색 실행기 준비: %w", stage, err)

@@ -15,7 +15,7 @@ func TestLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("구성 읽기: %v", err)
 	}
-	if cfg.HTTPAddr != ":8080" || cfg.EmbeddingDimension != 1024 || cfg.SearchExecution != SearchExecutionParallel || cfg.SearchGraphStage != SearchGraphStageBaseline || cfg.SearchCandidateLimit != 50 || cfg.SearchSemanticThreshold != 0.7 || cfg.RelationAdjacencyWindow != time.Hour || cfg.RelationSimilarityThreshold != 0.8 || cfg.RelationProposalLimit != 10 {
+	if cfg.HTTPAddr != ":8080" || cfg.EmbeddingDimension != 1024 || cfg.SearchExecution != SearchExecutionParallel || cfg.SearchGraphStage != SearchGraphStageBaseline || !cfg.SearchGlobalFallback || cfg.SearchCandidateLimit != 50 || cfg.SearchSemanticThreshold != 0.7 || cfg.RelationAdjacencyWindow != time.Hour || cfg.RelationSimilarityThreshold != 0.8 || cfg.RelationProposalLimit != 10 {
 		t.Fatalf("핵심 구성 값이 다르다: %+v", cfg)
 	}
 	if len(cfg.OAuthClients) != 1 || len(cfg.OAuthClients["agent-context-dev"]) != 1 || cfg.ResourceServerURL.String() != "https://service.test/mcp" || cfg.AuthorizationServerURL.String() != "https://issuer.test" || len(cfg.MCPAllowedOrigins) != 1 {
@@ -61,10 +61,8 @@ func TestLoadPlacementDefaultsToEmbedded(t *testing.T) {
 	}
 }
 
-// TestLoadAcceptsFourPlacementCombinations는 「배치 조합」의 네 조합이 모두 구성으로
-// 표현되는지 확인한다. 어느 조합이든 같은 코드로 성립해야 한다.
-// TestLoadIndexTargetsDefaultsToAllLayers는 「색인 대상 비교」의 판정 전 기본값을
-// 확인한다. 비어 있을 때 원천이 빠지면 아직 하지 않은 판정을 구성이 먼저 내리는 셈이다.
+// TestLoadIndexTargetsDefaultsToAllLayers는 「색인 대상 비교」에서 채택한
+// 원천 포함 구성을 빈 값의 기본으로 유지하는지 확인한다.
 func TestLoadIndexTargetsDefaultsToAllLayers(t *testing.T) {
 	values := validValues()
 	delete(values, "INDEX_TARGET_LAYERS")
@@ -119,6 +117,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		"검색 후보 수 상한 오류":   func(values map[string]string) { values["SEARCH_CHANNEL_CANDIDATE_LIMIT"] = "0" },
 		"검색 의미 유사도 하한 오류": func(values map[string]string) { values["SEARCH_SEMANTIC_SIMILARITY_THRESHOLD"] = "1.1" },
 		"그래프 검색 단계 오류":    func(values map[string]string) { values["SEARCH_GRAPH_STAGE"] = "unknown" },
+		"전역 전환 활성화 오류":    func(values map[string]string) { values["SEARCH_GLOBAL_FALLBACK_ENABLED"] = "unknown" },
 		"색인 대상 계층 오류":     func(values map[string]string) { values["INDEX_TARGET_LAYERS"] = "derived_only" },
 		"관계 시간 인접 임계값 오류": func(values map[string]string) { values["RELATION_ADJACENCY_WINDOW"] = "0" },
 		"관계 유사도 임계값 오류":   func(values map[string]string) { values["RELATION_SIMILARITY_THRESHOLD"] = "1.1" },
@@ -231,6 +230,7 @@ func validValues() map[string]string {
 		"SEARCH_CHANNEL_CANDIDATE_LIMIT":       "50",
 		"SEARCH_SEMANTIC_SIMILARITY_THRESHOLD": "0.70",
 		"SEARCH_GRAPH_STAGE":                   "baseline",
+		"SEARCH_GLOBAL_FALLBACK_ENABLED":       "true",
 		"SEARCH_FOLD_SIMILARITY_THRESHOLD":     "0.90",
 		"OAUTH_CLIENTS":                        `{"agent-context-dev":["http://127.0.0.1/callback"]}`,
 		"RESOURCE_SERVER_URL":                  "https://service.test/mcp",

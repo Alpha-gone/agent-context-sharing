@@ -99,6 +99,8 @@ type Config struct {
 	SearchFoldThreshold float64
 	// SearchGraphStage 필드에는 그래프 검색 비교에서 활성화할 누적 단계를 둔다.
 	SearchGraphStage SearchGraphStage
+	// SearchGlobalFallback 필드에는 auto 범위의 전역 요약 전환 활성 여부를 둔다.
+	SearchGlobalFallback bool
 	// IndexTargetLayers 필드에는 색인 작업으로 등록할 계층 범위를 둔다.
 	IndexTargetLayers IndexTargetLayers
 	// OAuthClients 필드에는 클라이언트별로 사전 등록한 OAuth 콜백 주소 목록을 둔다.
@@ -214,8 +216,13 @@ func Load(env Environment) (Config, error) {
 	if !slices.Contains([]SearchGraphStage{SearchGraphStageBaseline, SearchGraphStageReferences, SearchGraphStageRelations, SearchGraphStageGlobal}, cfg.SearchGraphStage) {
 		return Config{}, fmt.Errorf("SEARCH_GRAPH_STAGE %q가 baseline, references, relations, global 중 하나가 아니다", cfg.SearchGraphStage)
 	}
-	// 「색인 대상 비교」의 판정을 아직 하지 않았으므로 비어 있으면 원천을 포함한다.
-	// 측정으로 원천 제외 구성의 재현율 손실이 유의하지 않다는 것이 확인되면 기본값을 바꾼다.
+	globalFallback, err := strconv.ParseBool(strings.TrimSpace(env("SEARCH_GLOBAL_FALLBACK_ENABLED")))
+	if err != nil {
+		return Config{}, fmt.Errorf("SEARCH_GLOBAL_FALLBACK_ENABLED가 불리언이 아니다")
+	}
+	cfg.SearchGlobalFallback = globalFallback
+	// 「색인 대상 비교」에서 원천 제외 구성의 재현율·순위 품질 손실이
+	// 유의하게 확인됐으므로 비어 있으면 원천을 포함하는 판정을 유지한다.
 	if cfg.IndexTargetLayers == "" {
 		cfg.IndexTargetLayers = IndexTargetLayersAll
 	}

@@ -26,11 +26,11 @@
 
 | 상태 | 건수 | 뜻 |
 |------|------|-----|
-| 구현 | 142 | 요구사항이 요구하는 동작을 수행하는 코드가 있다 |
-| 평가 대기 | 6 | 측정 값을 내는 자리는 있으나 평가를 수행하지 않아 요구사항이 닫히지 않았다 |
-| 미구현 | 1 | 대응하는 코드가 없다 |
+| 구현·측정 완료 | 147 | 요구사항이 요구하는 동작이 구현됐고 측정 요구가 있는 항목은 본 측정까지 끝났다 |
+| 평가 대기 | 2 | 구현은 끝났으나 업무 효과 본 측정이 필요해 요구사항이 닫히지 않았다 |
+| 미구현 | 0 | 대응하는 코드가 없는 요구사항은 없다 |
 
-검사 뒤 `FR-AGENT_CONTEXT-122`의 등록 조건 분기를 구현해 미구현이 둘에서 하나로 줄었다. 위 표는 그 처리를 반영한 값이며, 처리 내용은 「발견 사항」 1번에 있다.
+검사 뒤 `FR-AGENT_CONTEXT-122`의 등록 조건 분기와 `FR-AGENT_CONTEXT-123`의 저장 계층화를 구현했다. `FR-AGENT_CONTEXT-112`~`115`는 검색 품질·그래프 효과·지속 평가 본 측정으로 닫았고, `FR-AGENT_CONTEXT-116`은 `cmd/eval -business` 집계·판정 경로까지 구현했다. `FR-AGENT_CONTEXT-061`과 `FR-AGENT_CONTEXT-116`은 실제 통제 과업의 업무 효과 값이 있어야 닫힌다.
 
 의도적 미구현으로 분류된 `TBD-AGENT_CONTEXT-048`·`-049`·`-052`·`-060`·`-061`은 기능 요구사항이 아니므로 이 표에 없다. 그 다섯 건은 선행 감사 6번이 확인했다.
 
@@ -98,7 +98,7 @@
 | `FR-AGENT_CONTEXT-058` | 입력 검증 | `internal/mcp/schema.go`의 `validateToolCall`와 `internal/model/context.go`의 `Validate` | 구현 |
 | `FR-AGENT_CONTEXT-059` | 연결 생성 | `internal/store/relation.go`의 `createProposedRelation`과 `ConfirmRelation` | 구현 |
 | `FR-AGENT_CONTEXT-060` | 재구성 | `internal/store/context.go`의 `CreateSupersedingContextWithOperation` | 구현 |
-| `FR-AGENT_CONTEXT-061` | 충족 기준 | 판정에 쓸 값은 `internal/search/search.go`의 `Flow`와 `operation_log`에 있으나 판정 자체는 평가를 거쳐야 한다 | 평가 대기 |
+| `FR-AGENT_CONTEXT-061` | 충족 기준 | 그래프 효과와 지속 평가는 통과했다. `NFR-AGENT_CONTEXT-009`의 업무 효과 본 측정이 끝나면 세 기준을 함께 판정한다 | 평가 대기 |
 | `FR-AGENT_CONTEXT-062` | 파생 생성 | `internal/store/context.go`의 `createContext`가 받는 파생 계층 경로 | 구현 |
 | `FR-AGENT_CONTEXT-063` | 요약 범위 | `internal/mcp/handler.go`의 `contextFlow`가 받는 `summary_scope`와 `internal/search/search.go`의 `globalSummaries` | 구현 |
 | `FR-AGENT_CONTEXT-064` | 근거 무효화 | `internal/store/context.go`의 `invalidateDerivedEvidence`와 `internal/model/context.go`의 `ValidateEvidenceInvalidation` | 구현 |
@@ -149,11 +149,11 @@
 | `FR-AGENT_CONTEXT-109` | 웹 감사 기록 | `internal/store/web.go`의 `insertWebAudit`와 `ListAuditEntries` | 구현 |
 | `FR-AGENT_CONTEXT-110` | 시각화 제공 | `internal/web/web.go`의 `newVisualizationData` | 구현 |
 | `FR-AGENT_CONTEXT-111` | 시각화 표시 | `internal/web/web.go`의 `visualizationNodeData`와 시각화 템플릿 | 구현 |
-| `FR-AGENT_CONTEXT-112` | 검증 원칙 | 판정에 필요한 통제 조건은 `internal/config/config.go`의 `SEARCH_GRAPH_STAGE`가 만들지만 판정을 수행하는 실행기가 없다 | 평가 대기 |
-| `FR-AGENT_CONTEXT-113` | 검색 품질 평가 | 측정 값은 `internal/search/search.go`의 `Flow`가 내지만 데이터셋과 실행기가 없다 | 평가 대기 |
-| `FR-AGENT_CONTEXT-114` | 그래프 효과 비교 | 단계 전환은 `internal/config/config.go`의 `SearchGraphStage`가 제공하나 비교를 수행하지 않았다 | 평가 대기 |
+| `FR-AGENT_CONTEXT-112` | 검증 원칙 | `cmd/eval`이 통제 조건과 반복 회차를 기록하고 같은 질의의 단계별 차이에 대한 95% 신뢰구간으로 판정한다 | 구현·측정 완료 |
+| `FR-AGENT_CONTEXT-113` | 검색 품질 평가 | `cmd/eval`과 공개·자체 세트로 사실·연상·전역 검색의 재현율·순위 품질·예산 효율·채널 기여를 측정했다 | 구현·측정 완료 |
+| `FR-AGENT_CONTEXT-114` | 그래프 효과 비교 | [검색 품질 본 측정](2026-09-20-search-quality-measurement.md)에서 기준선·국소 그래프·자동 전역 전환을 비교해 운영 구성을 판정했다 | 구현·측정 완료 |
 | `FR-AGENT_CONTEXT-115` | 지속 평가 | `cmd/eval -continual`의 여섯 시나리오, 품질 비악화 판정과 `operation_log` 판단 입력 재확인 | 구현·측정 완료 |
-| `FR-AGENT_CONTEXT-116` | 업무 효과 평가 | 집계 지표의 자리는 있으나 측정을 수행하지 않았다. 운영 후 집계로 미루기로 했다 | 평가 대기 |
+| `FR-AGENT_CONTEXT-116` | 업무 효과 평가 | `cmd/eval -business`가 본문·개인 식별 정보 없이 두 조건의 네 집계 지표를 대응 비교한다. 실제 통제 과업 집계값을 넣은 본 측정은 남았다 | 평가 대기 |
 | `FR-AGENT_CONTEXT-117` | 플랜 항목 | `internal/plan/plan.go`의 `Limits`와 `Default` | 구현 |
 | `FR-AGENT_CONTEXT-118` | 플랜 변경 | `internal/plan/plan.go`의 `CheckIncrease` | 구현 |
 | `FR-AGENT_CONTEXT-119` | 한도 초과 | `internal/plan/plan.go`의 `LimitError`와 `internal/mcp/handler.go`의 `limitError` | 구현 |

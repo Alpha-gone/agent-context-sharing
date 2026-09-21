@@ -75,6 +75,7 @@ func run() error {
 	convertLimit := flag.Int("convert-questions", 0, "변환에 쓸 질의 수. 0이면 전부 쓴다")
 	convertUseCase := flag.String("convert-use-case", "", "변환 결과의 질의를 fact, associative 또는 global 사용 사례로 제한한다")
 	continual := flag.Bool("continual", false, "온라인 갱신부터 상충 해소까지 여섯 지속 평가 시나리오를 실행한다")
+	businessPath := flag.String("business", "", "업무 효과 통제 과업의 집계 지표 파일 경로")
 	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
 	flag.Parse()
 
@@ -85,6 +86,9 @@ func run() error {
 			return fmt.Errorf("-contexts와 -queries가 필요하다")
 		}
 		return runConvert(*convert, *convertSource, *convertName, *convertLimit, *convertUseCase, *contextsPath, *queriesPath)
+	}
+	if *businessPath != "" {
+		return runBusiness(*businessPath, *outPath)
 	}
 	if *repeats < minimumRepeats {
 		return fmt.Errorf("반복 회차는 %d 이상이어야 한다. 「검증」이 최소 세 번으로 정했다", minimumRepeats)

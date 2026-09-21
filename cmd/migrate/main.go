@@ -107,9 +107,10 @@ func loadConfig() (migrate.Config, error) {
 		return migrate.Config{}, fmt.Errorf("EMBEDDING_DIMENSION %q 해석: %w", dimText, err)
 	}
 	cfg := migrate.Config{
-		GraphName:  os.Getenv("AGE_GRAPH_NAME"),
-		VectorType: os.Getenv("EMBEDDING_VECTOR_TYPE"),
-		VectorDim:  dim,
+		GraphName:      os.Getenv("AGE_GRAPH_NAME"),
+		VectorType:     os.Getenv("EMBEDDING_VECTOR_TYPE"),
+		VectorDim:      dim,
+		ColdTablespace: os.Getenv("EMBEDDING_COLD_TABLESPACE"),
 	}
 	if err := cfg.Validate(); err != nil {
 		return migrate.Config{}, err

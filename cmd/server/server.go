@@ -224,6 +224,32 @@ func (app *application) shutdown(ctx context.Context, server *http.Server) error
 	return nil
 }
 
+// worker는 종료 순서가 기다리는 상시 작업자다. 색인 작업자와 주기 작업자가 이 모양이다.
+type worker interface {
+	Close(context.Context) error
+}
+
+// shutdownInOrder는 「기동과 종료」가 고정한 정상 종료 순서를 수행한다.
+//
+// 트래픽을 끊고 진행 중인 요청을 끝낸 뒤 작업자를 멈춘다. 연결 풀은 닫지 않는다. 작업자가
+// 아직 연결을 빌려 갔을 수 있어 풀을 닫는 것은 조립 지점의 마지막 일이기 때문이다.
+//
+// 요청 대기가 실패해도 작업자 종료를 건너뛰지 않는다. 건너뛰면 풀 닫기가 작업자의 연결이
+// 돌아오기를 기다리며 막힌다. 요청 대기에서 예산을 다 썼을 수 있으므로 작업자에는
+// workerCtx로 새 기한을 준다. 돌려주는 오류는 요청 대기의 것을 우선한다.
+func shutdownInOrder(ctx, workerCtx context.Context, app *application, server *http.Server, logger *slog.Logger, workers ...worker) error {
+	shutdownErr := app.shutdown(ctx, server)
+	if shutdownErr != nil {
+		logger.Error("진행 요청 종료 대기", "error", shutdownErr)
+	}
+	for _, closing := range workers {
+		if err := closing.Close(workerCtx); err != nil {
+			logger.Error("작업자 종료", "error", err)
+		}
+	}
+	return shutdownErr
+}
+
 // logRequests는 본문·자격 증명·쿼리 문자열을 기록하지 않고 요청 결과만 남긴다.
 func (app *application) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

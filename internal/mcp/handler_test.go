@@ -3,6 +3,7 @@ package mcp
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -218,5 +219,37 @@ func TestFlowValueOmitsHopBoundaryWhenNotTruncated(t *testing.T) {
 	truncated, ok := value["result_truncated"].(map[string]any)
 	if !ok || truncated["truncated_hop"] != 0 {
 		t.Fatalf("경계 0의 절단 표시 = %#v", value["result_truncated"])
+	}
+}
+
+// TestFailureModesMatchDesign은 「장애 시의 동작」이 정한 오류 사상 중 이 경계가 책임지는
+// 행을 확인한다.
+//
+// 데이터베이스 장애는 판별할 수 있는 도메인 오류가 아니라 드라이버가 올려 보내는 임의의
+// 오류로 나타난다. 그것이 `internal`이 되어야 호출자가 재시도 가능 여부를 코드만으로
+// 판단할 수 있고, 원인 문자열이 응답에 실리면 내부 구현이 노출된다.
+//
+// 같은 표의 나머지 행은 다른 자리에서 확인한다. 임베딩 제공자의 색인 실패는
+// `store`의 색인 재시도 테스트가, 질의 실패는 `search`의 채널 제외 테스트가, 일부와 전부
+// 채널 실패는 `search`의 부분 상태 테스트가 본다.
+func TestFailureModesMatchDesign(t *testing.T) {
+	tests := map[string]error{
+		"연결 실패":      errors.New("failed to connect to `host=db user=agent_context`: dial error"),
+		"트랜잭션 취소":    errors.New("conn busy"),
+		"감싼 드라이버 오류": fmt.Errorf("그래프 조회: %w", errors.New("server closed the connection unexpectedly")),
+	}
+	for name, failure := range tests {
+		t.Run(name, func(t *testing.T) {
+			domain, ok := errors.AsType[*Error](mapError(failure))
+			if !ok || domain.Code != "internal" {
+				t.Fatalf("장애 사상 = %#v, want internal", domain)
+			}
+			if len(domain.Data) != 0 {
+				t.Fatalf("internal 응답이 부가 정보를 실었다: %#v", domain.Data)
+			}
+			if strings.Contains(domain.Error(), "host=") || strings.Contains(domain.Error(), "conn") {
+				t.Fatalf("internal 응답에 원인이 새어 나왔다: %s", domain.Error())
+			}
+		})
 	}
 }

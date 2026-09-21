@@ -40,10 +40,12 @@ const (
 
 // Config는 검색 결합의 배포 구성을 담는다.
 type Config struct {
-	Execution      Execution
-	CandidateLimit int
-	FoldThreshold  float64
-	GraphStage     GraphStage
+	Execution         Execution
+	CandidateLimit    int
+	SemanticThreshold float64
+	FoldThreshold     float64
+	GraphStage        GraphStage
+	GlobalFallback    bool
 }
 
 // Embedder는 질의 텍스트를 현재 색인 모델의 벡터로 바꾸는 index 경계다.
@@ -133,6 +135,9 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 	if config.CandidateLimit < 1 {
 		return nil, fmt.Errorf("검색 채널 후보 수 상한은 양수여야 한다")
 	}
+	if config.SemanticThreshold < 0 || config.SemanticThreshold > 1 {
+		return nil, fmt.Errorf("의미 유사도 하한은 0 이상 1 이하여야 한다")
+	}
 	if config.FoldThreshold <= 0 || config.FoldThreshold > 1 {
 		return nil, fmt.Errorf("중복 파생 접기 임계값은 0 초과 1 이하여야 한다")
 	}
@@ -214,7 +219,7 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	}
 	// 진입점이 없으면 확장할 것도 없으므로 그래프 채널의 상태까지 남기고 끝낸다.
 	allEntryChannelsFailed := func() (Flow, error) {
-		graph := service.graphCandidates(ctx, input, nil)
+		graph := service.graphCandidates(ctx, input, nil, false)
 		channels[graph.name] = graph.metric
 		return Flow{Channels: channels}, ErrAllChannelsFailed
 	}
@@ -222,8 +227,11 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 		return allEntryChannelsFailed()
 	}
 	combined := combine(results)
-	if input.Scope == "global" || (input.Scope == "auto" && len(combined) == 0) {
-		global := service.globalSummaries(ctx, input)
+	relevantLocal := hasRelevantSemantic(results[0].candidates, service.config.SemanticThreshold) || len(results[1].candidates) > 0
+	globalFallbackTriggered := input.Scope == "auto" && !relevantLocal
+	var global channelResult
+	if input.Scope == "global" || globalFallbackTriggered {
+		global = service.globalSummaries(ctx, input)
 		channels[global.name] = global.metric
 		// 전역 범위의 진입 채널은 전역 요약 하나뿐이므로 그 채널의 실패가 곧 모든 채널
 		// 실패다. 비교 단계에서 끈 상태는 조회 실패가 아니라 구성이므로 제외한다.
@@ -233,8 +241,15 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 		results = append(results, global)
 		combined = combine(results)
 	}
+	globalFallbackApplied := globalFallbackTriggered && service.config.GlobalFallback && len(global.candidates) > 0
 	entryPoints := candidateContexts(combined)
-	graph := service.graphCandidates(ctx, input, entryPoints)
+	// auto가 전역 요약으로 전환됐으면 광범위한 시간 후보가 홉 결과 상한을 먼저
+	// 채우지 않게 실제 전역 요약이 있을 때 그 요약만 확장 시작점으로 쓴다. 전역 요약이
+	// 없거나 비교 단계가 되돌림을 껐으면 기존 국소 후보를 그대로 쓴다.
+	if globalFallbackApplied {
+		entryPoints = candidateContexts(combine([]channelResult{global}))
+	}
+	graph := service.graphCandidates(ctx, input, entryPoints, globalFallbackApplied)
 	channels[graph.name] = graph.metric
 	results = append(results, graph)
 	combined = combine(results)
@@ -262,8 +277,17 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	}
 	edges := filterEdges(selected, results)
 	flow := Flow{Contexts: contexts, Edges: edges, EntryPoints: contextIDs(entryPoints), BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation, HopBoundary: graph.boundary}
-	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil)
+	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "global_fallback_triggered", globalFallbackTriggered, "global_fallback_applied", globalFallbackApplied, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil)
 	return flow, nil
+}
+
+func hasRelevantSemantic(candidates []store.SearchCandidate, threshold float64) bool {
+	for _, candidate := range candidates {
+		if candidate.Similarity >= threshold {
+			return true
+		}
+	}
+	return false
 }
 
 // ErrEmbeddingUnavailable은 질의 임베딩 생성이 실패했음을 나타낸다.
@@ -305,10 +329,10 @@ type channelResult struct {
 
 func (service *Service) globalSummaries(ctx context.Context, input Input) channelResult {
 	result := channelResult{name: "global_summary"}
-	// 명시한 전역 범위는 클라이언트가 고른 진입점 계약이므로 비교 단계로 끄지 않는다.
-	// 비교 단계가 끄는 것은 국소 결과가 비었을 때 전역 요약을 시작점으로 더하는
-	// `auto`의 되돌림이며, 그것이 「그래프 효과 비교」의 마지막 단계다.
-	if input.Scope != "global" && service.config.GraphStage != GraphStageGlobal {
+	// 명시한 전역 범위는 클라이언트가 고른 진입점 계약이므로 배포 구성으로 끄지 않는다.
+	// 구성이 끄는 것은 국소 결과의 관련성이 낮을 때 전역 요약을 시작점으로 더하는
+	// `auto`의 자동 전환뿐이다.
+	if input.Scope != "global" && !service.config.GlobalFallback {
 		result.metric.Failure = failureDisabled
 		return result
 	}
@@ -325,7 +349,7 @@ func (service *Service) globalSummaries(ctx context.Context, input Input) channe
 	return result
 }
 
-func (service *Service) graphCandidates(ctx context.Context, input Input, entryPoints []model.Context) channelResult {
+func (service *Service) graphCandidates(ctx context.Context, input Input, entryPoints []model.Context, globalFallback bool) channelResult {
 	result := channelResult{name: "graph"}
 	// 진입점 부재를 먼저 판정한다. 「검색 채널 실행기」가 이 사유를 2단계에 두었으므로
 	// 비교 단계로 채널을 끈 것과 구분되어야 한다.
@@ -333,7 +357,7 @@ func (service *Service) graphCandidates(ctx context.Context, input Input, entryP
 		result.metric.Failure = "no_entry_points"
 		return result
 	}
-	if service.config.GraphStage == GraphStageBaseline {
+	if service.config.GraphStage == GraphStageBaseline && !globalFallback {
 		result.metric.Failure = failureDisabled
 		return result
 	}
@@ -342,7 +366,7 @@ func (service *Service) graphCandidates(ctx context.Context, input Input, entryP
 	if service.config.GraphStage == GraphStageRelations || service.config.GraphStage == GraphStageGlobal {
 		filters = append(filters, "precedes", "causes", "part_of", "relates_to")
 	}
-	if input.Scope == "global" {
+	if input.Scope == "global" || globalFallback {
 		// 전역 범위는 전역 요약에서 근거를 따라 내려가는 흐름이다.
 		filters = []string{"derived_from"}
 	}

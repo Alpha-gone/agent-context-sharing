@@ -19,6 +19,7 @@ const (
 	revocationCleanupLockKey int64 = 4182026104
 	codeCleanupLockKey       int64 = 4182026105
 	rateCleanupLockKey       int64 = 4182026106
+	embeddingTierLockKey     int64 = 4182026107
 )
 
 type periodicStore interface {
@@ -29,6 +30,7 @@ type periodicStore interface {
 	CleanupExpiredRevocations(context.Context, time.Time) (int, error)
 	CleanupExpiredAuthorizationCodes(context.Context, time.Time) (int, error)
 	CleanupRequestRateWindows(context.Context, time.Time) (int, error)
+	MoveColdEmbeddings(context.Context, time.Time, store.RetentionDays) (int, error)
 }
 
 type periodicTask struct {
@@ -38,7 +40,7 @@ type periodicTask struct {
 	run      func(context.Context) (int, error)
 }
 
-// periodicWorker는 모든 애플리케이션 인스턴스에 내장되는 여섯 주기 작업의 시작과 종료를 관리한다.
+// periodicWorker는 모든 애플리케이션 인스턴스에 내장되는 일곱 주기 작업의 시작과 종료를 관리한다.
 type periodicWorker struct {
 	store  periodicStore
 	logger *slog.Logger
@@ -78,6 +80,9 @@ func newPeriodicWorker(database *store.Store, plans plan.AccountPlans, logger *s
 		}},
 		{name: "request_rate_cleanup", interval: time.Hour, lockKey: rateCleanupLockKey, run: func(ctx context.Context) (int, error) {
 			return database.CleanupRequestRateWindows(ctx, worker.now().UTC())
+		}},
+		{name: "embedding_tier_move", interval: 24 * time.Hour, lockKey: embeddingTierLockKey, run: func(ctx context.Context) (int, error) {
+			return database.MoveColdEmbeddings(ctx, worker.now().UTC(), func(accountID model.ID) int { return limits(accountID).TierMoveAfterDays })
 		}},
 	}
 	return worker, nil

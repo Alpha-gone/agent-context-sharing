@@ -211,10 +211,11 @@ func (s *Store) CleanupRequestRateWindows(ctx context.Context, now time.Time) (i
 type retentionGraph struct {
 	id        model.ID
 	createdBy model.ID
+	deleted   bool
 }
 
 func (s *Store) retentionGraphs(ctx context.Context) ([]retentionGraph, error) {
-	rows, err := s.pool.Query(ctx, `SELECT graph_id, created_by FROM public.context_graph`)
+	rows, err := s.pool.Query(ctx, `SELECT graph_id, created_by, deleted_at IS NOT NULL FROM public.context_graph`)
 	if err != nil {
 		return nil, fmt.Errorf("보존 기간 그래프 조회: %w", err)
 	}
@@ -222,7 +223,8 @@ func (s *Store) retentionGraphs(ctx context.Context) ([]retentionGraph, error) {
 	graphs := make([]retentionGraph, 0)
 	for rows.Next() {
 		var rawGraphID, rawAccountID string
-		if err := rows.Scan(&rawGraphID, &rawAccountID); err != nil {
+		var deleted bool
+		if err := rows.Scan(&rawGraphID, &rawAccountID, &deleted); err != nil {
 			return nil, fmt.Errorf("보존 기간 그래프 행 해석: %w", err)
 		}
 		graphID, err := model.ParseID(rawGraphID)
@@ -233,7 +235,7 @@ func (s *Store) retentionGraphs(ctx context.Context) ([]retentionGraph, error) {
 		if err != nil {
 			return nil, fmt.Errorf("보존 기간 생성 계정 식별자: %w", err)
 		}
-		graphs = append(graphs, retentionGraph{id: graphID, createdBy: accountID})
+		graphs = append(graphs, retentionGraph{id: graphID, createdBy: accountID, deleted: deleted})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("보존 기간 그래프 행 읽기: %w", err)

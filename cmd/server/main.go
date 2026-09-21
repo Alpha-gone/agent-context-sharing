@@ -73,7 +73,7 @@ func run() error {
 		AdjacencyWindow:     cfg.RelationAdjacencyWindow,
 		SimilarityThreshold: cfg.RelationSimilarityThreshold,
 		Limit:               cfg.RelationProposalLimit,
-	}, func(accountID model.ID) int { return cfg.AccountPlans.For(accountID).GraceDays })
+	}, func(accountID model.ID) int { return cfg.AccountPlans.For(accountID).GraceDays }, store.IndexTargets(cfg.IndexTargetLayers))
 	if err != nil {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
@@ -93,10 +93,18 @@ func run() error {
 	}
 	// 작업자 종료는 defer가 아니라 아래 종료 순서에서 처리한다. defer로 두면 요청 종료와
 	// 풀 종료 사이가 아니라 그 뒤에 실행되어, 작업자가 도는 중에 풀이 닫힌다.
+	//
+	// 색인 작업자는 「배치 조합」이 배치를 선택으로 열어 두었으므로 내장일 때만 시작한다.
+	// 분리 배치에서는 다른 배포 단위가 작업 큐를 소비한다. 시작하지 않아도 만들어 두는
+	// 이유는 질의 임베딩이 요청 경로에 있어 배치와 무관하게 필요하기 때문이다.
 	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
-	indexer.Start(context.Background())
+	workers := []worker{periodic}
+	if cfg.IndexWorkerPlacement == config.PlacementEmbedded {
+		indexer.Start(context.Background())
+		workers = append(workers, indexer)
+	}
 	periodic.Start(context.Background())
-	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, FoldThreshold: cfg.SearchFoldThreshold, GraphStage: search.GraphStage(cfg.SearchGraphStage)}, slog.Default())
+	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, SemanticThreshold: cfg.SearchSemanticThreshold, FoldThreshold: cfg.SearchFoldThreshold, GraphStage: search.GraphStage(cfg.SearchGraphStage), GlobalFallback: cfg.SearchGlobalFallback}, slog.Default())
 	if err != nil {
 		return fmt.Errorf("검색 실행기 준비: %w", err)
 	}
@@ -136,7 +144,13 @@ func run() error {
 	}
 	app := newApplication(database, slog.Default(), transport, resourceServer)
 	app.web = webServer
-	app.authz = authorizationHandler
+	// 인가 서버가 분리 배치이면 발급 경로를 등록하지 않는다. 「배치 조합」이 이 인스턴스를
+	// 리소스 서버로만 두는 조합을 열어 두었고, 메타데이터가 가리키는 인가 서버 주소는
+	// 구성 값으로 이미 분리되어 있다. 이미 발급된 토큰의 검증은 JWKS와 폐기 목록이
+	// 데이터베이스에 있으므로 배치와 무관하게 계속된다.
+	if cfg.AuthorizationServerPlacement == config.PlacementEmbedded {
+		app.authz = authorizationHandler
+	}
 	server := newHTTPServer(cfg.HTTPAddr, app.handler())
 
 	stopSignals := make(chan os.Signal, 1)
@@ -159,26 +173,13 @@ func run() error {
 		slog.Info("종료 신호 수신", "signal", signal.String())
 	}
 
-	// 순서를 고정한다. 트래픽을 끊고 진행 요청을 마친 뒤 색인 작업자를 멈추고, 둘 다 풀을
-	// 쓰지 않게 된 다음에 defer가 풀을 닫는다.
+	// 순서는 shutdownInOrder가 고정한다. 트래픽을 끊고 진행 요청을 마친 뒤 작업자를
+	// 멈추고, 둘 다 풀을 쓰지 않게 된 다음에 defer가 풀을 닫는다.
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	shutdownErr := app.shutdown(shutdownContext, server)
-	if shutdownErr != nil {
-		slog.Error("진행 요청 종료 대기", "error", shutdownErr)
-	}
-	// 요청 대기가 실패해도 작업자 종료를 건너뛰지 않는다. 건너뛰면 defer된 풀 닫기가
-	// 작업자가 빌려 간 연결이 돌아오기를 기다리며 막힌다. 요청 대기에서 이미 예산을 다
-	// 썼을 수 있으므로 작업자에는 새 기한을 준다.
 	workerContext, cancelWorkers := context.WithTimeout(context.Background(), workerShutdownTimeout)
 	defer cancelWorkers()
-	if err := periodic.Close(workerContext); err != nil {
-		slog.Error("주기 작업 종료", "error", err)
-	}
-	if err := indexer.Close(workerContext); err != nil {
-		slog.Error("색인 작업자 종료", "error", err)
-	}
-	if shutdownErr != nil {
+	if shutdownErr := shutdownInOrder(shutdownContext, workerContext, app, server, slog.Default(), workers...); shutdownErr != nil {
 		return shutdownErr
 	}
 	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {

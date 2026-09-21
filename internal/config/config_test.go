@@ -15,7 +15,7 @@ func TestLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("구성 읽기: %v", err)
 	}
-	if cfg.HTTPAddr != ":8080" || cfg.EmbeddingDimension != 1024 || cfg.SearchExecution != SearchExecutionParallel || cfg.SearchGraphStage != SearchGraphStageBaseline || cfg.SearchCandidateLimit != 50 || cfg.RelationAdjacencyWindow != time.Hour || cfg.RelationSimilarityThreshold != 0.8 || cfg.RelationProposalLimit != 10 {
+	if cfg.HTTPAddr != ":8080" || cfg.EmbeddingDimension != 1024 || cfg.SearchExecution != SearchExecutionParallel || cfg.SearchGraphStage != SearchGraphStageBaseline || !cfg.SearchGlobalFallback || cfg.SearchCandidateLimit != 50 || cfg.SearchSemanticThreshold != 0.7 || cfg.RelationAdjacencyWindow != time.Hour || cfg.RelationSimilarityThreshold != 0.8 || cfg.RelationProposalLimit != 10 {
 		t.Fatalf("핵심 구성 값이 다르다: %+v", cfg)
 	}
 	if len(cfg.OAuthClients) != 1 || len(cfg.OAuthClients["agent-context-dev"]) != 1 || cfg.ResourceServerURL.String() != "https://service.test/mcp" || cfg.AuthorizationServerURL.String() != "https://issuer.test" || len(cfg.MCPAllowedOrigins) != 1 {
@@ -46,15 +46,79 @@ func TestLoadAccountPlanLimits(t *testing.T) {
 	}
 }
 
+// TestLoadPlacementDefaultsToEmbedded는 「배치 조합」이 기본값으로 삼은 둘 다 내장이
+// 구성 값을 비워 두었을 때 그대로 나오는지 확인한다.
+func TestLoadPlacementDefaultsToEmbedded(t *testing.T) {
+	values := validValues()
+	delete(values, "INDEX_WORKER_PLACEMENT")
+	delete(values, "AUTHORIZATION_SERVER_PLACEMENT")
+	cfg, err := Load(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("구성 읽기: %v", err)
+	}
+	if cfg.IndexWorkerPlacement != PlacementEmbedded || cfg.AuthorizationServerPlacement != PlacementEmbedded {
+		t.Fatalf("기본 배치 = %q, %q; 둘 다 embedded여야 한다", cfg.IndexWorkerPlacement, cfg.AuthorizationServerPlacement)
+	}
+}
+
+// TestLoadIndexTargetsDefaultsToAllLayers는 「색인 대상 비교」에서 채택한
+// 원천 포함 구성을 빈 값의 기본으로 유지하는지 확인한다.
+func TestLoadIndexTargetsDefaultsToAllLayers(t *testing.T) {
+	values := validValues()
+	delete(values, "INDEX_TARGET_LAYERS")
+	cfg, err := Load(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("구성 읽기: %v", err)
+	}
+	if cfg.IndexTargetLayers != IndexTargetLayersAll {
+		t.Fatalf("기본 색인 대상 = %q; all_layers여야 한다", cfg.IndexTargetLayers)
+	}
+}
+
+// TestLoadIndexTargetsAcceptsWithoutSource는 비교에 쓸 다른 구성이 실제로 읽히는지 본다.
+func TestLoadIndexTargetsAcceptsWithoutSource(t *testing.T) {
+	values := validValues()
+	values["INDEX_TARGET_LAYERS"] = string(IndexTargetLayersWithoutSource)
+	cfg, err := Load(func(name string) string { return values[name] })
+	if err != nil {
+		t.Fatalf("구성 읽기: %v", err)
+	}
+	if cfg.IndexTargetLayers != IndexTargetLayersWithoutSource {
+		t.Fatalf("색인 대상 = %q; without_source여야 한다", cfg.IndexTargetLayers)
+	}
+}
+
+func TestLoadAcceptsFourPlacementCombinations(t *testing.T) {
+	for _, worker := range []ComponentPlacement{PlacementEmbedded, PlacementExternal} {
+		for _, authorization := range []ComponentPlacement{PlacementEmbedded, PlacementExternal} {
+			values := validValues()
+			values["INDEX_WORKER_PLACEMENT"] = string(worker)
+			values["AUTHORIZATION_SERVER_PLACEMENT"] = string(authorization)
+			cfg, err := Load(func(name string) string { return values[name] })
+			if err != nil {
+				t.Fatalf("색인 %s, 인가 %s 구성 읽기: %v", worker, authorization, err)
+			}
+			if cfg.IndexWorkerPlacement != worker || cfg.AuthorizationServerPlacement != authorization {
+				t.Fatalf("배치 = %q, %q; want %q, %q", cfg.IndexWorkerPlacement, cfg.AuthorizationServerPlacement, worker, authorization)
+			}
+		}
+	}
+}
+
 // TestLoadRejectsInvalidValues은 기동 전에 잘못된 배포 구성이 거부되는지 확인한다.
 func TestLoadRejectsInvalidValues(t *testing.T) {
 	tests := map[string]func(map[string]string){
 		"수신 주소 누락":        func(values map[string]string) { values["HTTP_ADDR"] = "" },
 		"그래프 이름 형식 오류":    func(values map[string]string) { values["AGE_GRAPH_NAME"] = "bad-name" },
 		"벡터 차원 오류":        func(values map[string]string) { values["EMBEDDING_DIMENSION"] = "0" },
+		"색인 작업자 배치 오류":    func(values map[string]string) { values["INDEX_WORKER_PLACEMENT"] = "detached" },
+		"인가 서버 배치 오류":     func(values map[string]string) { values["AUTHORIZATION_SERVER_PLACEMENT"] = "detached" },
 		"검색 채널 실행 방식 오류":  func(values map[string]string) { values["SEARCH_CHANNEL_EXECUTION"] = "unknown" },
 		"검색 후보 수 상한 오류":   func(values map[string]string) { values["SEARCH_CHANNEL_CANDIDATE_LIMIT"] = "0" },
+		"검색 의미 유사도 하한 오류": func(values map[string]string) { values["SEARCH_SEMANTIC_SIMILARITY_THRESHOLD"] = "1.1" },
 		"그래프 검색 단계 오류":    func(values map[string]string) { values["SEARCH_GRAPH_STAGE"] = "unknown" },
+		"전역 전환 활성화 오류":    func(values map[string]string) { values["SEARCH_GLOBAL_FALLBACK_ENABLED"] = "unknown" },
+		"색인 대상 계층 오류":     func(values map[string]string) { values["INDEX_TARGET_LAYERS"] = "derived_only" },
 		"관계 시간 인접 임계값 오류": func(values map[string]string) { values["RELATION_ADJACENCY_WINDOW"] = "0" },
 		"관계 유사도 임계값 오류":   func(values map[string]string) { values["RELATION_SIMILARITY_THRESHOLD"] = "1.1" },
 		"관계 후보 수 상한 오류":   func(values map[string]string) { values["RELATION_PROPOSAL_LIMIT"] = "0" },
@@ -155,29 +219,31 @@ func TestGraphNamePattern(t *testing.T) {
 // validValues는 각 테스트가 독립적으로 바꿀 수 있는 유효한 배포 구성을 만든다.
 func validValues() map[string]string {
 	return map[string]string{
-		"HTTP_ADDR":                        ":8080",
-		"DATABASE_URL":                     "postgres://user:pass@localhost:5432/app",
-		"AGE_GRAPH_NAME":                   "agent_context",
-		"EMBEDDING_BASE_URL":               "http://localhost:11434",
-		"EMBEDDING_MODEL":                  "bge-m3",
-		"EMBEDDING_VECTOR_TYPE":            "vector",
-		"EMBEDDING_DIMENSION":              "1024",
-		"SEARCH_CHANNEL_EXECUTION":         "parallel",
-		"SEARCH_CHANNEL_CANDIDATE_LIMIT":   "50",
-		"SEARCH_GRAPH_STAGE":               "baseline",
-		"SEARCH_FOLD_SIMILARITY_THRESHOLD": "0.90",
-		"OAUTH_CLIENTS":                    `{"agent-context-dev":["http://127.0.0.1/callback"]}`,
-		"RESOURCE_SERVER_URL":              "https://service.test/mcp",
-		"AUTHORIZATION_SERVER_URL":         "https://issuer.test",
-		"MCP_ALLOWED_ORIGINS":              "https://client.test",
-		"BCRYPT_COST":                      "12",
-		"RELATION_ADJACENCY_WINDOW":        "1h",
-		"RELATION_SIMILARITY_THRESHOLD":    "0.8",
-		"RELATION_PROPOSAL_LIMIT":          "10",
-		"ACCOUNT_PLAN_LIMITS":              "",
-		"TLS_TERMINATION":                  "proxy",
-		"TRUSTED_PROXY_CIDRS":              "10.0.0.0/8",
-		"TLS_CERT_FILE":                    "",
-		"TLS_KEY_FILE":                     "",
+		"HTTP_ADDR":                            ":8080",
+		"DATABASE_URL":                         "postgres://user:pass@localhost:5432/app",
+		"AGE_GRAPH_NAME":                       "agent_context",
+		"EMBEDDING_BASE_URL":                   "http://localhost:11434",
+		"EMBEDDING_MODEL":                      "bge-m3",
+		"EMBEDDING_VECTOR_TYPE":                "vector",
+		"EMBEDDING_DIMENSION":                  "1024",
+		"SEARCH_CHANNEL_EXECUTION":             "parallel",
+		"SEARCH_CHANNEL_CANDIDATE_LIMIT":       "50",
+		"SEARCH_SEMANTIC_SIMILARITY_THRESHOLD": "0.70",
+		"SEARCH_GRAPH_STAGE":                   "baseline",
+		"SEARCH_GLOBAL_FALLBACK_ENABLED":       "true",
+		"SEARCH_FOLD_SIMILARITY_THRESHOLD":     "0.90",
+		"OAUTH_CLIENTS":                        `{"agent-context-dev":["http://127.0.0.1/callback"]}`,
+		"RESOURCE_SERVER_URL":                  "https://service.test/mcp",
+		"AUTHORIZATION_SERVER_URL":             "https://issuer.test",
+		"MCP_ALLOWED_ORIGINS":                  "https://client.test",
+		"BCRYPT_COST":                          "12",
+		"RELATION_ADJACENCY_WINDOW":            "1h",
+		"RELATION_SIMILARITY_THRESHOLD":        "0.8",
+		"RELATION_PROPOSAL_LIMIT":              "10",
+		"ACCOUNT_PLAN_LIMITS":                  "",
+		"TLS_TERMINATION":                      "proxy",
+		"TRUSTED_PROXY_CIDRS":                  "10.0.0.0/8",
+		"TLS_CERT_FILE":                        "",
+		"TLS_KEY_FILE":                         "",
 	}
 }

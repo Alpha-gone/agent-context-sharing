@@ -20,9 +20,9 @@ func TestIndexAndNonGraphSearchIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("색인 대상 생성: %v", err)
 	}
-	if _, err := database.pool.Exec(t.Context(), `UPDATE public.index_task SET enqueued_at = to_timestamp(0), next_attempt_at = to_timestamp(0) WHERE context_id = $1`, stored.ID.String()); err != nil {
-		t.Fatalf("테스트 색인 작업 우선순위 설정: %v", err)
-	}
+	// 자기 작업만 앞으로 당기면 다른 테스트가 남긴 행이 더 앞선 시각일 때 그쪽이 먼저
+	// 잡힌다. readyIndexTasks가 나머지를 함께 미뤄 확보 순서를 고정한다.
+	readyIndexTasks(t, database, stored.ID)
 	vector := make([]float64, 1024)
 	vector[0] = 1
 	processed, err := database.ProcessNextIndexTask(t.Context(), func(_ context.Context, task IndexTask) IndexTaskResult {
@@ -38,12 +38,25 @@ func TestIndexAndNonGraphSearchIntegration(t *testing.T) {
 		t.Fatalf("색인 작업 결과 = %+v", processed)
 	}
 	semantic, err := database.SemanticCandidates(t.Context(), graphID, "test:vector:1024", vector, time.Now().UTC(), 10)
-	if err != nil || len(semantic) != 1 || semantic[0].Context.ID != stored.ID {
+	if err != nil || len(semantic) != 1 || semantic[0].Context.ID != stored.ID || semantic[0].Similarity != 1 {
 		t.Fatalf("의미 유사도 후보 = %#v, err=%v", semantic, err)
+	}
+	orthogonal := make([]float64, 1024)
+	orthogonal[1] = 1
+	semantic, err = database.SemanticCandidates(t.Context(), graphID, "test:vector:1024", orthogonal, time.Now().UTC(), 10)
+	if err != nil || len(semantic) != 1 || semantic[0].Similarity != 0 {
+		t.Fatalf("직교 의미 후보 = %#v, err=%v", semantic, err)
 	}
 	keyword, err := database.KeywordCandidates(t.Context(), graphID, "고유어", time.Now().UTC(), 10)
 	if err != nil || len(keyword) != 1 || keyword[0].Context.ID != stored.ID {
 		t.Fatalf("키워드 후보 = %#v, err=%v", keyword, err)
+	}
+	// 자연어 질의는 본문에 없는 어휘를 함께 담는다. websearch_to_tsquery가 어휘를 OR로
+	// 묶으므로 일부 어휘만 겹쳐도 후보가 나와야 한다. plainto_tsquery의 AND는 이 조건에서
+	// 후보를 내지 못했다.
+	keyword, err = database.KeywordCandidates(t.Context(), graphID, "고유어 본문에 없는 어휘", time.Now().UTC(), 10)
+	if err != nil || len(keyword) != 1 || keyword[0].Context.ID != stored.ID {
+		t.Fatalf("자연어 키워드 후보 = %#v, err=%v", keyword, err)
 	}
 	timed, err := database.TimeCandidates(t.Context(), graphID, time.Now().UTC(), 10)
 	if err != nil || len(timed) != 1 || timed[0].Context.ID != stored.ID {
@@ -95,7 +108,8 @@ func TestGlobalSummaryCandidatesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("최신 전역 요약 생성: %v", err)
 	}
-	if _, err := database.CreateContext(t.Context(), graphID, createSummary("국소 요약", model.SummaryScopeLocal, now, nil), []model.ID{storedSource.ID}); err != nil {
+	local, err := database.CreateContext(t.Context(), graphID, createSummary("국소 요약", model.SummaryScopeLocal, now, nil), []model.ID{storedSource.ID})
+	if err != nil {
 		t.Fatalf("국소 요약 생성: %v", err)
 	}
 	expiredAt := new(time.Time)
@@ -114,6 +128,19 @@ func TestGlobalSummaryCandidatesIntegration(t *testing.T) {
 	limited, err := database.GlobalSummaryCandidates(t.Context(), graphID, now, 1)
 	if err != nil || len(limited) != 1 || limited[0].Context.ID != newer.ID {
 		t.Fatalf("전역 요약 후보 상한 = %#v, err=%v", limited, err)
+	}
+	keyword, err := database.KeywordCandidates(t.Context(), graphID, "전역 요약", now, 10)
+	if err != nil || len(keyword) != 1 || keyword[0].Context.ID != local.ID {
+		t.Fatalf("국소 키워드 후보 = %#v, want 국소 요약만, err=%v", keyword, err)
+	}
+	timed, err := database.TimeCandidates(t.Context(), graphID, now, 10)
+	if err != nil {
+		t.Fatalf("국소 시간 후보 조회: %v", err)
+	}
+	for _, candidate := range timed {
+		if candidate.Context.ID == older.ID || candidate.Context.ID == newer.ID {
+			t.Fatalf("국소 시간 후보에 전역 요약이 섞였다: %s", candidate.Context.ID)
+		}
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
 )
 
@@ -169,7 +170,23 @@ func (worker *Worker) logReindexProgress(ctx context.Context) int {
 
 // RunOnce는 현재 가능한 색인 작업 하나를 처리하고, 완료된 사건의 의미 관계 후보를 제안한다.
 func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
-	result, err := worker.store.ProcessNextIndexTask(ctx, func(ctx context.Context, task store.IndexTask) store.IndexTaskResult {
+	return worker.runOnce(ctx, model.ID{})
+}
+
+// RunOnceInGraph는 확보 대상을 그래프 하나로 좁혀 한 회차를 돈다. 「검증」의 측정이
+// 자기 그래프의 색인만 비우고 시작해야 할 때 쓴다.
+func (worker *Worker) RunOnceInGraph(ctx context.Context, graphID model.ID) (bool, error) {
+	return worker.runOnce(ctx, graphID)
+}
+
+func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error) {
+	acquire := worker.store.ProcessNextIndexTask
+	if scope.IsV7() {
+		acquire = func(ctx context.Context, processor store.IndexTaskProcessor) (store.IndexProcessResult, error) {
+			return worker.store.ProcessNextIndexTaskInGraph(ctx, scope, processor)
+		}
+	}
+	result, err := acquire(ctx, func(ctx context.Context, task store.IndexTask) store.IndexTaskResult {
 		embedding, err := worker.Embed(ctx, task.Body)
 		if err != nil {
 			// 사유를 그대로 남긴다. 고정 문구만 남기면 「색인 재시도」가 운영자 개입이

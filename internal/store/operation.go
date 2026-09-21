@@ -71,6 +71,24 @@ func (s *Store) HasAppliedDiscard(ctx context.Context, graphID, contextID model.
 	return found, nil
 }
 
+// HasOperationJudgment는 그래프의 관리 연산 기록에 같은 판단 입력이
+// 존재하는지 확인한다. 지속 평가는 본문 대신 시나리오 표식을 판단 입력에
+// 남겨 반복 강화 여부를 검증한다.
+func (s *Store) HasOperationJudgment(ctx context.Context, graphID model.ID, judgmentInput string) (bool, error) {
+	if !graphID.IsV7() || judgmentInput == "" {
+		return false, fmt.Errorf("관리 연산 판단 조회 인자가 올바르지 않다")
+	}
+	var found bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM public.operation_log
+			WHERE graph_id = $1 AND judgment_input = $2
+		)`, graphID.String(), judgmentInput).Scan(&found); err != nil {
+		return false, fmt.Errorf("관리 연산 판단 입력 조회: %w", err)
+	}
+	return found, nil
+}
+
 // valid는 적용과 거부의 대상 요구가 다르므로 기록 결과를 함께 본다. 추가와 확정의 거부는
 // 「기록 항목」이 대상을 비우기로 확정했고, 적용 기록은 언제나 대상을 하나 갖는다.
 func (operation OperationRecord) valid(result string) error {
@@ -139,9 +157,14 @@ func (s *Store) recordAppliedRelationOperation(ctx context.Context, tx pgx.Tx, o
 
 // enqueueIndexTask는 색인 대기 작업을 컨텍스트 변경과 같은 트랜잭션에서 등록한다.
 // 컨텍스트마다 한 행만 두므로 같은 행이 있으면 대기 상태로 되돌린다.
-func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contextID model.ID) error {
+func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contextID model.ID, layer model.Layer) error {
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return fmt.Errorf("색인 작업 식별자가 UUIDv7이 아니다")
+	}
+	// 「색인 대상 비교」의 원천 제외 구성에서는 등록하지 않는다. 등록 조건만 달라지고
+	// 저장·간선·기록은 그대로이므로 두 구성이 나머지 조건에서 같다.
+	if !s.indexTargets.indexes(layer) {
+		return nil
 	}
 	taskID, err := model.NewID()
 	if err != nil {

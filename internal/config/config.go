@@ -41,6 +41,19 @@ const (
 	SearchExecutionSequential SearchExecution = "sequential"
 )
 
+// ComponentPlacement는 「배치 조합」이 선택으로 연 구성 요소의 배치다.
+//
+// 배치가 바뀌어도 코드는 같다. 내장이면 이 인스턴스가 그 구성 요소를 함께 돌리고,
+// 분리면 다른 배포 단위가 맡으므로 이 인스턴스는 시작하거나 경로를 등록하지 않는다.
+type ComponentPlacement string
+
+const (
+	// PlacementEmbedded는 이 인스턴스가 구성 요소를 함께 돌린다. 기본값이다.
+	PlacementEmbedded ComponentPlacement = "embedded"
+	// PlacementExternal은 다른 배포 단위가 구성 요소를 맡는다.
+	PlacementExternal ComponentPlacement = "external"
+)
+
 // SearchGraphStage는 그래프 효과를 비교할 때 누적해서 켜는 검색 범위다.
 type SearchGraphStage string
 
@@ -49,6 +62,15 @@ const (
 	SearchGraphStageReferences SearchGraphStage = "references"
 	SearchGraphStageRelations  SearchGraphStage = "relations"
 	SearchGraphStageGlobal     SearchGraphStage = "global"
+)
+
+// IndexTargetLayers는 색인 작업으로 등록할 계층 범위다. 「색인 대상 비교」가 원천을
+// 포함한 구성과 파생·사건만 담은 구성을 비교하라고 확정했다.
+type IndexTargetLayers string
+
+const (
+	IndexTargetLayersAll           IndexTargetLayers = "all_layers"
+	IndexTargetLayersWithoutSource IndexTargetLayers = "without_source"
 )
 
 // Config는 실행 중 필요한 배포 구성의 검증된 묶음이다. 비밀값은 로그로 전달하지 않는다.
@@ -71,10 +93,16 @@ type Config struct {
 	SearchExecution SearchExecution
 	// SearchCandidateLimit 필드에는 각 검색 채널이 결합 단계에 넘길 후보 수 상한을 둔다.
 	SearchCandidateLimit int
+	// SearchSemanticThreshold 필드에는 의미 후보가 국소 관련성을 입증하는 코사인 유사도 하한을 둔다.
+	SearchSemanticThreshold float64
 	// SearchFoldThreshold 필드에는 중복 파생 접기의 유사 판정 임계값을 둔다.
 	SearchFoldThreshold float64
 	// SearchGraphStage 필드에는 그래프 검색 비교에서 활성화할 누적 단계를 둔다.
 	SearchGraphStage SearchGraphStage
+	// SearchGlobalFallback 필드에는 auto 범위의 전역 요약 전환 활성 여부를 둔다.
+	SearchGlobalFallback bool
+	// IndexTargetLayers 필드에는 색인 작업으로 등록할 계층 범위를 둔다.
+	IndexTargetLayers IndexTargetLayers
 	// OAuthClients 필드에는 클라이언트별로 사전 등록한 OAuth 콜백 주소 목록을 둔다.
 	OAuthClients map[string][]*url.URL
 	// ResourceServerURL 필드에는 보호 리소스 서버의 고정 MCP 엔드포인트 주소를 둔다.
@@ -93,6 +121,12 @@ type Config struct {
 	RelationProposalLimit int
 	// AccountPlans 필드에는 계정별로 배정한 플랜 값을 둔다.
 	AccountPlans plan.AccountPlans
+	// IndexWorkerPlacement 필드에는 색인 작업자의 배치를 둔다. 분리면 이 인스턴스가
+	// 작업 큐를 소비하지 않는다. 질의 임베딩은 요청 경로에 있으므로 배치와 무관하다.
+	IndexWorkerPlacement ComponentPlacement
+	// AuthorizationServerPlacement 필드에는 인가 서버의 배치를 둔다. 분리면 이 인스턴스가
+	// 발급 경로를 등록하지 않는다. 이미 발급된 토큰의 검증은 배치와 무관하게 계속된다.
+	AuthorizationServerPlacement ComponentPlacement
 	// TLSMode 필드에는 TLS 종단 배치를 둔다.
 	TLSMode TLSMode
 	// TrustedProxies 필드에는 전달 헤더를 신뢰할 역방향 프록시의 주소 대역을 둔다.
@@ -114,16 +148,19 @@ func Load(env Environment) (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:            strings.TrimSpace(env("HTTP_ADDR")),
-		DatabaseURL:         strings.TrimSpace(env("DATABASE_URL")),
-		GraphName:           strings.TrimSpace(env("AGE_GRAPH_NAME")),
-		EmbeddingModel:      strings.TrimSpace(env("EMBEDDING_MODEL")),
-		EmbeddingVectorType: strings.TrimSpace(env("EMBEDDING_VECTOR_TYPE")),
-		SearchExecution:     SearchExecution(strings.TrimSpace(env("SEARCH_CHANNEL_EXECUTION"))),
-		SearchGraphStage:    SearchGraphStage(strings.TrimSpace(env("SEARCH_GRAPH_STAGE"))),
-		TLSMode:             TLSMode(strings.TrimSpace(env("TLS_TERMINATION"))),
-		TLSCertFile:         strings.TrimSpace(env("TLS_CERT_FILE")),
-		TLSKeyFile:          strings.TrimSpace(env("TLS_KEY_FILE")),
+		HTTPAddr:                     strings.TrimSpace(env("HTTP_ADDR")),
+		DatabaseURL:                  strings.TrimSpace(env("DATABASE_URL")),
+		GraphName:                    strings.TrimSpace(env("AGE_GRAPH_NAME")),
+		EmbeddingModel:               strings.TrimSpace(env("EMBEDDING_MODEL")),
+		EmbeddingVectorType:          strings.TrimSpace(env("EMBEDDING_VECTOR_TYPE")),
+		SearchExecution:              SearchExecution(strings.TrimSpace(env("SEARCH_CHANNEL_EXECUTION"))),
+		SearchGraphStage:             SearchGraphStage(strings.TrimSpace(env("SEARCH_GRAPH_STAGE"))),
+		IndexTargetLayers:            IndexTargetLayers(strings.TrimSpace(env("INDEX_TARGET_LAYERS"))),
+		IndexWorkerPlacement:         ComponentPlacement(strings.TrimSpace(env("INDEX_WORKER_PLACEMENT"))),
+		AuthorizationServerPlacement: ComponentPlacement(strings.TrimSpace(env("AUTHORIZATION_SERVER_PLACEMENT"))),
+		TLSMode:                      TLSMode(strings.TrimSpace(env("TLS_TERMINATION"))),
+		TLSCertFile:                  strings.TrimSpace(env("TLS_CERT_FILE")),
+		TLSKeyFile:                   strings.TrimSpace(env("TLS_KEY_FILE")),
 	}
 
 	if err := validateAddress(cfg.HTTPAddr); err != nil {
@@ -166,6 +203,11 @@ func Load(env Environment) (Config, error) {
 		return Config{}, fmt.Errorf("SEARCH_CHANNEL_CANDIDATE_LIMIT이 양의 정수가 아니다")
 	}
 	cfg.SearchCandidateLimit = candidateLimit
+	semanticThreshold, err := strconv.ParseFloat(strings.TrimSpace(env("SEARCH_SEMANTIC_SIMILARITY_THRESHOLD")), 64)
+	if err != nil || semanticThreshold < 0 || semanticThreshold > 1 {
+		return Config{}, fmt.Errorf("SEARCH_SEMANTIC_SIMILARITY_THRESHOLD가 0 이상 1 이하의 수가 아니다")
+	}
+	cfg.SearchSemanticThreshold = semanticThreshold
 	foldThreshold, err := strconv.ParseFloat(strings.TrimSpace(env("SEARCH_FOLD_SIMILARITY_THRESHOLD")), 64)
 	if err != nil || foldThreshold <= 0 || foldThreshold > 1 {
 		return Config{}, fmt.Errorf("SEARCH_FOLD_SIMILARITY_THRESHOLD가 0 초과 1 이하의 수가 아니다")
@@ -173,6 +215,32 @@ func Load(env Environment) (Config, error) {
 	cfg.SearchFoldThreshold = foldThreshold
 	if !slices.Contains([]SearchGraphStage{SearchGraphStageBaseline, SearchGraphStageReferences, SearchGraphStageRelations, SearchGraphStageGlobal}, cfg.SearchGraphStage) {
 		return Config{}, fmt.Errorf("SEARCH_GRAPH_STAGE %q가 baseline, references, relations, global 중 하나가 아니다", cfg.SearchGraphStage)
+	}
+	globalFallback, err := strconv.ParseBool(strings.TrimSpace(env("SEARCH_GLOBAL_FALLBACK_ENABLED")))
+	if err != nil {
+		return Config{}, fmt.Errorf("SEARCH_GLOBAL_FALLBACK_ENABLED가 불리언이 아니다")
+	}
+	cfg.SearchGlobalFallback = globalFallback
+	// 「색인 대상 비교」에서 원천 제외 구성의 재현율·순위 품질 손실이
+	// 유의하게 확인됐으므로 비어 있으면 원천을 포함하는 판정을 유지한다.
+	if cfg.IndexTargetLayers == "" {
+		cfg.IndexTargetLayers = IndexTargetLayersAll
+	}
+	if !slices.Contains([]IndexTargetLayers{IndexTargetLayersAll, IndexTargetLayersWithoutSource}, cfg.IndexTargetLayers) {
+		return Config{}, fmt.Errorf("INDEX_TARGET_LAYERS %q가 all_layers 또는 without_source가 아니다", cfg.IndexTargetLayers)
+	}
+	// 「배치 조합」이 둘 다 내장을 기본값으로 확정했으므로 비어 있으면 내장으로 읽는다.
+	placements := map[string]*ComponentPlacement{
+		"INDEX_WORKER_PLACEMENT":         &cfg.IndexWorkerPlacement,
+		"AUTHORIZATION_SERVER_PLACEMENT": &cfg.AuthorizationServerPlacement,
+	}
+	for name, placement := range placements {
+		if *placement == "" {
+			*placement = PlacementEmbedded
+		}
+		if !slices.Contains([]ComponentPlacement{PlacementEmbedded, PlacementExternal}, *placement) {
+			return Config{}, fmt.Errorf("%s %q가 embedded 또는 external이 아니다", name, *placement)
+		}
 	}
 
 	clients, err := parseOAuthClients("OAUTH_CLIENTS", env("OAUTH_CLIENTS"))

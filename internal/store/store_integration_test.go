@@ -25,7 +25,7 @@ func TestStoreIntegration(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	store, err := New(t.Context(), databaseURL, graphName, nil, nil)
+	store, err := New(t.Context(), databaseURL, graphName, nil, nil, "")
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}
@@ -121,6 +121,9 @@ func TestStoreIntegration(t *testing.T) {
 	}
 	if found, err := store.HasAppliedDiscard(t.Context(), graphID, createdSource.ID); err != nil || !found {
 		t.Fatalf("적용된 폐기 기록을 찾지 못했다: found=%t err=%v", found, err)
+	}
+	if found, err := store.HasOperationJudgment(t.Context(), graphID, "integration discard"); err != nil || !found {
+		t.Fatalf("관리 연산 판단 입력을 찾지 못했다: found=%t err=%v", found, err)
 	}
 	invalidated, err := store.Context(t.Context(), graphID, createdDerived.ID)
 	if err != nil {
@@ -297,7 +300,7 @@ func TestEventRelationProposals(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	store, err := New(t.Context(), databaseURL, graphName, &RelationProposalConfig{AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 10}, nil)
+	store, err := New(t.Context(), databaseURL, graphName, &RelationProposalConfig{AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 10}, nil, "")
 	if err != nil {
 		t.Fatalf("후보 제안 저장소 준비: %v", err)
 	}
@@ -555,7 +558,7 @@ func TestHopEdgeOrderIsDeterministic(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	store, err := New(t.Context(), databaseURL, graphName, nil, nil)
+	store, err := New(t.Context(), databaseURL, graphName, nil, nil, "")
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)
 	}
@@ -632,7 +635,7 @@ func TestEventRelationProposalRules(t *testing.T) {
 	// 상한이 자르는지 보려면 상한이 후보 수보다 작아야 하므로 1로 둔다.
 	store, err := New(t.Context(), databaseURL, graphName, &RelationProposalConfig{
 		AdjacencyWindow: time.Hour, SimilarityThreshold: 0.8, Limit: 1,
-	}, nil)
+	}, nil, "")
 	if err != nil {
 		t.Fatalf("후보 제안 저장소 준비: %v", err)
 	}

@@ -56,6 +56,8 @@ type IndexProcessResult struct {
 // SearchCandidate는 검색 채널이 순위를 부여하기 전 저장소가 돌려주는 컨텍스트다.
 type SearchCandidate struct {
 	Context model.Context
+	// Similarity는 의미 유사도 채널에서만 코사인 유사도를 담는다. 다른 채널은 0이다.
+	Similarity float64
 }
 
 // ProcessNextIndexTask는 대기 중인 작업 하나를 확보하고 제공자 결과를 저장한다.
@@ -65,8 +67,31 @@ type SearchCandidate struct {
 // 컨텍스트의 저장이 제공자 응답까지 막혀 대역이 늦어질 때 저장 지연이 함께 늘어난다.
 // 확보한 작업은 next_attempt_at을 미뤄 다른 작업자에게 숨긴다.
 func (s *Store) ProcessNextIndexTask(ctx context.Context, processor IndexTaskProcessor) (IndexProcessResult, error) {
+	return s.processNextIndexTask(ctx, model.ID{}, processor)
+}
+
+// ProcessNextIndexTaskInGraph는 확보 대상을 그래프 하나로 좁힌다.
+//
+// 「검증」의 측정은 잰 그래프의 색인이 끝난 상태에서 시작해야 하고, 그 판정에 다른
+// 그래프의 대기 작업이 섞이면 회차마다 시작 상태가 달라진다. 좁혀서 확보하면 평가가
+// 남의 작업을 대신 처리하지 않고 자기 그래프만 비운다. 운영 경로의 색인 작업자는
+// 그래프를 가리지 않으므로 이 함수를 쓰지 않는다.
+func (s *Store) ProcessNextIndexTaskInGraph(ctx context.Context, graphID model.ID, processor IndexTaskProcessor) (IndexProcessResult, error) {
+	if !graphID.IsV7() {
+		return IndexProcessResult{}, fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
+	}
+	return s.processNextIndexTask(ctx, graphID, processor)
+}
+
+// processNextIndexTask는 확보 범위만 다른 두 진입점의 공통 구현이다. scope가 비어
+// 있으면 그래프를 가리지 않는다.
+func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, processor IndexTaskProcessor) (IndexProcessResult, error) {
 	if processor == nil {
 		return IndexProcessResult{}, fmt.Errorf("색인 작업 처리기가 없다")
+	}
+	scopeValue := any(nil)
+	if scope.IsV7() {
+		scopeValue = scope.String()
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -81,9 +106,10 @@ func (s *Store) ProcessNextIndexTask(ctx context.Context, processor IndexTaskPro
 		SELECT task_id::text, context_id::text, graph_id::text, attempts, COALESCE(correlation_id, ''), enqueued_at
 		FROM public.index_task
 		WHERE state = 'pending' AND next_attempt_at <= now()
+		  AND ($1::uuid IS NULL OR graph_id = $1::uuid)
 		ORDER BY enqueued_at, task_id
 		LIMIT 1
-		FOR UPDATE SKIP LOCKED`).Scan(&rawID, &rawContextID, &rawGraphID, &attempts, &correlationID, &enqueuedAt)
+		FOR UPDATE SKIP LOCKED`, scopeValue).Scan(&rawID, &rawContextID, &rawGraphID, &attempts, &correlationID, &enqueuedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return IndexProcessResult{}, tx.Commit(ctx)
@@ -150,12 +176,16 @@ func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, enqueuedAt
 		return fmt.Errorf("색인 결과 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// 파티션 키를 포함하지 않는 전역 unique index는 PostgreSQL이 허용하지 않는다.
+	// 단일 색인 저장 경로에서 기존 계층의 행을 먼저 지운 뒤 hot 파티션에 넣어,
+	// context_id가 두 파티션에 동시에 남지 않게 한다.
+	if _, err := tx.Exec(ctx, `DELETE FROM public.context_embedding WHERE context_id = $1`, task.ContextID.String()); err != nil {
+		return fmt.Errorf("기존 임베딩 제거: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO public.context_embedding (context_id, graph_id, embedding, model_id, indexed_at)
-		VALUES ($1, $2, $3, $4, now())
-		ON CONFLICT (context_id) DO UPDATE SET
-			graph_id = EXCLUDED.graph_id, embedding = EXCLUDED.embedding,
-			model_id = EXCLUDED.model_id, indexed_at = EXCLUDED.indexed_at`,
+		INSERT INTO public.context_embedding
+			(context_id, graph_id, embedding, model_id, indexed_at, last_accessed_at, storage_tier)
+		VALUES ($1, $2, $3, $4, now(), now(), 'hot')`,
 		task.ContextID.String(), task.GraphID.String(), vectorText(result.Embedding), result.ModelID); err != nil {
 		return fmt.Errorf("임베딩 저장: %w", err)
 	}
@@ -253,27 +283,41 @@ func (s *Store) OutdatedEmbeddingCount(ctx context.Context, modelID string) (int
 	return count, nil
 }
 
-// ReindexGraph는 그래프의 모든 컨텍스트를 기존 upsert 규칙으로 다시 등록한다.
+// ReindexGraph는 그래프의 컨텍스트를 현재 색인 대상 구성에 맞게 다시 맞춘다.
+//
+// 대상인 계층은 기존 upsert 규칙으로 다시 등록하고, 대상에서 빠진 계층은 남아 있던
+// 임베딩과 대기 작업을 지운다. 지우지 않으면 「색인 대상 비교」의 원천 제외 구성으로
+// 바꿔도 예전 구성이 남긴 원천 임베딩이 의미 유사도 채널에 계속 올라와 두 구성이
+// 등록 조건 말고도 달라진다.
 func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 	if !graphID.IsV7() {
 		return fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
 	}
-	rows, err := s.pool.Query(ctx, `SELECT properties ->> 'context_id'::text FROM `+s.contextTable()+` WHERE properties ->> 'graph_id'::text = $1`, graphID.String())
+	rows, err := s.pool.Query(ctx, `SELECT properties ->> 'context_id'::text, properties ->> 'layer'::text FROM `+s.contextTable()+` WHERE properties ->> 'graph_id'::text = $1`, graphID.String())
 	if err != nil {
 		return fmt.Errorf("재색인 대상 조회: %w", err)
 	}
 	defer rows.Close()
-	ids := make([]model.ID, 0)
+	type reindexTarget struct {
+		id    model.ID
+		layer model.Layer
+	}
+	targets := make([]reindexTarget, 0)
+	excluded := make([]string, 0)
 	for rows.Next() {
-		var rawID string
-		if err := rows.Scan(&rawID); err != nil {
+		var rawID, rawLayer string
+		if err := rows.Scan(&rawID, &rawLayer); err != nil {
 			return fmt.Errorf("재색인 대상 행 해석: %w", err)
 		}
 		contextID, err := model.ParseID(rawID)
 		if err != nil {
 			return fmt.Errorf("재색인 대상 식별자 해석: %w", err)
 		}
-		ids = append(ids, contextID)
+		if s.indexTargets.indexes(model.Layer(rawLayer)) {
+			targets = append(targets, reindexTarget{id: contextID, layer: model.Layer(rawLayer)})
+			continue
+		}
+		excluded = append(excluded, contextID.String())
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("재색인 대상 행 읽기: %w", err)
@@ -283,9 +327,17 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 		return fmt.Errorf("재색인 등록 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	for _, contextID := range ids {
-		if err := s.enqueueIndexTask(ctx, tx, graphID, contextID); err != nil {
+	for _, target := range targets {
+		if err := s.enqueueIndexTask(ctx, tx, graphID, target.id, target.layer); err != nil {
 			return err
+		}
+	}
+	if len(excluded) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM public.context_embedding WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded); err != nil {
+			return fmt.Errorf("색인 대상에서 빠진 임베딩 제거: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM public.index_task WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded); err != nil {
+			return fmt.Errorf("색인 대상에서 빠진 대기 작업 제거: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -295,7 +347,17 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 }
 
 // KeywordCandidates는 PostgreSQL simple 전문 검색으로 활성 기본 검색 후보를 읽는다.
+// websearchOrQuery는 자연어 질의의 어휘를 websearch 구문의 OR로 묶는다.
+//
+// plainto와 websearch 모두 어휘를 AND로 묶는데 work_context는 문장 단위라 전부를 담은
+// 문단이 없으면 후보가 나오지 않는다. 후보를 내는 이 채널은 겹치는 어휘만으로도
+// 문단을 찾아야 하므로 어휘를 OR로 조립하고 구문 해석은 websearch_to_tsquery에 맡긴다.
+func websearchOrQuery(query string) string {
+	return strings.Join(strings.Fields(query), " OR ")
+}
+
 func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query string, current time.Time, limit int) ([]SearchCandidate, error) {
+	query = websearchOrQuery(query)
 	if !graphID.IsV7() || !current.UTC().Equal(current) || limit < 1 {
 		return nil, fmt.Errorf("키워드 검색 인자가 올바르지 않다")
 	}
@@ -304,11 +366,14 @@ func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query s
 		FROM `+s.contextTable()+`
 		WHERE properties ->> 'graph_id'::text = $1
 			AND properties ->> 'deleted_at'::text IS NULL
+			AND NOT (properties ->> 'layer'::text = 'derived'
+				AND properties ->> 'derivation_kind'::text = 'summary'
+				AND properties ->> 'summary_scope'::text = 'global')
 			AND ((properties ->> 'layer'::text) <> 'derived'
 				OR NULLIF(properties ->> 'valid_to'::text, '') IS NULL
 				OR (properties ->> 'valid_to'::text)::timestamptz >= $3)
-			AND to_tsvector('simple', properties ->> 'body'::text) @@ plainto_tsquery('simple', $2)
-		ORDER BY ts_rank_cd(to_tsvector('simple', properties ->> 'body'::text), plainto_tsquery('simple', $2)) DESC,
+			AND to_tsvector('simple', properties ->> 'body'::text) @@ websearch_to_tsquery('simple', $2)
+		ORDER BY ts_rank_cd(to_tsvector('simple', properties ->> 'body'::text), websearch_to_tsquery('simple', $2)) DESC,
 			(properties ->> 'recorded_at'::text)::timestamptz DESC, properties ->> 'context_id'::text ASC
 		LIMIT $4`, graphID.String(), query, current, limit)
 	if err != nil {
@@ -330,6 +395,9 @@ func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.
 		SELECT properties ->> 'context_id'::text
 		FROM `+s.contextTable()+`
 		WHERE properties ->> 'graph_id'::text = $1 AND properties ->> 'deleted_at'::text IS NULL
+			AND NOT (properties ->> 'layer'::text = 'derived'
+				AND properties ->> 'derivation_kind'::text = 'summary'
+				AND properties ->> 'summary_scope'::text = 'global')
 			AND ((properties ->> 'layer'::text) <> 'derived'
 				OR (NULLIF(properties ->> 'valid_from'::text, '') IS NULL OR (properties ->> 'valid_from'::text)::timestamptz <= $2)
 				AND (NULLIF(properties ->> 'valid_to'::text, '') IS NULL OR (properties ->> 'valid_to'::text)::timestamptz >= $2))
@@ -388,12 +456,15 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT candidate.context_id::text
+		SELECT candidate.context_id::text, 1 - (candidate.embedding <=> $3::vector) AS similarity
 		FROM public.context_embedding AS candidate
 		JOIN `+s.contextTable()+` AS node ON (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
 		WHERE candidate.graph_id = $1 AND candidate.model_id = $2
 			AND node.properties ->> 'graph_id'::text = $1::text
 			AND node.properties ->> 'deleted_at'::text IS NULL
+			AND NOT (node.properties ->> 'layer'::text = 'derived'
+				AND node.properties ->> 'derivation_kind'::text = 'summary'
+				AND node.properties ->> 'summary_scope'::text = 'global')
 			AND ((node.properties ->> 'layer'::text) <> 'derived'
 				OR NULLIF(node.properties ->> 'valid_to'::text, '') IS NULL
 				OR (node.properties ->> 'valid_to'::text)::timestamptz >= $4)
@@ -402,14 +473,39 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	if err != nil {
 		return nil, fmt.Errorf("의미 유사도 검색: %w", err)
 	}
-	ids, err := searchCandidateIDs(rows)
-	if err != nil {
-		return nil, err
+	ids := make([]model.ID, 0)
+	similarities := make(map[model.ID]float64)
+	for rows.Next() {
+		var rawID string
+		var similarity float64
+		if err := rows.Scan(&rawID, &similarity); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("의미 유사도 후보 행 해석: %w", err)
+		}
+		contextID, err := model.ParseID(rawID)
+		if err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("의미 유사도 후보 식별자 해석: %w", err)
+		}
+		ids = append(ids, contextID)
+		similarities[contextID] = similarity
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("의미 유사도 후보 행 읽기: %w", err)
+	}
+	rows.Close()
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("의미 유사도 검색 커밋: %w", err)
 	}
-	return s.searchCandidates(ctx, graphID, ids)
+	candidates, err := s.searchCandidates(ctx, graphID, ids)
+	if err != nil {
+		return nil, err
+	}
+	for index := range candidates {
+		candidates[index].Similarity = similarities[candidates[index].Context.ID]
+	}
+	return candidates, nil
 }
 
 // searchCandidateIDs는 결과 행을 끝까지 읽어 식별자만 모으고 연결을 놓아준다.

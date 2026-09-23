@@ -33,7 +33,7 @@ func TestEmbeddingLossRecoversFromBodyIntegration(t *testing.T) {
 	vector[0] = 1
 
 	// 색인을 한 번 끝내 의미 유사도 채널에 걸리는 상태를 만든다.
-	indexOnce(t, database, stored.ID, modelID, vector)
+	indexOnce(t, database, graphID, stored.ID, modelID, vector)
 	if found := semanticContains(t, database, graphID, modelID, vector, stored.ID); !found {
 		t.Fatal("색인한 원천이 의미 유사도 채널에 걸리지 않는다")
 	}
@@ -53,10 +53,10 @@ func TestEmbeddingLossRecoversFromBodyIntegration(t *testing.T) {
 	if err := database.ReindexGraph(t.Context(), graphID); err != nil {
 		t.Fatalf("그래프 재색인 등록: %v", err)
 	}
-	readyIndexTasks(t, database, stored.ID)
+	readyIndexTasks(t, database, graphID, stored.ID)
 
 	var indexedBody string
-	result, err := database.ProcessNextIndexTask(t.Context(), func(_ context.Context, task IndexTask) IndexTaskResult {
+	result, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(_ context.Context, task IndexTask) IndexTaskResult {
 		indexedBody = task.Body
 		return IndexTaskResult{Embedding: vector, ModelID: modelID}
 	})
@@ -72,10 +72,10 @@ func TestEmbeddingLossRecoversFromBodyIntegration(t *testing.T) {
 }
 
 // indexOnce는 대기 작업 하나를 주어진 벡터로 처리해 색인을 끝낸 상태를 만든다.
-func indexOnce(t *testing.T, database *Store, contextID model.ID, modelID string, vector []float64) {
+func indexOnce(t *testing.T, database *Store, graphID, contextID model.ID, modelID string, vector []float64) {
 	t.Helper()
-	readyIndexTasks(t, database, contextID)
-	result, err := database.ProcessNextIndexTask(t.Context(), func(_ context.Context, task IndexTask) IndexTaskResult {
+	readyIndexTasks(t, database, graphID, contextID)
+	result, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(_ context.Context, task IndexTask) IndexTaskResult {
 		if task.ContextID != contextID {
 			t.Errorf("대상이 아닌 작업을 잡았다: %s", task.ContextID)
 			return IndexTaskResult{Failure: "대상 아님", Retryable: true}

@@ -22,6 +22,13 @@ import (
 	"agent_context_sharing/internal/web"
 )
 
+const (
+	// serverName과 serverVersion은 규약이 결과의 `_meta`에 싣도록 권고한 구현 식별
+	// 정보다. 표시와 진단에만 쓰이며 어느 판정의 근거도 되지 않는다.
+	serverName    = "agent-context"
+	serverVersion = "0.1.0"
+)
+
 // shutdownTimeout은 종료 신호 뒤 진행 중인 요청을 기다리는 최대 시간이다.
 const shutdownTimeout = 30 * time.Second
 
@@ -111,6 +118,7 @@ func run() error {
 	authorization, err := authz.New(database, authz.Config{
 		Issuer:     cfg.AuthorizationServerURL.String(),
 		Resource:   cfg.ResourceServerURL.String(),
+		Scope:      mcp.Scope,
 		Clients:    cfg.OAuthClients,
 		BcryptCost: cfg.BcryptCost,
 	})
@@ -121,6 +129,7 @@ func run() error {
 		ResourceURL:            cfg.ResourceServerURL,
 		AuthorizationServerURL: cfg.AuthorizationServerURL,
 		AllowedOrigins:         cfg.MCPAllowedOrigins,
+		ServerInfo:             mcp.Implementation{Name: serverName, Version: serverVersion},
 	}, verifyWithRenewal(authorization), mcp.NewHandlerWithSearch(database, cfg.AccountPlans, searcher, slog.Default()))
 	if err != nil {
 		return fmt.Errorf("MCP 리소스 서버 준비: %w", err)

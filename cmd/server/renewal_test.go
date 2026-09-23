@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"agent_context_sharing/internal/authz"
+	"agent_context_sharing/internal/mcp"
 	"agent_context_sharing/internal/model"
 )
 
@@ -80,5 +82,36 @@ func TestVerificationFailureStopsRequest(t *testing.T) {
 	}
 	if got := recorder.Header().Get(renewedTokenHeader); got != "" {
 		t.Fatalf("검증 실패인데 %s = %q", renewedTokenHeader, got)
+	}
+}
+
+// TestVerificationErrorsAreClassifiedForTransport는 인가 서버의 검증 오류가 전송 계층이
+// 가를 수 있는 형태로 옮겨지는지 확인한다.
+//
+// `mcp`는 `authz`를 의존하지 않으므로 이 경계가 자격 증명 실패만 `mcp.ErrUnauthenticated`로
+// 감싼다. 내부 장애까지 감싸면 전송 계층이 그것을 401로 답해, 클라이언트가 재인증하고
+// 돌아와도 같은 자리에서 다시 막힌다.
+func TestVerificationErrorsAreClassifiedForTransport(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		err             error
+		unauthenticated bool
+	}{
+		"자격 증명 실패": {authz.ErrInvalidCredential, true},
+		"내부 조회 장애": {fmt.Errorf("%w: 폐기 목록 조회", authz.ErrUnavailable), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			verify := verifyWithRenewal(fakeRenewer{err: testCase.err})
+			_, err := verify(t.Context(), "token", "https://service.test/mcp")
+			if err == nil {
+				t.Fatal("검증 실패가 오류로 나오지 않았다")
+			}
+			if got := errors.Is(err, mcp.ErrUnauthenticated); got != testCase.unauthenticated {
+				t.Fatalf("ErrUnauthenticated 여부 = %t, want %t; 오류 = %v", got, testCase.unauthenticated, err)
+			}
+			// 어느 쪽이든 원인은 보존해 로그에서 추적할 수 있어야 한다.
+			if !errors.Is(err, testCase.err) {
+				t.Fatalf("원인이 보존되지 않았다: %v", err)
+			}
+		})
 	}
 }

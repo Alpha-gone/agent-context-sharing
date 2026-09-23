@@ -38,10 +38,29 @@ const (
 
 var loginIDPattern = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
 
+// verifierPattern은 RFC 7636이 정한 `code_verifier`의 문법이다. 43자 이상 128자 이하의
+// unreserved 문자이며, 이 범위를 확인하지 않으면 형식을 어긴 클라이언트의 엔트로피가
+// 모자란 검증기가 그대로 통과해 PKCE를 둔 의미가 사라진다.
+var verifierPattern = regexp.MustCompile(`^[A-Za-z0-9\-._~]{43,128}$`)
+
+var (
+	// ErrInvalidCredential은 제시한 자격 증명 자체가 유효하지 않다는 결과다.
+	ErrInvalidCredential = errors.New("invalid_credential")
+	// ErrUnavailable은 자격 증명의 문제가 아니라 검증을 끝내지 못했다는 결과다.
+	//
+	// 두 오류를 나누는 이유는 호출자가 할 일이 다르기 때문이다. 앞은 재인증이 답이지만
+	// 서명 키나 폐기 목록을 읽지 못한 것은 재인증해도 같은 자리에서 다시 막힌다.
+	// 「토큰 검증」이 이 구분을 계약으로 확정했다.
+	ErrUnavailable = errors.New("unavailable")
+)
+
 // Config는 인가 서버의 고정된 배포 경계를 모은다.
 type Config struct {
 	Issuer   string
 	Resource string
+	// Scope에는 「계정 매핑과 인가 범위」가 단일로 확정한 OAuth scope를 둔다. 값을
+	// 구성으로 받는 이유는 이 패키지가 리소스 서버 패키지를 의존하지 않기 위해서다.
+	Scope string
 	// Clients 필드에는 클라이언트별로 사전 등록한 redirect_uri 허용 목록을 둔다.
 	Clients    map[string][]*url.URL
 	BcryptCost int
@@ -81,11 +100,16 @@ type Token struct {
 }
 
 // AuthorizeRequest는 로그인 뒤 인가 코드를 만들 때 이미 검증된 OAuth 입력이다.
-type AuthorizeRequest struct{ ClientID, RedirectURI, CodeChallenge, CodeChallengeMethod, Resource string }
+type AuthorizeRequest struct {
+	ClientID, RedirectURI, CodeChallenge, CodeChallengeMethod, Resource string
+	// ResponseType과 Scope는 받지 않기로 한 값이 조용히 통과하지 않게 확인만 한다.
+	// Scope는 생략할 수 있다. 값이 하나뿐이라 생략은 그 하나를 요청한 것과 같다.
+	ResponseType, Scope string
+}
 
 // New는 필요한 구성과 저장소 접근 계층을 확인해 인가 서비스를 만든다.
 func New(source authStore, config Config) (*Service, error) {
-	if source == nil || config.Issuer == "" || config.Resource == "" || config.BcryptCost < bcrypt.MinCost || config.BcryptCost > bcrypt.MaxCost {
+	if source == nil || config.Issuer == "" || config.Resource == "" || config.Scope == "" || config.BcryptCost < bcrypt.MinCost || config.BcryptCost > bcrypt.MaxCost {
 		return nil, fmt.Errorf("인가 서비스 구성이 올바르지 않다")
 	}
 	if len(config.Clients) == 0 {
@@ -205,10 +229,18 @@ func (s *Service) ValidateRedirectTarget(request AuthorizeRequest) (*url.URL, er
 	return redirect, nil
 }
 
-// ValidateAuthorizeRequest는 사전 등록 클라이언트, 완전 일치 redirect_uri, PKCE와 리소스를 확인한다.
+// ValidateAuthorizeRequest는 「인가 코드 흐름」의 1~6단계를 순서대로 확인한다.
+//
+// 순서가 단계 번호와 같아야 호출자가 실패를 단계별 오류 코드로 옮길 수 있다.
 func (s *Service) ValidateAuthorizeRequest(request AuthorizeRequest) error {
 	if _, err := s.ValidateRedirectTarget(request); err != nil {
 		return err
+	}
+	if request.ResponseType != "code" {
+		return fmt.Errorf("response_type은 code만 받는다")
+	}
+	if request.Scope != "" && request.Scope != s.config.Scope {
+		return fmt.Errorf("scope가 일치하지 않는다")
 	}
 	if request.CodeChallenge == "" || request.CodeChallengeMethod != "S256" {
 		return fmt.Errorf("PKCE S256 code_challenge이 필요하다")
@@ -236,15 +268,29 @@ func (s *Service) Authorize(ctx context.Context, accountID model.ID, request Aut
 	return code, nil
 }
 
-// Exchange는 코드를 조건부로 한 번 소비하고 PKCE를 검증한 뒤 MCP 접근 토큰을 발급한다.
-func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, verifier string) (Token, error) {
+// Exchange는 코드를 조건부로 한 번 소비하고 PKCE와 리소스 결속을 검증한 뒤 MCP 접근
+// 토큰을 발급한다.
+//
+// resource를 함께 받는 이유는 결속이 두 요청에 걸쳐 있기 때문이다. 인가 요청에서 고른
+// 대상 리소스를 코드 행에 남겨 두었으므로, 토큰 요청이 같은 값을 제시하는지 확인해야
+// 실제 발급 대상이 그때 고른 것과 같다는 것이 성립한다. 값이 비면 거부한다. 규약이
+// 클라이언트에 이 파라미터를 요구하므로 생략을 허용하면 결속 자체가 선택이 된다.
+func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, verifier, resource string) (Token, error) {
+	// 검증기의 문법을 해시 대조보다 먼저 본다. 대조만 하면 43자보다 짧거나 엔트로피가
+	// 모자란 검증기도 해시만 맞으면 통과해 RFC 7636이 보장하려던 것이 사라진다.
+	if !verifierPattern.MatchString(verifier) {
+		return Token{}, fmt.Errorf("invalid_grant")
+	}
+	if resource == "" || resource != s.config.Resource {
+		return Token{}, fmt.Errorf("invalid_grant")
+	}
 	now := time.Now().UTC()
 	hash := digest(code)
 	stored, err := s.store.AuthorizationCodeForExchange(ctx, hash, now)
 	if err != nil {
 		return Token{}, s.invalidGrant(ctx, err)
 	}
-	if stored.ClientID != clientID || stored.RedirectURI != redirectURI || stored.Resource != s.config.Resource || digest(verifier) != stored.CodeChallenge {
+	if stored.ClientID != clientID || stored.RedirectURI != redirectURI || stored.Resource != resource || digest(verifier) != stored.CodeChallenge {
 		return Token{}, fmt.Errorf("invalid_grant")
 	}
 	token, err := s.issue(ctx, stored.AccountID, s.config.Resource, now, now)
@@ -284,7 +330,7 @@ func (s *Service) Verify(ctx context.Context, raw, audience string) (model.ID, T
 	}
 	id, err := model.ParseID(claims.Subject)
 	if err != nil {
-		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
+		return model.ID{}, Token{}, ErrInvalidCredential
 	}
 	return id, Token{Raw: raw, ID: claims.ID, ExpiresAt: claims.Expiry.Time()}, nil
 }
@@ -301,7 +347,7 @@ func (s *Service) VerifyAndRenew(ctx context.Context, raw, audience string) (mod
 	}
 	id, err := model.ParseID(claims.Subject)
 	if err != nil {
-		return model.ID{}, Token{}, fmt.Errorf("unauthenticated")
+		return model.ID{}, Token{}, ErrInvalidCredential
 	}
 	if audience != s.config.Resource {
 		return id, Token{}, nil
@@ -313,25 +359,38 @@ func (s *Service) VerifyAndRenew(ctx context.Context, raw, audience string) (mod
 	return id, renewed, nil
 }
 
+// verifiedClaims는 서명, 필수 클레임, 값과 폐기 여부를 한 경로에서 확인한다.
+//
+// 자격 증명 실패는 어느 항목이 틀렸는지 구분하지 않고 모두 ErrInvalidCredential로 묶는다.
+// 만료와 서명 불일치를 나눠 알리면 공격자에게 무엇을 고쳐야 하는지 알려주는 셈이 된다.
+// 반면 서명 키나 폐기 목록을 읽지 못한 것은 자격 증명과 무관하므로 ErrUnavailable로
+// 따로 올린다. 어느 조회가 실패했는지는 감싼 원인에만 남고 응답에는 담기지 않는다.
 func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (tokenClaims, error) {
 	parsed, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
 	if err != nil {
-		return tokenClaims{}, fmt.Errorf("unauthenticated")
+		return tokenClaims{}, ErrInvalidCredential
 	}
 	if len(parsed.Headers) != 1 || parsed.Headers[0].KeyID == "" {
-		return tokenClaims{}, fmt.Errorf("unauthenticated")
+		return tokenClaims{}, ErrInvalidCredential
 	}
 	public, err := s.cache.publicKey(ctx, s.store, parsed.Headers[0].KeyID)
 	if err != nil {
-		return tokenClaims{}, fmt.Errorf("unauthenticated")
+		// 모르는 `kid`는 자격 증명의 문제이고, 그 밖의 조회 실패는 저장소의 문제다.
+		if errors.Is(err, store.ErrNotFound) {
+			return tokenClaims{}, ErrInvalidCredential
+		}
+		return tokenClaims{}, fmt.Errorf("%w: 서명 키 조회: %w", ErrUnavailable, err)
 	}
 	var claims tokenClaims
 	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil {
-		return tokenClaims{}, fmt.Errorf("unauthenticated")
+		return tokenClaims{}, ErrInvalidCredential
 	}
 	revoked, err := s.cache.isRevoked(ctx, s.store, claims.ID, time.Now().UTC())
-	if err != nil || revoked {
-		return tokenClaims{}, fmt.Errorf("unauthenticated")
+	if err != nil {
+		return tokenClaims{}, fmt.Errorf("%w: 폐기 목록 조회: %w", ErrUnavailable, err)
+	}
+	if revoked {
+		return tokenClaims{}, ErrInvalidCredential
 	}
 	return claims, nil
 }

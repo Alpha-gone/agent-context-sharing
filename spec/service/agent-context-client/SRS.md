@@ -99,7 +99,7 @@
 ### 인증 만료와 재인증
 
 1. 유효한 요청의 응답에 갱신 토큰 헤더가 있으면 클라이언트는 마지막으로 받은 유효한 토큰을 이후 요청에 사용한다.
-2. 서버가 `unauthenticated`를 반환하거나 접근 토큰이 없으면 진행 중인 인가가 있는지 확인한다.
+2. 서버가 HTTP `401`을 반환하거나 접근 토큰이 없으면 진행 중인 인가가 있는지 확인한다.
 3. 인가가 없으면 브라우저 인가를 한 번만 시작하고, 동시에 들어온 요청은 같은 결과를 기다린다.
 4. 재인증에 성공하면 인증 실패로 실행되지 않은 원래 요청을 한 번만 다시 보낸다.
 5. 사용자가 거부하거나 시간 안에 끝내지 않으면 대기 중인 요청 모두에 재인증 필요 상태를 반환한다.
@@ -128,7 +128,7 @@
 | `FR-AGENT_CONTEXT_CLIENT-011` | 클라이언트는 접근 토큰과 만료 시각을 프로세스 메모리에만 보관하고 종료·재시작 시 폐기해야 한다. | 토큰, 인가 코드, PKCE 검증자가 파일·환경 변수·표준 출력·로그·오류 메시지에 기록되지 않는다. | 검토 필요 | agent-context `NFR-AGENT_CONTEXT-013` |
 | `FR-AGENT_CONTEXT_CLIENT-012` | 클라이언트는 응답의 `Mcp-Access-Token`과 `Mcp-Access-Token-Expires-At`을 함께 검증해 현재 토큰을 원자적으로 교체해야 한다. | 둘 중 하나만 있거나 만료 시각이 유효하지 않으면 교체하지 않으며, 동시 응답에서는 마지막으로 정상 수신한 토큰을 사용한다. | 검토 필요 | agent-context SRS 「토큰 갱신」 |
 | `FR-AGENT_CONTEXT_CLIENT-013` | 클라이언트는 인증이 필요한 동시 요청에서 브라우저 인가를 하나만 진행해야 한다. | 인가 성공 시 대기 요청이 같은 새 토큰을 사용하고 실패·취소 시 모두 일관된 재인증 필요 결과를 받는다. | 검토 필요 | 제품 기준선 |
-| `FR-AGENT_CONTEXT_CLIENT-014` | 클라이언트는 `unauthenticated`가 된 요청에 대해 재인증 성공 뒤 원래 요청을 최대 한 번 다시 보내야 한다. | 인증 실패는 서버의 도메인 연산 전에 발생한다는 계약을 전제로 하며 두 번째 인증 실패는 반복하지 않고 호스트에 반환한다. | 검토 필요 | agent-context SDD 「요청 처리 순서」 |
+| `FR-AGENT_CONTEXT_CLIENT-014` | 클라이언트는 HTTP `401`을 받은 요청에 대해 재인증 성공 뒤 원래 요청을 최대 한 번 다시 보내야 한다. | 인증 실패는 서버의 도메인 연산 전에 발생한다는 계약을 전제로 하며, `401`의 `WWW-Authenticate`가 알린 보호 리소스 메타데이터 위치와 scope로 인가를 시작하고, 두 번째 인증 실패는 반복하지 않고 호스트에 반환한다. HTTP `500`은 재인증 대상이 아니다. | 검토 필요 | agent-context SDD 「요청 처리 순서」 |
 
 ### 원격 요청과 응답
 
@@ -188,9 +188,11 @@
 
 서버가 `tools` 결과로 반환하는 아래 도메인 코드는 이름과 부가 정보를 바꾸지 않는다.
 
-`unauthenticated`, `permission_denied`, `not_found`, `invalid_argument`, `version_conflict`, `limit_exceeded`, `result_truncated`, `not_supported`, `internal`
+`permission_denied`, `not_found`, `invalid_argument`, `version_conflict`, `limit_exceeded`, `result_truncated`, `not_supported`, `internal`
 
-`result_truncated`는 서버 계약대로 성공 응답의 표시로 취급한다. `unauthenticated`는 한 번의 재인증 대상이고, 나머지 도메인 오류는 자동 재시도하지 않는다.
+`result_truncated`는 서버 계약대로 성공 응답의 표시로 취급한다. 도메인 오류는 자동 재시도하지 않는다.
+
+인증 실패는 이 목록에 없다. 서버가 도메인 코드가 아니라 HTTP `401`과 `WWW-Authenticate` 도전으로 답하기로 확정했으므로, 클라이언트는 전송 계층의 상태 코드로 재인증 시점을 판정한다. 근거는 agent-context SRS 「오류 코드」에 있다.
 
 ### 클라이언트 오류
 
@@ -230,10 +232,10 @@
 
 | 의존성 | 현재 상태 | 완료 조건 |
 |--------|-----------|-----------|
-| 인가 응답의 발급자 식별 | MCP `2026-07-28`은 인가 응답의 `iss` 검증을 요구하지만 현재 agent-context 서버의 인가 리디렉션은 `code`와 `state`만 반환한다. | 서버가 발견된 인가 서버와 일치하는 `iss`를 성공·오류 인가 응답에 포함하고 계약 테스트를 통과한다. |
+| 인가 응답의 발급자 식별 | agent-context 서버 SRS 「프로토콜 매핑」과 SDD 「인가 코드 흐름」이 성공·오류 인가 응답의 `iss`와 메타데이터 선언을 확정했다. | 서버 구현이 `iss`를 포함하고 계약 테스트를 통과한다. |
 | 공개 클라이언트 사전 등록 | 서버는 사전 등록된 `client_id`와 루프백 `redirect_uri`만 허용한다. | 배포 환경마다 클라이언트 식별자와 등록된 콜백 경로를 제공한다. |
 | 호스트의 MCP `2026-07-28` 지원 | 첫 지원 호스트가 정해지지 않았다. | `TBD-AGENT_CONTEXT_CLIENT-001`을 확정하고 해당 호스트에서 `stdio` 종단 간 검증을 통과한다. |
-| 원격 수명주기·캐시 계약 | 현재 agent-context 서버 명세는 `tools/list`·`tools/call`과 13종 도구 중심이며 `server/discover`, 수명주기 메타데이터와 `tools/list` 캐시 힌트를 구체화하지 않았다. | 서버 SRS·SDD가 `server/discover`, 요청별 metadata, 응답 `serverInfo`, `tools/list`의 `ttlMs`·`cacheScope`를 정의하고 계약 테스트를 통과한다. |
+| 원격 수명주기·캐시 계약 | agent-context 서버 SRS 「외부 연동 요구사항」과 SDD 「MCP 표면」이 `server/discover`, 요청별 `_meta`, 응답 `resultType`과 `serverInfo`, `tools/list`의 `ttlMs`·`cacheScope`를 확정했다. | 서버 구현이 이 표면을 제공하고 계약 테스트를 통과한다. |
 
 ## 구성과 데이터 정책
 

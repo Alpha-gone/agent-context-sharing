@@ -90,3 +90,82 @@ func createIndexScopeGraph(t *testing.T, database *Store, actorID model.ID, labe
 	})
 	return graphID
 }
+
+// queueHeadSentinel은 이 검사가 자기 작업을 대기열 맨 앞에 두려고 쓰는 시각이다.
+//
+// `readyIndexTasks`가 쓰는 값보다 더 먼 과거로 둔다. 두 값이 같으면 순서가 `task_id`로
+// 갈려 다른 검사가 남긴 행이 앞설 수 있고, 그러면 범위를 지정하지 않은 확보가 남의
+// 작업을 집는다.
+const queueHeadSentinel = "to_timestamp(-6000000000)"
+
+// TestProcessNextIndexTaskSpansGraphsIntegration은 범위를 지정하지 않은 확보가 그래프를
+// 가리지 않고 대기 작업을 집는지 확인한다.
+//
+// 이 경로는 운영 색인 작업자가 쓰는 것이다. 확보 조건이 깨지면 작업자가 조용히 일을 찾지
+// 못해 색인이 멈추는데, 그래프로 좁힌 확보만 검사하면 그 사실이 드러나지 않는다.
+//
+// 공유 데이터베이스에서 이 진입점을 부르는 것이 「테스트 사이의 격리」와 부딪히지 않게
+// 순서로 푼다. 자기 행만 대기열 맨 앞으로 당기고, 확보 직전에 선두가 실제로 자기 것인지
+// 확인한다. 남의 행은 건드리지 않으며, 선두를 보장할 수 없으면 집지 않고 건너뛴다.
+func TestProcessNextIndexTaskSpansGraphsIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, database, actorID)
+	graphID := createTestGraph(t, database, actorID)
+
+	source, err := database.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "https://example.test/index-unscoped-"+graphID.String()), nil)
+	if err != nil {
+		t.Fatalf("원천 생성: %v", err)
+	}
+	cleanupIndexTasks(t, database, source.ID)
+	headIndexTask(t, database, source.ID)
+
+	if head := readyQueueHead(t, database); head != source.ID.String() {
+		t.Skipf("대기열 선두가 이 검사의 작업이 아니라 남의 작업을 집게 된다: %s", head)
+	}
+
+	result, err := database.ProcessNextIndexTask(t.Context(), scopeTestProcessor(embeddingDimension(t, database)))
+	if err != nil {
+		t.Fatalf("범위 미지정 확보: %v", err)
+	}
+	if !result.Found {
+		t.Fatal("대기 작업이 있는데 범위를 지정하지 않은 확보가 아무것도 찾지 못했다")
+	}
+	if result.Task.ContextID != source.ID {
+		t.Fatalf("확보한 작업 = %s, want %s", result.Task.ContextID, source.ID)
+	}
+	if result.Task.GraphID != graphID {
+		t.Fatalf("확보한 작업의 그래프 = %s, want %s", result.Task.GraphID, graphID)
+	}
+	if !result.Succeeded {
+		t.Fatalf("확보 결과 = %+v", result)
+	}
+}
+
+// headIndexTask는 지정한 작업만 대기열 맨 앞으로 당긴다. 자기 행 외에는 건드리지 않는다.
+func headIndexTask(t *testing.T, database *Store, contextID model.ID) {
+	t.Helper()
+	const query = `UPDATE public.index_task
+		SET enqueued_at = ` + queueHeadSentinel + `, next_attempt_at = ` + queueHeadSentinel + `
+		WHERE context_id = $1`
+	if _, err := database.pool.Exec(t.Context(), query, contextID.String()); err != nil {
+		t.Fatalf("색인 작업을 대기열 앞으로 당기기: %v", err)
+	}
+}
+
+// readyQueueHead는 지금 확보 가능한 대기 작업 중 확보 질의가 가장 먼저 고를 것을 돌려준다.
+// 확보 질의와 같은 조건과 정렬을 쓴다.
+func readyQueueHead(t *testing.T, database *Store) string {
+	t.Helper()
+	var contextID string
+	err := database.pool.QueryRow(t.Context(), `
+		SELECT context_id::text
+		FROM public.index_task
+		WHERE state = 'pending' AND next_attempt_at <= now()
+		ORDER BY enqueued_at, task_id
+		LIMIT 1`).Scan(&contextID)
+	if err != nil {
+		t.Fatalf("대기열 선두 조회: %v", err)
+	}
+	return contextID
+}

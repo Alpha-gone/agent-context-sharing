@@ -26,16 +26,16 @@ func TestAuthorizationCodeSingleUseRevokesIssuedToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("계정 등록: %v", err)
 	}
-	verifier := "high-entropy-pkce-verifier"
-	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
+	verifier := "high-entropy-pkce-verifier-x-x-x-x-x-x-x-x-x"
+	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ResponseType: "code", ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
 	if err != nil {
 		t.Fatalf("인가 코드 발급: %v", err)
 	}
-	token, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier)
+	token, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp")
 	if err != nil {
 		t.Fatalf("첫 코드 교환: %v", err)
 	}
-	if _, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier); err == nil {
+	if _, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp"); err == nil {
 		t.Fatal("재사용 코드가 허용됐다")
 	}
 	revoked, err := backend.IsTokenRevoked(t.Context(), token.ID, time.Now())
@@ -51,13 +51,13 @@ func TestExchangeRejectsAuthorizationCodeForOtherResource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier := "resource-change-verifier"
+	verifier := "resource-change-verifier-x-x-x-x-x-x-x-x-x-x"
 	code := "resource-change-code"
 	now := time.Now().UTC()
 	if err := backend.CreateAuthorizationCode(t.Context(), store.AuthorizationCode{Hash: digest(code), ClientID: "test-client", AccountID: accountID, RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), Resource: "https://other.test/mcp", IssuedAt: now, ExpiresAt: now.Add(authorizationCodeLifetime)}); err != nil {
 		t.Fatalf("인가 코드 저장: %v", err)
 	}
-	if _, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier); err == nil {
+	if _, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp"); err == nil {
 		t.Fatal("다른 resource의 인가 코드가 교환됐다")
 	}
 }
@@ -76,8 +76,8 @@ func TestAuthorizationCodeConcurrentExchangeAllowsOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("계정 등록: %v", err)
 	}
-	verifier := "concurrent-pkce-verifier"
-	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
+	verifier := "concurrent-pkce-verifier-x-x-x-x-x-x-x-x-x-x"
+	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{ResponseType: "code", ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
 	if err != nil {
 		t.Fatalf("인가 코드 발급: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestAuthorizationCodeConcurrentExchangeAllowsOne(t *testing.T) {
 	var waitGroup sync.WaitGroup
 	for range 2 {
 		waitGroup.Go(func() {
-			_, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier)
+			_, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp")
 			results <- err
 		})
 	}
@@ -118,8 +118,9 @@ func TestAuthorizationCodeConcurrentExchangeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("통합 검사 계정 등록: %v", err)
 	}
-	verifier := "concurrent-postgresql-pkce-verifier"
+	verifier := "concurrent-postgresql-pkce-verifier-x-x-x-x"
 	request := AuthorizeRequest{
+		ResponseType:        "code",
 		ClientID:            "test-client",
 		RedirectURI:         "http://127.0.0.1/callback",
 		CodeChallenge:       digest(verifier),
@@ -139,7 +140,7 @@ func TestAuthorizationCodeConcurrentExchangeIntegration(t *testing.T) {
 		var waitGroup sync.WaitGroup
 		for range 2 {
 			waitGroup.Go(func() {
-				token, err := service.Exchange(t.Context(), code, request.ClientID, request.RedirectURI, verifier)
+				token, err := service.Exchange(t.Context(), code, request.ClientID, request.RedirectURI, verifier, request.Resource)
 				results <- exchangeResult{token: token, err: err}
 			})
 		}
@@ -330,7 +331,7 @@ func signedRenewalToken(t *testing.T, service *Service, accountID model.ID, expi
 
 func TestValidateAuthorizeRequestAllowsLoopbackDynamicPort(t *testing.T) {
 	service := testService(t, newMemoryStore())
-	err := service.ValidateAuthorizeRequest(AuthorizeRequest{ClientID: "test-client", RedirectURI: "http://127.0.0.1:49152/callback", CodeChallenge: "challenge", CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
+	err := service.ValidateAuthorizeRequest(AuthorizeRequest{ResponseType: "code", ClientID: "test-client", RedirectURI: "http://127.0.0.1:49152/callback", CodeChallenge: "challenge", CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
 	if err != nil {
 		t.Fatalf("루프백 동적 포트가 거부됐다: %v", err)
 	}
@@ -347,11 +348,11 @@ func TestValidateAuthorizeRequestScopesRedirectURIsPerClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := New(newMemoryStore(), Config{Issuer: "https://service.test", Resource: "https://service.test/mcp", Clients: map[string][]*url.URL{"test-client": {primary}, "other-client": {secondary}}, BcryptCost: 4})
+	service, err := New(newMemoryStore(), Config{Issuer: "https://service.test", Resource: "https://service.test/mcp", Scope: "agent-context", Clients: map[string][]*url.URL{"test-client": {primary}, "other-client": {secondary}}, BcryptCost: 4})
 	if err != nil {
 		t.Fatalf("인가 서비스 생성: %v", err)
 	}
-	request := AuthorizeRequest{ClientID: "other-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: "challenge", CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"}
+	request := AuthorizeRequest{ResponseType: "code", ClientID: "other-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: "challenge", CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"}
 	if err := service.ValidateAuthorizeRequest(request); err == nil {
 		t.Fatal("다른 클라이언트의 redirect_uri가 허용됐다")
 	}
@@ -464,7 +465,7 @@ func testService(t *testing.T, backend authStore) *Service {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := New(backend, Config{Issuer: "https://service.test", Resource: "https://service.test/mcp", Clients: map[string][]*url.URL{"test-client": {redirect}}, BcryptCost: 4})
+	service, err := New(backend, Config{Issuer: "https://service.test", Resource: "https://service.test/mcp", Scope: "agent-context", Clients: map[string][]*url.URL{"test-client": {redirect}}, BcryptCost: 4})
 	if err != nil {
 		t.Fatalf("인가 서비스 생성: %v", err)
 	}

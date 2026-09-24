@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"agent_context_sharing/internal/authz"
+	"agent_context_sharing/internal/mcp"
 	"agent_context_sharing/internal/model"
 )
 
@@ -38,10 +41,17 @@ func withRenewalHeader(next http.Handler) http.Handler {
 }
 
 // verifyWithRenewal은 MCP 토큰을 검증하면서 갱신 구간에 든 토큰을 응답 헤더로 알린다.
+//
+// 검증 실패를 두 갈래로 옮기는 자리이기도 하다. `mcp`는 `authz`를 의존하지 않으므로
+// 인가 서버의 오류를 전송 계층이 아는 형태로 바꾸는 일을 이 경계가 맡는다. 자격 증명
+// 실패만 `mcp.ErrUnauthenticated`가 되고, 내부 장애는 원인을 그대로 올려 `500`이 된다.
 func verifyWithRenewal(service tokenRenewer) func(context.Context, string, string) (model.ID, error) {
 	return func(ctx context.Context, raw, audience string) (model.ID, error) {
 		accountID, renewed, err := service.VerifyAndRenew(ctx, raw, audience)
 		if err != nil {
+			if errors.Is(err, authz.ErrInvalidCredential) {
+				return model.ID{}, fmt.Errorf("%w: %w", mcp.ErrUnauthenticated, err)
+			}
 			return model.ID{}, err
 		}
 		if renewed.Raw == "" {

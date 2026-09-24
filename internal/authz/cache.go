@@ -44,6 +44,8 @@ func (cache *verificationCache) publicKey(ctx context.Context, source authStore,
 	if found {
 		return key, nil
 	}
+	// 오류를 감싸지 않고 그대로 올린다. 모르는 `kid`와 저장소 장애를 가르는 것은
+	// 호출자이며, 여기에서 합치면 그 구분이 사라진다.
 	stored, err := source.SigningKey(ctx, keyID)
 	if err != nil {
 		return jose.JSONWebKey{}, err

@@ -44,6 +44,8 @@ func (h *Handler) Authorize(writer http.ResponseWriter, request *http.Request) {
 		CodeChallenge:       query.Get("code_challenge"),
 		CodeChallengeMethod: query.Get("code_challenge_method"),
 		Resource:            query.Get("resource"),
+		ResponseType:        query.Get("response_type"),
+		Scope:               query.Get("scope"),
 	}
 	redirect, err := h.service.ValidateRedirectTarget(authorize)
 	if err != nil {
@@ -52,25 +54,26 @@ func (h *Handler) Authorize(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if err := h.service.ValidateAuthorizeRequest(authorize); err != nil {
-		// 3~4단계 실패다. 검증된 redirect_uri로만 오류를 돌려보낸다.
-		redirectError(writer, request, redirect, query.Get("state"), authorizeErrorCode(authorize))
+		// 3~6단계 실패다. 검증된 redirect_uri로만 오류를 돌려보낸다.
+		h.redirectError(writer, request, redirect, query.Get("state"), authorizeErrorCode(h.service, authorize))
 		return
 	}
 	accountID, ok := h.session(request)
 	if !ok {
-		// 5단계다. 로그인 뒤 같은 인가 요청으로 돌아온다.
+		// 7단계다. 로그인 뒤 같은 인가 요청으로 돌아온다.
 		next := url.URL{Path: h.loginPath, RawQuery: url.Values{"next": {request.URL.RequestURI()}}.Encode()}
 		http.Redirect(writer, request, next.String(), http.StatusSeeOther)
 		return
 	}
 	code, err := h.service.Authorize(request.Context(), accountID, authorize)
 	if err != nil {
-		redirectError(writer, request, redirect, query.Get("state"), "server_error")
+		h.redirectError(writer, request, redirect, query.Get("state"), "server_error")
 		return
 	}
-	// 6단계다. 원문은 저장하지 않았으므로 이 응답이 코드를 전달하는 유일한 자리다.
+	// 8단계다. 원문은 저장하지 않았으므로 이 응답이 코드를 전달하는 유일한 자리다.
 	values := redirect.Query()
 	values.Set("code", code)
+	values.Set("iss", h.service.config.Issuer)
 	if state := query.Get("state"); state != "" {
 		values.Set("state", state)
 	}
@@ -79,7 +82,7 @@ func (h *Handler) Authorize(writer http.ResponseWriter, request *http.Request) {
 	http.Redirect(writer, request, target.String(), http.StatusFound)
 }
 
-// Token은 「인가 코드 흐름」의 7단계를 처리한다.
+// Token은 「인가 코드 흐름」의 9~10단계를 처리한다.
 func (h *Handler) Token(writer http.ResponseWriter, request *http.Request) {
 	if err := request.ParseForm(); err != nil {
 		writeTokenError(writer, http.StatusBadRequest, "invalid_request")
@@ -93,17 +96,21 @@ func (h *Handler) Token(writer http.ResponseWriter, request *http.Request) {
 		request.PostForm.Get("code"),
 		request.PostForm.Get("client_id"),
 		request.PostForm.Get("redirect_uri"),
-		request.PostForm.Get("code_verifier"))
+		request.PostForm.Get("code_verifier"),
+		request.PostForm.Get("resource"))
 	if err != nil {
 		writeTokenError(writer, http.StatusBadRequest, "invalid_grant")
 		return
 	}
 	// 갱신 토큰을 두지 않으므로 refresh_token은 응답에 넣지 않는다.
+	//
+	// scope에는 리소스 서버 URL이 아니라 확정된 scope 값을 담는다. 두 값은 다른
+	// 것이며, 「계정 매핑과 인가 범위」가 정한 것은 후자다.
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"access_token": token.Raw,
 		"token_type":   "Bearer",
 		"expires_in":   int(accessTokenLifetime.Seconds()),
-		"scope":        h.service.config.Resource,
+		"scope":        h.service.config.Scope,
 	})
 }
 
@@ -117,17 +124,27 @@ func (h *Handler) JWKS(writer http.ResponseWriter, request *http.Request) {
 	writeJSON(writer, http.StatusOK, set)
 }
 
-// authorizeErrorCode는 3단계와 4단계의 실패를 「인가 코드 흐름」이 정한 코드로 나눈다.
-func authorizeErrorCode(request AuthorizeRequest) string {
-	if request.CodeChallenge == "" || request.CodeChallengeMethod != "S256" {
+// authorizeErrorCode는 3~6단계의 실패를 「인가 코드 흐름」이 정한 코드로 나눈다.
+// 판정 순서는 그 표의 단계 순서와 같아야 첫 실패의 코드가 나온다.
+func authorizeErrorCode(service *Service, request AuthorizeRequest) string {
+	switch {
+	case request.ResponseType != "code":
+		return "unsupported_response_type"
+	case request.Scope != "" && request.Scope != service.config.Scope:
+		return "invalid_scope"
+	case request.CodeChallenge == "" || request.CodeChallengeMethod != "S256":
 		return "invalid_request"
+	default:
+		return "invalid_target"
 	}
-	return "invalid_target"
 }
 
-func redirectError(writer http.ResponseWriter, request *http.Request, redirect *url.URL, state, code string) {
+// redirectError는 오류 응답에도 iss를 싣는다. 클라이언트는 발신자를 확인한 뒤에야
+// error를 신뢰할 수 있으므로, 1~2단계를 지나 리다이렉트하는 모든 응답에 함께 보낸다.
+func (h *Handler) redirectError(writer http.ResponseWriter, request *http.Request, redirect *url.URL, state, code string) {
 	values := redirect.Query()
 	values.Set("error", code)
+	values.Set("iss", h.service.config.Issuer)
 	if state != "" {
 		values.Set("state", state)
 	}

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -49,7 +51,7 @@ func TestTransportValidationOrder(t *testing.T) {
 			"params": map[string]any{
 				"name":      "graph_list",
 				"arguments": map[string]any{},
-				"_meta":     map[string]any{"io.modelcontextprotocol/protocolVersion": "2025-03-26"},
+				"_meta":     requestMeta("2025-03-26"),
 			},
 		}))
 		response := httptest.NewRecorder()
@@ -70,11 +72,11 @@ func TestTransportValidationOrder(t *testing.T) {
 		request.Header.Set("MCP-Protocol-Version", "2025-03-26")
 		request.Body = io.NopCloser(jsonBody(t, map[string]any{
 			"jsonrpc": "2.0", "id": 1, "method": "tools/list",
-			"params": map[string]any{"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": "2025-03-26"}},
+			"params": map[string]any{"_meta": requestMeta("2025-03-26")},
 		}))
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
-		assertRPCError(t, response, http.StatusBadRequest, -32019)
+		assertRPCError(t, response, http.StatusBadRequest, -32022)
 	})
 
 	t.Run("정의하지 않은 RPC 메서드는 404다", func(t *testing.T) {
@@ -93,7 +95,7 @@ func TestToolsListRequiresBearerTokenAndReturnsAllTools(t *testing.T) {
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("토큰 없는 요청 상태 = %d, want 401", response.Code)
 	}
-	const metadata = `Bearer resource_metadata="https://service.test/.well-known/oauth-protected-resource"`
+	const metadata = `Bearer resource_metadata="https://service.test/.well-known/oauth-protected-resource", scope="agent-context"`
 	if response.Header().Get("WWW-Authenticate") != metadata {
 		t.Fatalf("WWW-Authenticate = %q, want %q", response.Header().Get("WWW-Authenticate"), metadata)
 	}
@@ -109,14 +111,22 @@ func TestToolsListRequiresBearerTokenAndReturnsAllTools(t *testing.T) {
 		t.Fatalf("Bearer가 아닌 인증 헤더의 WWW-Authenticate = %q, want %q", response.Header().Get("WWW-Authenticate"), metadata)
 	}
 
+	// 제시된 토큰의 검증 실패도 401이다. OAuth 2.1이 유효하지 않은 접근 토큰에 그것을
+	// 요구하며, 도메인 결과로 내려보내면 응답이 HTTP 수준에서 성공으로 보여 표준
+	// 클라이언트가 재인증 흐름을 시작하지 못한다.
 	request = mcpRequest(t, "tools/list", map[string]any{})
 	request.Header.Set("Authorization", "Bearer invalid-token")
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("검증 실패 상태 = %d, want 200", response.Code)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("검증 실패 상태 = %d, want 401", response.Code)
 	}
-	assertDomainCode(t, response, "unauthenticated")
+	if response.Header().Get("WWW-Authenticate") != metadata {
+		t.Fatalf("검증 실패의 WWW-Authenticate = %q, want %q", response.Header().Get("WWW-Authenticate"), metadata)
+	}
+	if strings.Contains(response.Body.String(), "unauthenticated") {
+		t.Fatalf("인증 실패가 도메인 오류로도 실렸다: %s", response.Body.String())
+	}
 
 	request = mcpRequest(t, "tools/list", map[string]any{})
 	request.Header.Set("Authorization", "Bearer valid-token")
@@ -419,8 +429,29 @@ func TestMetadataDocuments(t *testing.T) {
 
 	authorization := httptest.NewRecorder()
 	server.AuthorizationServerMetadata(authorization, httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil))
-	if authorization.Code != http.StatusOK || !bytes.Contains(authorization.Body.Bytes(), []byte(`"issuer":"https://issuer.test"`)) {
+	if authorization.Code != http.StatusOK {
 		t.Fatalf("인가 서버 문서 = %d, %s", authorization.Code, authorization.Body.String())
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(authorization.Body.Bytes(), &metadata); err != nil {
+		t.Fatalf("인가 서버 문서 해석: %v", err)
+	}
+	if metadata["issuer"] != "https://issuer.test" {
+		t.Fatalf("issuer = %#v", metadata["issuer"])
+	}
+	// 생략하면 RFC 8414가 client_secret_basic을 기본값으로 가정하게 둔다. 이 서버는
+	// 공개 클라이언트만 받으므로 그 가정이 남으면 클라이언트가 없는 비밀을 찾는다.
+	methods, ok := metadata["token_endpoint_auth_methods_supported"].([]any)
+	if !ok || len(methods) != 1 || methods[0] != "none" {
+		t.Fatalf("token_endpoint_auth_methods_supported = %#v, want [none]", metadata["token_endpoint_auth_methods_supported"])
+	}
+	// 싣기만 하고 선언하지 않으면 클라이언트가 iss 없는 응답도 정상으로 받아들인다.
+	if metadata["authorization_response_iss_parameter_supported"] != true {
+		t.Fatalf("authorization_response_iss_parameter_supported = %#v, want true", metadata["authorization_response_iss_parameter_supported"])
+	}
+	scopes, ok := metadata["scopes_supported"].([]any)
+	if !ok || len(scopes) != 1 || scopes[0] != Scope {
+		t.Fatalf("scopes_supported = %#v, want [%s]", metadata["scopes_supported"], Scope)
 	}
 }
 
@@ -433,8 +464,17 @@ func testServer(t *testing.T, call CallFunc) *Server {
 	if err != nil {
 		t.Fatalf("계정 ID 생성: %v", err)
 	}
-	server, err := New(Config{ResourceURL: resource, AuthorizationServerURL: issuer, AllowedOrigins: []*url.URL{origin}}, func(_ context.Context, token, audience string) (model.ID, error) {
-		if token != "valid-token" || audience != resource.String() {
+	server, err := New(Config{
+		ResourceURL:            resource,
+		AuthorizationServerURL: issuer,
+		AllowedOrigins:         []*url.URL{origin},
+		ServerInfo:             Implementation{Name: "agent-context", Version: "0.1.0"},
+	}, func(_ context.Context, token, audience string) (model.ID, error) {
+		switch {
+		case token == "unavailable-token":
+			// 자격 증명이 아니라 검증을 끝내지 못한 경우다. 401로 답하면 안 된다.
+			return model.ID{}, errVerificationUnavailable
+		case token != "valid-token" || audience != resource.String():
 			return model.ID{}, errUnauthorized
 		}
 		return accountID, nil
@@ -465,7 +505,7 @@ func newTestID(t *testing.T) string {
 
 func mcpRequest(t *testing.T, method string, params map[string]any) *http.Request {
 	t.Helper()
-	params["_meta"] = map[string]any{"io.modelcontextprotocol/protocolVersion": ProtocolVersion}
+	params["_meta"] = requestMeta(ProtocolVersion)
 	payload := map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
 	request := httptest.NewRequest(http.MethodPost, "/mcp", jsonBody(t, payload))
 	request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
@@ -543,11 +583,12 @@ func assertDomainFieldAbsent(t *testing.T, response *httptest.ResponseRecorder, 
 	}
 }
 
-var errUnauthorized = &unauthorizedError{}
+// errUnauthorized는 제시한 자격 증명 자체가 유효하지 않은 경우다. 검증 함수를 채우는
+// 쪽이 그렇듯 ErrUnauthenticated로 감싸 전송 계층이 401로 옮길 수 있게 한다.
+var errUnauthorized = fmt.Errorf("%w: 서명 불일치", ErrUnauthenticated)
 
-type unauthorizedError struct{}
-
-func (*unauthorizedError) Error() string { return "unauthenticated" }
+// errVerificationUnavailable은 자격 증명의 문제가 아니라 검증을 끝내지 못한 경우다.
+var errVerificationUnavailable = errors.New("폐기 목록 조회 실패")
 
 // TestRequestIDMustBeStringOrNumber는 JSON-RPC 요청 식별자를 문자열이나 숫자로 제한하는지
 // 확인한다. 받아 주면 결과에 "id":null을 실어 클라이언트가 응답을 요청과 잇지 못한다.
@@ -564,7 +605,7 @@ func TestRequestIDMustBeStringOrNumber(t *testing.T) {
 	} {
 		payload := map[string]any{
 			"jsonrpc": "2.0", "method": "tools/list",
-			"params": map[string]any{"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": ProtocolVersion}},
+			"params": map[string]any{"_meta": requestMeta(ProtocolVersion)},
 		}
 		if id != nil {
 			payload["id"] = id
@@ -589,7 +630,7 @@ func TestRequestIDMustBeStringOrNumber(t *testing.T) {
 	for _, id := range []any{"call-1", float64(7)} {
 		payload := map[string]any{
 			"jsonrpc": "2.0", "id": id, "method": "tools/list",
-			"params": map[string]any{"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": ProtocolVersion}},
+			"params": map[string]any{"_meta": requestMeta(ProtocolVersion)},
 		}
 		request := httptest.NewRequest(http.MethodPost, "/mcp", jsonBody(t, payload))
 		request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
@@ -600,4 +641,221 @@ func TestRequestIDMustBeStringOrNumber(t *testing.T) {
 			t.Fatalf("식별자 %v를 거부했다: %s", id, recorder.Body.String())
 		}
 	}
+}
+
+// requestMeta는 규약이 요청마다 요구하는 필수 메타데이터를 만든다. 기능 선언은 빈
+// 객체여도 유효하며, 이 서비스의 연산은 어느 클라이언트 기능도 요구하지 않는다.
+func requestMeta(protocolVersion string) map[string]any {
+	return map[string]any{
+		"io.modelcontextprotocol/protocolVersion":    protocolVersion,
+		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+	}
+}
+
+// TestParseAndMetadataFailuresUseDistinctCodes는 본문 해석 실패, 필수 메타데이터 누락과
+// 헤더 불일치가 서로 다른 코드로 갈리는지 확인한다.
+//
+// 세 코드가 각각 다른 수정을 가리킨다. 해석 불가를 -32020으로 답하면 본문을 읽지도
+// 못한 상태에서 클라이언트가 헤더를 고치려 든다.
+func TestParseAndMetadataFailuresUseDistinctCodes(t *testing.T) {
+	server := testServer(t, nil)
+
+	t.Run("손상된 JSON은 Parse error다", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,`))
+		request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
+		request.Header.Set("Mcp-Method", "tools/list")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		assertRPCError(t, response, http.StatusBadRequest, -32700)
+	})
+
+	for name, meta := range map[string]map[string]any{
+		"protocolVersion 누락":    {"io.modelcontextprotocol/clientCapabilities": map[string]any{}},
+		"clientCapabilities 누락": {"io.modelcontextprotocol/protocolVersion": ProtocolVersion},
+		"_meta 자체가 없음":          nil,
+	} {
+		t.Run(name+"은 Invalid params다", func(t *testing.T) {
+			params := map[string]any{}
+			if meta != nil {
+				params["_meta"] = meta
+			}
+			payload := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": params}
+			request := httptest.NewRequest(http.MethodPost, "/mcp", jsonBody(t, payload))
+			request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
+			request.Header.Set("Mcp-Method", "tools/list")
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			// protocolVersion이 빠지면 헤더 대조가 먼저 걸리므로 두 코드 모두 허용한다.
+			if name == "protocolVersion 누락" || name == "_meta 자체가 없음" {
+				assertRPCError(t, response, http.StatusBadRequest, -32020)
+				return
+			}
+			assertRPCError(t, response, http.StatusBadRequest, -32602)
+		})
+	}
+}
+
+// TestUnsupportedVersionUsesReservedCode는 미지원 버전이 규약이 확정한 코드로 나가는지
+// 확인한다. -32000~-32019는 legacy 구간이라 표준 클라이언트가 재협상하지 않는다.
+func TestUnsupportedVersionUsesReservedCode(t *testing.T) {
+	server := testServer(t, nil)
+	request := mcpRequest(t, "tools/list", map[string]any{})
+	request.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	request.Body = io.NopCloser(jsonBody(t, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+		"params": map[string]any{"_meta": requestMeta("2025-11-25")},
+	}))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	assertRPCError(t, response, http.StatusBadRequest, -32022)
+
+	var payload struct {
+		Error struct {
+			Data struct {
+				Supported []string `json:"supported"`
+				Requested string   `json:"requested"`
+			} `json:"data"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("오류 응답 해석: %v", err)
+	}
+	if len(payload.Error.Data.Supported) != 1 || payload.Error.Data.Supported[0] != ProtocolVersion {
+		t.Fatalf("지원 목록 = %#v, want [%s]", payload.Error.Data.Supported, ProtocolVersion)
+	}
+	if payload.Error.Data.Requested != "2025-11-25" {
+		t.Fatalf("요청 버전 = %q, want 2025-11-25", payload.Error.Data.Requested)
+	}
+}
+
+// TestServerDiscoverAnnouncesVersionAndCapabilities는 규약이 필수로 요구한
+// `server/discover`가 지원 revision과 기능을 알리는지 확인한다.
+//
+// 인증보다 앞에 두는 것도 함께 본다. 클라이언트가 인가를 받기 전에 버전을 확인하는 것이
+// 이 메서드의 목적이며, 담는 값에 계정이나 컨텍스트가 없다.
+func TestServerDiscoverAnnouncesVersionAndCapabilities(t *testing.T) {
+	server := testServer(t, nil)
+	request := mcpRequest(t, "server/discover", map[string]any{})
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("server/discover 상태 = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	result := decodeResult(t, response)
+	versions, ok := result["supportedVersions"].([]any)
+	if !ok || len(versions) != 1 || versions[0] != ProtocolVersion {
+		t.Fatalf("supportedVersions = %#v, want [%s]", result["supportedVersions"], ProtocolVersion)
+	}
+	capabilities, ok := result["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("capabilities = %#v", result["capabilities"])
+	}
+	if _, found := capabilities["tools"]; !found {
+		t.Fatalf("tools 기능을 알리지 않았다: %#v", capabilities)
+	}
+	assertCacheHints(t, result, 3600000)
+}
+
+// TestResultsCarryEnvelope는 모든 결과가 규약의 응답 외피를 갖는지 확인한다.
+//
+// `resultType`이 빠지면 클라이언트가 해석을 시작하지 못하거나 예전 판의 응답으로
+// 취급한다. 결과마다 붙이므로 한 연산이라도 빠지면 안 된다.
+func TestResultsCarryEnvelope(t *testing.T) {
+	server := testServer(t, func(context.Context, model.ID, string, map[string]any) (ToolResult, error) {
+		return ToolResult{Content: []Content{{Type: "text", Text: "ok"}}}, nil
+	})
+	requests := map[string]*http.Request{
+		"server/discover": mcpRequest(t, "server/discover", map[string]any{}),
+		"tools/list":      mcpRequest(t, "tools/list", map[string]any{}),
+		"tools/call":      toolCallRequest(t, "graph_list", map[string]any{}),
+	}
+	for name, request := range requests {
+		t.Run(name, func(t *testing.T) {
+			request.Header.Set("Authorization", "Bearer valid-token")
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("상태 = %d: %s", response.Code, response.Body.String())
+			}
+			result := decodeResult(t, response)
+			if result["resultType"] != "complete" {
+				t.Fatalf("resultType = %#v, want complete", result["resultType"])
+			}
+			meta, ok := result["_meta"].(map[string]any)
+			if !ok {
+				t.Fatalf("_meta = %#v", result["_meta"])
+			}
+			info, ok := meta["io.modelcontextprotocol/serverInfo"].(map[string]any)
+			if !ok || info["name"] != "agent-context" || info["version"] != "0.1.0" {
+				t.Fatalf("serverInfo = %#v", meta["io.modelcontextprotocol/serverInfo"])
+			}
+		})
+	}
+}
+
+// TestToolsListCarriesCacheHints는 목록 결과가 규약이 요구한 캐시 힌트를 싣는지 확인한다.
+// cacheScope가 public인 이유는 도구 목록이 계정과 무관하기 때문이다.
+func TestToolsListCarriesCacheHints(t *testing.T) {
+	server := testServer(t, nil)
+	request := mcpRequest(t, "tools/list", map[string]any{})
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	assertCacheHints(t, decodeResult(t, response), 300000)
+}
+
+// TestVerificationFailureSeparatesCredentialFromOutage는 자격 증명 실패와 내부 장애가
+// 서로 다른 상태 코드로 갈리는지 확인한다.
+//
+// 장애를 401로 숨기면 클라이언트가 재인증하고 돌아와도 같은 자리에서 다시 막히고,
+// 실제 장애가 재인증 문제로 보여 관측과 장애 대응이 늦는다.
+func TestVerificationFailureSeparatesCredentialFromOutage(t *testing.T) {
+	server := testServer(t, nil)
+	request := mcpRequest(t, "tools/list", map[string]any{})
+	request.Header.Set("Authorization", "Bearer unavailable-token")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("내부 장애 상태 = %d, want 500: %s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("WWW-Authenticate") != "" {
+		t.Fatal("내부 장애에 재인증 도전을 보냈다")
+	}
+	assertRPCError(t, response, http.StatusInternalServerError, -32603)
+	// 실패한 조회의 원인은 응답에 담지 않는다.
+	if strings.Contains(response.Body.String(), "폐기 목록") {
+		t.Fatalf("내부 원인이 응답에 실렸다: %s", response.Body.String())
+	}
+}
+
+// decodeResult는 응답의 result 객체를 꺼낸다.
+func decodeResult(t *testing.T, response *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var payload struct {
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("결과 해석: %v; 본문 = %s", err, response.Body.String())
+	}
+	return payload.Result
+}
+
+// assertCacheHints는 규약이 요구한 캐시 힌트를 확인한다.
+func assertCacheHints(t *testing.T, result map[string]any, wantTTL float64) {
+	t.Helper()
+	ttl, ok := result["ttlMs"].(float64)
+	if !ok || ttl != wantTTL {
+		t.Fatalf("ttlMs = %#v, want %v", result["ttlMs"], wantTTL)
+	}
+	if result["cacheScope"] != "public" {
+		t.Fatalf("cacheScope = %#v, want public", result["cacheScope"])
+	}
+}
+
+// toolCallRequest는 헤더와 본문이 맞는 tools/call 요청을 만든다.
+func toolCallRequest(t *testing.T, name string, arguments map[string]any) *http.Request {
+	t.Helper()
+	request := mcpRequest(t, "tools/call", map[string]any{"name": name, "arguments": arguments})
+	request.Header.Set("Mcp-Name", name)
+	return request
 }

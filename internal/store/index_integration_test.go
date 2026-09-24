@@ -22,10 +22,10 @@ func TestIndexAndNonGraphSearchIntegration(t *testing.T) {
 	}
 	// 자기 작업만 앞으로 당기면 다른 테스트가 남긴 행이 더 앞선 시각일 때 그쪽이 먼저
 	// 잡힌다. readyIndexTasks가 나머지를 함께 미뤄 확보 순서를 고정한다.
-	readyIndexTasks(t, database, stored.ID)
+	readyIndexTasks(t, database, graphID, stored.ID)
 	vector := make([]float64, 1024)
 	vector[0] = 1
-	processed, err := database.ProcessNextIndexTask(t.Context(), func(_ context.Context, task IndexTask) IndexTaskResult {
+	processed, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(_ context.Context, task IndexTask) IndexTaskResult {
 		if task.ContextID != stored.ID || task.Body != stored.Body {
 			t.Fatalf("색인 작업 = %+v", task)
 		}
@@ -158,7 +158,7 @@ func TestIndexTaskClaimConcurrency(t *testing.T) {
 		}
 		targets = append(targets, stored.ID)
 	}
-	readyIndexTasks(t, database, targets...)
+	readyIndexTasks(t, database, graphID, targets...)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
@@ -168,7 +168,7 @@ func TestIndexTaskClaimConcurrency(t *testing.T) {
 	failures := make(chan error, 2)
 	var group sync.WaitGroup
 	claim := func() {
-		result, err := database.ProcessNextIndexTask(ctx, func(_ context.Context, task IndexTask) IndexTaskResult {
+		result, err := database.ProcessNextIndexTaskInGraph(ctx, graphID, func(_ context.Context, task IndexTask) IndexTaskResult {
 			started <- task.ContextID
 			<-release
 			return IndexTaskResult{Failure: "동시 확보 확인", Retryable: true}
@@ -220,11 +220,11 @@ func TestReindexExcludesAndReplacesOutdatedModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("재색인 대상 생성: %v", err)
 	}
-	readyIndexTasks(t, database, stored.ID)
+	readyIndexTasks(t, database, graphID, stored.ID)
 	vector := make([]float64, 1024)
 	vector[0] = 1
 	const currentModel = "current:vector:1024"
-	if _, err := database.ProcessNextIndexTask(t.Context(), func(context.Context, IndexTask) IndexTaskResult {
+	if _, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(context.Context, IndexTask) IndexTaskResult {
 		return IndexTaskResult{Embedding: vector, ModelID: currentModel}
 	}); err != nil {
 		t.Fatalf("현재 모델 색인: %v", err)
@@ -250,8 +250,8 @@ func TestReindexExcludesAndReplacesOutdatedModel(t *testing.T) {
 	if count := indexTaskCount(t, database, stored.ID); count != 1 {
 		t.Fatalf("재색인 작업 수 = %d, want 1", count)
 	}
-	readyIndexTasks(t, database, stored.ID)
-	if _, err := database.ProcessNextIndexTask(t.Context(), func(context.Context, IndexTask) IndexTaskResult {
+	readyIndexTasks(t, database, graphID, stored.ID)
+	if _, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(context.Context, IndexTask) IndexTaskResult {
 		return IndexTaskResult{Embedding: vector, ModelID: currentModel}
 	}); err != nil {
 		t.Fatalf("재색인 처리: %v", err)
@@ -275,9 +275,9 @@ func TestIndexRetryAndImmediateFailureIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("재시도 대상 생성: %v", err)
 	}
-	readyIndexTasks(t, database, stored.ID)
+	readyIndexTasks(t, database, graphID, stored.ID)
 	before := time.Now().UTC()
-	processed, err := database.ProcessNextIndexTask(t.Context(), func(context.Context, IndexTask) IndexTaskResult {
+	processed, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(context.Context, IndexTask) IndexTaskResult {
 		return IndexTaskResult{Failure: "임베딩 제공자 호출 실패", Retryable: true}
 	})
 	if err != nil {
@@ -295,7 +295,7 @@ func TestIndexRetryAndImmediateFailureIntegration(t *testing.T) {
 	if _, err := database.pool.Exec(t.Context(), query, stored.ID.String()); err != nil {
 		t.Fatalf("다섯 번째 시도 준비: %v", err)
 	}
-	processed, err = database.ProcessNextIndexTask(t.Context(), func(context.Context, IndexTask) IndexTaskResult {
+	processed, err = database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(context.Context, IndexTask) IndexTaskResult {
 		return IndexTaskResult{Failure: "임베딩 제공자 호출 실패", Retryable: true}
 	})
 	if err != nil {
@@ -313,7 +313,7 @@ func TestIndexRetryAndImmediateFailureIntegration(t *testing.T) {
 	if _, err := database.pool.Exec(t.Context(), query, stored.ID.String()); err != nil {
 		t.Fatalf("차원 실패 시도 준비: %v", err)
 	}
-	processed, err = database.ProcessNextIndexTask(t.Context(), func(context.Context, IndexTask) IndexTaskResult {
+	processed, err = database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(context.Context, IndexTask) IndexTaskResult {
 		return IndexTaskResult{Failure: "임베딩 차원이 다르다", Retryable: false}
 	})
 	if err != nil {
@@ -353,15 +353,21 @@ func indexTaskState(t *testing.T, store *Store, contextID model.ID) indexTaskSta
 // 작업자는 그래프를 가리지 않고 가장 오래된 대기 작업을 가져가므로, 다른 테스트나 이전
 // 실행이 남긴 대기 작업이 있으면 이 테스트가 남의 작업을 확보한다. 대상이 아닌 대기 작업을
 // 뒤로 밀어 확보 대상을 하나로 고정한다.
-func readyIndexTasks(t *testing.T, store *Store, contextIDs ...model.ID) {
+// readyIndexTasks는 한 그래프 안에서 지정한 작업만 지금 확보되게 한다.
+//
+// 미루기를 그래프로 좁히는 것이 중요하다. 예전에는 조건 없이 나머지 대기 작업을 모두 한
+// 시간 미뤘는데, 색인 큐는 `graph_id`로 나뉘지 않는 유일한 공유 자원이라 그 UPDATE가 다른
+// 테스트의 행까지 밀어 「테스트 사이의 격리」를 깼다. 같은 그래프 안의 경쟁은 여전히
+// 막아야 하므로 범위만 좁히고 미루기 자체는 남긴다.
+func readyIndexTasks(t *testing.T, store *Store, graphID model.ID, contextIDs ...model.ID) {
 	t.Helper()
 	targets := make([]string, 0, len(contextIDs))
 	for _, contextID := range contextIDs {
 		targets = append(targets, contextID.String())
 	}
-	postpone := "UPDATE public.index_task SET next_attempt_at = now() + interval '1 hour' WHERE state = 'pending' AND NOT (context_id = ANY($1))"
-	if _, err := store.pool.Exec(t.Context(), postpone, targets); err != nil {
-		t.Fatalf("다른 색인 작업 미루기: %v", err)
+	postpone := "UPDATE public.index_task SET next_attempt_at = now() + interval '1 hour' WHERE state = 'pending' AND graph_id = $1 AND NOT (context_id = ANY($2))"
+	if _, err := store.pool.Exec(t.Context(), postpone, graphID.String(), targets); err != nil {
+		t.Fatalf("같은 그래프의 다른 색인 작업 미루기: %v", err)
 	}
 	ready := "UPDATE public.index_task SET enqueued_at = to_timestamp(-3000000000), next_attempt_at = to_timestamp(-3000000000) WHERE context_id = ANY($1)"
 	if _, err := store.pool.Exec(t.Context(), ready, targets); err != nil {

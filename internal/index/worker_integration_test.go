@@ -51,7 +51,7 @@ func TestWorkerProposesSimilarEventRelationsAfterIndexIntegration(t *testing.T) 
 	}
 	focusIndexQueue(t, databaseURL, graphID)
 	for range 100 {
-		processed, err := worker.RunOnce(t.Context())
+		processed, err := worker.RunOnceInGraph(t.Context(), graphID)
 		if err != nil {
 			t.Fatalf("색인 작업 실행: %v", err)
 		}
@@ -81,13 +81,13 @@ func TestWorkerProposesSimilarEventRelationsAfterIndexIntegration(t *testing.T) 
 	t.Fatal("색인 성공 뒤 의미 관계 후보가 만들어지지 않았다")
 }
 
-// focusIndexQueue는 이 테스트의 그래프 작업만 확보 대상으로 남긴다.
+// focusIndexQueue는 이 테스트가 만든 대기 작업을 확보 가능한 상태로 두고 뒤에 지운다.
 //
-// 개발 데이터베이스를 공유하므로 다른 테스트가 남긴 대기 작업이 있고, 작업자는 그중 가장
-// 오래된 것을 집는다. 그대로 두면 이 테스트가 자기 작업 대신 남의 작업을 처리하다 회차를
-// 다 쓰고, 남은 행의 상태에 따라 통과와 실패가 갈린다. 나머지를 미루고 이 그래프의 작업만
-// 지난 시각으로 당겨 확보 순서를 고정한다. `internal/store`의 같은 이름 도우미와 방법이
-// 같으며, 미뤄 둔 행은 한 시간 뒤에 저절로 다시 대기가 된다.
+// 예전에는 다른 그래프의 대기 작업을 한 시간 미루고 자기 행만 지난 시각으로 당겨 확보
+// 순서를 고정했다. 색인 큐는 `graph_id`로 나뉘지 않는 유일한 공유 자원이라 그 UPDATE가
+// 다른 테스트의 행까지 밀어 「테스트 사이의 격리」를 깼고, 당겨 둔 자기 행은 반대로 다른
+// 패키지의 작업자가 가장 먼저 집어 갔다. 확보를 그래프로 좁히면 두 방향 모두 사라지므로
+// 남의 행을 건드리지 않는다.
 func focusIndexQueue(t *testing.T, databaseURL string, graphID model.ID) {
 	t.Helper()
 	connection, err := pgx.Connect(t.Context(), databaseURL)
@@ -103,13 +103,9 @@ func focusIndexQueue(t *testing.T, databaseURL string, graphID model.ID) {
 		}
 	})
 
-	const postpone = `UPDATE public.index_task SET next_attempt_at = now() + interval '1 hour' WHERE state = 'pending' AND graph_id <> $1`
-	if _, err := connection.Exec(t.Context(), postpone, graphID.String()); err != nil {
-		t.Fatalf("다른 색인 작업 미루기: %v", err)
-	}
-	const ready = `UPDATE public.index_task SET enqueued_at = to_timestamp(-3000000000), next_attempt_at = to_timestamp(-3000000000) WHERE graph_id = $1`
+	const ready = `UPDATE public.index_task SET next_attempt_at = now() WHERE graph_id = $1`
 	if _, err := connection.Exec(t.Context(), ready, graphID.String()); err != nil {
-		t.Fatalf("색인 작업 우선순위 설정: %v", err)
+		t.Fatalf("색인 작업 확보 가능 상태 설정: %v", err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"agent_context_sharing/internal/model"
 )
@@ -21,13 +22,28 @@ const (
 	ProtocolVersion = "2026-07-28"
 	// Scope는 모든 MCP 접근 토큰에 쓰는 단일 OAuth scope다.
 	Scope = "agent-context"
+	// cacheScopePublic은 계정과 무관한 결과에 쓰는 캐시 범위다.
+	cacheScopePublic = "public"
+	// toolsListTTL과 discoverTTL은 「MCP 표면」이 정한 캐시 힌트다. 두 값이 배포로만
+	// 바뀌므로 배포 주기보다 짧게 잡은 시작값이며 측정 근거는 아직 없다.
+	toolsListTTL = 5 * time.Minute
+	discoverTTL  = time.Hour
 )
+
+// ErrUnauthenticated는 제시한 자격 증명 자체가 유효하지 않다는 검증 결과다.
+//
+// 검증을 끝내지 못한 내부 장애와 나누려고 둔다. 「토큰 검증」이 확정한 대로 전자는 401로
+// 재인증을 요구하고 후자는 500으로 답하며, 후자를 401로 숨기면 클라이언트가 재인증하고
+// 돌아와도 같은 자리에서 다시 막힌다. VerifyFunc를 채우는 쪽이 이 오류로 감싼다.
+var ErrUnauthenticated = errors.New("unauthenticated")
 
 // Config는 MCP 리소스 서버의 고정된 공개 경계를 모은다.
 type Config struct {
 	ResourceURL            *url.URL
 	AuthorizationServerURL *url.URL
 	AllowedOrigins         []*url.URL
+	// ServerInfo는 규약이 모든 결과의 `_meta`에 싣도록 권고한 구현 식별 정보다.
+	ServerInfo Implementation
 }
 
 // VerifyFunc는 Bearer 토큰을 검증하고 요청 계정을 돌려준다.
@@ -71,6 +87,9 @@ func New(config Config, verify VerifyFunc, call CallFunc) (*Server, error) {
 	if config.ResourceURL == nil || config.AuthorizationServerURL == nil || verify == nil {
 		return nil, fmt.Errorf("MCP 서버 구성이 올바르지 않다")
 	}
+	if config.ServerInfo.Name == "" || config.ServerInfo.Version == "" {
+		return nil, fmt.Errorf("MCP 서버 식별 정보가 필요하다")
+	}
 	if !validResourceURL(config.ResourceURL) || !validOrigin(config.AuthorizationServerURL) || len(config.AllowedOrigins) == 0 {
 		return nil, fmt.Errorf("MCP 공개 URL 구성이 올바르지 않다")
 	}
@@ -100,8 +119,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	var message rpcRequest
+	// 본문을 해석하지 못한 것은 헤더와 본문이 어긋난 것과 다른 층이다. 「요청 처리 순서」의
+	// 1d가 이 경우를 JSON-RPC Parse Error로 분리했다. -32020으로 답하면 본문을 읽지도
+	// 못한 상태에서 클라이언트가 헤더를 고치려 든다.
 	if err := json.UnmarshalRead(request.Body, &message); err != nil {
-		s.writeRPCError(writer, http.StatusBadRequest, jsontext.Value("null"), -32600, "Invalid request", nil)
+		s.writeRPCError(writer, http.StatusBadRequest, jsontext.Value("null"), -32700, "Parse error", nil)
 		return
 	}
 	// JSON-RPC 2.0은 요청의 id를 문자열이나 숫자로 정하고, id가 없는 것은 알림이다.
@@ -115,11 +137,17 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.writeRPCError(writer, http.StatusBadRequest, message.ID, -32020, "Header mismatch", nil)
 		return
 	}
-	if protocolVersion != ProtocolVersion {
-		s.writeRPCError(writer, http.StatusBadRequest, message.ID, -32019, "Unsupported protocol version", map[string]any{"supported": []string{ProtocolVersion}})
+	// 1f다. 해석은 되었으나 필수 메타데이터가 빠진 것은 파라미터 문제이므로 Invalid params다.
+	// 값의 내용은 보지 않고 선언 여부만 본다. 빈 객체도 유효한 기능 선언이다.
+	if !message.Params.Meta.declared() {
+		s.writeRPCError(writer, http.StatusBadRequest, message.ID, -32602, "Invalid params", map[string]any{"missing": message.Params.Meta.missing()})
 		return
 	}
-	if !slices.Contains([]string{"tools/list", "tools/call"}, method) {
+	if protocolVersion != ProtocolVersion {
+		s.writeRPCError(writer, http.StatusBadRequest, message.ID, -32022, "Unsupported protocol version", map[string]any{"supported": []string{ProtocolVersion}, "requested": protocolVersion})
+		return
+	}
+	if !slices.Contains([]string{"server/discover", "tools/list", "tools/call"}, method) {
 		s.writeRPCError(writer, http.StatusNotFound, message.ID, -32601, "Method not found", nil)
 		return
 	}
@@ -127,19 +155,31 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.writeRPCError(writer, http.StatusBadRequest, message.ID, -32020, "Header mismatch", nil)
 		return
 	}
+	// `server/discover`는 인증보다 앞이다. 클라이언트가 인가를 받기 전에 버전과 기능을
+	// 확인하는 것이 이 메서드의 목적이며, 담는 값에 계정이나 컨텍스트가 없다.
+	if method == "server/discover" {
+		s.writeResult(writer, message.ID, discoverResult())
+		return
+	}
 
 	token := bearerToken(request)
 	if token == "" {
-		s.writeMissingToken(writer)
+		s.writeAuthenticationChallenge(writer)
 		return
 	}
 	accountID, err := s.verify(request.Context(), token, s.config.ResourceURL.String())
 	if err != nil {
-		s.writeResult(writer, message.ID, domainError("unauthenticated", nil))
+		// 자격 증명 실패와 내부 장애를 나눈다. 「토큰 검증」이 확정한 대로 재인증이
+		// 답이 아닌 실패에 401을 돌려주면 클라이언트가 같은 자리에서 다시 막힌다.
+		if errors.Is(err, ErrUnauthenticated) {
+			s.writeAuthenticationChallenge(writer)
+			return
+		}
+		s.writeRPCError(writer, http.StatusInternalServerError, message.ID, -32603, "Internal error", nil)
 		return
 	}
 	if method == "tools/list" {
-		s.writeResult(writer, message.ID, map[string]any{"tools": toolDefinitions()})
+		s.writeResult(writer, message.ID, listToolsResult())
 		return
 	}
 	if isWebOnlyTool(message.Params.Name) {
@@ -186,6 +226,13 @@ func (s *Server) AuthorizationServerMetadata(writer http.ResponseWriter, _ *http
 		"response_types_supported":         []string{"code"},
 		"grant_types_supported":            []string{"authorization_code"},
 		"code_challenge_methods_supported": []string{"S256"},
+		"scopes_supported":                 []string{Scope},
+		// 생략하면 RFC 8414가 client_secret_basic을 기본값으로 가정하게 둔다. 이 서버는
+		// 공개 클라이언트만 받으므로 선언하지 않으면 클라이언트가 없는 비밀을 찾는다.
+		"token_endpoint_auth_methods_supported": []string{"none"},
+		// 인가 응답에 iss를 싣는다는 사실을 알린다. 싣기만 하고 선언하지 않으면
+		// 클라이언트가 iss 없는 응답도 정상으로 받아들여 mix-up 방어가 성립하지 않는다.
+		"authorization_response_iss_parameter_supported": true,
 	})
 }
 
@@ -263,18 +310,54 @@ func (s *Server) writeRPCError(writer http.ResponseWriter, status int, id jsonte
 	s.writeJSON(writer, status, rpcErrorResponse{JSONRPC: "2.0", ID: id, Error: rpcError{Code: code, Message: message, Data: data}})
 }
 
+// writeResult는 결과를 규약의 응답 외피에 넣어 내보낸다.
+//
+// 「MCP 표면」이 모든 결과에 resultType과 서버 정보를 요구한다. 호출 지점마다 넣지 않고
+// 여기에서 한 번에 붙이는 이유는 빠뜨릴 자리를 없애기 위해서다. 이 서버는 다회 왕복을
+// 쓰지 않으므로 resultType은 언제나 complete다.
 func (s *Server) writeResult(writer http.ResponseWriter, id jsontext.Value, result any) {
-	s.writeJSON(writer, http.StatusOK, rpcResult{JSONRPC: "2.0", ID: id, Result: result})
+	envelope, err := s.envelope(result)
+	if err != nil {
+		s.writeRPCError(writer, http.StatusInternalServerError, id, -32603, "Internal error", nil)
+		return
+	}
+	s.writeJSON(writer, http.StatusOK, rpcResult{JSONRPC: "2.0", ID: id, Result: envelope})
 }
 
-// writeMissingToken은 보호 리소스 메타데이터 위치를 알려 클라이언트가 인가 서버를
-// 발견할 수 있게 한다. 유효한 Bearer 토큰이 제시되지 않았을 때 HTTP 인증 도전을 쓰고,
-// Bearer 형식으로 제시된 토큰의 검증 실패는 tools 결과의 unauthenticated로 분리한다.
-func (s *Server) writeMissingToken(writer http.ResponseWriter) {
+// envelope는 연산이 만든 결과의 필드 위에 규약의 공통 필드를 얹는다.
+//
+// 필드 값을 원시 JSON으로 다루는 이유는 다시 해석하지 않기 위해서다. Go 값으로 되돌려
+// 담으면 정수가 부동소수점을 거치며 표현이 바뀔 수 있는데, `ttlMs`처럼 규약이 정수로
+// 정한 값에서 그 변환을 만들 이유가 없다.
+func (s *Server) envelope(result any) (map[string]jsontext.Value, error) {
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	fields := make(map[string]jsontext.Value)
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	meta, err := json.Marshal(resultMeta{ServerInfo: s.config.ServerInfo})
+	if err != nil {
+		return nil, err
+	}
+	fields["resultType"] = jsontext.Value(`"complete"`)
+	fields["_meta"] = meta
+	return fields, nil
+}
+
+// writeAuthenticationChallenge는 보호 리소스 메타데이터 위치와 필요한 scope를 알려
+// 클라이언트가 인가 서버를 발견하고 재인증을 시작할 수 있게 한다.
+//
+// 토큰이 없는 경우와 제시한 토큰의 검증이 실패한 경우를 같은 응답으로 다룬다. OAuth 2.1이
+// 유효하지 않은 접근 토큰에 401을 요구하며, 도메인 결과로 내려보내면 응답이 HTTP 수준에서
+// 성공으로 보여 표준 클라이언트와 중간 장치가 재인증 흐름을 시작하지 못한다.
+func (s *Server) writeAuthenticationChallenge(writer http.ResponseWriter) {
 	metadataURL := s.config.ResourceURL.Clone()
 	metadataURL.Path = "/.well-known/oauth-protected-resource"
 	metadataURL.RawPath = ""
-	writer.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata=%q`, metadataURL.String()))
+	writer.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata=%q, scope=%q`, metadataURL.String(), Scope))
 	writer.WriteHeader(http.StatusUnauthorized)
 }
 
@@ -296,8 +379,10 @@ func domainError(code string, data map[string]any) ToolResult {
 }
 
 func validDomainCode(code string) bool {
+	// 인증 실패는 이 목록에 없다. 「오류 코드」가 그것을 도메인 결과가 아니라 전송
+	// 계층의 401로 확정했으므로 tools 결과로 나갈 경로가 없다.
 	return slices.Contains([]string{
-		"unauthenticated", "permission_denied", "not_found", "invalid_argument",
+		"permission_denied", "not_found", "invalid_argument",
 		"version_conflict", "limit_exceeded", "result_truncated", "not_supported", "internal",
 	}, code)
 }
@@ -338,8 +423,30 @@ type rpcParams struct {
 	Meta      rpcMeta        `json:"_meta"`
 }
 
+// rpcMeta는 규약이 요청마다 요구하는 per-request 메타데이터를 담는다.
+//
+// 규약이 세션을 두지 않으므로 protocol revision과 클라이언트 기능이 요청마다 실린다.
+// ClientCapabilities를 문자열이나 구조체가 아니라 원시 JSON으로 받는 이유는 이 서버가
+// 값을 해석하지 않기 때문이다. 확인할 것은 선언 여부뿐이고, 빈 객체도 유효한 선언이다.
 type rpcMeta struct {
-	ProtocolVersion string `json:"io.modelcontextprotocol/protocolVersion"`
+	ProtocolVersion    string         `json:"io.modelcontextprotocol/protocolVersion"`
+	ClientCapabilities jsontext.Value `json:"io.modelcontextprotocol/clientCapabilities"`
+}
+
+// declared는 필수 메타데이터가 모두 실렸는지 본다.
+func (meta rpcMeta) declared() bool { return len(meta.missing()) == 0 }
+
+// missing은 빠진 필수 메타데이터 키를 돌려준다. 클라이언트가 무엇을 더해야 하는지
+// 알 수 있도록 오류의 부가 정보로 그대로 실린다.
+func (meta rpcMeta) missing() []string {
+	missing := make([]string, 0, 2)
+	if meta.ProtocolVersion == "" {
+		missing = append(missing, "io.modelcontextprotocol/protocolVersion")
+	}
+	if len(meta.ClientCapabilities) == 0 {
+		missing = append(missing, "io.modelcontextprotocol/clientCapabilities")
+	}
+	return missing
 }
 
 type rpcErrorResponse struct {
@@ -355,9 +462,46 @@ type rpcError struct {
 }
 
 type rpcResult struct {
-	JSONRPC string         `json:"jsonrpc"`
-	ID      jsontext.Value `json:"id"`
-	Result  any            `json:"result"`
+	JSONRPC string                    `json:"jsonrpc"`
+	ID      jsontext.Value            `json:"id"`
+	Result  map[string]jsontext.Value `json:"result"`
+}
+
+type resultMeta struct {
+	ServerInfo Implementation `json:"io.modelcontextprotocol/serverInfo"`
+}
+
+// Implementation은 규약이 정한 구현 식별 정보다. 표시와 진단에만 쓰이며 판정 근거가
+// 되지 않는다.
+type Implementation struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// discoverResult는 `server/discover`가 알릴 지원 revision과 기능을 만든다.
+//
+// 이 서버는 `tools`만 제공하므로 기능 선언도 그 하나다. 빈 객체는 추가 설정 없이
+// 지원한다는 뜻이다.
+func discoverResult() map[string]any {
+	return map[string]any{
+		"supportedVersions": []string{ProtocolVersion},
+		"capabilities":      map[string]any{"tools": map[string]any{}},
+		"ttlMs":             discoverTTL.Milliseconds(),
+		"cacheScope":        cacheScopePublic,
+	}
+}
+
+// listToolsResult는 도구 목록과 규약이 요구하는 캐시 힌트를 함께 만든다.
+//
+// cacheScope가 public인 이유는 목록이 계정과 무관하기 때문이다. 「MCP 연산 매핑」이
+// 연산 13종을 고정했으므로 어느 토큰으로 물어도 같은 목록이 나오고, 공유 캐시가 이를
+// 다른 호출자에게 돌려줘도 새어 나갈 것이 없다.
+func listToolsResult() map[string]any {
+	return map[string]any{
+		"tools":      toolDefinitions(),
+		"ttlMs":      toolsListTTL.Milliseconds(),
+		"cacheScope": cacheScopePublic,
+	}
 }
 
 type toolDefinition struct {

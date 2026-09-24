@@ -40,7 +40,7 @@ func TestIndexProviderCallDoesNotBlockSavesIntegration(t *testing.T) {
 			t.Errorf("색인 작업 정리: %v", err)
 		}
 	})
-	readyIndexTasks(t, database, target.ID)
+	readyIndexTasks(t, database, graphID, target.ID)
 
 	const providerDelay = 2 * time.Second
 	saved := make(chan time.Duration, 1)
@@ -68,7 +68,7 @@ func TestIndexProviderCallDoesNotBlockSavesIntegration(t *testing.T) {
 		return IndexTaskResult{Embedding: embedding, ModelID: "lease-test"}
 	}
 
-	result, err := database.ProcessNextIndexTask(t.Context(), processor)
+	result, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, processor)
 	if err != nil {
 		t.Fatalf("색인 작업 처리: %v", err)
 	}

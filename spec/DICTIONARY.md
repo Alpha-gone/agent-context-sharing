@@ -115,6 +115,7 @@
 | SDD               | 확정된 요구사항을 아키텍처, 인터페이스, 데이터와 처리 흐름으로 구체화한 상세 설계 문서다.                | `spec/service/{서비스 경로}/SDD.md`                                                                                                  |
 | SBOM              | 소프트웨어를 구성하는 패키지와 라이선스 등의 목록을 기계가 읽을 수 있는 형식으로 나타낸 산출물이다.       | 배포 실행 파일의 구성 요소를 추적하고 취약점·라이선스 검토에 사용한다. `NFR-AGENT_CONTEXT_CLIENT-015`이 제공을 요구한다.             |
 | SRS               | 서비스의 기능·비기능 요구사항, 정책, 제약과 미정 사항을 정의하는 요구사항 명세 문서다.                   | `spec/service/{서비스 경로}/SRS.md`                                                                                                  |
+| WSL2              | Windows에서 Linux 커널 환경을 실행하는 Windows Subsystem for Linux 2다.                                  | 에이전트 컨텍스트 MCP 클라이언트의 Windows 공식 실행 환경은 Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상이며, 브라우저 인가와 loopback callback은 Windows 호스트와 함께 검증한다. |
 | `server/discover` | MCP `2026-07-28` 서버가 지원 protocol revision, capability와 식별 정보를 알리는 lifecycle RPC다.         | 애플리케이션 primitive와 구분한다. 클라이언트의 호스트·원격 경계 처리 규칙은 `FR-AGENT_CONTEXT_CLIENT-027`이 정의한다.                 |
 | 명세 문서         | 서비스 요구사항, 설계, 계약처럼 프로젝트의 지속적인 사실을 기록하는 문서다.                              | `spec/`에 보관한다.                                                                                                                  |
 | 미정 사항         | 답이 정해지지 않아 선택에 따라 결과가 달라지는 항목이다.                                                 | 요구사항 수준은 `SRS.md`가, 설계 선택 수준은 `SDD.md`가 소유하며 `README.md`가 둘을 합쳐 보여준다.                                   |

@@ -29,6 +29,7 @@
 | 구현 언어 | Go `1.27.1` |
 | MCP 구현 | MCP `2026-07-28`을 지원하는 공식 MCP Go SDK |
 | 저장소 배치 | 이 저장소의 루트 Go 모듈 안에 서버와 분리된 실행 파일로 배치하고 세부 명령·패키지 경계는 SDD에서 확정 |
+| 지원 운영체제 판 | Apple 보안 업데이트 대상인 macOS 14 Sonoma 이상, Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상 또는 Debian Security·LTS 지원 기간인 Debian 12 이상, Microsoft 지원 기간인 Windows 11 25H2 이상에서 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상 실행 |
 | 첫 지원 에이전트 호스트 | Codex CLI `0.156.1` |
 | 호스트 연결 | 표준 입출력을 사용하는 MCP `stdio` transport |
 | 호스트 프로토콜 기능 | Codex `config.toml`에서 `features.mcp_2026_07_28`을 활성화 |
@@ -239,7 +240,7 @@
 | `NFR-AGENT_CONTEXT_CLIENT-006` | 동시성 | 동시 호출, 토큰 갱신과 재인증이 요청 상관관계와 자격 증명 상태를 손상해서는 안 된다. | 100개 동시 호출과 겹친 갱신·인증 테스트에서 응답 혼선, data race와 중복 브라우저 인가가 없다. | 검토 필요 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-007` | 지연 | 인증이 필요하지 않은 중계가 원격 왕복을 제외하고 과도한 지연을 추가해서는 안 된다. | 준비된 프로세스와 루프백 모의 서버에서 1KiB 요청·응답 100개를 동시에 중계할 때 클라이언트 자체 처리 시간 p95가 50ms 이하이다. | 검토 필요 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-008` | 장애 격리 | 한 요청의 취소·오류·잘못된 응답이 다른 진행 중 요청이나 인증 상태를 실패시켜서는 안 된다. | 오류 주입 테스트에서 영향이 해당 요청에 한정되고 프로세스는 후속 정상 요청을 처리한다. | 검토 필요 | 제품 기준선 |
-| `NFR-AGENT_CONTEXT_CLIENT-009` | 이식성 | 클라이언트는 macOS, Linux와 Windows에서 같은 구성·인가·도구 계약을 제공해야 한다. | 각 운영체제의 지원 대상 버전에서 시작, 브라우저 인가, 도구 목록과 대표 읽기·쓰기 호출을 검증한다. | 검토 필요 | 제품 기준선 |
+| `NFR-AGENT_CONTEXT_CLIENT-009` | 이식성 | 클라이언트는 Apple 보안 업데이트 대상인 macOS 14 Sonoma 이상, Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상 또는 Debian Security·LTS 지원 기간인 Debian 12 이상, Microsoft 지원 기간인 Windows 11 25H2 이상에서 같은 구성·인가·도구 계약을 제공해야 한다. Windows에서는 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상을 공식 실행 환경으로 사용한다. | 출시 시점에 지원 기간 안에 있는 각 최소 판에서 시작, 브라우저 인가, loopback callback, 도구 목록과 대표 읽기·쓰기 호출을 검증한다. Windows는 Windows 호스트와 WSL2 게스트 사이의 브라우저·loopback 경로를 함께 검증한다. | 검토 필요 | 제품 기준선, Codex CLI 설치 요구사항, Go 최소 요구사항, 운영체제 수명 주기 |
 | `NFR-AGENT_CONTEXT_CLIENT-010` | 관측 가능성 | 클라이언트는 비밀과 본문 없이 기동, 인증 단계, 원격 호출, 재시도, 취소와 종료를 진단할 수 있어야 한다. | 구조화 로그가 시각, 수준, 요청 상관 식별자, 도구 이름, 결과 범주와 지연을 포함한다. | 검토 필요 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-011` | 복구 가능성 | 클라이언트는 영속 런타임 상태 없이 재시작만으로 깨끗한 상태에서 복구할 수 있어야 한다. | 강제 종료 뒤 재실행하면 새 인증을 요구하고 이전 요청·토큰·콜백을 재사용하지 않는다. | 검토 필요 | agent-context `NFR-AGENT_CONTEXT-012`, `-013` |
 | `NFR-AGENT_CONTEXT_CLIENT-012` | 검증 가능성 | 인증, 도구 13종, 오류, 응답 보존, 재시도와 비밀 비노출을 자동화된 계약 테스트로 반복 검증할 수 있어야 한다. | 모의 인가·MCP 서버 테스트와 실제 agent-context 서버 통합 테스트가 분리되어 실행되며, 호스트 내부 기능이 추가되어도 공개 도구 수와 `context_flow_get` 중계 계약의 회귀를 탐지한다. | 검토 필요 | 제품 기준선, agent-context `FR-AGENT_CONTEXT-150`~`FR-AGENT_CONTEXT-154` |
@@ -330,7 +331,7 @@ mcp_2026_07_28 = true
 - [ ] 256 KiB 입력과 32 MiB 응답의 경계값은 성공하고 1바이트 초과, 길이를 알 수 없는 초과 본문과 압축 해제 뒤 32 MiB를 넘는 응답은 해당 요청만 실패한다.
 - [ ] 토큰과 컨텍스트 본문이 파일, 표준 출력, 로그와 오류에 남지 않음을 확인한다.
 - [ ] loopback callback과 HTTP redirect 보안 시험, `doctor` 비밀 비노출 시험이 통과한다.
-- [ ] macOS, Linux와 Windows 지원 대상에서 대표 시나리오를 검증한다.
+- [ ] Apple 보안 업데이트 대상인 macOS 14 Sonoma 이상, Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상 또는 Debian Security·LTS 지원 기간인 Debian 12 이상, Microsoft 지원 기간인 Windows 11 25H2 이상에서 대표 시나리오를 검증한다. Windows는 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상을 사용하고 Windows 호스트와 WSL2 게스트 사이의 브라우저·loopback callback을 함께 검증한다.
 - [ ] 각 운영체제의 공식 배포본 서명 또는 동등한 무결성 검증, checksum, SBOM과 빌드 출처 증명을 확인한다.
 - [ ] 실제 agent-context 서버를 사용한 종단 간 검증이 통과한다.
 
@@ -340,16 +341,16 @@ mcp_2026_07_28 = true
 |----|------|------|------|------|
 | `TBD-AGENT_CONTEXT_CLIENT-001` | 지원 에이전트 호스트 | 첫 출시의 공식 종단 간 호환성 검증 대상은 `features.mcp_2026_07_28`을 활성화한 Codex CLI `0.156.1`이다. 다른 Codex 판과 실행 표면은 같은 계약 테스트를 통과한 뒤 지원 대상으로 추가한다. | 확정 | 사용자 확정, OpenAI Docs, 로컬 설치본 확인 |
 | `TBD-AGENT_CONTEXT_CLIENT-002` | 구현 언어와 저장소 배치 | Go `1.27.1`과 공식 MCP Go SDK를 사용한다. 이 저장소의 루트 Go 모듈 안에 서버와 분리된 독립 실행 파일로 두며, 구체적인 실행 명령 경로와 내부 패키지 경계는 SDD가 소유한다. | 확정 | 사용자 확정, 저장소 Go 기준, MCP Go SDK lifecycle |
+| `TBD-AGENT_CONTEXT_CLIENT-004` | 지원 운영체제 판 | 첫 출시는 Apple 보안 업데이트 대상인 macOS 14 Sonoma 이상, Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상 또는 Debian Security·LTS 지원 기간인 Debian 12 이상, Microsoft 지원 기간인 Windows 11 25H2 이상에서 지원한다. Windows의 공식 실행 환경은 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상이며 브라우저 인가와 loopback callback을 Windows 호스트와 함께 검증한다. CPU 아키텍처별 배포본 범위는 SDD가 소유한다. | 확정 | 사용자 채택, Codex CLI 설치 요구사항, Go 최소 요구사항, 운영체제 수명 주기 |
 | `TBD-AGENT_CONTEXT_CLIENT-005` | 클라이언트 자원 상한 | 첫 출시의 입력은 256 KiB, 응답은 전송·압축 해제·`stdio` 출력 각각 32 MiB로 제한한다. 진행 중 원격 호출은 8개, 원격 호출과 공유 브라우저 인가 대기열은 각각 128개로 제한하며 출시 전 경계값·부하·오류 주입 시험으로 검증한다. | 확정 | 사용자 확정, 서버 공개 계약, MCP `stdio` transport |
 
 ## 미정 사항
 
-요구사항 수준의 미정 사항 네 건이 있다.
+요구사항 수준의 미정 사항 세 건이 있다.
 
 | ID | 항목 | 내용 | 결정 시점 |
 |----|------|------|-----------|
 | `TBD-AGENT_CONTEXT_CLIENT-003` | 재시도 기본값 | 읽기 재시도의 최대 횟수, 초기 지연과 상한을 부하·장애 시험으로 정한다. | 구현 검증 중 |
-| `TBD-AGENT_CONTEXT_CLIENT-004` | 지원 운영체제 판 | macOS, Linux와 Windows에서 공식 지원할 최소 판을 정한다. | 배포 설계 전 |
 | `TBD-AGENT_CONTEXT_CLIENT-006` | 쓰기 멱등성 키 | 서버와 클라이언트가 쓰기 요청의 멱등성 키와 결과 보관 기간을 지원해 `client_indeterminate`를 안전한 재시도로 줄일지 결정한다. 같은 키에 다른 요청이 오면 거부하는 계약도 함께 정한다. | 서버 계약 변경 전 |
 | `TBD-AGENT_CONTEXT_CLIENT-007` | DPoP 지원 | 공개 클라이언트의 접근 토큰을 프로세스 수명 키에 결합하는 DPoP를 도입할지, 서버의 토큰 발급·검증과 replay 방어를 포함해 결정한다. | 서버 인증 계약 변경 전 |
 

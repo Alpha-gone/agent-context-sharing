@@ -39,11 +39,12 @@
 | 도구 범위 | 원격 서버가 공개한 도구 13종 전체 |
 | 인증 | 시스템 브라우저와 루프백 콜백을 이용한 Authorization Code with PKCE(`S256`) |
 | 자격 증명 보관 | 접근 토큰, 인가 코드와 PKCE 검증자는 프로세스 메모리에만 보관 |
+| 쓰기 멱등성 | 원격 서버와 `io.github.alpha-gone/write-idempotency` 확장을 협상하고 쓰기 호출마다 클라이언트 생성 UUIDv7 키 사용 |
 | 재시작 | 인증 상태를 복원하지 않고 다시 인가함 |
 
 ### 호스트 SRS 변경 영향
 
-호스트의 변경된 `FR-AGENT_CONTEXT-086`, `FR-AGENT_CONTEXT-087`, `FR-AGENT_CONTEXT-089`, `FR-AGENT_CONTEXT-113`, `FR-AGENT_CONTEXT-114`와 새 `FR-AGENT_CONTEXT-150`~`FR-AGENT_CONTEXT-154`는 검색 구성, 요청 내부 읽기, 감사와 오프라인 평가를 확장하지만 MCP 연산 13종과 입출력 스키마·오류 계약은 바꾸지 않는다. 클라이언트는 다음 경계를 유지한다.
+호스트의 변경된 `FR-AGENT_CONTEXT-086`, `FR-AGENT_CONTEXT-087`, `FR-AGENT_CONTEXT-089`, `FR-AGENT_CONTEXT-113`, `FR-AGENT_CONTEXT-114`와 새 `FR-AGENT_CONTEXT-150`~`FR-AGENT_CONTEXT-154`는 검색 구성, 요청 내부 읽기, 감사와 오프라인 평가를 확장하지만 MCP 연산 13종과 입출력 스키마·오류 계약은 바꾸지 않는다. `FR-AGENT_CONTEXT-155`만 선택 확장과 HTTP 헤더라는 공개 전송 계약을 추가한다. 클라이언트는 다음 경계를 유지한다.
 
 | 호스트 요구사항 | 공개 계약 영향 | 클라이언트 반영 |
 |-----------------|----------------|-----------------|
@@ -53,6 +54,7 @@
 | `FR-AGENT_CONTEXT-152` 일관 읽기 | 한 `context_flow_get` 응답을 만드는 서버 내부 읽기 경계이며 기존 그래프 `version`의 의미를 바꾸지 않는다. | 응답을 분할·재조립하거나 `version`을 내용 판으로 해석해 자동 재시도하지 않는다. |
 | `FR-AGENT_CONTEXT-153` 불변식 감사 | 전체 감사는 MCP가 아닌 서버의 `cmd/audit`가 수행한다. | `cmd/audit` 또는 감사 전용 도구를 호스트에 노출하지 않는다. |
 | `FR-AGENT_CONTEXT-154` 오염 적대적 평가 | 적대적 표본과 홉별 진단은 MCP가 아닌 서버의 `cmd/eval -adversarial`이 오프라인에서 수행한다. | 평가·진단 전용 도구나 경고를 새 MCP 계약으로 만들지 않으며 서버 도메인 판단을 로컬에서 재현하지 않는다. |
+| `FR-AGENT_CONTEXT-155` 쓰기 멱등성 | 선택 확장과 `Idempotency-Key` 헤더를 추가하되 도구 13종의 입력·출력 스키마는 유지한다. | 확장을 요청별로 선언하고 8종 쓰기에 호출별 UUIDv7 키를 보내며 비협상 서버에는 기존 계약으로 호출한다. |
 
 ## 목표와 비목표
 
@@ -62,7 +64,7 @@
 - 사용자가 비밀번호나 접근 토큰을 에이전트 호스트에 전달하지 않고 브라우저에서 인가를 완료하게 한다.
 - 접근 토큰 갱신과 재인증을 도구 호출 흐름 안에서 안전하게 처리한다.
 - 전송 실패, 프로토콜 오류와 서버 도메인 오류를 구분해 호출자가 후속 행동을 결정할 수 있게 한다.
-- 비멱등 요청의 결과가 불확실할 때 자동 재시도로 중복 변경을 만들지 않는다.
+- 비협상 쓰기나 키를 잃은 요청의 결과가 불확실할 때 자동 재시도로 중복 변경을 만들지 않는다.
 - 토큰과 컨텍스트 본문이 로컬 파일이나 운영 로그로 새지 않게 한다.
 
 ### 비목표
@@ -154,11 +156,11 @@
 
 | ID | 요구사항 | 판정 기준 | 상태 | 출처 |
 |----|----------|-----------|------|------|
-| `FR-AGENT_CONTEXT_CLIENT-015` | 클라이언트는 원격 MCP URL에 POST하고 Bearer 토큰, `MCP-Protocol-Version`, `Mcp-Method`와 `tools/call`의 `Mcp-Name`을 정확히 한 개씩 보내야 한다. | 헤더 값은 JSON-RPC 본문의 method·도구 이름과 일치하고 `_meta`에는 같은 protocol version과 클라이언트 정보가 있다. | 검토 필요 | agent-context SDD 「요청 처리 순서」 |
+| `FR-AGENT_CONTEXT_CLIENT-015` | 클라이언트는 원격 MCP URL에 POST하고 Bearer 토큰, `MCP-Protocol-Version`, `Mcp-Method`와 `tools/call`의 `Mcp-Name`을 정확히 한 개씩 보내야 한다. | 헤더 값은 JSON-RPC 본문의 method·도구 이름과 일치하고 `_meta`에는 같은 protocol version과 클라이언트 정보가 있다. 협상된 쓰기 호출에는 `Idempotency-Key`를 정확히 하나 더 보낸다. | 검토 필요 | agent-context SDD 「요청 처리 순서」 |
 | `FR-AGENT_CONTEXT_CLIENT-016` | 클라이언트는 호스트 요청과 원격 요청에 서로 충돌하지 않는 식별자를 사용하고 응답을 원래 호스트 요청에 연결해야 한다. | 100개 이상의 동시 호출에서도 응답, 오류와 취소가 다른 호출에 전달되지 않는다. | 검토 필요 | agent-context SDD 「요청 처리 순서」, 제품 기준선 |
 | `FR-AGENT_CONTEXT_CLIENT-017` | 클라이언트는 원격 성공 결과와 `tools` 결과 안의 도메인 오류를 구조를 잃지 않고 호스트에 전달해야 한다. | `structuredContent`, `content`, `isError`, 현재 `version`, 커서와 부분 상태가 보존된다. `context_flow_get`의 평면 응답과 컨텍스트별 검색 메타데이터도 필드 누락·목록 재정렬·의미 변환 없이 전달된다. | 검토 필요 | agent-context SRS 「응답 구성」, agent-context SDD 「MCP 표면」, 「응답 직렬화」 |
 | `FR-AGENT_CONTEXT_CLIENT-018` | 클라이언트는 호스트 취소와 요청 제한 시간을 원격 HTTP 요청의 취소로 전파해야 한다. | 취소된 응답을 다른 요청에 사용하지 않고 제한 시간은 인증 대기와 도구 호출에 각각 적용한다. | 검토 필요 | MCP `2026-07-28` transport |
-| `FR-AGENT_CONTEXT_CLIENT-019` | 클라이언트는 전송 실패의 발생 시점을 기준으로 자동 재시도 가능 여부를 판정해야 한다. | 원격에 요청이 전달되지 않았음이 확실한 경우만 자동 재시도하고, 쓰기 요청을 보낸 뒤 응답을 잃으면 `client_indeterminate`로 반환한다. | 검토 필요 | agent-context SDD 「연산 계약」 |
+| `FR-AGENT_CONTEXT_CLIENT-019` | 클라이언트는 전송 실패의 발생 시점과 쓰기 멱등성 협상 여부를 기준으로 자동 재시도 가능 여부를 판정해야 한다. | 원격에 요청이 전달되지 않았음이 확실하거나 서버와 쓰기 멱등성 확장을 협상하고 보관 기간 안에 같은 키를 재사용할 수 있을 때만 자동 재시도한다. 그 밖의 쓰기 요청을 보낸 뒤 응답을 잃으면 `client_indeterminate`로 반환한다. | 검토 필요 | agent-context SDD 「연산 계약」, `TBD-AGENT_CONTEXT_CLIENT-006` |
 | `FR-AGENT_CONTEXT_CLIENT-020` | 클라이언트는 읽기 연산의 일시적 연결 실패만 지수형 지연과 상한을 적용해 재시도할 수 있어야 한다. | `graph_list`, `graph_get`, `node_get`, `context_flow_get`, `relation_list`만 대상이며 도메인 오류와 프로토콜 오류는 자동 재시도하지 않는다. | 검토 필요 | agent-context SDD 「연산 계약」 |
 | `FR-AGENT_CONTEXT_CLIENT-021` | 클라이언트는 `version_conflict`를 자동 병합하거나 자동 재시도하지 않고 현재 `version`을 포함해 호스트에 반환해야 한다. | 에이전트가 재조회·재판단하지 않은 수정 요청이 자동 실행되지 않는다. | 검토 필요 | agent-context SRS 「오류 코드」 |
 | `FR-AGENT_CONTEXT_CLIENT-022` | 클라이언트는 커서를 불투명 값으로 취급하고 `result_truncated`를 성공 결과의 부분 상태로 유지해야 한다. | 커서를 해석·수정하지 않고 후속 요청에 그대로 전달하며 절단 표시를 일반 오류로 바꾸지 않는다. | 검토 필요 | agent-context SDD 「페이지 처리」, 「오류 코드」 |
@@ -176,31 +178,32 @@
 
 | ID | 요구사항 | 판정 기준 | 상태 | 출처 |
 |----|----------|-----------|------|------|
-| `FR-AGENT_CONTEXT_CLIENT-027` | 클라이언트는 호스트 측 `server/discover`에 응답하고, 원격 인증 뒤 `server/discover`로 `2026-07-28` 지원·기능 선언·서버 식별 정보를 검증해야 한다. | 호스트는 `server/discover` 뒤 13종 도구를 조회·호출할 수 있고, 원격 서버가 고정 revision 또는 `tools` capability를 광고하지 않으면 도구를 공개하지 않고 `client_protocol`로 중단한다. 호스트 응답에는 클라이언트 프로세스의 `serverInfo`를 넣는다. | 검토 필요 | MCP `2026-07-28`, MCP Go SDK lifecycle |
+| `FR-AGENT_CONTEXT_CLIENT-027` | 클라이언트는 호스트 측 `server/discover`에 응답하고, 원격 인증 뒤 `server/discover`로 `2026-07-28` 지원·기능 선언·서버 식별 정보를 검증해야 한다. | 호스트는 `server/discover` 뒤 13종 도구를 조회·호출할 수 있고, 원격 서버가 고정 revision 또는 `tools` capability를 광고하지 않으면 도구를 공개하지 않고 `client_protocol`로 중단한다. `io.github.alpha-gone/write-idempotency` 확장과 24시간 보관 선언이 있으면 쓰기 멱등성 경로를 활성화하며, 없으면 기존 비협상 경로를 유지한다. 호스트 응답에는 클라이언트 프로세스의 `serverInfo`를 넣는다. | 검토 필요 | MCP `2026-07-28`, MCP extension framework, MCP Go SDK lifecycle |
 | `FR-AGENT_CONTEXT_CLIENT-028` | 클라이언트는 원격 `tools/list`의 `ttlMs`와 `cacheScope`를 지켜 도구 정의를 캐시하고, 캐시가 만료되면 다음 노출 또는 호출 전에 스키마를 재검증해야 한다. | `ttlMs`가 없거나 `0`이면 캐시된 결과를 새 요청에 사용하지 않으며, `private` 결과는 현재 프로세스와 인증 주체 밖에서 재사용하지 않는다. 이름·설명·입력 스키마의 변경은 부분 공개 없이 `client_protocol`로 처리한다. | 검토 필요 | MCP `2026-07-28` |
 | `FR-AGENT_CONTEXT_CLIENT-029` | 클라이언트는 공유 브라우저 인가를 기다리는 요청의 취소를 대기자별로 분리해야 한다. | 한 대기자의 취소·제한 시간은 다른 대기자의 인가를 취소하지 않고, 마지막 대기자가 사라지면 인가와 콜백 수신기를 종료한다. 종료된 요청에는 뒤늦은 인증 결과를 전달하지 않는다. | 검토 필요 | 제품 기준선, `NFR-AGENT_CONTEXT_CLIENT-006` |
 | `FR-AGENT_CONTEXT_CLIENT-030` | 클라이언트는 기동 정책으로 기본 `all`, `read_only`, allowlist 도구 공개 모드를 제공해야 한다. | 정책은 원격 서버의 도구·권한을 새로 추가하지 않고 노출을 축소만 하며, `tools/list`와 `tools/call`의 결과가 같은 정책을 따른다. 서버의 권한 판정은 항상 정본으로 유지한다. | 검토 필요 | 제품 기준선 |
 | `FR-AGENT_CONTEXT_CLIENT-031` | 클라이언트는 MCP 도구와 분리된 `doctor` 진단 명령을 제공해야 한다. | 구성, DNS·TLS, 보호 리소스·인가 서버 발견, 원격 lifecycle 호환성, 브라우저 실행과 루프백 bind를 점검하고 사람 읽기 형식과 JSON 결과를 제공한다. 토큰, 인가 코드, PKCE 값, 인가 URL과 컨텍스트 본문은 출력하지 않는다. | 검토 필요 | 제품 기준선 |
+| `FR-AGENT_CONTEXT_CLIENT-032` | 클라이언트는 서버와 쓰기 멱등성 확장을 협상한 뒤 호스트의 논리적 쓰기 호출마다 새 UUIDv7 키를 생성하고 같은 호출의 모든 전송 시도에 재사용해야 한다. | 원격 요청별 `clientCapabilities.extensions`에 `"io.github.alpha-gone/write-idempotency": {}`를 선언하고 키는 Structured Fields String 형식의 `Idempotency-Key: "<uuid>"`로 보낸다. 키를 호스트 도구 스키마에 노출하거나 서로 다른 호스트 호출에 재사용하지 않고 로그·오류에도 기록하지 않는다. `graph_create`, `graph_update`, `node_create`, `node_update`, `node_discard`, `node_restore`, `relation_confirm`, `relation_discard`가 대상이며 호출 반환·취소 또는 프로세스 종료 시 메모리에서 폐기한다. | 검토 필요 | agent-context `FR-AGENT_CONTEXT-155`, `TBD-AGENT_CONTEXT_CLIENT-006` |
 
 ## 도구 중계 계약
 
 | 도구 | 성격 | 호스트 측 처리 | 자동 재시도 |
 |------|------|----------------|-------------|
 | `graph_list` | 읽기 | 원격 스키마 유지 | 일시적 연결 실패에 한해 가능 |
-| `graph_create` | 쓰기 | 원격 스키마 유지 | 전송 뒤에는 금지 |
+| `graph_create` | 쓰기 | 원격 스키마 유지 | 멱등성 협상 시 같은 키로 가능 |
 | `graph_get` | 읽기 | 원격 스키마 유지 | 일시적 연결 실패에 한해 가능 |
-| `graph_update` | 조건부 쓰기 | 원격 스키마 유지 | 전송 뒤에는 금지 |
-| `node_create` | 조건부 쓰기 | `created_by_agent` 주입 | 전송 뒤에는 금지 |
+| `graph_update` | 조건부 쓰기 | 원격 스키마 유지 | 멱등성 협상 시 같은 키로 가능 |
+| `node_create` | 조건부 쓰기 | `created_by_agent` 주입 | 멱등성 협상 시 같은 키로 가능 |
 | `node_get` | 읽기 | 원격 스키마 유지 | 일시적 연결 실패에 한해 가능 |
-| `node_update` | 조건부 쓰기 | `created_by_agent` 주입 | 전송 뒤에는 금지 |
-| `node_discard` | 쓰기 | `created_by_agent` 주입 | 전송 뒤에는 금지 |
-| `node_restore` | 쓰기 | `created_by_agent` 주입 | 전송 뒤에는 금지 |
+| `node_update` | 조건부 쓰기 | `created_by_agent` 주입 | 멱등성 협상 시 같은 키로 가능 |
+| `node_discard` | 쓰기 | `created_by_agent` 주입 | 멱등성 협상 시 같은 키로 가능 |
+| `node_restore` | 쓰기 | `created_by_agent` 주입 | 멱등성 협상 시 같은 키로 가능 |
 | `context_flow_get` | 읽기 | 원격 스키마 유지 | 일시적 연결 실패에 한해 가능 |
 | `relation_list` | 읽기 | 원격 스키마 유지 | 일시적 연결 실패에 한해 가능 |
-| `relation_confirm` | 멱등 쓰기 | `created_by_agent` 주입 | 전송 뒤에는 금지 |
-| `relation_discard` | 쓰기 | `created_by_agent` 주입 | 전송 뒤에는 금지 |
+| `relation_confirm` | 멱등 쓰기 | `created_by_agent` 주입 | 멱등성 협상 시 같은 키로 가능 |
+| `relation_discard` | 쓰기 | `created_by_agent` 주입 | 멱등성 협상 시 같은 키로 가능 |
 
-서버 계약이 일부 쓰기를 멱등 또는 조건부로 분류하더라도 클라이언트는 응답을 잃은 쓰기를 자동 재전송하지 않는다. 재전송 여부에는 도메인 상태와 사용자의 의도가 필요하므로 에이전트가 서버의 현재 상태를 다시 읽고 판단한다.
+도메인 연산의 기존 멱등·조건부·비멱등 분류는 유지한다. 클라이언트는 쓰기 멱등성 확장을 협상한 같은 논리적 호출에서만 동일 키로 전송을 다시 시도한다. 서버가 확장을 광고하지 않았거나 키를 잃었거나 재시도 한도를 넘긴 경우에는 도메인 상태와 사용자의 의도가 필요하므로 `client_indeterminate`를 반환하고 에이전트가 현재 상태를 다시 읽어 판단한다.
 
 ## 오류 계약
 
@@ -223,7 +226,7 @@
 | `client_transport` | 원격 연결, DNS 또는 TLS 통신에 실패함 | 연결 상태를 확인한 뒤 재시도함 |
 | `client_timeout` | 인증 대기 또는 원격 호출 제한 시간을 넘김 | 상태 확인 뒤 재시도함 |
 | `client_protocol` | MCP 헤더·본문·응답 또는 도구 계약이 맞지 않음 | 서버와 클라이언트 버전을 확인함 |
-| `client_indeterminate` | 쓰기 요청 전송 뒤 응답을 받지 못해 적용 여부를 모름 | 대상 상태를 조회한 뒤 재판단함 |
+| `client_indeterminate` | 멱등성 미협상·키 소실·보관 만료 또는 재시도 한도 초과 상태에서 쓰기 요청 전송 뒤 응답을 받지 못해 적용 여부를 모름 | 대상 상태를 조회한 뒤 재판단함 |
 | `client_busy` | 동시 호출·대기열 또는 메시지 크기의 클라이언트 한도를 넘음 | 요청 부하 또는 입력 크기를 낮춘 뒤 다시 시도함 |
 
 클라이언트 오류는 서버 도메인 오류와 구분되는 구조로 반환해야 하며 내부 스택, 토큰, 인가 코드, PKCE 값과 컨텍스트 본문을 포함해서는 안 된다.
@@ -243,7 +246,7 @@
 | `NFR-AGENT_CONTEXT_CLIENT-009` | 이식성 | 클라이언트는 Apple 보안 업데이트 대상인 macOS 14 Sonoma 이상, Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상 또는 Debian Security·LTS 지원 기간인 Debian 12 이상, Microsoft 지원 기간인 Windows 11 25H2 이상에서 같은 구성·인가·도구 계약을 제공해야 한다. Windows에서는 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상을 공식 실행 환경으로 사용한다. | 출시 시점에 지원 기간 안에 있는 각 최소 판에서 시작, 브라우저 인가, loopback callback, 도구 목록과 대표 읽기·쓰기 호출을 검증한다. Windows는 Windows 호스트와 WSL2 게스트 사이의 브라우저·loopback 경로를 함께 검증한다. | 검토 필요 | 제품 기준선, Codex CLI 설치 요구사항, Go 최소 요구사항, 운영체제 수명 주기 |
 | `NFR-AGENT_CONTEXT_CLIENT-010` | 관측 가능성 | 클라이언트는 비밀과 본문 없이 기동, 인증 단계, 원격 호출, 재시도, 취소와 종료를 진단할 수 있어야 한다. | 구조화 로그가 시각, 수준, 요청 상관 식별자, 도구 이름, 결과 범주와 지연을 포함한다. | 검토 필요 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-011` | 복구 가능성 | 클라이언트는 영속 런타임 상태 없이 재시작만으로 깨끗한 상태에서 복구할 수 있어야 한다. | 강제 종료 뒤 재실행하면 새 인증을 요구하고 이전 요청·토큰·콜백을 재사용하지 않는다. | 검토 필요 | agent-context `NFR-AGENT_CONTEXT-012`, `-013` |
-| `NFR-AGENT_CONTEXT_CLIENT-012` | 검증 가능성 | 인증, 도구 13종, 오류, 응답 보존, 재시도와 비밀 비노출을 자동화된 계약 테스트로 반복 검증할 수 있어야 한다. | 모의 인가·MCP 서버 테스트와 실제 agent-context 서버 통합 테스트가 분리되어 실행되며, 호스트 내부 기능이 추가되어도 공개 도구 수와 `context_flow_get` 중계 계약의 회귀를 탐지한다. | 검토 필요 | 제품 기준선, agent-context `FR-AGENT_CONTEXT-150`~`FR-AGENT_CONTEXT-154` |
+| `NFR-AGENT_CONTEXT_CLIENT-012` | 검증 가능성 | 인증, 도구 13종, 오류, 응답 보존, 재시도와 비밀 비노출을 자동화된 계약 테스트로 반복 검증할 수 있어야 한다. | 모의 인가·MCP 서버 테스트와 실제 agent-context 서버 통합 테스트가 분리되어 실행되며, 공개 도구 수와 `context_flow_get` 중계 계약의 회귀 및 쓰기 멱등성의 순차·동시 재시도, 키 충돌과 비협상 경로를 탐지한다. | 검토 필요 | 제품 기준선, agent-context `FR-AGENT_CONTEXT-150`~`FR-AGENT_CONTEXT-155` |
 | `NFR-AGENT_CONTEXT_CLIENT-013` | 자원 격리 | 클라이언트는 「자원 상한」이 정한 표준 입출력 메시지, 원격 요청·응답, 압축 해제 뒤 응답, 진행 중 호출과 대기열의 고정 상한으로 한 요청이 프로세스 메모리·연결을 고갈시키지 않게 해야 한다. | 각 바이트 경계값은 처리하고 1바이트 초과는 정해진 오류로 거부한다. 호출 100개를 동시에 넣어도 진행 중 호출은 8개, 호출·인증 대기는 각각 128개를 넘지 않으며 초과 요청 이후의 정상 요청을 처리한다. | 검토 필요 | 제품 기준선, `TBD-AGENT_CONTEXT_CLIENT-005` |
 | `NFR-AGENT_CONTEXT_CLIENT-014` | 인가 전송 강화 | 클라이언트는 보호된 MCP POST와 토큰 교환에서 자동 HTTP redirect를 따르지 않고, discovery redirect는 HTTPS 유지·횟수 상한·origin 변경 시 자격 증명 제거 조건에서만 처리해야 한다. | redirect 응답이 Bearer 토큰, 인가 코드 또는 PKCE 값을 다른 origin으로 전달하지 않으며, loopback callback과 원격 redirect 변조를 주입한 시험이 실패한다. | 검토 필요 | RFC 8252, RFC 9700 |
 | `NFR-AGENT_CONTEXT_CLIENT-015` | 배포 무결성 | 배포 대상 운영체제별 실행 파일은 출처와 무결성을 검증할 수 있어야 한다. | 배포본마다 서명 또는 동등한 배포 플랫폼 검증, checksum, SBOM과 빌드 출처 증명을 제공하고 검증 실패한 실행 파일은 공식 배포본으로 취급하지 않는다. | 검토 필요 | 제품 기준선 |
@@ -313,19 +316,20 @@ mcp_2026_07_28 = true
 | 도구 스키마 | 원격 `tools/list`의 `ttlMs`와 `cacheScope`가 허용하는 기간 동안 |
 | 요청·응답 본문 | 해당 요청 반환 또는 취소까지 |
 | 요청 상관 정보 | 해당 호스트 요청이 완료될 때까지 |
+| 쓰기 멱등성 키 | 해당 호스트 요청이 반환·취소되거나 프로세스가 종료될 때까지 |
 
 ## 출시 완료 기준
 
 - [ ] 제품 기준선과 모든 요구사항의 `검토 필요` 상태가 사용자 검토를 거쳐 확정된다.
 - [ ] `features.mcp_2026_07_28`을 활성화한 Codex CLI `0.156.1`의 호스트 측 `stdio`와 원격 Streamable HTTP가 MCP `2026-07-28` 계약 테스트를 통과한다.
-- [ ] 호스트 측 `server/discover`, 원격 수명주기 검증과 요청별 metadata가 MCP `2026-07-28` 계약과 일치한다.
+- [ ] 호스트 측 `server/discover`, 원격 수명주기 검증, 원격 요청별 metadata와 `io.github.alpha-gone/write-idempotency` 확장 협상이 MCP `2026-07-28` 계약과 일치한다. 호스트 측에는 원격 전송용 확장을 광고하지 않는다.
 - [ ] 브라우저 인가, 루프백 콜백, PKCE, 코드 교환, 토큰 갱신과 재인증 시나리오가 통과한다.
 - [ ] 원격 인가 서버가 성공·오류 응답에 발급자 식별 정보를 제공하고 클라이언트가 이를 검증한다.
 - [ ] 도구 13종의 목록·입력 스키마·성공·도메인 오류 중계가 실제 서버와 일치한다.
 - [ ] `context_flow_get`의 평면 응답과 검색 메타데이터가 필드 누락·목록 재정렬·의미 변환 없이 종단 간 중계된다.
 - [ ] 호스트의 `cmd/audit`, `cmd/eval -adversarial`과 검색 내부 기능이 클라이언트 도구 목록에 추가되지 않는다.
 - [ ] `created_by_agent`가 여섯 변경 도구에 구성값으로만 주입된다.
-- [ ] 읽기 재시도와 쓰기 결과 불확실성 처리가 오류 계약과 일치한다.
+- [ ] 읽기 재시도, 쓰기 호출별 UUIDv7 키 생성·동일 키 재사용, 같은 키·다른 요청의 거부와 멱등성 미협상·보관 만료 시의 쓰기 결과 불확실성 처리가 오류 계약과 일치한다.
 - [ ] 동시 호출·갱신·재인증의 race 검사가 통과한다.
 - [ ] 공유 인가의 대기자별 취소·마지막 대기자 종료와 호출·인증 대기열 128개 초과 시나리오가 통과한다.
 - [ ] 256 KiB 입력과 32 MiB 응답의 경계값은 성공하고 1바이트 초과, 길이를 알 수 없는 초과 본문과 압축 해제 뒤 32 MiB를 넘는 응답은 해당 요청만 실패한다.
@@ -343,15 +347,15 @@ mcp_2026_07_28 = true
 | `TBD-AGENT_CONTEXT_CLIENT-002` | 구현 언어와 저장소 배치 | Go `1.27.1`과 공식 MCP Go SDK를 사용한다. 이 저장소의 루트 Go 모듈 안에 서버와 분리된 독립 실행 파일로 두며, 구체적인 실행 명령 경로와 내부 패키지 경계는 SDD가 소유한다. | 확정 | 사용자 확정, 저장소 Go 기준, MCP Go SDK lifecycle |
 | `TBD-AGENT_CONTEXT_CLIENT-004` | 지원 운영체제 판 | 첫 출시는 Apple 보안 업데이트 대상인 macOS 14 Sonoma 이상, Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상 또는 Debian Security·LTS 지원 기간인 Debian 12 이상, Microsoft 지원 기간인 Windows 11 25H2 이상에서 지원한다. Windows의 공식 실행 환경은 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상이며 브라우저 인가와 loopback callback을 Windows 호스트와 함께 검증한다. CPU 아키텍처별 배포본 범위는 SDD가 소유한다. | 확정 | 사용자 채택, Codex CLI 설치 요구사항, Go 최소 요구사항, 운영체제 수명 주기 |
 | `TBD-AGENT_CONTEXT_CLIENT-005` | 클라이언트 자원 상한 | 첫 출시의 입력은 256 KiB, 응답은 전송·압축 해제·`stdio` 출력 각각 32 MiB로 제한한다. 진행 중 원격 호출은 8개, 원격 호출과 공유 브라우저 인가 대기열은 각각 128개로 제한하며 출시 전 경계값·부하·오류 주입 시험으로 검증한다. | 확정 | 사용자 확정, 서버 공개 계약, MCP `stdio` transport |
+| `TBD-AGENT_CONTEXT_CLIENT-006` | 쓰기 멱등성 키 | 첫 출시는 MCP 확장 `io.github.alpha-gone/write-idempotency`를 협상하고 8종 쓰기 호출마다 클라이언트 생성 UUIDv7 키를 `Idempotency-Key`로 보낸다. 서버는 인증 계정과 키를 범위로 요청 지문과 최초 완료 결과를 24시간 보관하고, 같은 키·같은 요청에는 최초 결과를 반환하며 같은 키·다른 요청에는 `invalid_argument`를 반환한다. 협상된 같은 논리적 호출만 동일 키로 자동 재시도하고, 미협상·키 소실·보관 만료·재시도 한도 초과에는 `client_indeterminate`를 유지한다. | 확정 | 사용자 채택, agent-context `FR-AGENT_CONTEXT-155`, IETF Idempotency-Key 초안, MCP extension framework |
 
 ## 미정 사항
 
-요구사항 수준의 미정 사항 세 건이 있다.
+요구사항 수준의 미정 사항 두 건이 있다.
 
 | ID | 항목 | 내용 | 결정 시점 |
 |----|------|------|-----------|
-| `TBD-AGENT_CONTEXT_CLIENT-003` | 재시도 기본값 | 읽기 재시도의 최대 횟수, 초기 지연과 상한을 부하·장애 시험으로 정한다. | 구현 검증 중 |
-| `TBD-AGENT_CONTEXT_CLIENT-006` | 쓰기 멱등성 키 | 서버와 클라이언트가 쓰기 요청의 멱등성 키와 결과 보관 기간을 지원해 `client_indeterminate`를 안전한 재시도로 줄일지 결정한다. 같은 키에 다른 요청이 오면 거부하는 계약도 함께 정한다. | 서버 계약 변경 전 |
+| `TBD-AGENT_CONTEXT_CLIENT-003` | 재시도 기본값 | 읽기 재시도와 멱등성 확장을 협상한 쓰기 재시도의 최대 횟수, 초기 지연과 상한을 부하·장애 시험으로 정한다. | 구현 검증 중 |
 | `TBD-AGENT_CONTEXT_CLIENT-007` | DPoP 지원 | 공개 클라이언트의 접근 토큰을 프로세스 수명 키에 결합하는 DPoP를 도입할지, 서버의 토큰 발급·검증과 replay 방어를 포함해 결정한다. | 서버 인증 계약 변경 전 |
 
 상세 설계는 제품 기준선이 확정된 뒤 작성한다. 구체적인 실행 명령 경로와 내부 패키지 경계는 상세 설계가 소유한다.

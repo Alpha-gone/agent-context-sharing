@@ -5,7 +5,7 @@
 | 항목 | 내용 |
 |------|------|
 | 문서 상태 | 검토 필요 |
-| 최종 수정일 | 2026-09-22 |
+| 최종 수정일 | 2026-09-26 |
 | 서비스 식별자 | `AGENT_CONTEXT_CLIENT` |
 | 담당 범위 | 에이전트 호스트와 에이전트 컨텍스트 관리 시스템 사이에서 인증과 MCP 도구 호출을 중계하는 로컬 클라이언트 프로세스 |
 | 기준 프로토콜 | MCP `2026-07-28`, OAuth 2.1 Authorization Code with PKCE |
@@ -35,6 +35,19 @@
 | 자격 증명 보관 | 접근 토큰, 인가 코드와 PKCE 검증자는 프로세스 메모리에만 보관 |
 | 재시작 | 인증 상태를 복원하지 않고 다시 인가함 |
 
+### 호스트 SRS 변경 영향
+
+호스트의 변경된 `FR-AGENT_CONTEXT-086`, `FR-AGENT_CONTEXT-087`, `FR-AGENT_CONTEXT-089`, `FR-AGENT_CONTEXT-113`, `FR-AGENT_CONTEXT-114`와 새 `FR-AGENT_CONTEXT-150`~`FR-AGENT_CONTEXT-154`는 검색 구성, 요청 내부 읽기, 감사와 오프라인 평가를 확장하지만 MCP 연산 13종과 입출력 스키마·오류 계약은 바꾸지 않는다. 클라이언트는 다음 경계를 유지한다.
+
+| 호스트 요구사항 | 공개 계약 영향 | 클라이언트 반영 |
+|-----------------|----------------|-----------------|
+| `FR-AGENT_CONTEXT-086`, `FR-AGENT_CONTEXT-087`, `FR-AGENT_CONTEXT-089`, `FR-AGENT_CONTEXT-113`, `FR-AGENT_CONTEXT-114` 검색 예산·측정·평가 보완 | 서버의 후보 선택, 절단, 측정과 통제 비교를 구체화하며 기존 응답 스키마를 유지한다. | 예산 배분·검색 지표를 로컬에서 다시 계산하지 않고 서버가 반환한 결과와 부분 상태를 중계한다. |
+| `FR-AGENT_CONTEXT-150` 근거 경로 선택 | `context_flow_get`의 평면 응답 구조를 유지한다. | `contexts`, `references`, `relations`, `entry_points`, `budget`, `channels`, `truncated`와 컨텍스트별 `entry_distance`, `matched_channels`, `rank`, `origin_kinds`, `folded_count`를 해석하거나 다시 조립하지 않고 중계한다. |
+| `FR-AGENT_CONTEXT-151` 질의 적응형 검색 | 기존 `scope` 입력의 의미를 유지하며 새 입력을 추가하지 않는다. | 호출자가 보낸 `scope`를 그대로 전달하고 서버의 검색 경로를 추론하거나 덮어쓰지 않는다. |
+| `FR-AGENT_CONTEXT-152` 일관 읽기 | 한 `context_flow_get` 응답을 만드는 서버 내부 읽기 경계이며 기존 그래프 `version`의 의미를 바꾸지 않는다. | 응답을 분할·재조립하거나 `version`을 내용 판으로 해석해 자동 재시도하지 않는다. |
+| `FR-AGENT_CONTEXT-153` 불변식 감사 | 전체 감사는 MCP가 아닌 서버의 `cmd/audit`가 수행한다. | `cmd/audit` 또는 감사 전용 도구를 호스트에 노출하지 않는다. |
+| `FR-AGENT_CONTEXT-154` 오염 적대적 평가 | 적대적 표본과 홉별 진단은 MCP가 아닌 서버의 `cmd/eval -adversarial`이 오프라인에서 수행한다. | 평가·진단 전용 도구나 경고를 새 MCP 계약으로 만들지 않으며 서버 도메인 판단을 로컬에서 재현하지 않는다. |
+
 ## 목표와 비목표
 
 ### 목표
@@ -50,6 +63,7 @@
 
 - 에이전트 호스트나 범용 대화형 에이전트를 구현하지 않는다.
 - 원격 서버의 검색, 그래프, 권한, 한도 또는 보관 정책을 로컬에서 다시 구현하지 않는다.
+- 원격 서버의 검색 경로 선택, 요청 단위 일관 읽기, 불변식 감사와 관계·경로 오염 적대적 평가를 로컬에서 실행하지 않는다.
 - 웹 전용인 권한·팀 관리, 사용자 직접 삭제·복구, 감사 화면과 컨텍스트 시각화를 제공하지 않는다.
 - 접근 토큰, 갱신 토큰, 비밀번호 또는 웹 세션을 영속 저장하지 않는다.
 - 브라우저가 없는 환경을 위한 Device Authorization Grant, Client Credentials 또는 수동 토큰 입력을 제공하지 않는다.
@@ -136,7 +150,7 @@
 |----|----------|-----------|------|------|
 | `FR-AGENT_CONTEXT_CLIENT-015` | 클라이언트는 원격 MCP URL에 POST하고 Bearer 토큰, `MCP-Protocol-Version`, `Mcp-Method`와 `tools/call`의 `Mcp-Name`을 정확히 한 개씩 보내야 한다. | 헤더 값은 JSON-RPC 본문의 method·도구 이름과 일치하고 `_meta`에는 같은 protocol version과 클라이언트 정보가 있다. | 검토 필요 | agent-context SDD 「요청 처리 순서」 |
 | `FR-AGENT_CONTEXT_CLIENT-016` | 클라이언트는 호스트 요청과 원격 요청에 서로 충돌하지 않는 식별자를 사용하고 응답을 원래 호스트 요청에 연결해야 한다. | 100개 이상의 동시 호출에서도 응답, 오류와 취소가 다른 호출에 전달되지 않는다. | 검토 필요 | agent-context SDD 「요청 처리 순서」, 제품 기준선 |
-| `FR-AGENT_CONTEXT_CLIENT-017` | 클라이언트는 원격 성공 결과와 `tools` 결과 안의 도메인 오류를 구조를 잃지 않고 호스트에 전달해야 한다. | `structuredContent`, `content`, `isError`, 현재 `version`, 커서와 부분 상태가 보존된다. | 검토 필요 | agent-context SDD 「MCP 표면」, 「응답 직렬화」 |
+| `FR-AGENT_CONTEXT_CLIENT-017` | 클라이언트는 원격 성공 결과와 `tools` 결과 안의 도메인 오류를 구조를 잃지 않고 호스트에 전달해야 한다. | `structuredContent`, `content`, `isError`, 현재 `version`, 커서와 부분 상태가 보존된다. `context_flow_get`의 평면 응답과 컨텍스트별 검색 메타데이터도 필드 누락·목록 재정렬·의미 변환 없이 전달된다. | 검토 필요 | agent-context SRS 「응답 구성」, agent-context SDD 「MCP 표면」, 「응답 직렬화」 |
 | `FR-AGENT_CONTEXT_CLIENT-018` | 클라이언트는 호스트 취소와 요청 제한 시간을 원격 HTTP 요청의 취소로 전파해야 한다. | 취소된 응답을 다른 요청에 사용하지 않고 제한 시간은 인증 대기와 도구 호출에 각각 적용한다. | 검토 필요 | MCP `2026-07-28` transport |
 | `FR-AGENT_CONTEXT_CLIENT-019` | 클라이언트는 전송 실패의 발생 시점을 기준으로 자동 재시도 가능 여부를 판정해야 한다. | 원격에 요청이 전달되지 않았음이 확실한 경우만 자동 재시도하고, 쓰기 요청을 보낸 뒤 응답을 잃으면 `client_indeterminate`로 반환한다. | 검토 필요 | agent-context SDD 「연산 계약」 |
 | `FR-AGENT_CONTEXT_CLIENT-020` | 클라이언트는 읽기 연산의 일시적 연결 실패만 지수형 지연과 상한을 적용해 재시도할 수 있어야 한다. | `graph_list`, `graph_get`, `node_get`, `context_flow_get`, `relation_list`만 대상이며 도메인 오류와 프로토콜 오류는 자동 재시도하지 않는다. | 검토 필요 | agent-context SDD 「연산 계약」 |
@@ -223,7 +237,7 @@
 | `NFR-AGENT_CONTEXT_CLIENT-009` | 이식성 | 클라이언트는 macOS, Linux와 Windows에서 같은 구성·인가·도구 계약을 제공해야 한다. | 각 운영체제의 지원 대상 버전에서 시작, 브라우저 인가, 도구 목록과 대표 읽기·쓰기 호출을 검증한다. | 검토 필요 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-010` | 관측 가능성 | 클라이언트는 비밀과 본문 없이 기동, 인증 단계, 원격 호출, 재시도, 취소와 종료를 진단할 수 있어야 한다. | 구조화 로그가 시각, 수준, 요청 상관 식별자, 도구 이름, 결과 범주와 지연을 포함한다. | 검토 필요 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-011` | 복구 가능성 | 클라이언트는 영속 런타임 상태 없이 재시작만으로 깨끗한 상태에서 복구할 수 있어야 한다. | 강제 종료 뒤 재실행하면 새 인증을 요구하고 이전 요청·토큰·콜백을 재사용하지 않는다. | 검토 필요 | agent-context `NFR-AGENT_CONTEXT-012`, `-013` |
-| `NFR-AGENT_CONTEXT_CLIENT-012` | 검증 가능성 | 인증, 도구 13종, 오류, 재시도와 비밀 비노출을 자동화된 계약 테스트로 반복 검증할 수 있어야 한다. | 모의 인가·MCP 서버 테스트와 실제 agent-context 서버 통합 테스트가 분리되어 실행된다. | 검토 필요 | 제품 기준선 |
+| `NFR-AGENT_CONTEXT_CLIENT-012` | 검증 가능성 | 인증, 도구 13종, 오류, 응답 보존, 재시도와 비밀 비노출을 자동화된 계약 테스트로 반복 검증할 수 있어야 한다. | 모의 인가·MCP 서버 테스트와 실제 agent-context 서버 통합 테스트가 분리되어 실행되며, 호스트 내부 기능이 추가되어도 공개 도구 수와 `context_flow_get` 중계 계약의 회귀를 탐지한다. | 검토 필요 | 제품 기준선, agent-context `FR-AGENT_CONTEXT-150`~`FR-AGENT_CONTEXT-154` |
 | `NFR-AGENT_CONTEXT_CLIENT-013` | 자원 격리 | 클라이언트는 표준 입출력 메시지, 원격 응답, 압축 해제 뒤 응답, 진행 중 호출과 인증 대기열에 상한을 두어 한 요청이 프로세스 메모리·연결을 고갈시키지 않게 해야 한다. | 상한을 넘는 요청은 다른 진행 중 요청을 방해하지 않고 `client_busy` 또는 `client_protocol`로 종료하며, 후속 정상 요청은 처리한다. 각 상한의 기본값은 `TBD-AGENT_CONTEXT_CLIENT-005`에서 정한다. | 검토 필요 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-014` | 인가 전송 강화 | 클라이언트는 보호된 MCP POST와 토큰 교환에서 자동 HTTP redirect를 따르지 않고, discovery redirect는 HTTPS 유지·횟수 상한·origin 변경 시 자격 증명 제거 조건에서만 처리해야 한다. | redirect 응답이 Bearer 토큰, 인가 코드 또는 PKCE 값을 다른 origin으로 전달하지 않으며, loopback callback과 원격 redirect 변조를 주입한 시험이 실패한다. | 검토 필요 | RFC 8252, RFC 9700 |
 | `NFR-AGENT_CONTEXT_CLIENT-015` | 배포 무결성 | 배포 대상 운영체제별 실행 파일은 출처와 무결성을 검증할 수 있어야 한다. | 배포본마다 서명 또는 동등한 배포 플랫폼 검증, checksum, SBOM과 빌드 출처 증명을 제공하고 검증 실패한 실행 파일은 공식 배포본으로 취급하지 않는다. | 검토 필요 | 제품 기준선 |
@@ -270,6 +284,8 @@
 - [ ] 브라우저 인가, 루프백 콜백, PKCE, 코드 교환, 토큰 갱신과 재인증 시나리오가 통과한다.
 - [ ] 원격 인가 서버가 성공·오류 응답에 발급자 식별 정보를 제공하고 클라이언트가 이를 검증한다.
 - [ ] 도구 13종의 목록·입력 스키마·성공·도메인 오류 중계가 실제 서버와 일치한다.
+- [ ] `context_flow_get`의 평면 응답과 검색 메타데이터가 필드 누락·목록 재정렬·의미 변환 없이 종단 간 중계된다.
+- [ ] 호스트의 `cmd/audit`, `cmd/eval -adversarial`과 검색 내부 기능이 클라이언트 도구 목록에 추가되지 않는다.
 - [ ] `created_by_agent`가 여섯 변경 도구에 구성값으로만 주입된다.
 - [ ] 읽기 재시도와 쓰기 결과 불확실성 처리가 오류 계약과 일치한다.
 - [ ] 동시 호출·갱신·재인증의 race 검사가 통과한다.

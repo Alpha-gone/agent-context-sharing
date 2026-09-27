@@ -318,7 +318,7 @@ func TestAuthorizationCodeIntegration(t *testing.T) {
 
 // newIntegrationStore는 실제 데이터베이스가 있을 때만 저장소를 연다. 건너뛰기 조건은
 // TestStoreIntegration과 같다.
-func newIntegrationStore(t *testing.T) *Store {
+func newIntegrationStore(t testing.TB) *Store {
 	t.Helper()
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -340,7 +340,7 @@ func newIntegrationStore(t *testing.T) *Store {
 }
 
 // createTestGraph는 등급 판정 대상이 될 활성 그래프를 만든다.
-func createTestGraph(t *testing.T, store *Store, createdBy model.ID) model.ID {
+func createTestGraph(t testing.TB, store *Store, createdBy model.ID) model.ID {
 	t.Helper()
 	now := time.Now().UTC()
 	graphID := newTestID(t)

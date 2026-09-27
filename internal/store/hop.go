@@ -2,9 +2,11 @@ package store
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	json "encoding/json/v2"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -30,7 +32,14 @@ type HopResult struct {
 	Edges     []HopEdge
 	Truncated bool
 	Boundary  int
+	// expansionQueries 필드에는 확장에 쓴 데이터베이스 질의 수를 둔다. 「홉 탐색 구현 비교」가
+	// 두 구현의 왕복 횟수를 견주는 측정 지점이며 응답에는 싣지 않는다.
+	expansionQueries int
 }
+
+// hopNeighborSource는 한 깊이의 기준 정점 전체를 label 하나로 확장한 이웃을 돌려준다.
+// 기준 정점 context_id와 이웃 context_id의 오름차순이어야 결과 상한이 같은 노드에서 자른다.
+type hopNeighborSource func(frontier []model.ID, label traversalLabel) ([]hopNeighbor, error)
 
 // HopContexts는 graph_id 안에서 확정 참조와 관계를 따라 너비 우선으로 탐색한다.
 func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops int, direction string, filter []string, limit int) (HopResult, error) {
@@ -54,6 +63,35 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 // 구현」이 하나로 두기로 한 결과 상한이 시작 노드 수만큼 겹쳐 어느 것이 잘랐는지 알 수
 // 없게 된다. 거리는 가장 가까운 시작 노드까지의 최단 홉 거리다.
 func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []model.Context, hops int, direction string, filter []string, limit int) (HopResult, error) {
+	queries := 0
+	return s.traverseHops(ctx, graphID, starts, hops, filter, limit, &queries, func(frontier []model.ID, label traversalLabel) ([]hopNeighbor, error) {
+		queries++
+		return s.hopNeighbors(ctx, graphID, frontier, label, direction)
+	})
+}
+
+// hopContextsPrefetched는 「홉 탐색 구현 비교」의 후보다. 첫 확장 전에 가변 길이 간선 질의
+// 한 번으로 도달 가능한 정점의 인접 간선을 모두 가져오고, 깊이·label별 확장은 그 결과에서
+// 기준선과 같은 조건과 순서로 만든다. 너비 우선 규칙은 기준선과 같은 루프를 공유한다.
+func (s *Store) hopContextsPrefetched(ctx context.Context, graphID model.ID, starts []model.Context, hops int, direction string, filter []string, limit int) (HopResult, error) {
+	queries := 0
+	var subgraph hopSubgraph
+	return s.traverseHops(ctx, graphID, starts, hops, filter, limit, &queries, func(frontier []model.ID, label traversalLabel) ([]hopNeighbor, error) {
+		if subgraph == nil {
+			// 첫 호출의 기준 정점은 상한 안에 담긴 시작 노드다. 기준선도 이 노드들만 확장한다.
+			queries++
+			fetched, err := s.fetchHopSubgraph(ctx, graphID, frontier, hops)
+			if err != nil {
+				return nil, err
+			}
+			subgraph = fetched
+		}
+		return subgraph.neighbors(frontier, label, direction), nil
+	})
+}
+
+// traverseHops는 두 구현이 공유하는 너비 우선 규칙이다. 이웃을 어디에서 가져오는지만 다르다.
+func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []model.Context, hops int, filter []string, limit int, queries *int, source hopNeighborSource) (HopResult, error) {
 	// limit 0은 「계정 플랜」이 선언한 대로 한도 없음이다. 값을 그대로 내려받아 여기에서
 	// 해석하지 않으면 한도를 푸는 설정이 연산을 죽인다.
 	if !graphID.IsV7() || hops < 0 || limit < 0 {
@@ -87,7 +125,7 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 	for depth := 1; depth <= hops && len(frontier) > 0; depth++ {
 		next := make([]model.ID, 0)
 		for _, label := range labels {
-			neighbors, err := s.hopNeighbors(ctx, graphID, frontier, label, direction)
+			neighbors, err := source(frontier, label)
 			if err != nil {
 				return HopResult{}, err
 			}
@@ -120,6 +158,7 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 	}
 	result.Distances = distances
 	result.Edges = slices.SortedFunc(edgesValues(edges, distances), compareHopEdges)
+	result.expansionQueries = *queries
 	if err := s.fillHopReferences(ctx, graphID, result.Contexts); err != nil {
 		return HopResult{}, err
 	}
@@ -272,6 +311,111 @@ func (s *Store) hopNeighbors(ctx context.Context, graphID model.ID, anchorIDs []
 		return nil, fmt.Errorf("홉 이웃 행 읽기: %w", err)
 	}
 	return neighbors, nil
+}
+
+// hopIncident는 가져온 부분 그래프에서 기준 정점 하나에 닿은 간선 하나다.
+type hopIncident struct {
+	neighbor model.Context
+	label    string
+	state    string
+	// forward 필드는 기준 정점이 간선의 시작인지다.
+	forward bool
+}
+
+// hopSubgraph는 기준 정점별 인접 간선이다.
+type hopSubgraph map[model.ID][]hopIncident
+
+// fetchHopSubgraph는 시작 노드에서 hops-1홉 안의 정점을 가변 길이 간선으로 모으고 그
+// 정점들의 인접 간선을 같은 질의에서 가져온다. 기준선이 확장하는 frontier는 깊이 hops-1까지
+// 이므로 이 범위의 인접 간선이면 기준선이 묻는 행을 모두 담는다.
+//
+// 가변 길이 간선에는 graph_id 조건만 건다. AGE 1.8.0의 가변 길이 간선은 label을 하나만 받고
+// 경로 노드 조건을 지원하지 않아, label·관계 상태·삭제 노드 조건을 걸면 여러 label을 거치는
+// 경로나 기준선이 지나는 경로를 잃는다. 조건을 빼고 모은 정점은 기준선이 도달하는 정점의
+// 상위 집합이고, 조건 판정은 neighbors가 기준선과 같은 규칙으로 한다.
+func (s *Store) fetchHopSubgraph(ctx context.Context, graphID model.ID, startIDs []model.ID, hops int) (hopSubgraph, error) {
+	identifiers := make([]string, 0, len(startIDs))
+	for _, startID := range startIDs {
+		identifiers = append(identifiers, cypherString(startID.String()))
+	}
+	// 상한 없는 탐색은 가변 길이 간선의 상한을 비워 연결 요소 전체를 모은다.
+	span := fmt.Sprintf("*0..%d", hops-1)
+	if hops == math.MaxInt {
+		span = "*0.."
+	}
+	graph := cypherString(graphID.String())
+	query := "MATCH (start:Context)-[" + span + " {graph_id: " + graph + "}]-(anchor:Context)" +
+		" WHERE start.context_id IN [" + strings.Join(identifiers, ", ") + "] AND start.graph_id = " + graph +
+		" WITH DISTINCT anchor" +
+		" MATCH (anchor)-[edge]-(neighbor:Context) WHERE edge.graph_id = " + graph + " AND neighbor.graph_id = " + graph +
+		" RETURN anchor.context_id, neighbor, label(edge), coalesce(edge.state, ''), id(anchor) = id(startNode(edge))"
+	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype, label agtype, state agtype, forward agtype"), pgx.QueryExecModeExec)
+	if err != nil {
+		return nil, fmt.Errorf("홉 부분 그래프 조회: %w", err)
+	}
+	defer rows.Close()
+	subgraph := hopSubgraph{}
+	for rows.Next() {
+		var rawAnchor, raw, rawLabel, rawState, rawForward string
+		if err := rows.Scan(&rawAnchor, &raw, &rawLabel, &rawState, &rawForward); err != nil {
+			return nil, fmt.Errorf("홉 부분 그래프 행 해석: %w", err)
+		}
+		anchorID, err := parseAnchorID(rawAnchor)
+		if err != nil {
+			return nil, err
+		}
+		value, err := parseContext(raw, graphID)
+		if err != nil {
+			return nil, err
+		}
+		incident := hopIncident{neighbor: value}
+		if err := json.Unmarshal([]byte(rawLabel), &incident.label); err != nil {
+			return nil, fmt.Errorf("홉 부분 그래프 간선 label 해석: %w", err)
+		}
+		if err := json.Unmarshal([]byte(rawState), &incident.state); err != nil {
+			return nil, fmt.Errorf("홉 부분 그래프 간선 상태 해석: %w", err)
+		}
+		if err := json.Unmarshal([]byte(rawForward), &incident.forward); err != nil {
+			return nil, fmt.Errorf("홉 부분 그래프 간선 방향 해석: %w", err)
+		}
+		subgraph[anchorID] = append(subgraph[anchorID], incident)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("홉 부분 그래프 행 읽기: %w", err)
+	}
+	return subgraph, nil
+}
+
+// neighbors는 hopNeighbors가 같은 frontier와 label로 돌려줄 행을 같은 순서로 만든다.
+func (subgraph hopSubgraph) neighbors(frontier []model.ID, label traversalLabel, direction string) []hopNeighbor {
+	type row struct {
+		anchor model.ID
+		hopNeighbor
+	}
+	rows := make([]row, 0)
+	for _, anchorID := range frontier {
+		for _, incident := range subgraph[anchorID] {
+			if incident.label != label.label || (label.confirmed && incident.state != "confirmed") {
+				continue
+			}
+			if (direction == "out" && !incident.forward) || (direction == "in" && incident.forward) {
+				continue
+			}
+			fromID, toID := anchorID, incident.neighbor.ID
+			if !incident.forward {
+				fromID, toID = incident.neighbor.ID, anchorID
+			}
+			rows = append(rows, row{anchor: anchorID, hopNeighbor: hopNeighbor{context: incident.neighbor, fromID: fromID, toID: toID}})
+		}
+	}
+	slices.SortStableFunc(rows, func(left, right row) int {
+		return cmp.Or(strings.Compare(left.anchor.String(), right.anchor.String()), strings.Compare(left.context.ID.String(), right.context.ID.String()))
+	})
+	neighbors := make([]hopNeighbor, len(rows))
+	for index, value := range rows {
+		neighbors[index] = value.hopNeighbor
+	}
+	return neighbors
 }
 
 // parseAnchorID는 agtype 문자열로 돌아온 정점의 context_id를 식별자로 바꾼다.

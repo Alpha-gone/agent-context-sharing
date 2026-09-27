@@ -189,6 +189,10 @@ func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, enqueuedAt
 		task.ContextID.String(), task.GraphID.String(), vectorText(result.Embedding), result.ModelID); err != nil {
 		return fmt.Errorf("임베딩 저장: %w", err)
 	}
+	// 임베딩 공개는 의미 유사도 채널의 후보를 바꾸므로 내용 판을 같은 트랜잭션에서 올린다.
+	if err := bumpContentRevision(ctx, tx, task.GraphID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1 AND enqueued_at = $2`, task.ID.String(), enqueuedAt); err != nil {
 		return fmt.Errorf("완료 색인 작업 제거: %w", err)
 	}
@@ -339,6 +343,10 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM public.index_task WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded); err != nil {
 			return fmt.Errorf("색인 대상에서 빠진 대기 작업 제거: %w", err)
 		}
+		// 임베딩을 지우면 의미 유사도 채널의 후보가 바뀌므로 공개와 같이 내용 판을 올린다.
+		if err := bumpContentRevision(ctx, tx, graphID); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("재색인 등록 커밋: %w", err)
@@ -361,7 +369,12 @@ func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query s
 	if !graphID.IsV7() || !current.UTC().Equal(current) || limit < 1 {
 		return nil, fmt.Errorf("키워드 검색 인자가 올바르지 않다")
 	}
-	rows, err := s.pool.Query(ctx, `
+	ctx, release, err := s.enterReadScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	rows, err := s.reader(ctx).Query(ctx, `
 		SELECT properties ->> 'context_id'::text
 		FROM `+s.contextTable()+`
 		WHERE properties ->> 'graph_id'::text = $1
@@ -391,7 +404,12 @@ func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.
 	if !graphID.IsV7() || !asOf.UTC().Equal(asOf) || limit < 1 {
 		return nil, fmt.Errorf("시간 검색 인자가 올바르지 않다")
 	}
-	rows, err := s.pool.Query(ctx, `
+	ctx, release, err := s.enterReadScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	rows, err := s.reader(ctx).Query(ctx, `
 		SELECT properties ->> 'context_id'::text
 		FROM `+s.contextTable()+`
 		WHERE properties ->> 'graph_id'::text = $1 AND properties ->> 'deleted_at'::text IS NULL
@@ -418,7 +436,12 @@ func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, a
 	if !graphID.IsV7() || !asOf.UTC().Equal(asOf) || limit < 1 {
 		return nil, fmt.Errorf("전역 요약 검색 인자가 올바르지 않다")
 	}
-	rows, err := s.pool.Query(ctx, `
+	ctx, release, err := s.enterReadScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	rows, err := s.reader(ctx).Query(ctx, `
 		SELECT properties ->> 'context_id'::text
 		FROM `+s.contextTable()+`
 		WHERE properties ->> 'graph_id'::text = $1 AND properties ->> 'deleted_at'::text IS NULL
@@ -447,11 +470,22 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	// 후보 식별자만 트랜잭션 안에서 읽고, 조립은 트랜잭션을 닫은 뒤에 한다. 반복 탐색
 	// 설정이 트랜잭션 범위라 질의가 그 안에 있어야 하고, 조립까지 안에 두면 연결을 오래
 	// 쥔 채 정점 조회가 같은 풀에서 연결을 하나 더 잡는다.
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	//
+	// 요청 단위 일관 읽기의 스냅숏 안이면 그 트랜잭션에서 반복 탐색을 켜고 조립까지 한다.
+	// 스냅숏 트랜잭션은 이 호출이 끝날 때 닫히므로 연결을 오래 쥐지 않는다.
+	ctx, release, err := s.enterReadScope(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("의미 유사도 검색 트랜잭션 시작: %w", err)
+		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer release()
+	tx, scoped := ctx.Value(readTxKey{}).(pgx.Tx)
+	if !scoped {
+		tx, err = s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+		if err != nil {
+			return nil, fmt.Errorf("의미 유사도 검색 트랜잭션 시작: %w", err)
+		}
+		defer tx.Rollback(ctx)
+	}
 	if err := enableIterativeScan(ctx, tx); err != nil {
 		return nil, err
 	}
@@ -495,8 +529,10 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 		return nil, fmt.Errorf("의미 유사도 후보 행 읽기: %w", err)
 	}
 	rows.Close()
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("의미 유사도 검색 커밋: %w", err)
+	if !scoped {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("의미 유사도 검색 커밋: %w", err)
+		}
 	}
 	candidates, err := s.searchCandidates(ctx, graphID, ids)
 	if err != nil {
@@ -553,6 +589,11 @@ func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contex
 	if len(contextIDs) == 0 {
 		return result, nil
 	}
+	ctx, release, err := s.enterReadScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	// 근거를 따라가며 만나는 모든 정점을 한 번씩만 읽는다.
 	loaded := make(map[model.ID]model.Context)
 	frontier := slices.Clone(contextIDs)

@@ -6,7 +6,7 @@
 - 검사일: 2026-09-19
 - 검사 대상: `feature/phase-10-release-verification` 브랜치
 - 검사 범위: `SRS.md`의 기능 요구사항 149건 전부. 비기능 요구사항 13건은 대상이 아니다.
-- 추가 대조: `FR-AGENT_CONTEXT-150`과 `FR-AGENT_CONTEXT-151`은 12·13단계 구현 뒤 2026-09-27에 같은 방법으로 대조해 표에 더했다. 「결과 요약」의 건수는 최초 검사 149건 기준이다.
+- 추가 대조: `FR-AGENT_CONTEXT-150`~`152`는 12·13·15단계 구현 뒤 2026-09-27에 같은 방법으로 대조해 표에 더했다. 「결과 요약」의 건수는 최초 검사 149건 기준이다.
 - 기준 문서: [SRS](../SRS.md), [SDD](../SDD.md), [개발 계획](../DEVELOPMENT_PLAN.md)
 - 선행 검사: [출시 판정 추적성 감사](2026-09-19-release-audit.md)가 남긴 "요구사항 단위 확인" 한계를 닫기 위한 검사다.
 
@@ -190,6 +190,7 @@
 | `FR-AGENT_CONTEXT-149` | 전송 계층 검증 | `internal/mcp/transport.go`의 `ServeHTTP`가 수행하는 여섯 검증 | 구현 |
 | `FR-AGENT_CONTEXT-150` | 근거 경로 선택 | `internal/search/evidence.go`의 `selectEvidenceSets`와 `SEARCH_EVIDENCE_PATH_SELECTION_ENABLED`, `cmd/eval`의 `evidence` 단계 | 구현 |
 | `FR-AGENT_CONTEXT-151` | 질의 적응형 검색 | `internal/search/route.go`의 `RouteSignals.Decide`와 `SEARCH_QUERY_ADAPTIVE_ROUTING_ENABLED`, `cmd/eval`의 `-adaptive` 비교 | 구현 |
+| `FR-AGENT_CONTEXT-152` | 일관 읽기 | `internal/store/consistency.go`의 `BeginReadSnapshot`·`enterReadScope`, `internal/search/search.go`의 `ConsistencySnapshot`, `cmd/eval`의 `-consistency` 비교 | 구현 |
 
 ## 발견 사항
 

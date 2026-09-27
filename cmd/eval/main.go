@@ -82,6 +82,12 @@ func run() error {
 	adaptiveEvidence := flag.Bool("adaptive-evidence", false, "적응형 비교의 두 구성에 근거 경로 보존 선택을 켠다")
 	directThresholds := flag.String("direct-thresholds", "0.5,0.6,0.7,0.8", "직접 충분성 하한 후보. 쉼표로 나눈다")
 	directMargins := flag.String("direct-margins", "0,0.02,0.05,0.1", "직접 후보 분리 폭 후보. 쉼표로 나눈다")
+	consistency := flag.Bool("consistency", false, "Read Committed 검색과 동기화 스냅숏의 결과 동등성과 동시 쓰기 일관성을 견준다")
+	consistencyRequests := flag.Int("consistency-requests", 100, "동시 쓰기 비교에서 구성마다 보낼 요청 수")
+	consistencyLoad := flag.String("consistency-load", "1,8,16,32", "동시 요청 부하 비교의 동시 요청자 수 후보. 쉼표로 나눈다")
+	consistencyLoadRequests := flag.Int("consistency-load-requests", 200, "동시 요청 부하 비교에서 조건마다 보낼 요청 수")
+	consistencyPauses := flag.String("consistency-write-pauses", "0,50,250", "동시 쓰기 비교에서 쓰기 사이에 쉬는 밀리초 후보. 쉼표로 나눈다")
+	consistencyStage := flag.String("consistency-stage", string(search.GraphStageReferences), "일관 읽기 비교의 그래프 관계 범위")
 	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
 	flag.Parse()
 
@@ -167,6 +173,39 @@ func run() error {
 		return err
 	}
 
+	if *consistency {
+		if !slices.Contains([]string{string(search.GraphStageReferences), string(search.GraphStageRelations), string(search.GraphStageGlobal)}, *consistencyStage) || *consistencyRequests < 1 {
+			return fmt.Errorf("-consistency-stage는 references, relations, global 중 하나이고 -consistency-requests는 양수여야 한다")
+		}
+		var pauses []int
+		for part := range strings.SplitSeq(*consistencyPauses, ",") {
+			pause, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil || pause < 0 {
+				return fmt.Errorf("-consistency-write-pauses의 %q가 0 이상의 정수가 아니다", part)
+			}
+			pauses = append(pauses, pause)
+		}
+		var concurrency []int
+		for part := range strings.SplitSeq(*consistencyLoad, ",") {
+			value, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil || value < 1 {
+				return fmt.Errorf("-consistency-load의 %q가 양의 정수가 아니다", part)
+			}
+			concurrency = append(concurrency, value)
+		}
+		if *consistencyLoadRequests < 1 {
+			return fmt.Errorf("-consistency-load-requests는 양수여야 한다")
+		}
+		result, err := runConsistency(ctx, database, worker, graph, contexts, queries, settings, consistencyConditions{
+			Requests: *consistencyRequests, WritePausesMS: pauses, LoadConcurrency: concurrency, LoadRequests: *consistencyLoadRequests, ToggledContexts: consistencyToggled, GraphStage: *consistencyStage,
+			Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
+			CandidateLimit: settings.candidateLimit, SemanticThreshold: settings.semanticThreshold, EmbeddingModel: worker.ModelID(),
+		})
+		if err != nil {
+			return err
+		}
+		return writeReport(*outPath, result)
+	}
 	if *adaptive {
 		result, err := runAdaptive(ctx, database, worker, graph, contexts, queries, settings, adaptiveConditions{
 			Repeats: *repeats, Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,

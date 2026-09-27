@@ -63,6 +63,11 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 // 구현」이 하나로 두기로 한 결과 상한이 시작 노드 수만큼 겹쳐 어느 것이 잘랐는지 알 수
 // 없게 된다. 거리는 가장 가까운 시작 노드까지의 최단 홉 거리다.
 func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []model.Context, hops int, direction string, filter []string, limit int) (HopResult, error) {
+	ctx, release, err := s.enterReadScope(ctx)
+	if err != nil {
+		return HopResult{}, err
+	}
+	defer release()
 	queries := 0
 	return s.traverseHops(ctx, graphID, starts, hops, filter, limit, &queries, func(frontier []model.ID, label traversalLabel) ([]hopNeighbor, error) {
 		queries++
@@ -191,11 +196,11 @@ func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, context
 		return nil
 	}
 	list := "[" + strings.Join(needs, ", ") + "]"
-	references, err := s.edgeTargetsBySource(ctx, s.pool, graphID, "DERIVED_FROM", list)
+	references, err := s.edgeTargetsBySource(ctx, s.reader(ctx), graphID, "DERIVED_FROM", list)
 	if err != nil {
 		return err
 	}
-	members, err := s.edgeTargetsBySource(ctx, s.pool, graphID, "HAS_MEMBER", list)
+	members, err := s.edgeTargetsBySource(ctx, s.reader(ctx), graphID, "HAS_MEMBER", list)
 	if err != nil {
 		return err
 	}
@@ -278,7 +283,7 @@ func (s *Store) hopNeighbors(ctx context.Context, graphID model.ID, anchorIDs []
 	}
 	query += " RETURN " + anchor + ".context_id, " + neighbor + ", id(" + anchor + ") = id(startNode(edge))" +
 		" ORDER BY " + anchor + ".context_id, " + neighbor + ".context_id"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype, forward agtype"), pgx.QueryExecModeExec)
+	rows, err := s.reader(ctx).Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype, forward agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("홉 이웃 조회: %w", err)
 	}
@@ -349,7 +354,7 @@ func (s *Store) fetchHopSubgraph(ctx context.Context, graphID model.ID, startIDs
 		" WITH DISTINCT anchor" +
 		" MATCH (anchor)-[edge]-(neighbor:Context) WHERE edge.graph_id = " + graph + " AND neighbor.graph_id = " + graph +
 		" RETURN anchor.context_id, neighbor, label(edge), coalesce(edge.state, ''), id(anchor) = id(startNode(edge))"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype, label agtype, state agtype, forward agtype"), pgx.QueryExecModeExec)
+	rows, err := s.reader(ctx).Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype, label agtype, state agtype, forward agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("홉 부분 그래프 조회: %w", err)
 	}

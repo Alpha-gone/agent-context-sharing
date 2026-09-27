@@ -722,10 +722,13 @@ func (s *Store) findSourceWith(ctx context.Context, queryer cypherQueryer, graph
 //
 // 값을 늘리는 요청만 한도로 막는다. 「계정 플랜 값」이 누적 한도를 그렇게 정했으므로
 // 이미 한도를 넘은 그래프에서도 축소와 읽기는 통과해야 한다.
+//
+// 컨텍스트 생성·갱신·폐기·복구가 모두 이 갱신을 지나므로 요청 단위 일관 읽기의 내용 판도
+// 같은 문장에서 올린다.
 func (s *Store) updateGraphActivity(ctx context.Context, tx pgx.Tx, graphID model.ID, characterDelta int, maxStoredChars int64) error {
 	command, err := tx.Exec(ctx, `
 		UPDATE public.context_graph
-		SET last_activity_at = $1, stored_chars = stored_chars + $2
+		SET last_activity_at = $1, stored_chars = stored_chars + $2, content_revision = content_revision + 1
 		WHERE graph_id = $3 AND stored_chars + $2 >= 0
 		  AND ($4 = 0 OR $2 <= 0 OR stored_chars + $2 <= $4)`, nowUTC(), characterDelta, graphID.String(), maxStoredChars)
 	if err != nil {
@@ -925,7 +928,7 @@ func (s *Store) contextVerticesByIDs(ctx context.Context, queryer cypherQueryer,
 // 후보마다 Context를 부르면 식별자 수만큼 왕복이 늘고, 결과 행을 연 채 부르면 같은 풀에서
 // 연결을 하나 더 잡아 동시 요청이 서로의 연결을 기다린다. 검색 채널은 이 함수를 쓴다.
 func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs []model.ID) ([]model.Context, error) {
-	values, err := s.contextsByIDs(ctx, s.pool, graphID, contextIDs)
+	values, err := s.contextsByIDs(ctx, s.reader(ctx), graphID, contextIDs)
 	if err != nil {
 		return nil, err
 	}

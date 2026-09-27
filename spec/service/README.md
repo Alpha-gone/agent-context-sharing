@@ -31,12 +31,19 @@
 - 벡터 인덱스 방식과 저장 계층의 허용 범위 (배포 구성)
 - 공개 벤치마크 선정과 반복 횟수 조정
 - 계정 플랜의 이름과 구체 값 (명세는 항목과 기본값만 정하고 값은 운영 구성으로 둔다)
-- MCP 클라이언트의 첫 지원 에이전트 호스트와 판 (`TBD-AGENT_CONTEXT_CLIENT-001`)
-- MCP 클라이언트의 구현 언어와 저장소 배치 (`TBD-AGENT_CONTEXT_CLIENT-002`)
-- MCP 클라이언트 읽기 재시도의 기본 횟수와 지연 (`TBD-AGENT_CONTEXT_CLIENT-003`)
-- MCP 클라이언트가 지원할 운영체제의 최소 판 (`TBD-AGENT_CONTEXT_CLIENT-004`)
-- MCP 클라이언트의 메시지·응답·동시성 자원 상한 (`TBD-AGENT_CONTEXT_CLIENT-005`)
-- MCP 클라이언트와 서버의 쓰기 멱등성 키 계약 (`TBD-AGENT_CONTEXT_CLIENT-006`)
-- MCP 클라이언트 공개 클라이언트 토큰의 DPoP 결합 여부 (`TBD-AGENT_CONTEXT_CLIENT-007`)
 
 상세 설계가 확정해 이 목록에서 뺀 항목은 HTTP 서버와 라우팅, 데이터베이스 드라이버와 커넥션 풀, 인가 서버 구현 방식, 색인 작업 큐 구현 방식, 색인 재시도 한계, 화면 배치와 시각 표현 규칙이다. 이후 `source_ref`의 하위 구조, 관계형 테이블의 열 정의와 스키마 적용 방식도 확정했다. 계정 개체와 최소 인증 모델(`TBD-AGENT_CONTEXT-047`), 웹 세션(`050`), 운영자 복구 경로(`051`), 클라이언트 등록과 인가 코드(`059`)도 확정해 뺐다. 인가 코드 저장, 판정의 직렬화, 주기 작업 배치와 색인 작업 확보 방식도 상세 설계가 확정했다. JWT 서명과 검증 라이브러리(`TBD-AGENT_CONTEXT-044`), 색상 값·서체와 간격(`045`), 화면 렌더링 방식과 시각화 구현(`046`)까지 확정해 상세 설계가 연 미정 사항에는 남은 항목이 없다.
+
+MCP 클라이언트의 첫 지원 에이전트 호스트(`TBD-AGENT_CONTEXT_CLIENT-001`)는 `features.mcp_2026_07_28`을 활성화한 Codex CLI `0.156.1`로 확정해 목록에서 뺐다.
+
+MCP 클라이언트의 메시지·응답·동시성 자원 상한(`TBD-AGENT_CONTEXT_CLIENT-005`)은 입력 256 KiB, 응답 32 MiB, 진행 중 원격 호출 8개와 호출·인증 대기열 각 128개로 확정해 목록에서 뺐다.
+
+MCP 클라이언트의 구현 언어와 저장소 배치(`TBD-AGENT_CONTEXT_CLIENT-002`)는 Go `1.27.1`과 공식 MCP Go SDK를 사용하는 이 저장소의 독립 실행 파일로 확정해 목록에서 뺐다. 세부 실행 명령 경로와 내부 패키지 경계는 클라이언트 SDD가 정한다.
+
+MCP 클라이언트의 지원 운영체제 판(`TBD-AGENT_CONTEXT_CLIENT-004`)은 공급자의 보안 지원 기간에 있는 macOS 14 Sonoma 이상, Ubuntu LTS 22.04 이상 또는 Debian 12 이상, Windows 11 25H2 이상으로 확정해 목록에서 뺐다. Windows의 공식 실행 환경은 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상이며 브라우저 인가와 loopback callback을 Windows 호스트와 함께 검증한다.
+
+MCP 클라이언트와 서버의 쓰기 멱등성 키 계약(`TBD-AGENT_CONTEXT_CLIENT-006`)은 `io.github.alpha-gone/write-idempotency` 확장, 호출별 UUIDv7 `Idempotency-Key`, 계정별 요청 지문과 최초 완료 결과의 24시간 보관으로 확정해 목록에서 뺐다. 같은 키·같은 요청은 최초 결과를 재생하고 같은 키·다른 요청은 `invalid_argument`로 거부한다.
+
+MCP 클라이언트와 서버의 DPoP 계약(`TBD-AGENT_CONTEXT_CLIENT-007`)은 RFC 9449, 보호 리소스·인가 서버 메타데이터의 DPoP 필수·ES256 선언, 프로세스 수명 ES256 키, `token_type=DPoP`와 `cnf.jkt`, HTTP 시도별 새 proof, 서버 시각 ±60초와 공유 `(jkt, jti)` 단일 사용 검사, 갱신 결합 유지, Bearer 하향 거부로 확정해 목록에서 뺐다. 보호 요청 오류는 `invalid_token`과 `invalid_dpop_proof`로 구분하고 최초 구현에서는 `DPoP-Nonce`를 사용하지 않는다. 이 인증은 MCP `2026-07-28` 핵심 Bearer 인증을 대체하는 서비스 전용 프로필이므로 원격 경계의 MCP 인증 적합성을 주장하지 않는다.
+
+MCP 클라이언트의 재시도 기본값(`TBD-AGENT_CONTEXT_CLIENT-003`)은 허용된 읽기, 원격 전달 전 실패가 확실한 쓰기와 멱등성 확장을 협상한 쓰기에 최초 시도 제외 최대 3회, 250ms·500ms·1초 상한의 무작위 대기를 적용하는 것으로 확정해 목록에서 뺐다. 취소와 도구 호출 제한 시간이 우선하며 재인증 뒤에도 같은 호출의 재시도 횟수를 초기화하지 않는다.

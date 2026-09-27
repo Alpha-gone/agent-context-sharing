@@ -36,7 +36,7 @@ func relationTestEvents(t *testing.T, database *Store) (model.ID, model.Context,
 }
 
 // confirmable은 두 사건을 잇는 확정 요청을 만든다.
-func confirmable(t *testing.T, graphID model.ID, relationType model.RelationType, fromID, toID model.ID) model.Relation {
+func confirmable(t testing.TB, graphID model.ID, relationType model.RelationType, fromID, toID model.ID) model.Relation {
 	t.Helper()
 	now := time.Now().UTC()
 	actorID := newTestID(t)

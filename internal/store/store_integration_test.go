@@ -410,7 +410,7 @@ func relationByID(relations []model.Relation, relationID model.ID) (model.Relati
 }
 
 // createTestAccount는 권한 목록 통합 테스트에 필요한 계정 행을 만든다.
-func createTestAccount(t *testing.T, store *Store, accountID model.ID) {
+func createTestAccount(t testing.TB, store *Store, accountID model.ID) {
 	t.Helper()
 	loginID := "test_" + strings.ReplaceAll(accountID.String(), "-", "")[5:]
 	_, err := store.pool.Exec(t.Context(), `
@@ -471,7 +471,7 @@ func addTestTeamMember(t *testing.T, store *Store, teamID, accountID model.ID) {
 }
 
 // newTestID는 통합 테스트마다 서로 다른 UUIDv7 식별자를 만든다.
-func newTestID(t *testing.T) model.ID {
+func newTestID(t testing.TB) model.ID {
 	t.Helper()
 	id, err := model.NewID()
 	if err != nil {
@@ -481,7 +481,7 @@ func newTestID(t *testing.T) model.ID {
 }
 
 // testSourceContext는 source_ref 중복과 격리 검증에 쓰는 유효한 원천을 만든다.
-func testSourceContext(t *testing.T, graphID, actorID model.ID, locator string) model.Context {
+func testSourceContext(t testing.TB, graphID, actorID model.ID, locator string) model.Context {
 	t.Helper()
 	now := time.Now().UTC()
 	return model.Context{
@@ -502,7 +502,7 @@ func testSourceContext(t *testing.T, graphID, actorID model.ID, locator string) 
 }
 
 // testDerivedContext는 낙관적 잠금 검증에 쓰는 유효한 파생을 만든다.
-func testDerivedContext(t *testing.T, graphID, actorID model.ID) model.Context {
+func testDerivedContext(t testing.TB, graphID, actorID model.ID) model.Context {
 	t.Helper()
 	return model.Context{
 		ID:             newTestID(t),
@@ -521,7 +521,7 @@ func testDerivedContext(t *testing.T, graphID, actorID model.ID) model.Context {
 }
 
 // testEventContext는 참조 간선과 사건 관계 검증에 쓰는 유효한 사건을 만든다.
-func testEventContext(t *testing.T, graphID, actorID, memberID model.ID) model.Context {
+func testEventContext(t testing.TB, graphID, actorID, memberID model.ID) model.Context {
 	t.Helper()
 	now := time.Now().UTC()
 	end := new(time.Time)

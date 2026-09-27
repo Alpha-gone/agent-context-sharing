@@ -6,7 +6,7 @@
 - 검사일: 2026-09-19
 - 검사 대상: `feature/phase-10-release-verification` 브랜치
 - 검사 범위: `SRS.md`의 기능 요구사항 149건 전부. 비기능 요구사항 13건은 대상이 아니다.
-- 추가 대조: `FR-AGENT_CONTEXT-150`~`153`은 12·13·15·16단계 구현 뒤 2026-09-27에 같은 방법으로 대조해 표에 더했다. 「결과 요약」의 건수는 최초 검사 149건 기준이다.
+- 추가 대조: `FR-AGENT_CONTEXT-150`~`154`는 12·13·15·16·17단계 구현 뒤 2026-09-27에 같은 방법으로 대조해 표에 더했다. 「결과 요약」의 건수는 최초 검사 149건 기준이다.
 - 기준 문서: [SRS](../SRS.md), [SDD](../SDD.md), [개발 계획](../DEVELOPMENT_PLAN.md)
 - 선행 검사: [출시 판정 추적성 감사](2026-09-19-release-audit.md)가 남긴 "요구사항 단위 확인" 한계를 닫기 위한 검사다.
 
@@ -192,6 +192,7 @@
 | `FR-AGENT_CONTEXT-151` | 질의 적응형 검색 | `internal/search/route.go`의 `RouteSignals.Decide`와 `SEARCH_QUERY_ADAPTIVE_ROUTING_ENABLED`, `cmd/eval`의 `-adaptive` 비교 | 구현 |
 | `FR-AGENT_CONTEXT-152` | 일관 읽기 | `internal/store/consistency.go`의 `BeginReadSnapshot`·`enterReadScope`, `internal/search/search.go`의 `ConsistencySnapshot`, `cmd/eval`의 `-consistency` 비교 | 구현 |
 | `FR-AGENT_CONTEXT-153` | 불변식 감사 | `internal/store/invariant.go`의 `invariantRules`·`checkWriteInvariants`·`AuditGraph`, `cmd/audit` | 구현 |
+| `FR-AGENT_CONTEXT-154` | 오염 적대적 평가 | `cmd/eval/adversarial.go`의 `runAdversarial`·`diagnosePath`·`summarizeMetrics`, `cmd/eval/adversarial_dataset.go`의 `validateAttackSet`·`convertOwnAdversarialSet` | 구현 |
 
 ## 발견 사항
 

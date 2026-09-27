@@ -60,8 +60,8 @@ func loadGraph(ctx context.Context, database *store.Store, set contextSet) (load
 	if err != nil {
 		return loadedGraph{}, fmt.Errorf("평가 그래프 생성: %w", err)
 	}
-	keys, err := createContexts(ctx, database, graph.ID, accountID, set)
-	if err != nil {
+	keys := make(map[string]model.ID, len(set.Contexts))
+	if err := createContexts(ctx, database, graph.ID, accountID, set.Contexts, keys); err != nil {
 		// 절반만 찬 그래프를 남기지 않는다. 적재가 실패하면 호출자가 그래프 식별자를
 		// 받지 못하므로 여기에서 지우지 않으면 정리할 방법이 남지 않는다.
 		if deleteErr := database.SetGraphDeleted(ctx, graph.ID, accountID, true); deleteErr != nil {
@@ -103,9 +103,11 @@ func confirmRelations(ctx context.Context, database *store.Store, graphID, accou
 
 // createContexts는 참조가 이미 만들어진 항목부터 차례로 올린다. 파생은 근거를,
 // 사건은 구성원을 식별자로 받으므로 순서를 맞추지 않으면 적재가 성립하지 않는다.
-func createContexts(ctx context.Context, database *store.Store, graphID, accountID model.ID, set contextSet) (map[string]model.ID, error) {
-	keys := make(map[string]model.ID, len(set.Contexts))
-	pending := set.Contexts
+//
+// keys에는 이미 만든 컨텍스트의 key를 담아 넘기고 새로 만든 항목도 같은 맵에 채운다. 공격
+// 표본의 추가 컨텍스트는 기준 집합의 key를 참조하므로 두 집합이 한 맵을 공유해야 한다.
+func createContexts(ctx context.Context, database *store.Store, graphID, accountID model.ID, specs []contextSpec, keys map[string]model.ID) error {
+	pending := specs
 	for len(pending) > 0 {
 		remaining := make([]contextSpec, 0, len(pending))
 		progressed := false
@@ -117,7 +119,7 @@ func createContexts(ctx context.Context, database *store.Store, graphID, account
 			}
 			created, err := createContext(ctx, database, graphID, accountID, spec, references)
 			if err != nil {
-				return nil, fmt.Errorf("컨텍스트 %q 적재: %w", spec.Key, err)
+				return fmt.Errorf("컨텍스트 %q 적재: %w", spec.Key, err)
 			}
 			keys[spec.Key] = created
 			progressed = true
@@ -125,11 +127,11 @@ func createContexts(ctx context.Context, database *store.Store, graphID, account
 		if !progressed {
 			// 참조가 순환하면 남은 항목이 영원히 준비되지 않는다. 파일 검증은 참조가
 			// 집합 안을 가리키는지만 보므로 순환은 여기에서 드러난다.
-			return nil, fmt.Errorf("컨텍스트 참조가 순환한다: %d건이 남았다", len(remaining))
+			return fmt.Errorf("컨텍스트 참조가 순환한다: %d건이 남았다", len(remaining))
 		}
 		pending = remaining
 	}
-	return keys, nil
+	return nil
 }
 
 // resolveReferences는 계층이 요구하는 참조를 식별자로 바꾼다. 아직 만들어지지 않은

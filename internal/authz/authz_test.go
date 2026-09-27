@@ -2,6 +2,9 @@ package authz
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -31,11 +34,11 @@ func TestAuthorizationCodeSingleUseRevokesIssuedToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("인가 코드 발급: %v", err)
 	}
-	token, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp")
+	token, err := exchangeWithDPoP(t, service, code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp")
 	if err != nil {
 		t.Fatalf("첫 코드 교환: %v", err)
 	}
-	if _, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp"); err == nil {
+	if _, err := exchangeWithDPoP(t, service, code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp"); err == nil {
 		t.Fatal("재사용 코드가 허용됐다")
 	}
 	revoked, err := backend.IsTokenRevoked(t.Context(), token.ID, time.Now())
@@ -57,7 +60,7 @@ func TestExchangeRejectsAuthorizationCodeForOtherResource(t *testing.T) {
 	if err := backend.CreateAuthorizationCode(t.Context(), store.AuthorizationCode{Hash: digest(code), ClientID: "test-client", AccountID: accountID, RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), Resource: "https://other.test/mcp", IssuedAt: now, ExpiresAt: now.Add(authorizationCodeLifetime)}); err != nil {
 		t.Fatalf("인가 코드 저장: %v", err)
 	}
-	if _, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp"); err == nil {
+	if _, err := exchangeWithDPoP(t, service, code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp"); err == nil {
 		t.Fatal("다른 resource의 인가 코드가 교환됐다")
 	}
 }
@@ -85,7 +88,7 @@ func TestAuthorizationCodeConcurrentExchangeAllowsOne(t *testing.T) {
 	var waitGroup sync.WaitGroup
 	for range 2 {
 		waitGroup.Go(func() {
-			_, err := service.Exchange(t.Context(), code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp")
+			_, err := exchangeWithDPoP(t, service, code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp")
 			results <- err
 		})
 	}
@@ -140,7 +143,7 @@ func TestAuthorizationCodeConcurrentExchangeIntegration(t *testing.T) {
 		var waitGroup sync.WaitGroup
 		for range 2 {
 			waitGroup.Go(func() {
-				token, err := service.Exchange(t.Context(), code, request.ClientID, request.RedirectURI, verifier, request.Resource)
+				token, err := exchangeWithDPoP(t, service, code, request.ClientID, request.RedirectURI, verifier, request.Resource)
 				results <- exchangeResult{token: token, err: err}
 			})
 		}
@@ -177,7 +180,7 @@ func TestTokenAudienceSeparation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := service.issue(t.Context(), id, "web", time.Now().UTC(), time.Now().UTC())
+	token, err := service.issue(t.Context(), id, "web", time.Now().UTC(), time.Now().UTC(), "")
 	if err != nil {
 		t.Fatalf("웹 세션 발급: %v", err)
 	}
@@ -322,7 +325,7 @@ func signedRenewalToken(t *testing.T, service *Service, accountID model.ID, expi
 	if !expiresAt.After(issuedAt) {
 		issuedAt = expiresAt.Add(-time.Hour)
 	}
-	raw, err := jwt.Signed(signer).Claims(tokenClaims{Claims: jwt.Claims{Issuer: service.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{service.config.Resource}, IssuedAt: jwt.NewNumericDate(issuedAt), Expiry: jwt.NewNumericDate(expiresAt), ID: "renewal-token"}, AuthenticatedAt: authenticatedAt.Unix()}).Serialize()
+	raw, err := jwt.Signed(signer).Claims(tokenClaims{Claims: jwt.Claims{Issuer: service.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{service.config.Resource}, IssuedAt: jwt.NewNumericDate(issuedAt), Expiry: jwt.NewNumericDate(expiresAt), ID: "renewal-token"}, AuthenticatedAt: authenticatedAt.Unix(), Confirmation: tokenConfirmation{JWKThumbprint: "renewal-jkt"}}).Serialize()
 	if err != nil {
 		t.Fatalf("갱신 검사 토큰 발급: %v", err)
 	}
@@ -507,12 +510,13 @@ type memoryStore struct {
 	accounts          map[string]store.Account
 	codes             map[string]store.AuthorizationCode
 	revoked           map[string]time.Time
+	proofs            map[string]time.Time
 	keys              []store.SigningKey
 	activeKeyConflict *store.SigningKey
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{accounts: map[string]store.Account{}, codes: map[string]store.AuthorizationCode{}, revoked: map[string]time.Time{}}
+	return &memoryStore{accounts: map[string]store.Account{}, codes: map[string]store.AuthorizationCode{}, revoked: map[string]time.Time{}, proofs: map[string]time.Time{}}
 }
 func (s *memoryStore) CreateAccount(_ context.Context, account store.Account) error {
 	s.mu.Lock()
@@ -660,4 +664,42 @@ func (s *memoryStore) RotateSigningKey(_ context.Context, key store.SigningKey) 
 	}
 	s.keys = append([]store.SigningKey{key}, s.keys...)
 	return nil
+}
+
+func (s *memoryStore) ReserveDPoPProof(_ context.Context, thumbprint string, proofIDHash []byte, expiresAt time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := thumbprint + ":" + string(proofIDHash)
+	if _, found := s.proofs[key]; found {
+		return false, nil
+	}
+	s.proofs[key] = expiresAt
+	return true, nil
+}
+
+func exchangeWithDPoP(t *testing.T, service *Service, code, clientID, redirectURI, verifier, resource string) (Token, error) {
+	t.Helper()
+	return service.Exchange(t.Context(), code, clientID, redirectURI, verifier, resource, dpopProof(t, service.config.Issuer+"/token", ""))
+}
+
+func dpopProof(t *testing.T, target, accessToken string) string {
+	t.Helper()
+	private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("DPoP 키 생성: %v", err)
+	}
+	options := (&jose.SignerOptions{}).WithType("dpop+jwt").WithHeader("jwk", jose.JSONWebKey{Key: private.Public(), Algorithm: string(jose.ES256)})
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: private}, options)
+	if err != nil {
+		t.Fatalf("DPoP 서명기 생성: %v", err)
+	}
+	proofID, err := secret()
+	if err != nil {
+		t.Fatalf("DPoP jti 생성: %v", err)
+	}
+	proof, err := jwt.Signed(signer).Claims(dpopClaims{Claims: jwt.Claims{IssuedAt: jwt.NewNumericDate(time.Now().UTC()), ID: proofID}, Method: "POST", Target: target, AccessTokenHash: dpopAccessTokenHash(accessToken)}).Serialize()
+	if err != nil {
+		t.Fatalf("DPoP proof 발급: %v", err)
+	}
+	return proof
 }

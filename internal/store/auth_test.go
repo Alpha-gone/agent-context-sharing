@@ -20,6 +20,7 @@ func TestAuthStoreRejectsInvalidInputs(t *testing.T) {
 		{name: "빈 발급 토큰", err: func() error { _, err := store.ConsumeAuthorizationCode(t.Context(), "code", "", now, now); return err }()},
 		{name: "빈 폐기 토큰", err: store.RevokeToken(t.Context(), "", now)},
 		{name: "빈 폐기 조회 토큰", err: func() error { _, err := store.IsTokenRevoked(t.Context(), "", now); return err }()},
+		{name: "불완전한 DPoP proof 예약", err: func() error { _, err := store.ReserveDPoPProof(t.Context(), "", nil, now); return err }()},
 		{name: "불완전한 서명 키 생성", err: store.CreateSigningKey(t.Context(), SigningKey{})},
 		{name: "불완전한 서명 키 회전", err: store.RotateSigningKey(t.Context(), SigningKey{})},
 	}

@@ -122,6 +122,7 @@ type failingStore struct {
 	*memoryStore
 	signingKeyFails bool
 	revocationFails bool
+	dpopProofFails  bool
 }
 
 var errStoreUnavailable = errors.New("데이터베이스에 닿을 수 없다")
@@ -138,6 +139,13 @@ func (s *failingStore) RevokedTokenIDs(ctx context.Context, now time.Time) ([]st
 		return nil, errStoreUnavailable
 	}
 	return s.memoryStore.RevokedTokenIDs(ctx, now)
+}
+
+func (s *failingStore) ReserveDPoPProof(ctx context.Context, thumbprint string, proofIDHash []byte, expiresAt time.Time) (bool, error) {
+	if s.dpopProofFails {
+		return false, errStoreUnavailable
+	}
+	return s.memoryStore.ReserveDPoPProof(ctx, thumbprint, proofIDHash, expiresAt)
 }
 
 // TestStoreFailureIsNotReportedAsInvalidCredential은 인증 기반 인프라 장애가 자격 증명

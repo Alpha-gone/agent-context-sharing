@@ -1,6 +1,7 @@
 package store
 
 import (
+	"crypto/sha256"
 	"errors"
 	"os"
 	"strings"
@@ -10,6 +11,70 @@ import (
 
 	"agent_context_sharing/internal/model"
 )
+
+// TestReserveDPoPProofIntegration은 같은 키·proof 식별자를 동시에 한 번만 예약하고,
+// 만료 행만 정리하는지 실제 데이터베이스에서 확인한다.
+func TestReserveDPoPProofIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	thumbprint := "jkt-" + newTestID(t).String()
+	proofIDHash := sha256.Sum256([]byte("same-dpop-proof"))
+	expiresAt := time.Now().UTC().Add(time.Minute)
+
+	type result struct {
+		reserved bool
+		err      error
+	}
+	results := make(chan result, 2)
+	var group sync.WaitGroup
+	for range 2 {
+		group.Go(func() {
+			reserved, err := database.ReserveDPoPProof(t.Context(), thumbprint, proofIDHash[:], expiresAt)
+			results <- result{reserved: reserved, err: err}
+		})
+	}
+	group.Wait()
+	close(results)
+
+	reservedCount := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("DPoP proof 예약: %v", result.err)
+		}
+		if result.reserved {
+			reservedCount++
+		}
+	}
+	if reservedCount != 1 {
+		t.Fatalf("동일 DPoP proof 예약 성공 수 = %d, want 1", reservedCount)
+	}
+
+	// 허용 창만 지난 기록은 시계 차이 여유 동안 남기고, 여유까지 지난 기록만 지운다.
+	now := time.Now().UTC()
+	graceHash := sha256.Sum256([]byte("grace-dpop-proof"))
+	expiredHash := sha256.Sum256([]byte("expired-dpop-proof"))
+	for _, row := range []struct {
+		hash      [sha256.Size]byte
+		expiresAt time.Time
+	}{
+		{graceHash, now.Add(-dpopProofCleanupGrace / 2)},
+		{expiredHash, now.Add(-2 * dpopProofCleanupGrace)},
+	} {
+		if reserved, err := database.ReserveDPoPProof(t.Context(), thumbprint, row.hash[:], row.expiresAt); err != nil || !reserved {
+			t.Fatalf("만료 DPoP proof 준비 = reserved:%t err:%v", reserved, err)
+		}
+	}
+	if deleted, err := database.CleanupExpiredDPoPProofs(t.Context(), now); err != nil || deleted < 1 {
+		t.Fatalf("만료 DPoP proof 정리 = %d, %v", deleted, err)
+	}
+	var currentExists, graceExists, expiredExists bool
+	if err := database.pool.QueryRow(t.Context(), `
+		SELECT EXISTS (SELECT 1 FROM public.dpop_proof_replay WHERE jwk_thumbprint = $1 AND proof_id_hash = $2),
+		       EXISTS (SELECT 1 FROM public.dpop_proof_replay WHERE jwk_thumbprint = $1 AND proof_id_hash = $3),
+		       EXISTS (SELECT 1 FROM public.dpop_proof_replay WHERE jwk_thumbprint = $1 AND proof_id_hash = $4)
+	`, thumbprint, proofIDHash[:], graceHash[:], expiredHash[:]).Scan(&currentExists, &graceExists, &expiredExists); err != nil || !currentExists || !graceExists || expiredExists {
+		t.Fatalf("DPoP proof 정리 대상 보존 = current:%t grace:%t expired:%t err:%v", currentExists, graceExists, expiredExists, err)
+	}
+}
 
 // TestUpdatePasswordHashIfMatchesIntegration은 재해시가 읽은 기존 값과 같을 때만
 // 반영돼 동시에 성공한 로그인 요청이 이미 바뀐 해시를 덮어쓰지 않음을 확인한다.

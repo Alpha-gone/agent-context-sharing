@@ -52,6 +52,8 @@ var (
 	// 서명 키나 폐기 목록을 읽지 못한 것은 재인증해도 같은 자리에서 다시 막힌다.
 	// 「토큰 검증」이 이 구분을 계약으로 확정했다.
 	ErrUnavailable = errors.New("unavailable")
+	// ErrInvalidDPoPProof는 토큰과 분리해 DPoP proof의 형식·결합·재생 실패를 나타낸다.
+	ErrInvalidDPoPProof = errors.New("invalid_dpop_proof")
 )
 
 // Config는 인가 서버의 고정된 배포 경계를 모은다.
@@ -90,6 +92,7 @@ type authStore interface {
 	SigningKeys(context.Context) ([]store.SigningKey, error)
 	CreateSigningKey(context.Context, store.SigningKey) error
 	RotateSigningKey(context.Context, store.SigningKey) error
+	ReserveDPoPProof(context.Context, string, []byte, time.Time) (bool, error)
 }
 
 // Token은 응답 헤더 또는 세션 쿠키로 보낼 서명된 자격 증명이다.
@@ -275,7 +278,11 @@ func (s *Service) Authorize(ctx context.Context, accountID model.ID, request Aut
 // 대상 리소스를 코드 행에 남겨 두었으므로, 토큰 요청이 같은 값을 제시하는지 확인해야
 // 실제 발급 대상이 그때 고른 것과 같다는 것이 성립한다. 값이 비면 거부한다. 규약이
 // 클라이언트에 이 파라미터를 요구하므로 생략을 허용하면 결속 자체가 선택이 된다.
-func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, verifier, resource string) (Token, error) {
+func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, verifier, resource, proof string) (Token, error) {
+	jkt, err := s.verifyDPoPProof(ctx, DPoPRequest{Proof: proof, Method: "POST", Target: s.config.Issuer + "/token"}, "", false)
+	if err != nil {
+		return Token{}, err
+	}
 	// 검증기의 문법을 해시 대조보다 먼저 본다. 대조만 하면 43자보다 짧거나 엔트로피가
 	// 모자란 검증기도 해시만 맞으면 통과해 RFC 7636이 보장하려던 것이 사라진다.
 	if !verifierPattern.MatchString(verifier) {
@@ -293,7 +300,7 @@ func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, ver
 	if stored.ClientID != clientID || stored.RedirectURI != redirectURI || stored.Resource != resource || digest(verifier) != stored.CodeChallenge {
 		return Token{}, fmt.Errorf("invalid_grant")
 	}
-	token, err := s.issue(ctx, stored.AccountID, s.config.Resource, now, now)
+	token, err := s.issue(ctx, stored.AccountID, s.config.Resource, now, now, jkt)
 	if err != nil {
 		return Token{}, err
 	}
@@ -319,7 +326,7 @@ func (s *Service) invalidGrant(ctx context.Context, err error) error {
 // WebSession은 웹 채널 전용 audience와 12시간 수명을 가진 서명 쿠키 값을 발급한다.
 func (s *Service) WebSession(ctx context.Context, accountID model.ID, audience string) (Token, error) {
 	now := time.Now().UTC()
-	return s.issue(ctx, accountID, audience, now, now)
+	return s.issue(ctx, accountID, audience, now, now, "")
 }
 
 // Verify는 기대 audience, 서명, 필수 클레임, 만료와 폐기 목록을 한 경로에서 확인한다.
@@ -340,8 +347,8 @@ func (s *Service) Verify(ctx context.Context, raw, audience string) (model.ID, T
 // Verify와 Renew를 이어 부르지 않는 이유는 왕복 때문이다. 두 함수가 각각 서명 키와
 // 폐기 목록을 읽으므로 이어 부르면 요청마다 그 조회가 두 배가 된다. 갱신 조건에 들지
 // 않거나 발급이 실패하면 renewed가 비고, 「토큰 갱신」대로 요청 자체는 정상 처리한다.
-func (s *Service) VerifyAndRenew(ctx context.Context, raw, audience string) (model.ID, Token, error) {
-	claims, err := s.verifiedClaims(ctx, raw, audience)
+func (s *Service) VerifyAndRenew(ctx context.Context, request DPoPRequest) (model.ID, Token, error) {
+	claims, err := s.verifiedClaims(ctx, request.AccessToken, request.Target)
 	if err != nil {
 		return model.ID{}, Token{}, err
 	}
@@ -349,8 +356,11 @@ func (s *Service) VerifyAndRenew(ctx context.Context, raw, audience string) (mod
 	if err != nil {
 		return model.ID{}, Token{}, ErrInvalidCredential
 	}
-	if audience != s.config.Resource {
+	if request.Target != s.config.Resource {
 		return id, Token{}, nil
+	}
+	if _, err := s.verifyDPoPProof(ctx, request, claims.Confirmation.JWKThumbprint, true); err != nil {
+		return model.ID{}, Token{}, err
 	}
 	renewed, ok, err := s.renewFromClaims(ctx, id, claims)
 	if err != nil || !ok {
@@ -382,7 +392,7 @@ func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (tok
 		return tokenClaims{}, fmt.Errorf("%w: 서명 키 조회: %w", ErrUnavailable, err)
 	}
 	var claims tokenClaims
-	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil {
+	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil || (audience == s.config.Resource && claims.Confirmation.JWKThumbprint == "") {
 		return tokenClaims{}, ErrInvalidCredential
 	}
 	revoked, err := s.cache.isRevoked(ctx, s.store, claims.ID, time.Now().UTC())
@@ -416,7 +426,10 @@ func (s *Service) renewFromClaims(ctx context.Context, accountID model.ID, claim
 	if claims.AuthenticatedAt == 0 || authenticatedAt.After(now) || now.Sub(authenticatedAt) > webSessionLifetime {
 		return Token{}, false, nil
 	}
-	renewed, err := s.issue(ctx, accountID, s.config.Resource, now, authenticatedAt)
+	if claims.Confirmation.JWKThumbprint == "" {
+		return Token{}, false, nil
+	}
+	renewed, err := s.issue(ctx, accountID, s.config.Resource, now, authenticatedAt, claims.Confirmation.JWKThumbprint)
 	return renewed, err == nil, err
 }
 
@@ -460,10 +473,15 @@ func (s *Service) RotateSigningKey(ctx context.Context) error {
 
 type tokenClaims struct {
 	jwt.Claims
-	AuthenticatedAt int64 `json:"auth_time"`
+	AuthenticatedAt int64             `json:"auth_time"`
+	Confirmation    tokenConfirmation `json:"cnf,omitzero"`
 }
 
-func (s *Service) issue(ctx context.Context, accountID model.ID, audience string, now, authenticatedAt time.Time) (Token, error) {
+type tokenConfirmation struct {
+	JWKThumbprint string `json:"jkt"`
+}
+
+func (s *Service) issue(ctx context.Context, accountID model.ID, audience string, now, authenticatedAt time.Time, jkt string) (Token, error) {
 	key, err := s.activeKey(ctx)
 	if err != nil {
 		return Token{}, err
@@ -486,7 +504,7 @@ func (s *Service) issue(ctx context.Context, accountID model.ID, audience string
 		lifetime = webSessionLifetime
 	}
 	expires := now.Add(lifetime)
-	raw, err := jwt.Signed(signer).Claims(tokenClaims{Claims: jwt.Claims{Issuer: s.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{audience}, IssuedAt: jwt.NewNumericDate(now), Expiry: jwt.NewNumericDate(expires), ID: jti}, AuthenticatedAt: authenticatedAt.Unix()}).Serialize()
+	raw, err := jwt.Signed(signer).Claims(tokenClaims{Claims: jwt.Claims{Issuer: s.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{audience}, IssuedAt: jwt.NewNumericDate(now), Expiry: jwt.NewNumericDate(expires), ID: jti}, AuthenticatedAt: authenticatedAt.Unix(), Confirmation: tokenConfirmation{JWKThumbprint: jkt}}).Serialize()
 	if err != nil {
 		return Token{}, fmt.Errorf("JWT 발급: %w", err)
 	}

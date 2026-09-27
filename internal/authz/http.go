@@ -2,6 +2,7 @@ package authz
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -92,13 +93,27 @@ func (h *Handler) Token(writer http.ResponseWriter, request *http.Request) {
 		writeTokenError(writer, http.StatusBadRequest, "unsupported_grant_type")
 		return
 	}
+	proof := request.Header.Values("DPoP")
+	if len(proof) != 1 || proof[0] == "" {
+		writeTokenError(writer, http.StatusBadRequest, "invalid_dpop_proof")
+		return
+	}
 	token, err := h.service.Exchange(request.Context(),
 		request.PostForm.Get("code"),
 		request.PostForm.Get("client_id"),
 		request.PostForm.Get("redirect_uri"),
 		request.PostForm.Get("code_verifier"),
-		request.PostForm.Get("resource"))
+		request.PostForm.Get("resource"),
+		proof[0])
 	if err != nil {
+		if errors.Is(err, ErrInvalidDPoPProof) {
+			writeTokenError(writer, http.StatusBadRequest, "invalid_dpop_proof")
+			return
+		}
+		if errors.Is(err, ErrUnavailable) {
+			writeTokenError(writer, http.StatusInternalServerError, "server_error")
+			return
+		}
 		writeTokenError(writer, http.StatusBadRequest, "invalid_grant")
 		return
 	}
@@ -108,7 +123,7 @@ func (h *Handler) Token(writer http.ResponseWriter, request *http.Request) {
 	// 것이며, 「계정 매핑과 인가 범위」가 정한 것은 후자다.
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"access_token": token.Raw,
-		"token_type":   "Bearer",
+		"token_type":   "DPoP",
 		"expires_in":   int(accessTokenLifetime.Seconds()),
 		"scope":        h.service.config.Scope,
 	})

@@ -203,6 +203,20 @@ func (s *Store) CleanupExpiredAuthorizationCodes(ctx context.Context, now time.T
 	return s.deleteBefore(ctx, "인가 코드 정리", `DELETE FROM public.authorization_code WHERE expires_at <= $1`, now)
 }
 
+// dpopProofCleanupGrace는 인스턴스 사이 시계 차이를 덮는 정리 여유다. iat 허용 창은 요청을
+// 받은 인스턴스의 시계로, 정리는 작업을 맡은 인스턴스의 시계로 판정하므로 여유 없이 지우면
+// 시계가 느린 인스턴스가 기록이 사라진 proof를 아직 허용 창 안으로 보고 다시 받는다.
+const dpopProofCleanupGrace = time.Minute
+
+// CleanupExpiredDPoPProofs는 60초 허용 창과 시계 차이 여유를 모두 지난 DPoP proof 재생
+// 기록을 지운다.
+func (s *Store) CleanupExpiredDPoPProofs(ctx context.Context, now time.Time) (int, error) {
+	if now.IsZero() {
+		return 0, fmt.Errorf("DPoP proof 재생 기록 정리 기준 시각이 없다")
+	}
+	return s.deleteBefore(ctx, "DPoP proof 재생 기록 정리", `DELETE FROM public.dpop_proof_replay WHERE expires_at <= $1`, now.Add(-dpopProofCleanupGrace))
+}
+
 // CleanupRequestRateWindows는 현재 1분 창보다 오래된 요청 빈도 행을 지운다.
 func (s *Store) CleanupRequestRateWindows(ctx context.Context, now time.Time) (int, error) {
 	return s.deleteBefore(ctx, "요청 빈도 창 정리", `DELETE FROM public.request_rate WHERE window_started_at < $1`, now.UTC().Truncate(time.Minute))

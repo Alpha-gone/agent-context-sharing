@@ -50,12 +50,12 @@ func IdempotencyFromContext(ctx context.Context) (IdempotencyRequest, bool) {
 	return request, ok
 }
 
-// ErrUnauthenticated는 제시한 자격 증명 자체가 유효하지 않다는 검증 결과다.
-//
-// 검증을 끝내지 못한 내부 장애와 나누려고 둔다. 「토큰 검증」이 확정한 대로 전자는 401로
-// 재인증을 요구하고 후자는 500으로 답하며, 후자를 401로 숨기면 클라이언트가 재인증하고
-// 돌아와도 같은 자리에서 다시 막힌다. VerifyFunc를 채우는 쪽이 이 오류로 감싼다.
-var ErrUnauthenticated = errors.New("unauthenticated")
+var (
+	// ErrInvalidToken은 DPoP proof까지 제시됐지만 접근 토큰 검증에 실패한 결과다.
+	ErrInvalidToken = errors.New("invalid_token")
+	// ErrInvalidDPoPProof는 proof 형식·결합·재생 또는 Bearer 하향 제시의 실패다.
+	ErrInvalidDPoPProof = errors.New("invalid_dpop_proof")
+)
 
 // Config는 MCP 리소스 서버의 고정된 공개 경계를 모은다.
 type Config struct {
@@ -66,8 +66,16 @@ type Config struct {
 	ServerInfo Implementation
 }
 
-// VerifyFunc는 Bearer 토큰을 검증하고 요청 계정을 돌려준다.
-type VerifyFunc func(context.Context, string, string) (model.ID, error)
+// Authentication은 요청별 DPoP 결합을 검증하는 데 필요한 값만 담는다.
+type Authentication struct {
+	AccessToken string
+	Proof       string
+	Method      string
+	Target      string
+}
+
+// VerifyFunc는 DPoP 접근 토큰과 요청 proof를 함께 검증하고 요청 계정을 돌려준다.
+type VerifyFunc func(context.Context, Authentication) (model.ID, error)
 
 // CallFunc는 전송 검증을 지난 도구 호출을 처리한다.
 type CallFunc func(context.Context, model.ID, string, map[string]any) (ToolResult, error)
@@ -182,17 +190,25 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	token := bearerToken(request)
-	if token == "" {
-		s.writeAuthenticationChallenge(writer)
+	authentication, state := dpopAuthentication(request, s.config.ResourceURL.String())
+	if state == authenticationMissing {
+		s.writeAuthenticationChallenge(writer, "")
 		return
 	}
-	accountID, err := s.verify(request.Context(), token, s.config.ResourceURL.String())
+	if state == authenticationInvalid {
+		s.writeAuthenticationChallenge(writer, "invalid_dpop_proof")
+		return
+	}
+	accountID, err := s.verify(request.Context(), authentication)
 	if err != nil {
 		// 자격 증명 실패와 내부 장애를 나눈다. 「토큰 검증」이 확정한 대로 재인증이
 		// 답이 아닌 실패에 401을 돌려주면 클라이언트가 같은 자리에서 다시 막힌다.
-		if errors.Is(err, ErrUnauthenticated) {
-			s.writeAuthenticationChallenge(writer)
+		if errors.Is(err, ErrInvalidToken) {
+			s.writeAuthenticationChallenge(writer, "invalid_token")
+			return
+		}
+		if errors.Is(err, ErrInvalidDPoPProof) {
+			s.writeAuthenticationChallenge(writer, "invalid_dpop_proof")
 			return
 		}
 		s.writeRPCError(writer, http.StatusInternalServerError, message.ID, -32603, "Internal error", nil)
@@ -240,9 +256,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 // ProtectedResourceMetadata는 RFC 9728 보호 리소스 메타데이터를 반환한다.
 func (s *Server) ProtectedResourceMetadata(writer http.ResponseWriter, _ *http.Request) {
 	s.writeJSON(writer, http.StatusOK, map[string]any{
-		"resource":              s.config.ResourceURL.String(),
-		"authorization_servers": []string{s.config.AuthorizationServerURL.String()},
-		"scopes_supported":      []string{Scope},
+		"resource":                          s.config.ResourceURL.String(),
+		"authorization_servers":             []string{s.config.AuthorizationServerURL.String()},
+		"scopes_supported":                  []string{Scope},
+		"dpop_bound_access_tokens_required": true,
+		"dpop_signing_alg_values_supported": []string{"ES256"},
 	})
 }
 
@@ -250,14 +268,15 @@ func (s *Server) ProtectedResourceMetadata(writer http.ResponseWriter, _ *http.R
 func (s *Server) AuthorizationServerMetadata(writer http.ResponseWriter, _ *http.Request) {
 	base := s.config.AuthorizationServerURL.String()
 	s.writeJSON(writer, http.StatusOK, map[string]any{
-		"issuer":                           base,
-		"authorization_endpoint":           base + "/authorize",
-		"token_endpoint":                   base + "/token",
-		"jwks_uri":                         base + "/jwks.json",
-		"response_types_supported":         []string{"code"},
-		"grant_types_supported":            []string{"authorization_code"},
-		"code_challenge_methods_supported": []string{"S256"},
-		"scopes_supported":                 []string{Scope},
+		"issuer":                            base,
+		"authorization_endpoint":            base + "/authorize",
+		"token_endpoint":                    base + "/token",
+		"jwks_uri":                          base + "/jwks.json",
+		"response_types_supported":          []string{"code"},
+		"grant_types_supported":             []string{"authorization_code"},
+		"code_challenge_methods_supported":  []string{"S256"},
+		"dpop_signing_alg_values_supported": []string{"ES256"},
+		"scopes_supported":                  []string{Scope},
 		// 생략하면 RFC 8414가 client_secret_basic을 기본값으로 가정하게 둔다. 이 서버는
 		// 공개 클라이언트만 받으므로 선언하지 않으면 클라이언트가 없는 비밀을 찾는다.
 		"token_endpoint_auth_methods_supported": []string{"none"},
@@ -325,16 +344,29 @@ func decodeHeaderValue(value string) (string, bool) {
 	return string(decoded), true
 }
 
-func bearerToken(request *http.Request) string {
-	values := request.Header.Values("Authorization")
-	if len(values) != 1 {
-		return ""
+type authenticationState uint8
+
+const (
+	authenticationMissing authenticationState = iota
+	authenticationInvalid
+	authenticationReady
+)
+
+func dpopAuthentication(request *http.Request, target string) (Authentication, authenticationState) {
+	authorization := request.Header.Values("Authorization")
+	proof := request.Header.Values("DPoP")
+	if len(authorization) == 0 && len(proof) == 0 {
+		return Authentication{}, authenticationMissing
 	}
-	value, found := strings.CutPrefix(values[0], "Bearer ")
-	if !found || value == "" || strings.ContainsAny(value, " \t") {
-		return ""
+	if len(authorization) != 1 || len(proof) != 1 {
+		return Authentication{}, authenticationInvalid
 	}
-	return value
+	// 스킴 이름은 RFC 9110대로 대소문자를 구분하지 않는다.
+	scheme, accessToken, found := strings.Cut(authorization[0], " ")
+	if !found || !strings.EqualFold(scheme, "DPoP") || accessToken == "" || strings.ContainsAny(accessToken, " \t") || proof[0] == "" {
+		return Authentication{}, authenticationInvalid
+	}
+	return Authentication{AccessToken: accessToken, Proof: proof[0], Method: request.Method, Target: target}, authenticationReady
 }
 
 func (s *Server) writeRPCError(writer http.ResponseWriter, status int, id jsontext.Value, code int, message string, data any) {
@@ -381,14 +413,17 @@ func (s *Server) envelope(result any) (map[string]jsontext.Value, error) {
 // writeAuthenticationChallenge는 보호 리소스 메타데이터 위치와 필요한 scope를 알려
 // 클라이언트가 인가 서버를 발견하고 재인증을 시작할 수 있게 한다.
 //
-// 토큰이 없는 경우와 제시한 토큰의 검증이 실패한 경우를 같은 응답으로 다룬다. OAuth 2.1이
-// 유효하지 않은 접근 토큰에 401을 요구하며, 도메인 결과로 내려보내면 응답이 HTTP 수준에서
-// 성공으로 보여 표준 클라이언트와 중간 장치가 재인증 흐름을 시작하지 못한다.
-func (s *Server) writeAuthenticationChallenge(writer http.ResponseWriter) {
+// proof 오류와 토큰 오류는 클라이언트가 재인증 여부를 판단할 수 있게 구분하지만, 세부
+// 실패 원인은 노출하지 않는다.
+func (s *Server) writeAuthenticationChallenge(writer http.ResponseWriter, code string) {
 	metadataURL := s.config.ResourceURL.Clone()
 	metadataURL.Path = "/.well-known/oauth-protected-resource"
 	metadataURL.RawPath = ""
-	writer.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata=%q, scope=%q`, metadataURL.String(), Scope))
+	challenge := fmt.Sprintf(`DPoP algs="ES256", resource_metadata=%q, scope=%q`, metadataURL.String(), Scope)
+	if code != "" {
+		challenge = fmt.Sprintf(`DPoP error=%q, algs="ES256", resource_metadata=%q, scope=%q`, code, metadataURL.String(), Scope)
+	}
+	writer.Header().Set("WWW-Authenticate", challenge)
 	writer.WriteHeader(http.StatusUnauthorized)
 }
 

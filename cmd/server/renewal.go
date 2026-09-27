@@ -25,7 +25,7 @@ type renewalHeaderKey struct{}
 
 // tokenRenewer는 갱신 헤더를 다는 데 필요한 인가 서버 계약만 노출한다.
 type tokenRenewer interface {
-	VerifyAndRenew(context.Context, string, string) (model.ID, authz.Token, error)
+	VerifyAndRenew(context.Context, authz.DPoPRequest) (model.ID, authz.Token, error)
 }
 
 // withRenewalHeader는 토큰 검증이 갱신 결과를 실을 응답 헤더를 요청 컨텍스트에 둔다.
@@ -43,14 +43,17 @@ func withRenewalHeader(next http.Handler) http.Handler {
 // verifyWithRenewal은 MCP 토큰을 검증하면서 갱신 구간에 든 토큰을 응답 헤더로 알린다.
 //
 // 검증 실패를 두 갈래로 옮기는 자리이기도 하다. `mcp`는 `authz`를 의존하지 않으므로
-// 인가 서버의 오류를 전송 계층이 아는 형태로 바꾸는 일을 이 경계가 맡는다. 자격 증명
-// 실패만 `mcp.ErrUnauthenticated`가 되고, 내부 장애는 원인을 그대로 올려 `500`이 된다.
-func verifyWithRenewal(service tokenRenewer) func(context.Context, string, string) (model.ID, error) {
-	return func(ctx context.Context, raw, audience string) (model.ID, error) {
-		accountID, renewed, err := service.VerifyAndRenew(ctx, raw, audience)
+// 인가 서버의 오류를 전송 계층이 아는 형태로 바꾸는 일을 이 경계가 맡는다. 토큰 실패와
+// proof 실패는 각각의 DPoP 도전으로, 내부 장애는 원인을 보존한 `500`으로 이어진다.
+func verifyWithRenewal(service tokenRenewer) mcp.VerifyFunc {
+	return func(ctx context.Context, request mcp.Authentication) (model.ID, error) {
+		accountID, renewed, err := service.VerifyAndRenew(ctx, authz.DPoPRequest{AccessToken: request.AccessToken, Proof: request.Proof, Method: request.Method, Target: request.Target})
 		if err != nil {
 			if errors.Is(err, authz.ErrInvalidCredential) {
-				return model.ID{}, fmt.Errorf("%w: %w", mcp.ErrUnauthenticated, err)
+				return model.ID{}, fmt.Errorf("%w: %w", mcp.ErrInvalidToken, err)
+			}
+			if errors.Is(err, authz.ErrInvalidDPoPProof) {
+				return model.ID{}, fmt.Errorf("%w: %w", mcp.ErrInvalidDPoPProof, err)
 			}
 			return model.ID{}, err
 		}

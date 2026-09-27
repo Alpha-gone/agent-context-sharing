@@ -41,7 +41,7 @@
 | 16 | 그래프 불변식 감사 | 완료 |
 | 17 | 관계·경로 오염 적대적 평가 | 완료 |
 | 18 | 쓰기 멱등성 확장 | 진행 중 |
-| 19 | DPoP 발신자 제한 | 미착수 |
+| 19 | DPoP 발신자 제한 | 진행 중 |
 
 10단계는 업무 효과 본 측정과 12~19단계 완료에 따른 출시 판정이 남았고, 11단계는 표준 클라이언트 실연결 상호 운용 확인만 남았다. 남은 단계의 진행 순서와 병렬 가능 범위는 「단계 간 병렬화」가 정한다.
 
@@ -1001,31 +1001,37 @@ go run ./cmd/eval -business <업무 효과 집계>.json -out <업무 효과 결�
 
 ### 작업
 
-- [ ] `(jwk_thumbprint, proof_id_hash)`를 기본 키로 하고 `expires_at`과 만료 정리 인덱스를 담는 `dpop_proof_replay` 마이그레이션과 원자적 단일 사용 저장소 연산을 추가한다.
-- [ ] 보호 리소스 메타데이터에 `dpop_bound_access_tokens_required: true`와 `dpop_signing_alg_values_supported: ["ES256"]`을, 인가 서버 메타데이터에 `dpop_signing_alg_values_supported: ["ES256"]`을 광고한다.
-- [ ] 토큰 엔드포인트에서 `typ`·`alg`·공개 JWK·서명·`htm`·`htu`·`iat`·`jti`를 검증하고 같은 `(jkt, jti)`를 재사용한 요청을 `invalid_dpop_proof`로 거부한다.
-- [ ] 토큰 응답을 `token_type=DPoP`로 내보내고 JWT `cnf.jkt`에 검증한 proof 키의 thumbprint를 담는다.
-  - proof 실패 시 Bearer 토큰을 발급하지 않는다.
-- [ ] `/mcp`에서 `Authorization: DPoP`와 `DPoP` 헤더를 정확히 하나씩 요구하고 토큰 검증에 더해 `ath`, `htm=POST`, 정규 `htu`, ±60초 `iat`, 새 `jti`와 `cnf.jkt` 결합을 검증한다.
-- [ ] 모든 proof 검증을 통과한 뒤 `(jkt, SHA-256(jti))`를 원자적으로 예약하고, 충돌은 HTTP `401`, 저장 장애는 HTTP `500`으로 구분한다.
-- [ ] 인증 정보 없는 요청에는 오류 값 없는 `WWW-Authenticate: DPoP` 도전을, 토큰 실패에는 `invalid_token`, proof 실패에는 `invalid_dpop_proof` 도전을 반환한다.
-  - 모든 도전에 `algs="ES256"`과 보호 리소스 메타데이터 위치를 알린다.
-  - 토큰 엔드포인트의 `invalid_dpop_proof`와 Bearer 제시 거부도 구현한다.
-- [ ] 자동 갱신 JWT가 현재 토큰의 `cnf.jkt`를 그대로 승계하게 하고 결합을 확인할 수 없으면 갱신하지 않는다.
-- [ ] `DPoP-Nonce`를 발급하거나 요구하지 않으며 `use_dpop_nonce` 흐름이 열리지 않았는지 확인한다.
-- [ ] 만료된 `dpop_proof_replay` 행을 1분 주기로 정리하는 아홉 번째 주기 작업과 독립된 자문 잠금 키를 추가한다.
-- [ ] 토큰·proof·원문 `jti`가 로그에 남지 않고 재생 저장소에는 `jti` 해시만 남는지 검증한다.
+- [x] `(jwk_thumbprint, proof_id_hash)`를 기본 키로 하고 `expires_at`과 만료 정리 인덱스를 담는 `dpop_proof_replay` 마이그레이션과 원자적 단일 사용 저장소 연산을 추가한다.
+- [x] 보호 리소스 메타데이터에 `dpop_bound_access_tokens_required: true`와 `dpop_signing_alg_values_supported: ["ES256"]`을, 인가 서버 메타데이터에 `dpop_signing_alg_values_supported: ["ES256"]`을 광고한다.
+- [x] 토큰 엔드포인트에서 `typ`·`alg`·공개 JWK·서명·`htm`·`htu`·`iat`·`jti`를 검증하고 같은 `(jkt, jti)`를 재사용한 요청을 `invalid_dpop_proof`로 거부한다.
+- [x] 토큰 응답을 `token_type=DPoP`로 내보내고 JWT `cnf.jkt`에 검증한 proof 키의 thumbprint를 담는다.
+  - [x] proof 실패 시 Bearer 토큰을 발급하지 않는다.
+- [x] `/mcp`에서 `Authorization: DPoP`와 `DPoP` 헤더를 정확히 하나씩 요구하고 토큰 검증에 더해 `ath`, `htm=POST`, 정규 `htu`, ±60초 `iat`, 새 `jti`와 `cnf.jkt` 결합을 검증한다.
+- [x] 모든 proof 검증을 통과한 뒤 `(jkt, SHA-256(jti))`를 원자적으로 예약하고, 충돌은 HTTP `401`, 저장 장애는 HTTP `500`으로 구분한다.
+- [x] 인증 정보 없는 요청에는 오류 값 없는 `WWW-Authenticate: DPoP` 도전을, 토큰 실패에는 `invalid_token`, proof 실패에는 `invalid_dpop_proof` 도전을 반환한다.
+  - [x] 모든 도전에 `algs="ES256"`과 보호 리소스 메타데이터 위치를 알린다.
+  - [x] 토큰 엔드포인트의 `invalid_dpop_proof`와 Bearer 제시 거부도 구현한다.
+- [x] 자동 갱신 JWT가 현재 토큰의 `cnf.jkt`를 그대로 승계하게 하고 결합을 확인할 수 없으면 갱신하지 않는다.
+- [x] `DPoP-Nonce`를 발급하거나 요구하지 않으며 `use_dpop_nonce` 흐름이 열리지 않았는지 확인한다.
+- [x] 만료된 `dpop_proof_replay` 행을 1분 주기로 정리하는 아홉 번째 주기 작업과 독립된 자문 잠금 키를 추가한다.
+- [x] 토큰·proof·원문 `jti`가 로그에 남지 않고 재생 저장소에는 `jti` 해시만 남는지 검증한다.
+- [x] 구현 검증에서 확인한 보완 사항을 반영한다.
+  - [x] 인스턴스 사이 시계 차이로 재생 기록이 먼저 사라지지 않도록 proof 정리에 1분 여유를 둔다.
+  - [x] `Authorization` 스킴 이름을 대소문자 구분 없이 해석한다.
+  - [x] `htu`를 RFC 3986의 구문·scheme 기반 정규화 뒤 대조한다.
+  - [x] proof JOSE·허용 창·`htu` 거부 경우와 정리 여유를 회귀 테스트로 고정한다.
+  - [x] 빈 데이터베이스에서 001~005 마이그레이션의 최초·재실행 적용을 확인한다.
 - [ ] 에이전트 컨텍스트 MCP 클라이언트와 토큰 발급, 보호 호출, 재시도별 새 proof, 갱신 결합, Bearer 하향 거부를 종단 간 검증한다.
 
 ### 완료 기준
 
-- [ ] 토큰만 제시한 요청, 다른 키·대상·메서드·토큰에 대한 proof와 ±60초 밖의 proof가 도메인 연산 전에 `invalid_dpop_proof`로 거부되고, 토큰 실패만 `invalid_token`으로 재인증을 요구한다.
-- [ ] 보호 리소스와 인가 서버 메타데이터가 DPoP 필수 여부와 ES256 지원을 실제 검증 정책대로 광고하고 모든 DPoP 도전이 `algs="ES256"`을 포함한다.
+- [x] 토큰만 제시한 요청, 다른 키·대상·메서드·토큰에 대한 proof와 ±60초 밖의 proof가 도메인 연산 전에 `invalid_dpop_proof`로 거부되고, 토큰 실패만 `invalid_token`으로 재인증을 요구한다.
+- [x] 보호 리소스와 인가 서버 메타데이터가 DPoP 필수 여부와 ES256 지원을 실제 검증 정책대로 광고하고 모든 DPoP 도전이 `algs="ES256"`을 포함한다.
 - [ ] 같은 proof의 순차·동시·교차 인스턴스 재생 중 하나만 통과하고 재생 저장소 장애는 재인증 오류로 숨겨지지 않는다.
 - [ ] 동시 자동 갱신으로 발급된 모든 토큰이 기존 `cnf.jkt`를 유지한다.
 - [ ] `FR-AGENT_CONTEXT-156`~`159`와 `NFR-AGENT_CONTEXT-013`이 구현·통합/연산 테스트·요구사항 추적표에서 함께 확인된다.
 - [ ] DPoP 인증 시험 결과를 MCP 핵심 인증 적합성과 분리해 기록한다. 이 단계의 인증은 MCP `2026-07-28`의 Bearer 계약을 대체하는 서비스 전용 프로필임을 시험 기록에 남긴다.
-- [ ] `go test ./...`, `go build ./...`, `go vet ./...`, `gofmt -l .`을 통과한다.
+- [x] `go test ./...`, `go build ./...`, `go vet ./...`, `gofmt -l .`을 통과한다.
 
 ## 공통 검증 명령
 

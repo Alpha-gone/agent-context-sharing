@@ -67,6 +67,7 @@ func TestAuthorizeIssuesCodeExchangeableForToken(t *testing.T) {
 	form := tokenForm(code, verifier)
 	tokenRequest := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
 	tokenRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRequest.Header.Set("DPoP", dpopProof(t, "https://service.test/token", ""))
 	tokenRecorder := httptest.NewRecorder()
 	testHandler(t, service, accountID, true).Token(tokenRecorder, tokenRequest)
 	if tokenRecorder.Code != http.StatusOK {
@@ -80,7 +81,7 @@ func TestAuthorizeIssuesCodeExchangeableForToken(t *testing.T) {
 	if err := json.Unmarshal(tokenRecorder.Body.Bytes(), &issued); err != nil {
 		t.Fatalf("토큰 응답 해석: %v", err)
 	}
-	if issued.TokenType != "Bearer" || issued.ExpiresIn != int(accessTokenLifetime.Seconds()) {
+	if issued.TokenType != "DPoP" || issued.ExpiresIn != int(accessTokenLifetime.Seconds()) {
 		t.Fatalf("토큰 응답 = %+v", issued)
 	}
 	if _, _, err := service.Verify(t.Context(), issued.AccessToken, "https://service.test/mcp"); err != nil {
@@ -166,6 +167,7 @@ func TestTokenRejectsUnsupportedGrantType(t *testing.T) {
 	form := url.Values{"grant_type": {"client_credentials"}}
 	request := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("DPoP", dpopProof(t, service.config.Issuer+"/token", ""))
 	recorder := httptest.NewRecorder()
 	testHandler(t, service, model.ID{}, true).Token(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
@@ -251,6 +253,7 @@ func postToken(t *testing.T, service *Service, form url.Values) *httptest.Respon
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("DPoP", dpopProof(t, service.config.Issuer+"/token", ""))
 	recorder := httptest.NewRecorder()
 	testHandler(t, service, model.ID{}, true).Token(recorder, request)
 	return recorder

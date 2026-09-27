@@ -6,7 +6,7 @@
 - 검사일: 2026-09-19
 - 검사 대상: `feature/phase-10-release-verification` 브랜치
 - 검사 범위: `SRS.md`의 기능 요구사항 149건 전부. 비기능 요구사항 13건은 대상이 아니다.
-- 추가 대조: `FR-AGENT_CONTEXT-150`~`155`는 12·13·15·16·17·18단계 구현 뒤 2026-09-27에 같은 방법으로 대조해 표에 더했다. 「결과 요약」의 건수는 최초 검사 149건 기준이다.
+- 추가 대조: `FR-AGENT_CONTEXT-150`~`155`는 12·13·15·16·17·18단계 구현 뒤 2026-09-27에 같은 방법으로 대조해 표에 더했다. `FR-AGENT_CONTEXT-156`~`159`는 같은 날 19단계 서버 구현을 대조해 표에 더했으며, 별도 MCP 클라이언트 구현과 종단 간 시험은 대기 상태다. 「결과 요약」의 건수는 최초 검사 149건 기준이다.
 - 기준 문서: [SRS](../SRS.md), [SDD](../SDD.md), [개발 계획](../DEVELOPMENT_PLAN.md)
 - 선행 검사: [출시 판정 추적성 감사](2026-09-19-release-audit.md)가 남긴 "요구사항 단위 확인" 한계를 닫기 위한 검사다.
 
@@ -66,7 +66,7 @@
 | `FR-AGENT_CONTEXT-025` | 노드 수정 | `internal/mcp/handler.go`의 `updateNode`와 `internal/store/context.go`의 `UpdateContextWithOperation` | 구현 |
 | `FR-AGENT_CONTEXT-026` | 삭제 경계 | `internal/mcp/transport.go`의 `isWebOnlyTool` | 구현 |
 | `FR-AGENT_CONTEXT-027` | 토큰 발급 | `internal/authz/authz.go`의 `Exchange`와 `internal/authz/http.go`의 `Token` | 구현 |
-| `FR-AGENT_CONTEXT-028` | 요청 인증 | `internal/authz/authz.go`의 `Verify`와 `internal/mcp/transport.go`의 `bearerToken` | 구현 |
+| `FR-AGENT_CONTEXT-028` | 요청 인증 | `internal/authz/authz.go`의 `VerifyAndRenew`와 `internal/mcp/transport.go`의 `dpopAuthentication` | 구현 |
 | `FR-AGENT_CONTEXT-029` | 토큰 만료 | `internal/authz/authz.go`의 `verifiedClaims` | 구현 |
 | `FR-AGENT_CONTEXT-030` | 토큰 자동 갱신 | `internal/authz/authz.go`의 `VerifyAndRenew`와 `cmd/server/renewal.go` | 구현 |
 | `FR-AGENT_CONTEXT-031` | 기본 보관 | `internal/store/permission.go`의 `cancelGraceForConnectedGraphs`. 활성 그래프에는 만료를 걸지 않는다 | 구현 |
@@ -194,6 +194,10 @@
 | `FR-AGENT_CONTEXT-153` | 불변식 감사 | `internal/store/invariant.go`의 `invariantRules`·`checkWriteInvariants`·`AuditGraph`, `cmd/audit` | 구현 |
 | `FR-AGENT_CONTEXT-154` | 오염 적대적 평가 | `cmd/eval/adversarial.go`의 `runAdversarial`·`diagnosePath`·`summarizeMetrics`, `cmd/eval/adversarial_dataset.go`의 `validateAttackSet`·`convertOwnAdversarialSet` | 구현 |
 | `FR-AGENT_CONTEXT-155` | 쓰기 멱등성 | `internal/mcp/transport.go`의 확장 협상·Structured Fields String 검증, `internal/mcp/handler.go`와 `internal/store/idempotency.go`의 원자적 재생, `migrations/003_idempotency_record.sql`, `cmd/server/periodic.go`의 정리 작업 | 구현 |
+| `FR-AGENT_CONTEXT-156` | DPoP 토큰 발급 | `internal/authz/dpop.go`의 ES256 proof 검증, `internal/authz/http.go`의 토큰 오류 사상, `internal/authz/authz.go`의 `cnf.jkt` 발급, `migrations/005_dpop_proof_replay.sql` | 서버 구현·클라이언트 통합 대기 |
+| `FR-AGENT_CONTEXT-157` | DPoP 보호 요청 | `internal/mcp/transport.go`의 `dpopAuthentication`·도전, `internal/authz/authz.go`의 `VerifyAndRenew`, `cmd/server/renewal.go`의 오류 사상 | 서버 구현·클라이언트 통합 대기 |
+| `FR-AGENT_CONTEXT-158` | DPoP 재생 방어 | `internal/store/auth.go`의 `ReserveDPoPProof`, `internal/store/periodic.go`의 정리, `cmd/server/periodic.go`의 1분 작업, `internal/authz/dpop.go`의 예약, `internal/store/auth_integration_test.go`의 실DB 동시 예약·정리 검사 | 서버 구현·교차 인스턴스 종단 간 시험 대기 |
+| `FR-AGENT_CONTEXT-159` | DPoP 갱신 결합 | `internal/authz/authz.go`의 `renewFromClaims`와 `internal/authz/dpop_test.go`의 `cnf.jkt` 승계 검사 | 서버 구현·클라이언트 통합 대기 |
 
 ## 발견 사항
 

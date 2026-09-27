@@ -22,7 +22,7 @@ type fakeRenewer struct {
 	err       error
 }
 
-func (fake fakeRenewer) VerifyAndRenew(context.Context, string, string) (model.ID, authz.Token, error) {
+func (fake fakeRenewer) VerifyAndRenew(context.Context, authz.DPoPRequest) (model.ID, authz.Token, error) {
 	return fake.accountID, fake.renewed, fake.err
 }
 
@@ -31,7 +31,7 @@ func serveWithRenewal(t *testing.T, service tokenRenewer) *httptest.ResponseReco
 	t.Helper()
 	verify := verifyWithRenewal(service)
 	inner := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if _, err := verify(request.Context(), "token", "https://service.test/mcp"); err != nil {
+		if _, err := verify(request.Context(), mcp.Authentication{AccessToken: "token", Proof: "proof", Method: http.MethodPost, Target: "https://service.test/mcp"}); err != nil {
 			writer.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -88,25 +88,30 @@ func TestVerificationFailureStopsRequest(t *testing.T) {
 // TestVerificationErrorsAreClassifiedForTransport는 인가 서버의 검증 오류가 전송 계층이
 // 가를 수 있는 형태로 옮겨지는지 확인한다.
 //
-// `mcp`는 `authz`를 의존하지 않으므로 이 경계가 자격 증명 실패만 `mcp.ErrUnauthenticated`로
+// `mcp`는 `authz`를 의존하지 않으므로 이 경계가 자격 증명 실패만 `mcp.ErrInvalidToken`으로
 // 감싼다. 내부 장애까지 감싸면 전송 계층이 그것을 401로 답해, 클라이언트가 재인증하고
 // 돌아와도 같은 자리에서 다시 막힌다.
 func TestVerificationErrorsAreClassifiedForTransport(t *testing.T) {
 	for name, testCase := range map[string]struct {
-		err             error
-		unauthenticated bool
+		err              error
+		invalidToken     bool
+		invalidDPoPProof bool
 	}{
-		"자격 증명 실패": {authz.ErrInvalidCredential, true},
-		"내부 조회 장애": {fmt.Errorf("%w: 폐기 목록 조회", authz.ErrUnavailable), false},
+		"자격 증명 실패":      {err: authz.ErrInvalidCredential, invalidToken: true},
+		"DPoP proof 실패": {err: authz.ErrInvalidDPoPProof, invalidDPoPProof: true},
+		"내부 조회 장애":      {err: fmt.Errorf("%w: 폐기 목록 조회", authz.ErrUnavailable)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			verify := verifyWithRenewal(fakeRenewer{err: testCase.err})
-			_, err := verify(t.Context(), "token", "https://service.test/mcp")
+			_, err := verify(t.Context(), mcp.Authentication{AccessToken: "token", Proof: "proof", Method: http.MethodPost, Target: "https://service.test/mcp"})
 			if err == nil {
 				t.Fatal("검증 실패가 오류로 나오지 않았다")
 			}
-			if got := errors.Is(err, mcp.ErrUnauthenticated); got != testCase.unauthenticated {
-				t.Fatalf("ErrUnauthenticated 여부 = %t, want %t; 오류 = %v", got, testCase.unauthenticated, err)
+			if got := errors.Is(err, mcp.ErrInvalidToken); got != testCase.invalidToken {
+				t.Fatalf("ErrInvalidToken 여부 = %t, want %t; 오류 = %v", got, testCase.invalidToken, err)
+			}
+			if got := errors.Is(err, mcp.ErrInvalidDPoPProof); got != testCase.invalidDPoPProof {
+				t.Fatalf("ErrInvalidDPoPProof 여부 = %t, want %t; 오류 = %v", got, testCase.invalidDPoPProof, err)
 			}
 			// 어느 쪽이든 원인은 보존해 로그에서 추적할 수 있어야 한다.
 			if !errors.Is(err, testCase.err) {

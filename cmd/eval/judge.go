@@ -29,6 +29,7 @@ var metricNames = []struct {
 	{"hub_concentration", true, func(m useCaseMetrics) float64 { return m.HubConcentration }, func(q queryMetrics) float64 { return q.HubConcentration }},
 	{"duplicate_ratio", true, func(m useCaseMetrics) float64 { return m.DuplicateRatio }, func(q queryMetrics) float64 { return q.DuplicateRatio }},
 	{"latency_ms", true, func(m useCaseMetrics) float64 { return m.LatencyMS }, func(q queryMetrics) float64 { return q.LatencyMS }},
+	{"misroute_rate", true, func(m useCaseMetrics) float64 { return m.MisrouteRate }, func(q queryMetrics) float64 { return q.Misrouted }},
 }
 
 // estimate는 한 지표의 반복 집계다.

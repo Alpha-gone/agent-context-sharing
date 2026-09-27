@@ -104,6 +104,9 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		if err != nil {
 			return model.Relation{}, err
 		}
+		if err := bumpContentRevision(ctx, tx, graphID); err != nil {
+			return model.Relation{}, err
+		}
 		if err := s.recordAppliedRelationOperation(ctx, tx, operation, stored.ID); err != nil {
 			return model.Relation{}, err
 		}
@@ -127,6 +130,9 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		existing.ConfirmedAt = relation.ConfirmedAt
 		stored, err := s.updateRelation(ctx, tx, graphID, existing)
 		if err != nil {
+			return model.Relation{}, err
+		}
+		if err := bumpContentRevision(ctx, tx, graphID); err != nil {
 			return model.Relation{}, err
 		}
 		existing = stored
@@ -172,6 +178,9 @@ func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.I
 	stored.ConfirmedAt = nil
 	stored, err = s.updateRelation(ctx, tx, graphID, stored)
 	if err != nil {
+		return model.Relation{}, err
+	}
+	if err := bumpContentRevision(ctx, tx, graphID); err != nil {
 		return model.Relation{}, err
 	}
 	if err := s.recordAppliedRelationOperation(ctx, tx, operation, stored.ID); err != nil {

@@ -38,6 +38,34 @@ func TestLoadEvidencePathSelection(t *testing.T) {
 	}
 }
 
+// TestLoadAdaptiveRouting은 적응형 라우팅이 비어 있으면 꺼지고, 켜면 baseline 조합과
+// 빠진 임계값을 거부하는지 확인한다.
+func TestLoadAdaptiveRouting(t *testing.T) {
+	values := validValues()
+	load := func() (Config, error) { return Load(func(name string) string { return values[name] }) }
+	if cfg, err := load(); err != nil || cfg.SearchAdaptiveRouting {
+		t.Fatalf("비어 있는 적응형 라우팅 = %v, %v", cfg.SearchAdaptiveRouting, err)
+	}
+	values["SEARCH_QUERY_ADAPTIVE_ROUTING_ENABLED"] = "true"
+	if _, err := load(); err == nil {
+		t.Fatal("baseline과 적응형 라우팅 조합을 받아들였다")
+	}
+	values["SEARCH_GRAPH_STAGE"] = "relations"
+	if _, err := load(); err == nil {
+		t.Fatal("임계값 없는 적응형 라우팅을 받아들였다")
+	}
+	values["SEARCH_ADAPTIVE_DIRECT_SIMILARITY_THRESHOLD"] = "0.7"
+	values["SEARCH_ADAPTIVE_DIRECT_MARGIN_THRESHOLD"] = "1.2"
+	if _, err := load(); err == nil {
+		t.Fatal("범위를 벗어난 분리 폭을 받아들였다")
+	}
+	values["SEARCH_ADAPTIVE_DIRECT_MARGIN_THRESHOLD"] = "0.1"
+	cfg, err := load()
+	if err != nil || !cfg.SearchAdaptiveRouting || cfg.SearchAdaptiveDirectThreshold != 0.7 || cfg.SearchAdaptiveMarginThreshold != 0.1 {
+		t.Fatalf("켠 적응형 라우팅 = %+v, %v", cfg, err)
+	}
+}
+
 func TestLoadAccountPlanLimits(t *testing.T) {
 	accountID, err := model.NewID()
 	if err != nil {

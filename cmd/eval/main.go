@@ -77,6 +77,11 @@ func run() error {
 	convertUseCase := flag.String("convert-use-case", "", "변환 결과의 질의를 fact, associative 또는 global 사용 사례로 제한한다")
 	continual := flag.Bool("continual", false, "온라인 갱신부터 상충 해소까지 여섯 지속 평가 시나리오를 실행한다")
 	businessPath := flag.String("business", "", "업무 효과 통제 과업의 집계 지표 파일 경로")
+	adaptive := flag.Bool("adaptive", false, "기존 auto와 질의 적응형 라우팅을 세 검색 경로의 오프라인 최적 경로로 견준다")
+	adaptiveStage := flag.String("adaptive-stage", string(search.GraphStageRelations), "적응형 비교의 그래프 관계 범위. baseline은 쓸 수 없다")
+	adaptiveEvidence := flag.Bool("adaptive-evidence", false, "적응형 비교의 두 구성에 근거 경로 보존 선택을 켠다")
+	directThresholds := flag.String("direct-thresholds", "0.5,0.6,0.7,0.8", "직접 충분성 하한 후보. 쉼표로 나눈다")
+	directMargins := flag.String("direct-margins", "0,0.02,0.05,0.1", "직접 후보 분리 폭 후보. 쉼표로 나눈다")
 	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
 	flag.Parse()
 
@@ -103,6 +108,19 @@ func run() error {
 	stages, err := parseStages(*stageList)
 	if err != nil {
 		return err
+	}
+	var directs, margins []float64
+	if *adaptive {
+		// 국소 확장이 확장할 관계가 없는 baseline은 직접 경로와 같아져 비교가 성립하지 않는다.
+		if !slices.Contains([]string{string(search.GraphStageReferences), string(search.GraphStageRelations), string(search.GraphStageGlobal)}, *adaptiveStage) {
+			return fmt.Errorf("-adaptive-stage는 references, relations, global 중 하나여야 한다")
+		}
+		if directs, err = parseFloats(*directThresholds, "직접 충분성 하한"); err != nil {
+			return err
+		}
+		if margins, err = parseFloats(*directMargins, "직접 후보 분리 폭"); err != nil {
+			return err
+		}
 	}
 	contexts, err := loadContextSet(*contextsPath)
 	if err != nil {
@@ -149,6 +167,19 @@ func run() error {
 		return err
 	}
 
+	if *adaptive {
+		result, err := runAdaptive(ctx, database, worker, graph, contexts, queries, settings, adaptiveConditions{
+			Repeats: *repeats, Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
+			GraphStage: *adaptiveStage, EvidencePathSelection: *adaptiveEvidence,
+			Execution: string(settings.execution), CandidateLimit: settings.candidateLimit,
+			SemanticThreshold: settings.semanticThreshold, FoldThreshold: settings.foldThreshold,
+			EmbeddingModel: worker.ModelID(), IndexTargets: *indexTargets,
+		}, directs, margins)
+		if err != nil {
+			return err
+		}
+		return writeReport(*outPath, result)
+	}
 	result := report{
 		StartedAt:      time.Now().UTC(),
 		ContextVersion: contexts.Version,

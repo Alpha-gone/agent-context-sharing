@@ -49,6 +49,16 @@ type Config struct {
 	// EvidencePathSelection 필드에는 근거 경로 보존 선택 활성 여부를 둔다. 끄면 기존 통합
 	// 순위 절단을 수행한다.
 	EvidencePathSelection bool
+	// AdaptiveRouting 필드에는 scope=auto의 질의 적응형 라우팅 활성 여부를 둔다. 끄면 기존
+	// auto 전환 규칙을 수행한다.
+	AdaptiveRouting bool
+	// AdaptiveDirectThreshold와 AdaptiveMarginThreshold 필드에는 직접 경로를 고르는 의미
+	// 후보 1위의 유사도 하한과 2위와의 분리 폭을 둔다.
+	AdaptiveDirectThreshold float64
+	AdaptiveMarginThreshold float64
+	// Route 필드는 평가 실행기만 쓴다. 적응형 라우팅이 켜진 scope=auto에서 라우터 대신 이
+	// 경로를 실행해 세 경로의 결과를 같은 입력으로 견준다. 비어 있으면 라우터가 고른다.
+	Route Route
 }
 
 // Embedder는 질의 텍스트를 현재 색인 모델의 벡터로 바꾸는 index 경계다.
@@ -126,6 +136,12 @@ type Flow struct {
 	// 다른 원인이므로 따로 싣고, 경계 0과 절단 없음을 구분하려고 포인터로 둔다.
 	HopBoundary *int
 	Selection   Selection
+	// Route와 RouteReason 필드에는 실제 실행한 검색 경로와 그 이유 코드를 둔다.
+	Route       Route
+	RouteReason string
+	// RouteSignals 필드에는 적응형 라우팅이 판정에 쓴 진입 채널 요약을 둔다. 라우터를
+	// 실행하지 않았으면 0 값이다.
+	RouteSignals RouteSignals
 }
 
 // ErrAllChannelsFailed는 부분 상태로 복구할 채널도 남지 않았음을 나타낸다.
@@ -153,6 +169,18 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 	}
 	if !slices.Contains([]GraphStage{GraphStageBaseline, GraphStageReferences, GraphStageRelations, GraphStageGlobal}, config.GraphStage) {
 		return nil, fmt.Errorf("그래프 검색 비교 단계가 올바르지 않다")
+	}
+	if config.AdaptiveRouting {
+		// 국소 확장이 확장할 관계가 없으면 직접 경로와 같아져 비교가 성립하지 않는다.
+		if config.GraphStage == GraphStageBaseline {
+			return nil, fmt.Errorf("질의 적응형 라우팅은 그래프 검색 비교 단계 baseline과 함께 쓸 수 없다")
+		}
+		if config.AdaptiveDirectThreshold < 0 || config.AdaptiveDirectThreshold > 1 || config.AdaptiveMarginThreshold < 0 || config.AdaptiveMarginThreshold > 1 {
+			return nil, fmt.Errorf("직접 충분성 하한과 분리 폭은 0 이상 1 이하여야 한다")
+		}
+	}
+	if !slices.Contains([]Route{"", RouteDirect, RouteLocal, RouteGlobal}, config.Route) || (config.Route != "" && !config.AdaptiveRouting) {
+		return nil, fmt.Errorf("강제 검색 경로는 질의 적응형 라우팅과 함께 direct, local, global 중 하나여야 한다")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -226,7 +254,7 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	}
 	// 진입점이 없으면 확장할 것도 없으므로 그래프 채널의 상태까지 남기고 끝낸다.
 	allEntryChannelsFailed := func() (Flow, error) {
-		graph := service.graphCandidates(ctx, input, nil, false)
+		graph := service.graphCandidates(ctx, input, nil, false, 0)
 		channels[graph.name] = graph.metric
 		return Flow{Channels: channels}, ErrAllChannelsFailed
 	}
@@ -234,29 +262,68 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 		return allEntryChannelsFailed()
 	}
 	combined := combine(results)
-	relevantLocal := hasRelevantSemantic(results[0].candidates, service.config.SemanticThreshold) || len(results[1].candidates) > 0
-	globalFallbackTriggered := input.Scope == "auto" && !relevantLocal
-	var global channelResult
-	if input.Scope == "global" || globalFallbackTriggered {
-		global = service.globalSummaries(ctx, input)
-		channels[global.name] = global.metric
-		// 전역 범위의 진입 채널은 전역 요약 하나뿐이므로 그 채널의 실패가 곧 모든 채널
-		// 실패다. 비교 단계에서 끈 상태는 조회 실패가 아니라 구성이므로 제외한다.
-		if input.Scope == "global" && global.metric.Failure != "" && global.metric.Failure != failureDisabled {
-			return allEntryChannelsFailed()
+	var entryPoints []model.Context
+	var graph channelResult
+	var route Route
+	var reason string
+	var signals RouteSignals
+	globalFallbackTriggered, globalFallbackApplied := false, false
+	if input.Scope == "auto" && service.config.AdaptiveRouting {
+		signals = routeSignals(results, combined, service.config.SemanticThreshold)
+		route, reason = signals.Decide(service.config.AdaptiveDirectThreshold, service.config.AdaptiveMarginThreshold)
+		if service.config.Route != "" {
+			route, reason = service.config.Route, ReasonForced
 		}
-		results = append(results, global)
-		combined = combine(results)
+		var global channelResult
+		if route == RouteGlobal {
+			global = service.globalSummaries(ctx, input)
+			channels[global.name] = global.metric
+			// 요약이 없거나 조회가 실패하면 직접 경로로 되돌린다. 조회 실패는 채널 실패로 남는다.
+			if len(global.candidates) == 0 {
+				route, reason = RouteDirect, ReasonGlobalSummaryAbsent
+			} else {
+				results = append(results, global)
+			}
+		}
+		switch route {
+		case RouteDirect:
+			entryPoints = candidateContexts(combined)
+			// 직접 경로는 확장 채널을 실행하지 않는다. 조회 실패가 아니므로 구성으로 끈 상태와
+			// 같이 표시해 모든 채널 실패 판정과 실패 집계에서 뺀다.
+			graph = channelResult{name: "graph", metric: Channel{Failure: failureDisabled}}
+		case RouteLocal:
+			entryPoints = relevantLocalContexts(results, combined, service.config.SemanticThreshold)
+			graph = service.graphCandidates(ctx, input, entryPoints, false, 1)
+		case RouteGlobal:
+			entryPoints = candidateContexts(combine([]channelResult{global}))
+			graph = service.graphCandidates(ctx, input, entryPoints, true, hopDepth(input.MaxHops))
+		}
+	} else {
+		relevantLocal := hasRelevantSemantic(results[0].candidates, service.config.SemanticThreshold) || len(results[1].candidates) > 0
+		globalFallbackTriggered = input.Scope == "auto" && !relevantLocal
+		var global channelResult
+		if input.Scope == "global" || globalFallbackTriggered {
+			global = service.globalSummaries(ctx, input)
+			channels[global.name] = global.metric
+			// 전역 범위의 진입 채널은 전역 요약 하나뿐이므로 그 채널의 실패가 곧 모든 채널
+			// 실패다. 비교 단계에서 끈 상태는 조회 실패가 아니라 구성이므로 제외한다.
+			if input.Scope == "global" && global.metric.Failure != "" && global.metric.Failure != failureDisabled {
+				return allEntryChannelsFailed()
+			}
+			results = append(results, global)
+			combined = combine(results)
+		}
+		globalFallbackApplied = globalFallbackTriggered && service.config.GlobalFallback && len(global.candidates) > 0
+		entryPoints = candidateContexts(combined)
+		// auto가 전역 요약으로 전환됐으면 광범위한 시간 후보가 홉 결과 상한을 먼저
+		// 채우지 않게 실제 전역 요약이 있을 때 그 요약만 확장 시작점으로 쓴다. 전역 요약이
+		// 없거나 비교 단계가 되돌림을 껐으면 기존 국소 후보를 그대로 쓴다.
+		if globalFallbackApplied {
+			entryPoints = candidateContexts(combine([]channelResult{global}))
+		}
+		graph = service.graphCandidates(ctx, input, entryPoints, globalFallbackApplied, hopDepth(input.MaxHops))
+		route, reason = legacyRoute(input.Scope, service.config.GraphStage, globalFallbackApplied, graph)
 	}
-	globalFallbackApplied := globalFallbackTriggered && service.config.GlobalFallback && len(global.candidates) > 0
-	entryPoints := candidateContexts(combined)
-	// auto가 전역 요약으로 전환됐으면 광범위한 시간 후보가 홉 결과 상한을 먼저
-	// 채우지 않게 실제 전역 요약이 있을 때 그 요약만 확장 시작점으로 쓴다. 전역 요약이
-	// 없거나 비교 단계가 되돌림을 껐으면 기존 국소 후보를 그대로 쓴다.
-	if globalFallbackApplied {
-		entryPoints = candidateContexts(combine([]channelResult{global}))
-	}
-	graph := service.graphCandidates(ctx, input, entryPoints, globalFallbackApplied)
 	channels[graph.name] = graph.metric
 	results = append(results, graph)
 	combined = combine(results)
@@ -302,18 +369,9 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 		}
 	}
 	edges := filterEdges(selected, results)
-	flow := Flow{Contexts: contexts, Edges: edges, EntryPoints: contextIDs(entryPoints), BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation, HopBoundary: graph.boundary, Selection: selection}
-	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "global_fallback_triggered", globalFallbackTriggered, "global_fallback_applied", globalFallbackApplied, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil, "evidence_path_selection", service.config.EvidencePathSelection, "selection_candidates", selection.Candidates, "selection_selected", selection.Selected, "selection_connectors", selection.Connectors, "selection_unreachable", selection.Unreachable)
+	flow := Flow{Contexts: contexts, Edges: edges, EntryPoints: contextIDs(entryPoints), BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation, HopBoundary: graph.boundary, Selection: selection, Route: route, RouteReason: reason, RouteSignals: signals}
+	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "global_fallback_triggered", globalFallbackTriggered, "global_fallback_applied", globalFallbackApplied, "selected_route", route, "route_reason", reason, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil, "evidence_path_selection", service.config.EvidencePathSelection, "selection_candidates", selection.Candidates, "selection_selected", selection.Selected, "selection_connectors", selection.Connectors, "selection_unreachable", selection.Unreachable)
 	return flow, nil
-}
-
-func hasRelevantSemantic(candidates []store.SearchCandidate, threshold float64) bool {
-	for _, candidate := range candidates {
-		if candidate.Similarity >= threshold {
-			return true
-		}
-	}
-	return false
 }
 
 // ErrEmbeddingUnavailable은 질의 임베딩 생성이 실패했음을 나타낸다.
@@ -357,8 +415,9 @@ func (service *Service) globalSummaries(ctx context.Context, input Input) channe
 	result := channelResult{name: "global_summary"}
 	// 명시한 전역 범위는 클라이언트가 고른 진입점 계약이므로 배포 구성으로 끄지 않는다.
 	// 구성이 끄는 것은 국소 결과의 관련성이 낮을 때 전역 요약을 시작점으로 더하는
-	// `auto`의 자동 전환뿐이다.
-	if input.Scope != "global" && !service.config.GlobalFallback {
+	// `auto`의 자동 전환뿐이다. 적응형 라우팅은 전역 진입 여부를 직접 정하므로 이 값을 보지
+	// 않는다.
+	if input.Scope != "global" && !service.config.GlobalFallback && !service.config.AdaptiveRouting {
 		result.metric.Failure = failureDisabled
 		return result
 	}
@@ -375,7 +434,9 @@ func (service *Service) globalSummaries(ctx context.Context, input Input) channe
 	return result
 }
 
-func (service *Service) graphCandidates(ctx context.Context, input Input, entryPoints []model.Context, globalFallback bool) channelResult {
+// graphCandidates는 진입점에서 depth홉까지 확장한다. globalFallback은 전역 요약에서
+// derived_from만 따라 내려가는 확장이다.
+func (service *Service) graphCandidates(ctx context.Context, input Input, entryPoints []model.Context, globalFallback bool, depth int) channelResult {
 	result := channelResult{name: "graph"}
 	// 진입점 부재를 먼저 판정한다. 「검색 채널 실행기」가 이 사유를 2단계에 두었으므로
 	// 비교 단계로 채널을 끈 것과 구분되어야 한다.
@@ -398,15 +459,6 @@ func (service *Service) graphCandidates(ctx context.Context, input Input, entryP
 	}
 	// 시작 노드를 한 번에 넘긴다. 진입점마다 따로 물으면 왕복이 진입점 수만큼 늘고
 	// 「채널 구현」이 하나로 두기로 한 결과 상한이 진입점마다 겹친다.
-	//
-	// MaxHops 0은 「계정 플랜」이 선언한 대로 한도 없음이다. 그대로 탐색 깊이로 넘기면
-	// 시작 노드만 돌아오고 거리 0은 후보에서 빠져 이 채널이 실패 표시 없이 항상 0건이
-	// 된다. 예산과 MaxHopNodes의 0을 해석하는 곳과 같은 자리에서 해석한다. 탐색은
-	// 더 넓힐 곳이 없거나 결과 상한에 닿으면 끝난다.
-	depth := input.MaxHops
-	if depth == 0 {
-		depth = math.MaxInt
-	}
 	hops, err := service.store.HopContextsFrom(ctx, input.GraphID, entryPoints, depth, "both", filters, input.MaxHopNodes)
 	result.metric.Latency = time.Since(started)
 	if err != nil {
@@ -437,6 +489,34 @@ func (service *Service) graphCandidates(ctx context.Context, input Input, entryP
 	}
 	result.metric.Candidates = len(values)
 	return result
+}
+
+// hopDepth는 플랜의 최대 홉 수를 탐색 깊이로 바꾼다. MaxHops 0은 「계정 플랜」이 선언한
+// 대로 한도 없음이다. 그대로 탐색 깊이로 넘기면 시작 노드만 돌아오고 거리 0은 후보에서
+// 빠져 그래프 채널이 실패 표시 없이 항상 0건이 된다. 탐색은 더 넓힐 곳이 없거나 결과
+// 상한에 닿으면 끝난다.
+func hopDepth(maxHops int) int {
+	if maxHops == 0 {
+		return math.MaxInt
+	}
+	return maxHops
+}
+
+// legacyRoute는 적응형 라우팅을 거치지 않은 요청이 실제로 실행한 경로를 적응형 경로 이름으로
+// 나타낸다. 기존 auto 정책의 경로 오선택률을 같은 기준으로 재기 위한 표시다.
+func legacyRoute(scope string, stage GraphStage, globalFallbackApplied bool, graph channelResult) (Route, string) {
+	reason := ReasonLegacyAuto
+	if scope != "auto" {
+		reason = ReasonExplicitScope
+	}
+	switch {
+	case scope == "global" || globalFallbackApplied:
+		return RouteGlobal, reason
+	case stage != GraphStageBaseline && graph.metric.Failure == "":
+		return RouteLocal, reason
+	default:
+		return RouteDirect, reason
+	}
 }
 
 func candidateContexts(candidates []combinedCandidate) []model.Context {

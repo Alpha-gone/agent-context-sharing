@@ -35,6 +35,9 @@ type useCaseMetrics struct {
 	SelectionSelected    float64            `json:"selection_selected"`
 	SelectionConnectors  float64            `json:"selection_connectors"`
 	SelectionUnreachable float64            `json:"selection_unreachable"`
+	MisrouteRate         float64            `json:"misroute_rate"`
+	Routes               map[string]float64 `json:"route_ratio"`
+	RouteReasons         map[string]int     `json:"route_reasons"`
 	Channels             map[string]float64 `json:"channel_contribution"`
 	Failures             map[string]int     `json:"channel_failures"`
 }
@@ -71,12 +74,20 @@ type queryMetrics struct {
 	HubConcentration     float64 `json:"hub_concentration"`
 	DuplicateRatio       float64 `json:"duplicate_ratio"`
 	LatencyMS            float64 `json:"latency_ms"`
+	// Route와 RouteReason 필드에는 실행한 검색 경로와 이유 코드만 둔다. 경로 원문은 싣지 않는다.
+	Route       string `json:"route"`
+	RouteReason string `json:"route_reason"`
+	// Misrouted 필드는 오프라인 최적 경로와 다르면 1, 같으면 0이다. 적응형 비교가 아니면
+	// 정의되지 않은 값이다.
+	Misrouted float64 `json:"misrouted"`
 }
 
 type measurement struct {
 	UseCases     map[string]useCaseMetrics
 	QuerySamples []queryMetrics
 	Recovered    map[string]map[string]struct{}
+	// Signals에는 질의별 라우터 신호를 둔다. 적응형 비교가 임계값 후보를 오프라인으로 견줄 때만 쓴다.
+	Signals map[string]search.RouteSignals
 }
 
 // measure는 질의를 하나씩 돌려 사용 사례별로 묶는다. 질의문과 컨텍스트 본문은
@@ -100,6 +111,7 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 	}
 	querySamples := make([]queryMetrics, 0, len(queries.Queries))
 	recovered := make(map[string]map[string]struct{}, len(queries.Queries))
+	signals := make(map[string]search.RouteSignals, len(queries.Queries))
 	for _, query := range queries.Queries {
 		input := search.Input{
 			GraphID:     graph.GraphID,
@@ -132,7 +144,8 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		sample := queryMetrics{ID: query.ID, UseCase: query.UseCase, Recall: float64(hits) / float64(len(answers)), BudgetPerHit: -1,
 			BudgetUsed: flow.BudgetUsed, EvidenceCompleteness: shape.completeness, PathContinuity: shape.continuity,
 			DisconnectedRatio: shape.disconnected, HubConcentration: shape.hub, DuplicateRatio: shape.duplicate,
-			LatencyMS: float64(latency.Microseconds()) / 1000}
+			LatencyMS: float64(latency.Microseconds()) / 1000,
+			Route:     string(flow.Route), RouteReason: flow.RouteReason, Misrouted: undefinedMetric}
 		if best > 0 {
 			sample.ReciprocalRank = 1 / float64(best)
 		}
@@ -146,6 +159,7 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		total.selection.Connectors += flow.Selection.Connectors
 		total.selection.Unreachable += flow.Selection.Unreachable
 		recovered[query.ID] = recoveredKeys(flow, query, graph.Keys)
+		signals[query.ID] = flow.RouteSignals
 		for _, name := range slices.Sorted(maps.Keys(flow.Channels)) {
 			channel := flow.Channels[name]
 			total.channels[name] += channel.Contribution
@@ -175,6 +189,9 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 			SelectionSelected:    float64(total.selection.Selected) / count,
 			SelectionConnectors:  float64(total.selection.Connectors) / count,
 			SelectionUnreachable: float64(total.selection.Unreachable) / count,
+			MisrouteRate:         definedMean(total.samples, func(sample queryMetrics) float64 { return sample.Misrouted }),
+			Routes:               routeRatio(total.samples),
+			RouteReasons:         routeReasons(total.samples),
 			Channels:             contributionRatio(total.channels),
 			Failures:             total.failures,
 		}
@@ -186,7 +203,25 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		}
 		result[useCase] = metrics
 	}
-	return measurement{UseCases: result, QuerySamples: querySamples, Recovered: recovered}, nil
+	return measurement{UseCases: result, QuerySamples: querySamples, Recovered: recovered, Signals: signals}, nil
+}
+
+// routeRatio는 사용 사례 안에서 경로별 선택 비율을 낸다.
+func routeRatio(samples []queryMetrics) map[string]float64 {
+	counts := map[string]int{}
+	for _, sample := range samples {
+		counts[sample.Route]++
+	}
+	return contributionRatio(counts)
+}
+
+// routeReasons는 사용 사례 안에서 이유 코드별 건수를 낸다.
+func routeReasons(samples []queryMetrics) map[string]int {
+	counts := map[string]int{}
+	for _, sample := range samples {
+		counts[sample.RouteReason]++
+	}
+	return counts
 }
 
 // definedMean은 정의된 질의별 값만 평균낸다. 하나도 없으면 정의되지 않은 값이다.

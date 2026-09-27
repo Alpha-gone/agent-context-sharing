@@ -16,6 +16,7 @@ func TestRouteSignalsDecideAppliesRulesInOrder(t *testing.T) {
 		reason  string
 	}{
 		"관련 국소 후보 없음":  {RouteSignals{CrossChannelAgreement: true, SemanticCount: 2, SemanticTop: 0.9}, RouteGlobal, ReasonNoRelevantLocal},
+		"1위 사건":        {RouteSignals{RelevantLocal: true, TopIsEvent: true, CrossChannelAgreement: true, SemanticCount: 2, SemanticTop: 0.9}, RouteLocal, ReasonEventAnchor},
 		"채널 간 일치":      {RouteSignals{RelevantLocal: true, CrossChannelAgreement: true}, RouteDirect, ReasonCrossChannelAgreement},
 		"의미 후보 분리":     {RouteSignals{RelevantLocal: true, SemanticCount: 2, SemanticTop: 0.8, SemanticSecond: 0.6}, RouteDirect, ReasonSemanticSeparation},
 		"분리 폭 부족":      {RouteSignals{RelevantLocal: true, SemanticCount: 2, SemanticTop: 0.8, SemanticSecond: 0.75}, RouteLocal, ReasonAmbiguousLocal},
@@ -216,4 +217,17 @@ func slicesContainID(ids []string, id model.ID) bool {
 		}
 	}
 	return false
+}
+
+// TestFlowAdaptiveEventAnchorExpandsLocally는 두 채널이 모두 1위로 올린 후보라도 사건이면
+// 직접 경로 대신 국소 확장으로 관계를 따라가는지 확인한다.
+func TestFlowAdaptiveEventAnchorExpandsLocally(t *testing.T) {
+	fixture := newRouteFixture(t, 0.2)
+	fixture.semanticTop.Layer = model.LayerEvent
+	fixture.database.semantic[0].Context = fixture.semanticTop
+	fixture.database.keyword = []store.SearchCandidate{{Context: fixture.semanticTop}}
+	flow := routeFlow(t, adaptiveService(t, fixture.database, "", true), fixture.graphID, "auto")
+	if flow.Route != RouteLocal || flow.RouteReason != ReasonEventAnchor || fixture.database.hopDepth != 1 || !flow.RouteSignals.TopIsEvent {
+		t.Fatalf("사건 1위 경로 = %s/%s, 깊이 %d, 신호 %+v", flow.Route, flow.RouteReason, fixture.database.hopDepth, flow.RouteSignals)
+	}
 }

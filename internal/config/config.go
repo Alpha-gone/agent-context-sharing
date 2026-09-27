@@ -103,6 +103,12 @@ type Config struct {
 	SearchGlobalFallback bool
 	// SearchEvidencePathSelection 필드에는 근거 경로 보존 선택 활성 여부를 둔다.
 	SearchEvidencePathSelection bool
+	// SearchAdaptiveRouting 필드에는 scope=auto의 질의 적응형 라우팅 활성 여부를 둔다.
+	SearchAdaptiveRouting bool
+	// SearchAdaptiveDirectThreshold 필드에는 직접 경로를 고르는 의미 후보 1위의 유사도 하한을 둔다.
+	SearchAdaptiveDirectThreshold float64
+	// SearchAdaptiveMarginThreshold 필드에는 직접 경로를 고르는 의미 후보 1위와 2위의 분리 폭을 둔다.
+	SearchAdaptiveMarginThreshold float64
 	// IndexTargetLayers 필드에는 색인 작업으로 등록할 계층 범위를 둔다.
 	IndexTargetLayers IndexTargetLayers
 	// OAuthClients 필드에는 클라이언트별로 사전 등록한 OAuth 콜백 주소 목록을 둔다.
@@ -227,6 +233,24 @@ func Load(env Environment) (Config, error) {
 	if raw := strings.TrimSpace(env("SEARCH_EVIDENCE_PATH_SELECTION_ENABLED")); raw != "" {
 		if cfg.SearchEvidencePathSelection, err = strconv.ParseBool(raw); err != nil {
 			return Config{}, fmt.Errorf("SEARCH_EVIDENCE_PATH_SELECTION_ENABLED가 불리언이 아니다")
+		}
+	}
+	// 통제 비교를 통과하기 전 운영 기본값은 기존 auto 전환이므로 비어 있으면 끈다. 켜면
+	// 국소 확장이 직접 경로와 같아지는 baseline을 거부하고 두 임계값을 필수로 받는다.
+	if raw := strings.TrimSpace(env("SEARCH_QUERY_ADAPTIVE_ROUTING_ENABLED")); raw != "" {
+		if cfg.SearchAdaptiveRouting, err = strconv.ParseBool(raw); err != nil {
+			return Config{}, fmt.Errorf("SEARCH_QUERY_ADAPTIVE_ROUTING_ENABLED가 불리언이 아니다")
+		}
+	}
+	if cfg.SearchAdaptiveRouting {
+		if cfg.SearchGraphStage == SearchGraphStageBaseline {
+			return Config{}, fmt.Errorf("SEARCH_QUERY_ADAPTIVE_ROUTING_ENABLED는 SEARCH_GRAPH_STAGE=baseline과 함께 켤 수 없다")
+		}
+		if cfg.SearchAdaptiveDirectThreshold, err = strconv.ParseFloat(strings.TrimSpace(env("SEARCH_ADAPTIVE_DIRECT_SIMILARITY_THRESHOLD")), 64); err != nil || cfg.SearchAdaptiveDirectThreshold < 0 || cfg.SearchAdaptiveDirectThreshold > 1 {
+			return Config{}, fmt.Errorf("SEARCH_ADAPTIVE_DIRECT_SIMILARITY_THRESHOLD가 0 이상 1 이하의 수가 아니다")
+		}
+		if cfg.SearchAdaptiveMarginThreshold, err = strconv.ParseFloat(strings.TrimSpace(env("SEARCH_ADAPTIVE_DIRECT_MARGIN_THRESHOLD")), 64); err != nil || cfg.SearchAdaptiveMarginThreshold < 0 || cfg.SearchAdaptiveMarginThreshold > 1 {
+			return Config{}, fmt.Errorf("SEARCH_ADAPTIVE_DIRECT_MARGIN_THRESHOLD가 0 이상 1 이하의 수가 아니다")
 		}
 	}
 	// 「색인 대상 비교」에서 원천 제외 구성의 재현율·순위 품질 손실이

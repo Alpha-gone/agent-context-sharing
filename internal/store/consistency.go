@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"sync"
@@ -131,25 +130,29 @@ func (s *Store) reader(ctx context.Context) cypherQueryer {
 	return s.pool
 }
 
-// ContentRevision은 그래프의 내용 판을 읽는다. 내용 판 재시도 후보가 요청 전후에 대조한다.
-func (s *Store) ContentRevision(ctx context.Context, graphID model.ID) (int64, error) {
-	if !graphID.IsV7() {
-		return 0, fmt.Errorf("그래프 식별자는 UUIDv7이어야 한다")
-	}
-	var revision int64
-	if err := s.pool.QueryRow(ctx, `SELECT content_revision FROM public.context_graph WHERE graph_id = $1`, graphID.String()).Scan(&revision); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, ErrNotFound
-		}
-		return 0, fmt.Errorf("내용 판 조회: %w", err)
-	}
-	return revision, nil
-}
-
 // bumpContentRevision은 검색에 공개되는 상태를 바꾼 트랜잭션 안에서 내용 판을 올린다.
+// 운영 검색은 이 값을 읽지 않는다. 「요청 단위 일관 읽기 구현 비교」가 내용 판 재시도를
+// 채택하지 않았지만, 증가 지점은 「테이블 열 정의」의 계약이라 유지한다.
 func bumpContentRevision(ctx context.Context, tx pgx.Tx, graphID model.ID) error {
 	if _, err := tx.Exec(ctx, `UPDATE public.context_graph SET content_revision = content_revision + 1 WHERE graph_id = $1`, graphID.String()); err != nil {
 		return fmt.Errorf("내용 판 증가: %w", err)
 	}
 	return nil
+}
+
+// PoolStats는 연결 풀의 누적 사용량이다. 평가 실행기가 동시 요청 부하에서 동기화 스냅숏이
+// 풀을 포화시키는지 잴 때 쓴다.
+type PoolStats struct {
+	// MaxConns 필드에는 풀의 연결 수 상한을 둔다.
+	MaxConns int32
+	// EmptyAcquires 필드에는 쉬는 연결이 없어 새 연결을 기다려야 했던 획득 수를 둔다.
+	EmptyAcquires int64
+	// AcquireWait 필드에는 연결 획득에 걸린 누적 시간을 둔다.
+	AcquireWait time.Duration
+}
+
+// PoolStats는 연결 풀의 현재 누적 사용량을 읽는다.
+func (s *Store) PoolStats() PoolStats {
+	stat := s.pool.Stat()
+	return PoolStats{MaxConns: stat.MaxConns(), EmptyAcquires: stat.EmptyAcquireCount(), AcquireWait: stat.AcquireDuration()}
 }

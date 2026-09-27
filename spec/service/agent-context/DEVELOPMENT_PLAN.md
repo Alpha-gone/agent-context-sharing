@@ -678,7 +678,7 @@ go run ./cmd/eval -contexts <컨텍스트 집합>.json -queries <질의 집합>.
 # 기존 auto와 질의 적응형 라우팅을 세 검색 경로의 오프라인 최적 경로로 견준다.
 go run ./cmd/eval -adaptive -contexts <컨텍스트 집합>.json -queries <질의 집합>.json -repeat 3 -out <결과>.json
 
-# 현행 검색, 동기화 스냅숏과 내용 판 재시도를 동시 쓰기 조건에서 견준다.
+# Read Committed 검색과 동기화 스냅숏을 동시 쓰기 조건에서 견준다.
 go run ./cmd/eval -consistency -contexts <컨텍스트 집합>.json -queries <질의 집합>.json -out <결과>.json
 
 # 통제 과업에서 별도로 수집한 집계값으로 업무 효과를 판정한다.

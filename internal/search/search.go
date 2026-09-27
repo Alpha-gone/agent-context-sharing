@@ -60,9 +60,8 @@ type Config struct {
 	// 경로를 실행해 세 경로의 결과를 같은 입력으로 견준다. 비어 있으면 라우터가 고른다.
 	Route Route
 	// Consistency 필드에는 한 흐름 응답의 읽기 일관성 방식을 둔다. 「요청 단위 일관 읽기 구현
-	// 비교」가 동기화 스냅숏을 운영 방식으로 채택해 서버는 스냅숏을 쓴다. 비어 있으면 비교
-	// 기준인 Read Committed 검색이고, 내용 판 재시도는 평가 실행기의 비교에서만 쓴다. 배포
-	// 구성으로 열지 않는다.
+	// 비교」가 동기화 스냅숏을 운영 방식으로 채택해 서버는 스냅숏을 쓴다. 비어 있으면 평가
+	// 실행기가 비교 기준으로 쓰는 Read Committed 검색이다. 배포 구성으로 열지 않는다.
 	Consistency Consistency
 }
 
@@ -72,29 +71,12 @@ type Consistency string
 const (
 	// ConsistencySnapshot은 조정 연결이 내보낸 스냅숏을 모든 읽기가 가져오는 방식이다.
 	ConsistencySnapshot Consistency = "snapshot"
-	// ConsistencyRevision은 요청 전후 내용 판이 다르면 흐름 전체를 다시 실행하는 방식이다.
-	ConsistencyRevision Consistency = "revision"
 )
 
-// maxReadAttempts는 내용 판 재시도의 상한이다. 쓰기가 계속 겹치면 무한히 돌지 않고
-// ErrReadNotSettled로 끝내며, 평가 실행기는 이를 지연 상한 위반으로 센다.
-const maxReadAttempts = 5
-
-// ErrReadNotSettled는 내용 판 재시도가 상한 안에 한 판의 결과를 얻지 못했음을 나타낸다.
-var ErrReadNotSettled = errors.New("요청 동안 그래프 내용 판이 계속 바뀌었다")
-
-// ConsistentStore는 일관 읽기 후보가 추가로 쓰는 저장소 기능이다. 현행 검색은 쓰지 않으므로
-// Store와 나눠 두고 후보를 고른 구성에서만 요구한다.
+// ConsistentStore는 동기화 스냅숏이 추가로 쓰는 저장소 기능이다. Read Committed 검색은 쓰지
+// 않으므로 Store와 나눠 두고 스냅숏을 고른 구성에서만 요구한다.
 type ConsistentStore interface {
 	BeginReadSnapshot(context.Context) (*store.ReadSnapshot, error)
-	ContentRevision(context.Context, model.ID) (int64, error)
-}
-
-// ReadStats는 한 흐름이 읽기 경계에서 쓴 자원과 시도 횟수다.
-type ReadStats struct {
-	// Attempts 필드에는 흐름을 실행한 횟수를 둔다. 내용 판 재시도가 아니면 1이다.
-	Attempts int
-	store.ReadStats
 }
 
 // Embedder는 질의 텍스트를 현재 색인 모델의 벡터로 바꾸는 index 경계다.
@@ -179,8 +161,8 @@ type Flow struct {
 	// RouteSignals 필드에는 적응형 라우팅이 판정에 쓴 진입 채널 요약을 둔다. 라우터를
 	// 실행하지 않았으면 0 값이다.
 	RouteSignals RouteSignals
-	// Read 필드에는 요청 단위 일관 읽기 비교의 측정값을 둔다.
-	Read ReadStats
+	// Read 필드에는 동기화 스냅숏이 쓴 연결 자원을 둔다. Read Committed 검색이면 0 값이다.
+	Read store.ReadStats
 }
 
 // ErrAllChannelsFailed는 부분 상태로 복구할 채널도 남지 않았음을 나타낸다.
@@ -224,10 +206,10 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 	var consistent ConsistentStore
 	switch config.Consistency {
 	case "":
-	case ConsistencySnapshot, ConsistencyRevision:
+	case ConsistencySnapshot:
 		var ok bool
 		if consistent, ok = database.(ConsistentStore); !ok {
-			return nil, fmt.Errorf("일관 읽기 비교에는 스냅숏과 내용 판을 제공하는 저장소가 필요하다")
+			return nil, fmt.Errorf("동기화 스냅숏에는 스냅숏을 내보내는 저장소가 필요하다")
 		}
 	default:
 		return nil, fmt.Errorf("읽기 일관성 방식이 올바르지 않다")
@@ -257,9 +239,7 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 		return Flow{}, fmt.Errorf("검색 기준 시각은 UTC여야 한다")
 	}
 	if service.config.Consistency == "" {
-		flow, err := service.flow(ctx, input, func() ([]float64, error) { return service.embedder.Embed(ctx, input.WorkContext) })
-		flow.Read.Attempts = 1
-		return flow, err
+		return service.flow(ctx, input, func() ([]float64, error) { return service.embedder.Embed(ctx, input.WorkContext) })
 	}
 	// 질의 임베딩은 외부 호출이므로 읽기 경계를 열기 전에 끝낸다. 경계 안에서 기다리면
 	// 스냅숏과 연결을 제공자 지연만큼 붙잡는다. 전역 범위는 의미 채널을 돌리지 않는다.
@@ -268,35 +248,13 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	if input.Scope != "global" {
 		embedding, embedErr = service.embedder.Embed(ctx, input.WorkContext)
 	}
-	embed := func() ([]float64, error) { return embedding, embedErr }
-	if service.config.Consistency == ConsistencySnapshot {
-		snapshot, err := service.consistent.BeginReadSnapshot(ctx)
-		if err != nil {
-			return Flow{}, err
-		}
-		flow, err := service.flow(snapshot.Context(ctx), input, embed)
-		flow.Read = ReadStats{Attempts: 1, ReadStats: snapshot.Close(ctx)}
-		return flow, err
+	snapshot, err := service.consistent.BeginReadSnapshot(ctx)
+	if err != nil {
+		return Flow{}, err
 	}
-	for attempt := 1; attempt <= maxReadAttempts; attempt++ {
-		before, err := service.consistent.ContentRevision(ctx, input.GraphID)
-		if err != nil {
-			return Flow{}, err
-		}
-		flow, err := service.flow(ctx, input, embed)
-		if err != nil {
-			return flow, err
-		}
-		after, err := service.consistent.ContentRevision(ctx, input.GraphID)
-		if err != nil {
-			return Flow{}, err
-		}
-		if before == after {
-			flow.Read.Attempts = attempt
-			return flow, nil
-		}
-	}
-	return Flow{}, ErrReadNotSettled
+	flow, err := service.flow(snapshot.Context(ctx), input, func() ([]float64, error) { return embedding, embedErr })
+	flow.Read = snapshot.Close(ctx)
+	return flow, err
 }
 
 // flow는 한 번의 검색 흐름이다. embed는 의미 채널이 쓸 질의 벡터를 돌려준다.

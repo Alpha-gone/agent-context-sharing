@@ -38,7 +38,7 @@ func TestFlowSignatureIgnoresMeasurementsOnly(t *testing.T) {
 		Channels: map[string]search.Channel{"time": {Candidates: 1}, "graph": {Failure: "disabled"}},
 	}
 	measured := base
-	measured.Read = search.ReadStats{Attempts: 3}
+	measured.Read = store.ReadStats{Connections: 6, PeakConnections: 4}
 	measured.Channels = map[string]search.Channel{"graph": {Failure: "disabled"}, "time": {Candidates: 1, Latency: 5}}
 	if flowSignature(base) != flowSignature(measured) {
 		t.Fatal("측정값만 다른 응답을 다르게 봤다")

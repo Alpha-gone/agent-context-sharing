@@ -18,7 +18,8 @@ func TestContentRevisionIncrementsOnSearchVisibleWritesIntegration(t *testing.T)
 	graphID := createTestGraph(t, database, actorID)
 	revision := func() int64 {
 		t.Helper()
-		value, err := database.ContentRevision(t.Context(), graphID)
+		var value int64
+		err := database.pool.QueryRow(t.Context(), `SELECT content_revision FROM public.context_graph WHERE graph_id = $1`, graphID.String()).Scan(&value)
 		if err != nil {
 			t.Fatalf("내용 판 조회: %v", err)
 		}

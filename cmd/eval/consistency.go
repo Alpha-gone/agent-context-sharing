@@ -1,10 +1,10 @@
-// 「요청 단위 일관 읽기 비교」를 실행한다. 현행 Read Committed, 동기화 스냅숏과 내용 판
-// 재시도를 병렬·순차 실행과 함께 같은 그래프·질의·검색 구성에서 견준다.
+// 「요청 단위 일관 읽기 비교」를 실행한다. Read Committed 검색과 채택한 동기화 스냅숏을
+// 병렬·순차 실행과 함께 같은 그래프·질의·검색 구성에서 견준다. 채택하지 않은 내용 판
+// 재시도의 측정값은 reviews/2026-09-27-consistent-read.md에 남아 있다.
 package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -35,7 +35,7 @@ func consistencyVariants() []consistencyVariant {
 	for _, consistency := range []struct {
 		name  string
 		value search.Consistency
-	}{{"read_committed", ""}, {"snapshot", search.ConsistencySnapshot}, {"revision", search.ConsistencyRevision}} {
+	}{{"read_committed", ""}, {"snapshot", search.ConsistencySnapshot}} {
 		for _, execution := range []search.Execution{search.ExecutionParallel, search.ExecutionSequential} {
 			variants = append(variants, consistencyVariant{Name: consistency.name + "/" + string(execution), Consistency: consistency.value, Execution: execution})
 		}
@@ -50,14 +50,19 @@ type consistencyReport struct {
 	QueryVersion   string                 `json:"query_dataset_version"`
 	Conditions     consistencyConditions  `json:"conditions"`
 	Equivalence    []equivalenceResult    `json:"equivalence"`
+	Load           []loadResult           `json:"concurrent_requests"`
 	Concurrent     []concurrentReadResult `json:"concurrent_writes"`
 }
 
 type consistencyConditions struct {
 	Requests int `json:"requests_per_variant"`
-	// WritePausesMS 필드에는 쓰기 작업자가 쓰기 사이에 쉬는 시간 후보를 둔다. 내용 판 재시도는
-	// 쓰기 빈도에 따라 재시도율이 크게 달라지므로 빈도 여럿에서 잰다.
-	WritePausesMS     []int   `json:"write_pauses_ms"`
+	// WritePausesMS 필드에는 쓰기 작업자가 쓰기 사이에 쉬는 시간 후보를 둔다. 불일치 빈도가
+	// 쓰기 빈도에 따라 달라지므로 빈도 여럿에서 잰다.
+	WritePausesMS []int `json:"write_pauses_ms"`
+	// LoadConcurrency와 LoadRequests 필드에는 동시 요청 부하의 동시 요청자 수 후보와 조건마다
+	// 보낼 요청 수를 둔다.
+	LoadConcurrency   []int   `json:"load_concurrency"`
+	LoadRequests      int     `json:"load_requests"`
 	ToggledContexts   int     `json:"toggled_contexts"`
 	GraphStage        string  `json:"graph_stage"`
 	Budget            int     `json:"budget"`
@@ -66,6 +71,20 @@ type consistencyConditions struct {
 	CandidateLimit    int     `json:"channel_candidate_limit"`
 	SemanticThreshold float64 `json:"semantic_similarity_threshold"`
 	EmbeddingModel    string  `json:"embedding_model"`
+}
+
+// loadResult는 동시 요청 부하에서 한 구성의 처리량과 연결 풀 대기다. 대기 획득과 대기
+// 시간은 측정 구간의 증가분이다.
+type loadResult struct {
+	Variant       string         `json:"variant"`
+	Concurrency   int            `json:"concurrency"`
+	Requests      int            `json:"requests"`
+	Errors        int            `json:"errors"`
+	Throughput    float64        `json:"requests_per_second"`
+	LatencyMS     latencySummary `json:"latency_ms"`
+	MaxConns      int32          `json:"pool_max_conns"`
+	EmptyAcquires int64          `json:"pool_empty_acquires"`
+	AcquireWaitMS float64        `json:"pool_acquire_wait_ms"`
 }
 
 // equivalenceResult는 동시 쓰기가 없을 때 한 구성이 기준 구성과 다른 응답을 낸 질의 수다.
@@ -83,7 +102,6 @@ type concurrentReadResult struct {
 	WritesPerSecond float64        `json:"writes_per_second"`
 	Requests        int            `json:"requests"`
 	Errors          int            `json:"errors"`
-	NotSettled      int            `json:"not_settled"`
 	Inconsistent    int            `json:"inconsistent"`
 	Writes          int            `json:"writes"`
 	WriteErrors     int            `json:"write_errors"`
@@ -91,8 +109,6 @@ type concurrentReadResult struct {
 	Connections     float64        `json:"connections_per_request"`
 	PeakConnections int            `json:"peak_connections"`
 	HoldMS          latencySummary `json:"snapshot_hold_ms"`
-	RetryRate       float64        `json:"retry_rate"`
-	MaxRetries      int            `json:"max_consecutive_retries"`
 }
 
 type latencySummary struct {
@@ -159,6 +175,21 @@ func runConsistency(ctx context.Context, database *store.Store, worker *index.Wo
 		slog.Info("동등성 비교 완료", "variant", variant.Name, "mismatches", entry.Mismatches)
 	}
 
+	for _, concurrency := range conditions.LoadConcurrency {
+		for _, variant := range variants {
+			if variant.Execution != search.ExecutionParallel {
+				continue
+			}
+			service, err := consistencyService(database, worker, loaded, stage, variant)
+			if err != nil {
+				return consistencyReport{}, err
+			}
+			measured := measureLoad(ctx, database, service, graph.GraphID, queries, variant.Name, concurrency, conditions)
+			result.Load = append(result.Load, measured)
+			slog.Info("동시 요청 비교 완료", "variant", variant.Name, "concurrency", concurrency, "errors", measured.Errors, "empty_acquires", measured.EmptyAcquires)
+		}
+	}
+
 	scenario, err := createConsistencyScenario(ctx, database, worker)
 	if err != nil {
 		return consistencyReport{}, err
@@ -179,10 +210,51 @@ func runConsistency(ctx context.Context, database *store.Store, worker *index.Wo
 				return consistencyReport{}, err
 			}
 			result.Concurrent = append(result.Concurrent, measured)
-			slog.Info("동시 쓰기 비교 완료", "variant", variant.Name, "pause_ms", pause, "inconsistent", measured.Inconsistent, "not_settled", measured.NotSettled)
+			slog.Info("동시 쓰기 비교 완료", "variant", variant.Name, "pause_ms", pause, "inconsistent", measured.Inconsistent, "errors", measured.Errors)
 		}
 	}
 	return result, nil
+}
+
+// measureLoad는 동시 요청자 concurrency개가 데이터셋 질의를 돌려가며 LoadRequests개의 요청을
+// 보낸다. 운영 기본 실행 방식인 병렬 실행만 재며, 한 요청이 동시에 쥐는 연결이 가장 많은
+// 조건에서 풀이 포화되는지 본다.
+func measureLoad(ctx context.Context, database *store.Store, service *search.Service, graphID model.ID, queries querySet, name string, concurrency int, conditions consistencyConditions) loadResult {
+	result := loadResult{Variant: name, Concurrency: concurrency, Requests: conditions.LoadRequests}
+	before := database.PoolStats()
+	jobs := make(chan int)
+	var mu sync.Mutex
+	latencies := make([]float64, 0, conditions.LoadRequests)
+	var group sync.WaitGroup
+	started := time.Now()
+	for range concurrency {
+		group.Go(func() {
+			for index := range jobs {
+				query := queries.Queries[index%len(queries.Queries)]
+				requestStarted := time.Now()
+				_, err := service.Flow(ctx, consistencyInput(graphID, query.WorkContext, query.Scope, conditions))
+				elapsed := float64(time.Since(requestStarted).Microseconds()) / 1000
+				mu.Lock()
+				latencies = append(latencies, elapsed)
+				if err != nil {
+					result.Errors++
+				}
+				mu.Unlock()
+			}
+		})
+	}
+	for index := range conditions.LoadRequests {
+		jobs <- index
+	}
+	close(jobs)
+	group.Wait()
+	after := database.PoolStats()
+	result.Throughput = float64(conditions.LoadRequests) / time.Since(started).Seconds()
+	result.LatencyMS = summarize(latencies)
+	result.MaxConns = after.MaxConns
+	result.EmptyAcquires = after.EmptyAcquires - before.EmptyAcquires
+	result.AcquireWaitMS = float64((after.AcquireWait - before.AcquireWait).Microseconds()) / 1000
+	return result
 }
 
 func consistencyInput(graphID model.ID, workContext, scope string, conditions consistencyConditions) search.Input {
@@ -347,16 +419,12 @@ func (scenario *consistencyScenario) measure(ctx context.Context, service *searc
 	})
 	latencies := make([]float64, 0, conditions.Requests)
 	holds := make([]float64, 0, conditions.Requests)
-	connections, retried := 0, 0
+	connections := 0
 	for range conditions.Requests {
 		started := time.Now()
 		flow, err := service.Flow(ctx, consistencyInput(scenario.graph.GraphID, "동시 쓰기 검증 질의", "local", conditions))
 		latencies = append(latencies, float64(time.Since(started).Microseconds())/1000)
-		switch {
-		case errors.Is(err, search.ErrReadNotSettled):
-			result.NotSettled++
-			continue
-		case err != nil:
+		if err != nil {
 			result.Errors++
 			slog.Warn("동시 쓰기 중 검색 실패", "variant", variant.Name, "error", err.Error())
 			continue
@@ -369,10 +437,6 @@ func (scenario *consistencyScenario) measure(ctx context.Context, service *searc
 		if variant.Consistency == search.ConsistencySnapshot {
 			holds = append(holds, float64(flow.Read.Hold.Microseconds())/1000)
 		}
-		if flow.Read.Attempts > 1 {
-			retried++
-		}
-		result.MaxRetries = max(result.MaxRetries, flow.Read.Attempts-1)
 	}
 	close(stop)
 	group.Wait()
@@ -380,10 +444,8 @@ func (scenario *consistencyScenario) measure(ctx context.Context, service *searc
 	result.WritesPerSecond = float64(writes) / time.Since(measureStarted).Seconds()
 	result.LatencyMS = summarize(latencies)
 	result.HoldMS = summarize(holds)
-	answered := conditions.Requests - result.Errors - result.NotSettled
-	if answered > 0 {
+	if answered := conditions.Requests - result.Errors; answered > 0 {
 		result.Connections = float64(connections) / float64(answered)
-		result.RetryRate = float64(retried) / float64(answered)
 	}
 	// 폐기한 채로 끝난 파생을 되살리고 남은 임시 파생을 폐기해 다음 구성이 같은 시작
 	// 상태에서 재게 한다.

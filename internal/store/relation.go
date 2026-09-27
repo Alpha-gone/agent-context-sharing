@@ -52,6 +52,9 @@ func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation m
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("사건 관계 생성: %w", err)
 	}
+	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}); err != nil {
+		return model.Relation{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return model.Relation{}, fmt.Errorf("관계 생성 커밋: %w", err)
 	}
@@ -110,6 +113,9 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		if err := s.recordAppliedRelationOperation(ctx, tx, operation, stored.ID); err != nil {
 			return model.Relation{}, err
 		}
+		if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}); err != nil {
+			return model.Relation{}, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return model.Relation{}, fmt.Errorf("관계 확정 커밋: %w", err)
 		}
@@ -138,6 +144,9 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		existing = stored
 	}
 	if err := s.recordAppliedRelationOperation(ctx, tx, operation, existing.ID); err != nil {
+		return model.Relation{}, err
+	}
+	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}); err != nil {
 		return model.Relation{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -184,6 +193,9 @@ func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.I
 		return model.Relation{}, err
 	}
 	if err := s.recordAppliedRelationOperation(ctx, tx, operation, stored.ID); err != nil {
+		return model.Relation{}, err
+	}
+	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{stored.FromContextID, stored.ToContextID}, EmbeddingExpectation{}); err != nil {
 		return model.Relation{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -492,6 +504,9 @@ func (s *Store) createProposedRelation(ctx context.Context, graphID model.ID, re
 		return false, fmt.Errorf("후보 관계 검증: %w", errors.Join(ErrInvalidRelation, err))
 	}
 	if _, err := s.createRelation(ctx, tx, graphID, relation); err != nil {
+		return false, err
+	}
+	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -196,6 +196,9 @@ func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, enqueuedAt
 	if _, err := tx.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1 AND enqueued_at = $2`, task.ID.String(), enqueuedAt); err != nil {
 		return fmt.Errorf("완료 색인 작업 제거: %w", err)
 	}
+	if err := s.checkWriteInvariants(ctx, tx, task.GraphID, []model.ID{task.ContextID}, EmbeddingExpectation{ModelID: result.ModelID, Dimension: len(result.Embedding)}); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("색인 작업 커밋: %w", err)
 	}

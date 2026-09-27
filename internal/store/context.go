@@ -144,6 +144,9 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if err := s.recordAppliedOperation(ctx, tx, operation, stored.Version); err != nil {
 		return model.Context{}, err
 	}
+	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{stored.ID}, EmbeddingExpectation{}); err != nil {
+		return model.Context{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 커밋: %w", err)
 	}
@@ -296,6 +299,9 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 			return model.Context{}, err
 		}
 	}
+	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{contextID}, EmbeddingExpectation{}); err != nil {
+		return model.Context{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 커밋: %w", err)
 	}
@@ -438,6 +444,9 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 		return model.Context{}, err
 	}
 	if err := s.recordAppliedOperation(ctx, tx, operation, stored.Version); err != nil {
+		return model.Context{}, err
+	}
+	if err := s.checkWriteInvariants(ctx, tx, graphID, createdScope(value, derivedFrom, supersededID), EmbeddingExpectation{}); err != nil {
 		return model.Context{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1021,4 +1030,17 @@ func (s *Store) edgeTargetsBySource(ctx context.Context, queryer cypherQueryer, 
 		return nil, fmt.Errorf("%s 간선 행 읽기: %w", label, err)
 	}
 	return targets, nil
+}
+
+// createdScope는 컨텍스트 생성이 만들거나 바꾼 정점이다. 새 컨텍스트와 그 근거·대체 대상·사건
+// 구성원이며, 이 정점들에 닿은 간선이 쓰기 검사의 영향 주변부다.
+func createdScope(value model.Context, derivedFrom []model.ID, supersededID model.ID) []model.ID {
+	scope := append([]model.ID{value.ID}, derivedFrom...)
+	if supersededID.IsV7() {
+		scope = append(scope, supersededID)
+	}
+	if value.Event != nil {
+		scope = append(scope, value.Event.MemberIDs...)
+	}
+	return scope
 }

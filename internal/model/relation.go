@@ -122,7 +122,7 @@ func ValidateRelation(relation Relation, from, to Context) error {
 	if relation.Type == RelationTypeRelatesTo && relation.FromContextID.String() > relation.ToContextID.String() {
 		return fieldErrorf("from_context_id", "relates_to는 식별자 순서로 양 끝을 정규화해야 한다")
 	}
-	if err := validateRelationTime(relation.Type, *from.Event, *to.Event); err != nil {
+	if err := ValidateRelationTime(relation.Type, *from.Event, *to.Event); err != nil {
 		return err
 	}
 	return nil
@@ -143,8 +143,9 @@ func ValidateRelationCycle(relation Relation, pathExists func(ID, ID) bool) erro
 	return nil
 }
 
-// validateRelationTime은 사건 시간 범위로 관계별 순서와 포함 제약을 확인한다.
-func validateRelationTime(kind RelationType, from, to EventAttributes) error {
+// ValidateRelationTime은 사건 시간 범위로 관계별 순서와 포함 제약을 확인한다. 저장소의
+// 그래프 불변식 감사가 저장된 관계에 같은 판정을 다시 적용하므로 공개한다.
+func ValidateRelationTime(kind RelationType, from, to EventAttributes) error {
 	switch kind {
 	case RelationTypePrecedes, RelationTypeCauses:
 		if from.Start.After(to.Start) {

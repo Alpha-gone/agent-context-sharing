@@ -88,7 +88,7 @@ func TestIndexProviderCallDoesNotBlockSavesIntegration(t *testing.T) {
 }
 
 // embeddingDimension은 배포가 만든 임베딩 열의 차원을 읽는다.
-func embeddingDimension(t *testing.T, database *Store) int {
+func embeddingDimension(t testing.TB, database *Store) int {
 	t.Helper()
 	var dimension int
 	if err := database.pool.QueryRow(t.Context(), `

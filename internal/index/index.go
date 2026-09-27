@@ -87,7 +87,13 @@ func New(database *store.Store, config Config, client *http.Client, logger *slog
 
 // ModelID는 모델과 벡터 표현이 같은지 비교할 수 있는 현재 색인 식별자다.
 func (worker *Worker) ModelID() string {
-	return worker.config.Model + ":" + worker.config.VectorType + ":" + fmt.Sprint(worker.config.Dimension)
+	return ModelID(worker.config.Model, worker.config.VectorType, worker.config.Dimension)
+}
+
+// ModelID는 임베딩 행의 model_id 형식을 만든다. 그래프 불변식 감사가 현재 모델과 대조할 때도
+// 같은 형식을 써야 하므로 작업자 밖에 둔다.
+func ModelID(model, vectorType string, dimension int) string {
+	return model + ":" + vectorType + ":" + fmt.Sprint(dimension)
 }
 
 // Start는 서버 요청 경로와 분리된 색인 소비 루프를 시작한다.

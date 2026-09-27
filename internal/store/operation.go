@@ -52,7 +52,11 @@ func (s *Store) RecordRejectedOperation(ctx context.Context, operation Operation
 	if reason == "" {
 		return fmt.Errorf("거부 사유가 비어 있다")
 	}
-	return s.insertOperation(ctx, s.pool, operation, "rejected", reason)
+	queryer := operationQueryer(s.pool)
+	if tx, ok := ctx.Value(writeTransactionContextKey{}).(pgx.Tx); ok {
+		queryer = tx
+	}
+	return s.insertOperation(ctx, queryer, operation, "rejected", reason)
 }
 
 // HasAppliedDiscard는 컨텍스트가 MCP 관리 연산으로 폐기됐는지 확인한다.

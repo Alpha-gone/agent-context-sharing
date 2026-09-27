@@ -1,11 +1,13 @@
 package mcp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,6 +101,135 @@ func TestHandlerIntegration(t *testing.T) {
 	}
 	if sourceValue["occurred_at"] == nil || sourceValue["origin_kind"] != "external_content" {
 		t.Fatalf("원천 응답에 계층별 속성이 없다: occurred_at=%#v origin_kind=%#v", sourceValue["occurred_at"], sourceValue["origin_kind"])
+	}
+
+	// 전송 결과를 받지 못한 재시도도 업무 변경과 적용 기록을 한 번만 남기고 최초 결과를
+	// 돌려줘야 한다. 같은 키를 다른 요청에 보내면 두 번째 쓰기는 시작하지 않는다.
+	idempotencyKey, err := model.NewID()
+	if err != nil {
+		t.Fatalf("멱등성 키 생성: %v", err)
+	}
+	idempotencyArguments := sourceArguments()
+	idempotencyArguments["body"] = "멱등성 원천 본문"
+	idempotencyArguments["locator"] = locator + "/idempotency"
+	fingerprint, err := requestFingerprint("node_create", idempotencyArguments)
+	if err != nil {
+		t.Fatalf("멱등성 요청 지문: %v", err)
+	}
+	idempotencyContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{Key: idempotencyKey.String(), Fingerprint: fingerprint})
+	firstCreate, err := call(idempotencyContext, ownerID, "node_create", idempotencyArguments)
+	if err != nil {
+		t.Fatalf("멱등성 생성: %v", err)
+	}
+	replayedCreate, err := call(idempotencyContext, ownerID, "node_create", idempotencyArguments)
+	if err != nil {
+		t.Fatalf("멱등성 생성 재생: %v", err)
+	}
+	idempotencySourceID := structured(t, firstCreate)["context_id"].(string)
+	if idempotencySourceID != structured(t, replayedCreate)["context_id"] {
+		t.Fatalf("재생 결과가 최초 결과와 다르다: first=%#v replay=%#v", structured(t, firstCreate), structured(t, replayedCreate))
+	}
+	var addRecordCount int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM public.operation_log
+		WHERE graph_id = $1 AND context_id = $2 AND operation_kind = 'add' AND result = 'applied'`, graphID, idempotencySourceID).Scan(&addRecordCount); err != nil {
+		t.Fatalf("멱등성 생성 기록 수 조회: %v", err)
+	}
+	if addRecordCount != 1 {
+		t.Fatalf("멱등성 생성 적용 기록 수 = %d, want 1", addRecordCount)
+	}
+	differentArguments := map[string]any{"graph_id": graphID, "layer": "source", "body": "다른 요청", "created_by_agent": ownerID.String(), "source_channel": "api", "locator": locator + "/different", "occurred_at": time.Now().UTC().Format(time.RFC3339), "origin_kind": "external_content"}
+	differentFingerprint, err := requestFingerprint("node_create", differentArguments)
+	if err != nil {
+		t.Fatalf("다른 멱등성 요청 지문: %v", err)
+	}
+	differentContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{Key: idempotencyKey.String(), Fingerprint: differentFingerprint})
+	if _, err := call(differentContext, ownerID, "node_create", differentArguments); !hasCode(err, "invalid_argument") {
+		t.Fatalf("같은 키의 다른 요청 오류 = %v, want invalid_argument", err)
+	}
+
+	concurrentKey, err := model.NewID()
+	if err != nil {
+		t.Fatalf("동시 멱등성 키 생성: %v", err)
+	}
+	concurrentArguments := sourceArguments()
+	concurrentArguments["body"] = "동시 멱등성 원천 본문"
+	concurrentArguments["locator"] = locator + "/concurrent"
+	concurrentFingerprint, err := requestFingerprint("node_create", concurrentArguments)
+	if err != nil {
+		t.Fatalf("동시 멱등성 요청 지문: %v", err)
+	}
+	concurrentContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{Key: concurrentKey.String(), Fingerprint: concurrentFingerprint})
+	type concurrentResult struct {
+		result ToolResult
+		err    error
+	}
+	concurrentResults := make(chan concurrentResult, 2)
+	var calls sync.WaitGroup
+	for range 2 {
+		calls.Go(func() {
+			result, callErr := call(concurrentContext, ownerID, "node_create", concurrentArguments)
+			concurrentResults <- concurrentResult{result: result, err: callErr}
+		})
+	}
+	calls.Wait()
+	close(concurrentResults)
+	var concurrentIDs []string
+	for result := range concurrentResults {
+		if result.err != nil {
+			t.Fatalf("동시 멱등성 생성: %v", result.err)
+		}
+		concurrentIDs = append(concurrentIDs, structured(t, result.result)["context_id"].(string))
+	}
+	if len(concurrentIDs) != 2 || concurrentIDs[0] != concurrentIDs[1] {
+		t.Fatalf("동시 재생 결과가 다르다: %#v", concurrentIDs)
+	}
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM public.operation_log
+		WHERE graph_id = $1 AND context_id = $2 AND operation_kind = 'add' AND result = 'applied'`, graphID, concurrentIDs[0]).Scan(&addRecordCount); err != nil {
+		t.Fatalf("동시 멱등성 생성 기록 수 조회: %v", err)
+	}
+	if addRecordCount != 1 {
+		t.Fatalf("동시 멱등성 생성 적용 기록 수 = %d, want 1", addRecordCount)
+	}
+
+	rollbackKey, err := model.NewID()
+	if err != nil {
+		t.Fatalf("롤백 멱등성 키 생성: %v", err)
+	}
+	rollbackRequest := store.IdempotencyRequest{AccountID: ownerID, Key: rollbackKey, ToolName: "graph_create", Fingerprint: concurrentFingerprint}
+	if _, err := database.ReplayIdempotent(t.Context(), rollbackRequest, func(context.Context) ([]byte, error) {
+		return nil, errors.New("의도한 업무 롤백")
+	}); err == nil {
+		t.Fatal("롤백되는 멱등성 업무가 성공했다")
+	}
+	var rollbackRecordCount int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM public.idempotency_record WHERE actor_account_id = $1 AND idempotency_key = $2`, ownerID.String(), rollbackKey.String()).Scan(&rollbackRecordCount); err != nil {
+		t.Fatalf("롤백 멱등성 기록 수 조회: %v", err)
+	}
+	if rollbackRecordCount != 0 {
+		t.Fatalf("롤백된 업무의 멱등성 기록 수 = %d, want 0", rollbackRecordCount)
+	}
+
+	expiredKey, err := model.NewID()
+	if err != nil {
+		t.Fatalf("만료 멱등성 키 생성: %v", err)
+	}
+	expiredRequest := store.IdempotencyRequest{AccountID: ownerID, Key: expiredKey, ToolName: "graph_create", Fingerprint: concurrentFingerprint}
+	firstExpiryResult, err := database.ReplayIdempotent(t.Context(), expiredRequest, func(context.Context) ([]byte, error) {
+		return []byte(`{"marker":1}`), nil
+	})
+	if err != nil || string(firstExpiryResult) != `{"marker":1}` {
+		t.Fatalf("만료 검증 최초 결과 = %s, err = %v", firstExpiryResult, err)
+	}
+	if _, err := pool.Exec(t.Context(), `UPDATE public.idempotency_record SET expires_at = now() - interval '1 second' WHERE actor_account_id = $1 AND idempotency_key = $2`, ownerID.String(), expiredKey.String()); err != nil {
+		t.Fatalf("멱등성 결과 만료: %v", err)
+	}
+	secondExpiryResult, err := database.ReplayIdempotent(t.Context(), expiredRequest, func(context.Context) ([]byte, error) {
+		return []byte(`{"marker":2}`), nil
+	})
+	if err != nil || string(secondExpiryResult) != `{"marker":2}` {
+		t.Fatalf("만료 뒤 새 결과 = %s, err = %v", secondExpiryResult, err)
 	}
 	duplicated, err := call(t.Context(), ownerID, "node_create", sourceArguments())
 	if err != nil {

@@ -29,10 +29,20 @@ func (s *Store) touchEmbeddings(ctx context.Context, graphID model.ID, contextID
 		}
 		ids = append(ids, contextID.String())
 	}
+	// 대상 행을 context_id 순서로 잠그고 다른 요청이 잠근 행은 건너뛴다. 흐름 응답마다 담긴
+	// 컨텍스트 전부를 기록하므로 동시 요청은 겹치는 행을 서로 다른 순서로 잠그게 되고, 한
+	// 문장으로 갱신하면 교착과 교착 감지 대기가 연결 풀을 고갈시킨다. 건너뛴 행은 잠근 요청이
+	// 같은 시각으로 기록하므로 접근 기록으로서 잃는 것이 없다.
 	if _, err := s.pool.Exec(ctx, `
-		UPDATE public.context_embedding
+		UPDATE public.context_embedding AS embedding
 		SET last_accessed_at = $3, storage_tier = $4
-		WHERE graph_id = $1 AND context_id = ANY($2::uuid[])
+		FROM (
+			SELECT context_id FROM public.context_embedding
+			WHERE graph_id = $1 AND context_id = ANY($2::uuid[])
+			ORDER BY context_id
+			FOR UPDATE SKIP LOCKED
+		) AS target
+		WHERE embedding.graph_id = $1 AND embedding.context_id = target.context_id
 	`, graphID.String(), ids, at.UTC(), embeddingTierHot); err != nil {
 		return fmt.Errorf("임베딩 되읽기 기록: %w", err)
 	}

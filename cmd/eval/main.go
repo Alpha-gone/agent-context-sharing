@@ -70,7 +70,7 @@ func run() error {
 	maxHops := flag.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
 	maxHopNodes := flag.Int("max-hop-nodes", defaultLimits.MaxHopNodes, "그래프 확장 최대 노드 수")
 	indexTargets := flag.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
-	convert := flag.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag, own, own-global 또는 own-global-auto")
+	convert := flag.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag, own, own-global, own-global-auto 또는 own-adversarial")
 	convertSource := flag.String("convert-source", "", "변환할 벤치마크 파일 경로")
 	convertName := flag.String("convert-name", "", "데이터셋 판에 넣을 세트 이름")
 	convertLimit := flag.Int("convert-questions", 0, "변환에 쓸 질의 수. 0이면 전부 쓴다")
@@ -88,6 +88,8 @@ func run() error {
 	consistencyLoadRequests := flag.Int("consistency-load-requests", 200, "동시 요청 부하 비교에서 조건마다 보낼 요청 수")
 	consistencyPauses := flag.String("consistency-write-pauses", "0,50,250", "동시 쓰기 비교에서 쓰기 사이에 쉬는 밀리초 후보. 쉼표로 나눈다")
 	consistencyStage := flag.String("consistency-stage", string(search.GraphStageReferences), "일관 읽기 비교의 그래프 관계 범위")
+	adversarial := flag.Bool("adversarial", false, "관계·경로 오염 공격 표본을 공격 전후와 복구 후에 평가하고 홉별 첫 불일치를 진단한다")
+	attacksPath := flag.String("attacks", "", "공격 표본 파일 경로. -adversarial의 입력이자 own-adversarial 생성의 출력이다")
 	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
 	flag.Parse()
 
@@ -97,7 +99,7 @@ func run() error {
 		if *contextsPath == "" || *queriesPath == "" {
 			return fmt.Errorf("-contexts와 -queries가 필요하다")
 		}
-		return runConvert(*convert, *convertSource, *convertName, *convertLimit, *convertUseCase, *contextsPath, *queriesPath)
+		return runConvert(*convert, *convertSource, *convertName, *convertLimit, *convertUseCase, *contextsPath, *queriesPath, *attacksPath)
 	}
 	if *businessPath != "" {
 		return runBusiness(*businessPath, *outPath)
@@ -137,6 +139,16 @@ func run() error {
 		return err
 	}
 
+	var attacks attackSet
+	if *adversarial {
+		if *attacksPath == "" {
+			return fmt.Errorf("-adversarial에는 -attacks가 필요하다")
+		}
+		if attacks, err = loadAttackSet(*attacksPath, contexts, queries); err != nil {
+			return err
+		}
+	}
+
 	settings, err := loadSettings()
 	if err != nil {
 		return err
@@ -158,6 +170,14 @@ func run() error {
 		return fmt.Errorf("색인 작업자 준비: %w", err)
 	}
 
+	if *adversarial {
+		return runAdversarialCommand(ctx, database, worker, settings, contexts, queries, attacks, adversarialConditions{
+			Repeats: *repeats, GraphStage: string(search.GraphStageRelations), GlobalFallback: true,
+			Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
+			Execution: string(settings.execution), CandidateLimit: settings.candidateLimit,
+			SemanticThreshold: settings.semanticThreshold, FoldThreshold: settings.foldThreshold, EmbeddingModel: worker.ModelID(),
+		}, *outPath)
+	}
 	graph, err := loadGraph(ctx, database, contexts)
 	if err != nil {
 		return err
@@ -279,11 +299,22 @@ func run() error {
 }
 
 // runConvert는 공개 벤치마크를 데이터셋 두 파일로 옮기고 끝낸다.
-func runConvert(format, source, name string, limit int, useCase, contextsPath, queriesPath string) error {
+func runConvert(format, source, name string, limit int, useCase, contextsPath, queriesPath, attacksPath string) error {
 	var contexts contextSet
 	var queries querySet
 	var err error
 	switch format {
+	case convertOwnAdversarial:
+		if name == "" || attacksPath == "" {
+			return fmt.Errorf("-convert-name과 -attacks가 필요하다")
+		}
+		var attacks attackSet
+		if contexts, queries, attacks, err = convertOwnAdversarialSet(name, max(limit, 12)); err != nil {
+			return err
+		}
+		if err := writeDataset(attacksPath, attacks); err != nil {
+			return err
+		}
 	case convertHippoRAG:
 		if source == "" || name == "" {
 			return fmt.Errorf("-convert-source와 -convert-name이 필요하다")
@@ -326,8 +357,14 @@ func runConvert(format, source, name string, limit int, useCase, contextsPath, q
 	if err != nil {
 		return err
 	}
-	if _, err := loadQuerySet(queriesPath, loaded); err != nil {
+	loadedQueries, err := loadQuerySet(queriesPath, loaded)
+	if err != nil {
 		return err
+	}
+	if format == convertOwnAdversarial {
+		if _, err := loadAttackSet(attacksPath, loaded, loadedQueries); err != nil {
+			return err
+		}
 	}
 	slog.Info("변환 완료", "version", contexts.Version, "contexts", len(contexts.Contexts), "queries", len(queries.Queries))
 	return nil

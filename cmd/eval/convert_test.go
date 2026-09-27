@@ -4,6 +4,7 @@ import (
 	"bytes"
 	json "encoding/json/v2"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -111,6 +112,13 @@ func TestConvertOwnSetKeepsAssociativeAnswerBehindRelation(t *testing.T) {
 	wantRelation := relationSpec{Type: "precedes", From: "g001-ew", To: "g001-ef"}
 	if !slices.Contains(contexts.Relations, wantRelation) {
 		t.Fatalf("연상 정답으로 한 홉 경로를 여는 관계가 없다: %+v", wantRelation)
+	}
+	// 기대 경로는 데이터셋이 실제로 확정한 관계를 따라가야 근거 완전성을 채울 수 있다.
+	if !reflect.DeepEqual(query.Required, []string{"g001-ew", "g001-ef"}) || !reflect.DeepEqual(query.Paths, [][]string{{"g001-ew", "g001-ef"}}) {
+		t.Fatalf("연상 질의의 필수 근거와 기대 경로 = %v %v", query.Required, query.Paths)
+	}
+	if fact := queries.Queries[0]; !reflect.DeepEqual(fact.Required, fact.Answers) || fact.Paths != nil {
+		t.Fatalf("사실 질의의 필수 근거와 기대 경로 = %v %v", fact.Required, fact.Paths)
 	}
 }
 

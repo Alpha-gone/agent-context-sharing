@@ -46,6 +46,9 @@ type Config struct {
 	FoldThreshold     float64
 	GraphStage        GraphStage
 	GlobalFallback    bool
+	// EvidencePathSelection 필드에는 근거 경로 보존 선택 활성 여부를 둔다. 끄면 기존 통합
+	// 순위 절단을 수행한다.
+	EvidencePathSelection bool
 }
 
 // Embedder는 질의 텍스트를 현재 색인 모델의 벡터로 바꾸는 index 경계다.
@@ -91,6 +94,9 @@ type Context struct {
 	Rank            int
 	FoldedCount     int
 	EntryDistance   int
+	// CandidateDegree 필드에는 후보 부분 그래프에서의 차수를 둔다. 응답에는 싣지 않으며
+	// 「검색 품질 평가」의 허브 편중을 계산하는 원자료다.
+	CandidateDegree int
 }
 
 // Channel은 채널별 후보 수·지연·실패와 응답 기여를 담는다.
@@ -119,6 +125,7 @@ type Flow struct {
 	// HopBoundary 필드에는 그래프 확장이 결과 상한으로 잘린 홉 경계를 둔다. 예산 절단과
 	// 다른 원인이므로 따로 싣고, 경계 0과 절단 없음을 구분하려고 포인터로 둔다.
 	HopBoundary *int
+	Selection   Selection
 }
 
 // ErrAllChannelsFailed는 부분 상태로 복구할 채널도 남지 않았음을 나타낸다.
@@ -254,7 +261,26 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	results = append(results, graph)
 	combined = combine(results)
 	combined = foldSimilarDerived(combined, service.config.FoldThreshold)
-	selected, used, truncation := applyBudget(combined, input.Budget)
+	graphView := buildCandidateSubgraph(combined, results)
+	var selected []combinedCandidate
+	var used int
+	var truncation *Truncation
+	var selection Selection
+	if service.config.EvidencePathSelection {
+		selected, used, truncation, selection = selectEvidenceSets(combined, graphView, input.Budget)
+	} else {
+		selected, used, truncation = applyBudget(combined, input.Budget)
+		selection = Selection{Candidates: len(combined), Selected: len(selected)}
+	}
+	// 연결 근거 집합은 경로 노드를 대표 후보 뒤에 붙이므로 응답 정렬인 통합 순위로 되돌린다.
+	// 순위는 선택 전 통합 순위를 그대로 쓴다. 비활성 구성은 앞부분만 남기므로 위치와 같다.
+	ranks := make(map[model.ID]int, len(combined))
+	for index, candidate := range combined {
+		ranks[candidate.value.ID] = index + 1
+	}
+	slices.SortFunc(selected, func(left, right combinedCandidate) int {
+		return cmp.Compare(ranks[left.value.ID], ranks[right.value.ID])
+	})
 	ids := make([]model.ID, 0, len(selected))
 	for _, candidate := range selected {
 		ids = append(ids, candidate.value.ID)
@@ -267,8 +293,8 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 		origins = map[model.ID][]model.OriginKind{}
 	}
 	contexts := make([]Context, 0, len(selected))
-	for rank, candidate := range selected {
-		contexts = append(contexts, Context{Value: candidate.value, OriginKinds: origins[candidate.value.ID], MatchedChannels: candidate.channels, Rank: rank + 1, FoldedCount: candidate.folded, EntryDistance: candidate.distance})
+	for _, candidate := range selected {
+		contexts = append(contexts, Context{Value: candidate.value, OriginKinds: origins[candidate.value.ID], MatchedChannels: candidate.channels, Rank: ranks[candidate.value.ID], FoldedCount: candidate.folded, EntryDistance: candidate.distance, CandidateDegree: graphView.degrees[candidate.value.ID]})
 		for _, channel := range candidate.channels {
 			metric := channels[channel]
 			metric.Contribution++
@@ -276,8 +302,8 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 		}
 	}
 	edges := filterEdges(selected, results)
-	flow := Flow{Contexts: contexts, Edges: edges, EntryPoints: contextIDs(entryPoints), BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation, HopBoundary: graph.boundary}
-	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "global_fallback_triggered", globalFallbackTriggered, "global_fallback_applied", globalFallbackApplied, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil)
+	flow := Flow{Contexts: contexts, Edges: edges, EntryPoints: contextIDs(entryPoints), BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation, HopBoundary: graph.boundary, Selection: selection}
+	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "global_fallback_triggered", globalFallbackTriggered, "global_fallback_applied", globalFallbackApplied, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil, "evidence_path_selection", service.config.EvidencePathSelection, "selection_candidates", selection.Candidates, "selection_selected", selection.Selected, "selection_connectors", selection.Connectors, "selection_unreachable", selection.Unreachable)
 	return flow, nil
 }
 

@@ -101,6 +101,8 @@ type Config struct {
 	SearchGraphStage SearchGraphStage
 	// SearchGlobalFallback 필드에는 auto 범위의 전역 요약 전환 활성 여부를 둔다.
 	SearchGlobalFallback bool
+	// SearchEvidencePathSelection 필드에는 근거 경로 보존 선택 활성 여부를 둔다.
+	SearchEvidencePathSelection bool
 	// IndexTargetLayers 필드에는 색인 작업으로 등록할 계층 범위를 둔다.
 	IndexTargetLayers IndexTargetLayers
 	// OAuthClients 필드에는 클라이언트별로 사전 등록한 OAuth 콜백 주소 목록을 둔다.
@@ -221,6 +223,12 @@ func Load(env Environment) (Config, error) {
 		return Config{}, fmt.Errorf("SEARCH_GLOBAL_FALLBACK_ENABLED가 불리언이 아니다")
 	}
 	cfg.SearchGlobalFallback = globalFallback
+	// 통제 비교를 통과하기 전 운영 기본값은 기존 통합 순위 절단이므로 비어 있으면 끈다.
+	if raw := strings.TrimSpace(env("SEARCH_EVIDENCE_PATH_SELECTION_ENABLED")); raw != "" {
+		if cfg.SearchEvidencePathSelection, err = strconv.ParseBool(raw); err != nil {
+			return Config{}, fmt.Errorf("SEARCH_EVIDENCE_PATH_SELECTION_ENABLED가 불리언이 아니다")
+		}
+	}
 	// 「색인 대상 비교」에서 원천 제외 구성의 재현율·순위 품질 손실이
 	// 유의하게 확인됐으므로 비어 있으면 원천을 포함하는 판정을 유지한다.
 	if cfg.IndexTargetLayers == "" {

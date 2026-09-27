@@ -53,7 +53,9 @@ var (
 // 원천 12개(초기·중간·마무리 넷씩), 파생 3개, 사건 4개(초기·중간·묶음·마무리)와 확정
 // 관계 3개로 구성한다. 사건 관계의 그래프 효과는 연상 질의가 재는데, 질의 어휘는 마무리
 // 사건과 겹치고 정답 사건과 준비 구간은 별도 작업 코드만 쓴다. 연상 정답은 마무리 사건과
-// `precedes`로 연결된 준비 묶음 사건이라 관계를 켠 단계에서 한 홉으로 올라온다.
+// `precedes`로 연결된 준비 묶음 사건이라 관계를 켠 단계에서 한 홉으로 올라온다. 그래서
+// 연상 질의의 필수 근거는 정답 사건과 진입점인 마무리 사건이고, 기대 경로는 둘을 잇는
+// `precedes` 하나다. 사실 질의의 정답은 원천이라 그 자체가 진입점이므로 경로가 없다.
 func convertOwnSet(name string, questions int) (contextSet, querySet, error) {
 	if questions < 2 || questions%2 != 0 {
 		return contextSet{}, querySet{}, fmt.Errorf("자체 세트의 질의 수는 2 이상의 짝수여야 한다")
@@ -78,11 +80,14 @@ func convertOwnSet(name string, questions int) (contextSet, querySet, error) {
 			finding := ownFindings[(group*5+(group%4)*7)%len(ownFindings)]
 			queries = append(queries, querySpec{ID: fmt.Sprintf("own-f-%04d", group), UseCase: useCaseFact,
 				WorkContext: topic + " 논의에서 " + finding + " 내용이 담긴 기록을 찾아야 한다.",
-				Answers:     []string{ownKey(group, fmt.Sprintf("s%02d", group%4))}})
+				Answers:     []string{ownKey(group, fmt.Sprintf("s%02d", group%4))},
+				Required:    []string{ownKey(group, fmt.Sprintf("s%02d", group%4))}})
 		} else {
 			queries = append(queries, querySpec{ID: fmt.Sprintf("own-a-%04d", group), UseCase: useCaseAssociative,
 				WorkContext: ownMarker(group) + "로 표시한 " + topic + " 안정화 회차를 마쳤다. 이 회차와 연결된 준비 과정 사건이 필요하다.",
-				Answers:     []string{ownKey(group, "ew")}})
+				Answers:     []string{ownKey(group, "ew")},
+				Required:    []string{ownKey(group, "ew"), ownKey(group, "ef")},
+				Paths:       [][]string{{ownKey(group, "ew"), ownKey(group, "ef")}}})
 		}
 	}
 	version := fmt.Sprintf("%s-%dq", name, questions)
@@ -95,6 +100,8 @@ func convertOwnSet(name string, questions int) (contextSet, querySet, error) {
 // 겹치지 않는 유효 구간을 두어 해당 시점의 요약 하나만 진입점이 되게 한다. 정답은 요약
 // 자체가 아니라 그 근거 원천 넷이다. 따라서 명시적 global 범위의 기준선은 요약만 내고,
 // references 단계부터 derived_from을 따라 그래프 전반의 근거를 모으는 차이가 드러난다.
+// 필수 근거는 요약과 근거 원천 넷이고, 기대 경로는 요약에서 각 원천으로 내려가는
+// `derived_from` 넷이다.
 func convertOwnGlobalSet(name string, questions int) (contextSet, querySet, error) {
 	return convertOwnGlobalSetWithScope(name, questions, "global")
 }
@@ -135,8 +142,13 @@ func convertOwnGlobalSetWithScope(name string, questions int, scope string) (con
 			Derived: &derivedSpec{Kind: "summary", SummaryScope: "global", DerivedFrom: answers,
 				EvidenceState: "observation", ValidFrom: &from, ValidTo: &to}})
 		asOf := from.Add(6 * time.Hour)
+		paths := make([][]string, 0, len(answers))
+		for _, answer := range answers {
+			paths = append(paths, []string{summaryKey, answer})
+		}
 		queries = append(queries, querySpec{ID: fmt.Sprintf("own-g-%04d", group), UseCase: useCaseGlobal,
 			WorkContext: ownGlobalMarker(group), Answers: answers,
+			Required: append([]string{summaryKey}, answers...), Paths: paths,
 			Scope: scope, AsOf: &asOf})
 	}
 	version := fmt.Sprintf("%s-%dq", name, questions)

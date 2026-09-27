@@ -80,11 +80,18 @@ type relationSpec struct {
 
 // querySpec은 질의 파일의 한 항목이다. Answers는 컨텍스트 집합의 Key 목록이며
 // 재현율과 순위 품질의 정답 집합이 된다.
+//
+// Required와 Paths는 자체 세트만 채우는 근거 구조다. Required는 반환되어야 할 필수
+// 컨텍스트이고, Paths의 각 항목은 대표 후보에서 진입점 또는 원천까지 이어져야 할 기대
+// 경로다. 경로의 이웃한 두 key 사이 관계가 필수 관계가 된다. 둘 다 비면 근거 완전성과
+// 경로 연속성을 정의하지 않는다.
 type querySpec struct {
 	ID           string     `json:"id"`
 	UseCase      string     `json:"use_case"`
 	WorkContext  string     `json:"work_context"`
 	Answers      []string   `json:"answers"`
+	Required     []string   `json:"required,omitzero"`
+	Paths        [][]string `json:"paths,omitzero"`
 	Scope        string     `json:"scope,omitzero"`
 	SummaryScope string     `json:"summary_scope,omitzero"`
 	AsOf         *time.Time `json:"as_of,omitzero"`
@@ -231,6 +238,22 @@ func loadQuerySet(path string, contexts contextSet) (querySet, error) {
 		for _, answer := range query.Answers {
 			if _, present := known[answer]; !present {
 				return querySet{}, fmt.Errorf("%s: 질의 %q의 정답 %q가 컨텍스트 집합에 없다", path, query.ID, answer)
+			}
+		}
+		for _, key := range query.Required {
+			if _, present := known[key]; !present {
+				return querySet{}, fmt.Errorf("%s: 질의 %q의 필수 컨텍스트 %q가 컨텍스트 집합에 없다", path, query.ID, key)
+			}
+		}
+		for _, expected := range query.Paths {
+			// 한 노드짜리 경로는 이어질 관계가 없어 연속성을 잴 수 없다.
+			if len(expected) < 2 {
+				return querySet{}, fmt.Errorf("%s: 질의 %q의 기대 경로는 두 컨텍스트 이상이어야 한다", path, query.ID)
+			}
+			for _, key := range expected {
+				if _, present := known[key]; !present {
+					return querySet{}, fmt.Errorf("%s: 질의 %q의 기대 경로 %q가 컨텍스트 집합에 없다", path, query.ID, key)
+				}
 			}
 		}
 	}

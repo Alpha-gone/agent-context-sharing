@@ -1,4 +1,4 @@
-// 한 구성에서 질의 집합을 한 회차 돌려 「검색 품질 평가」의 네 지표를 잰다.
+// 한 구성에서 질의 집합을 한 회차 돌려 「검색 품질 평가」의 검색·구조·비용 지표를 잰다.
 package main
 
 import (
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/search"
@@ -15,13 +16,27 @@ import (
 //
 // 예산 효율을 비율이 아니라 문자 수로 두는 이유는 「검색 품질 평가」가 그 지표를
 // "같은 재현율에 쓴 문자 수"로 정의했기 때문이다. 값이 작을수록 좋다.
+//
+// 구조 지표와 지연은 질의별 값의 평균이며 정의되지 않은 질의는 뺀다. 모든 질의에서
+// 정의되지 않으면 음수 표식이다. 선택 측정값은 질의당 평균이다.
 type useCaseMetrics struct {
-	Queries        int                `json:"queries"`
-	Recall         float64            `json:"recall"`
-	ReciprocalRank float64            `json:"reciprocal_rank"`
-	BudgetPerHit   float64            `json:"budget_per_hit"`
-	Channels       map[string]float64 `json:"channel_contribution"`
-	Failures       map[string]int     `json:"channel_failures"`
+	Queries              int                `json:"queries"`
+	Recall               float64            `json:"recall"`
+	ReciprocalRank       float64            `json:"reciprocal_rank"`
+	BudgetPerHit         float64            `json:"budget_per_hit"`
+	EvidenceCompleteness float64            `json:"evidence_completeness"`
+	PathContinuity       float64            `json:"path_continuity"`
+	DisconnectedRatio    float64            `json:"disconnected_ratio"`
+	HubConcentration     float64            `json:"hub_concentration"`
+	DuplicateRatio       float64            `json:"duplicate_ratio"`
+	LatencyMS            float64            `json:"latency_ms"`
+	LatencyP95MS         float64            `json:"latency_p95_ms"`
+	SelectionCandidates  float64            `json:"selection_candidates"`
+	SelectionSelected    float64            `json:"selection_selected"`
+	SelectionConnectors  float64            `json:"selection_connectors"`
+	SelectionUnreachable float64            `json:"selection_unreachable"`
+	Channels             map[string]float64 `json:"channel_contribution"`
+	Failures             map[string]int     `json:"channel_failures"`
 }
 
 // channelDisabled는 비교 단계 구성으로 채널을 끈 상태다. `search` 패키지가 응답에
@@ -36,21 +51,32 @@ type runMetrics struct {
 	DurationMS   int64                     `json:"duration_ms"`
 	UseCases     map[string]useCaseMetrics `json:"use_cases"`
 	QuerySamples []queryMetrics            `json:"query_samples"`
+	// recovered에는 질의별로 반환된 정답·필수 근거 key를 둔다. 확장 단계의 한계 기여를
+	// 계산할 때만 쓰며 결과 파일에는 싣지 않는다.
+	recovered map[string]map[string]struct{}
 }
 
 // queryMetrics는 반복이 결정적인 실행에서도 질의 사이의 차이로 단계 효과를 판정할 수
 // 있게 하는 표본이다. 본문은 싣지 않고 데이터셋 식별자와 지표만 남긴다.
 type queryMetrics struct {
-	ID             string  `json:"id"`
-	UseCase        string  `json:"use_case"`
-	Recall         float64 `json:"recall"`
-	ReciprocalRank float64 `json:"reciprocal_rank"`
-	BudgetPerHit   float64 `json:"budget_per_hit"`
+	ID                   string  `json:"id"`
+	UseCase              string  `json:"use_case"`
+	Recall               float64 `json:"recall"`
+	ReciprocalRank       float64 `json:"reciprocal_rank"`
+	BudgetPerHit         float64 `json:"budget_per_hit"`
+	BudgetUsed           int     `json:"budget_used"`
+	EvidenceCompleteness float64 `json:"evidence_completeness"`
+	PathContinuity       float64 `json:"path_continuity"`
+	DisconnectedRatio    float64 `json:"disconnected_ratio"`
+	HubConcentration     float64 `json:"hub_concentration"`
+	DuplicateRatio       float64 `json:"duplicate_ratio"`
+	LatencyMS            float64 `json:"latency_ms"`
 }
 
 type measurement struct {
 	UseCases     map[string]useCaseMetrics
 	QuerySamples []queryMetrics
+	Recovered    map[string]map[string]struct{}
 }
 
 // measure는 질의를 하나씩 돌려 사용 사례별로 묶는다. 질의문과 컨텍스트 본문은
@@ -65,12 +91,15 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		hits           int
 		channels       map[string]int
 		failures       map[string]int
+		samples        []queryMetrics
+		selection      search.Selection
 	}
 	totals := map[string]*accumulator{}
 	for _, useCase := range useCases {
 		totals[useCase] = &accumulator{channels: map[string]int{}, failures: map[string]int{}}
 	}
 	querySamples := make([]queryMetrics, 0, len(queries.Queries))
+	recovered := make(map[string]map[string]struct{}, len(queries.Queries))
 	for _, query := range queries.Queries {
 		input := search.Input{
 			GraphID:     graph.GraphID,
@@ -83,7 +112,9 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		if query.AsOf != nil {
 			input.AsOf = query.AsOf.UTC()
 		}
+		started := time.Now()
 		flow, err := service.Flow(ctx, input)
+		latency := time.Since(started)
 		if err != nil {
 			return measurement{}, fmt.Errorf("질의 %q 검색: %w", query.ID, err)
 		}
@@ -97,7 +128,11 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 			total.reciprocalRank += 1 / float64(best)
 		}
 		total.budgetUsed += flow.BudgetUsed
-		sample := queryMetrics{ID: query.ID, UseCase: query.UseCase, Recall: float64(hits) / float64(len(answers)), BudgetPerHit: -1}
+		shape := measureStructure(flow, query, graph.Keys)
+		sample := queryMetrics{ID: query.ID, UseCase: query.UseCase, Recall: float64(hits) / float64(len(answers)), BudgetPerHit: -1,
+			BudgetUsed: flow.BudgetUsed, EvidenceCompleteness: shape.completeness, PathContinuity: shape.continuity,
+			DisconnectedRatio: shape.disconnected, HubConcentration: shape.hub, DuplicateRatio: shape.duplicate,
+			LatencyMS: float64(latency.Microseconds()) / 1000}
 		if best > 0 {
 			sample.ReciprocalRank = 1 / float64(best)
 		}
@@ -105,6 +140,12 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 			sample.BudgetPerHit = float64(flow.BudgetUsed) / float64(hits)
 		}
 		querySamples = append(querySamples, sample)
+		total.samples = append(total.samples, sample)
+		total.selection.Candidates += flow.Selection.Candidates
+		total.selection.Selected += flow.Selection.Selected
+		total.selection.Connectors += flow.Selection.Connectors
+		total.selection.Unreachable += flow.Selection.Unreachable
+		recovered[query.ID] = recoveredKeys(flow, query, graph.Keys)
 		for _, name := range slices.Sorted(maps.Keys(flow.Channels)) {
 			channel := flow.Channels[name]
 			total.channels[name] += channel.Contribution
@@ -118,12 +159,24 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		if total.queries == 0 {
 			continue
 		}
+		count := float64(total.queries)
 		metrics := useCaseMetrics{
-			Queries:        total.queries,
-			Recall:         total.recall / float64(total.queries),
-			ReciprocalRank: total.reciprocalRank / float64(total.queries),
-			Channels:       contributionRatio(total.channels),
-			Failures:       total.failures,
+			Queries:              total.queries,
+			Recall:               total.recall / count,
+			ReciprocalRank:       total.reciprocalRank / count,
+			EvidenceCompleteness: definedMean(total.samples, func(sample queryMetrics) float64 { return sample.EvidenceCompleteness }),
+			PathContinuity:       definedMean(total.samples, func(sample queryMetrics) float64 { return sample.PathContinuity }),
+			DisconnectedRatio:    definedMean(total.samples, func(sample queryMetrics) float64 { return sample.DisconnectedRatio }),
+			HubConcentration:     definedMean(total.samples, func(sample queryMetrics) float64 { return sample.HubConcentration }),
+			DuplicateRatio:       definedMean(total.samples, func(sample queryMetrics) float64 { return sample.DuplicateRatio }),
+			LatencyMS:            definedMean(total.samples, func(sample queryMetrics) float64 { return sample.LatencyMS }),
+			LatencyP95MS:         latencyP95(total.samples),
+			SelectionCandidates:  float64(total.selection.Candidates) / count,
+			SelectionSelected:    float64(total.selection.Selected) / count,
+			SelectionConnectors:  float64(total.selection.Connectors) / count,
+			SelectionUnreachable: float64(total.selection.Unreachable) / count,
+			Channels:             contributionRatio(total.channels),
+			Failures:             total.failures,
 		}
 		// 정답을 하나도 못 찾으면 "같은 재현율에 쓴 문자 수"가 정의되지 않는다.
 		// 0으로 두면 가장 좋은 값과 구분되지 않으므로 음수 표식으로 남긴다.
@@ -133,7 +186,52 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		}
 		result[useCase] = metrics
 	}
-	return measurement{UseCases: result, QuerySamples: querySamples}, nil
+	return measurement{UseCases: result, QuerySamples: querySamples, Recovered: recovered}, nil
+}
+
+// definedMean은 정의된 질의별 값만 평균낸다. 하나도 없으면 정의되지 않은 값이다.
+func definedMean(samples []queryMetrics, value func(queryMetrics) float64) float64 {
+	total, count := 0.0, 0
+	for _, sample := range samples {
+		if current := value(sample); current >= 0 {
+			total += current
+			count++
+		}
+	}
+	if count == 0 {
+		return undefinedMetric
+	}
+	return total / float64(count)
+}
+
+// latencyP95는 질의별 지연의 95번째 백분위수를 최근접 순위로 낸다. 「검색 품질 평가」가
+// 지연 분포를 기록하라고 했으므로 평균만으로 꼬리를 가리지 않는다.
+func latencyP95(samples []queryMetrics) float64 {
+	if len(samples) == 0 {
+		return undefinedMetric
+	}
+	latencies := make([]float64, 0, len(samples))
+	for _, sample := range samples {
+		latencies = append(latencies, sample.LatencyMS)
+	}
+	slices.Sort(latencies)
+	rank := (95*len(latencies) + 99) / 100
+	return latencies[rank-1]
+}
+
+// recoveredKeys는 반환된 정답과 필수 근거의 key를 모은다.
+func recoveredKeys(flow search.Flow, query querySpec, keys map[string]model.ID) map[string]struct{} {
+	returned := make(map[model.ID]struct{}, len(flow.Contexts))
+	for _, item := range flow.Contexts {
+		returned[item.Value.ID] = struct{}{}
+	}
+	found := map[string]struct{}{}
+	for _, key := range slices.Concat(query.Answers, query.Required) {
+		if _, ok := returned[keys[key]]; ok {
+			found[key] = struct{}{}
+		}
+	}
+	return found
 }
 
 // countsAsFailure는 채널 상태를 실패로 셀지 정한다. 비교 단계가 끈 채널은 실패가

@@ -83,13 +83,11 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if !graphID.IsV7() || value.GraphID != graphID || expectedVersion < 1 {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 인자가 올바르지 않다")
 	}
-	tx, own, err := s.writeTransaction(ctx)
+	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 트랜잭션 시작: %w", err)
 	}
-	if own {
-		defer tx.Rollback(ctx)
-	}
+	defer tx.Rollback(ctx)
 
 	if err := consumeWriteRate(ctx, tx, limits); err != nil {
 		return model.Context{}, err
@@ -149,8 +147,8 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{stored.ID}, EmbeddingExpectation{}); err != nil {
 		return model.Context{}, err
 	}
-	if err := commitWriteTransaction(ctx, tx, own, "컨텍스트 갱신"); err != nil {
-		return model.Context{}, err
+	if err := tx.Commit(ctx); err != nil {
+		return model.Context{}, fmt.Errorf("컨텍스트 갱신 커밋: %w", err)
 	}
 	// 파생 근거는 「컨텍스트 모델」이 불변으로 두었으므로 갱신 전 값을 그대로 옮기고,
 	// 사건 구성원은 이 트랜잭션이 쓴 값을 옮긴다. 커밋 뒤 재조회는 하지 않는다.
@@ -184,13 +182,11 @@ func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, ex
 	if !graphID.IsV7() || !contextID.IsV7() || expectedVersion < 1 {
 		return model.Context{}, fmt.Errorf("컨텍스트 유지 인자가 올바르지 않다")
 	}
-	tx, own, err := s.writeTransaction(ctx)
+	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 유지 트랜잭션 시작: %w", err)
 	}
-	if own {
-		defer tx.Rollback(ctx)
-	}
+	defer tx.Rollback(ctx)
 
 	stored, err := s.context(ctx, tx, graphID, contextID)
 	if err != nil {
@@ -205,8 +201,8 @@ func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, ex
 	if err := s.recordAppliedOperation(ctx, tx, operation, stored.Version); err != nil {
 		return model.Context{}, err
 	}
-	if err := commitWriteTransaction(ctx, tx, own, "컨텍스트 유지"); err != nil {
-		return model.Context{}, err
+	if err := tx.Commit(ctx); err != nil {
+		return model.Context{}, fmt.Errorf("컨텍스트 유지 커밋: %w", err)
 	}
 	return stored, nil
 }
@@ -219,13 +215,11 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
-	tx, own, err := s.writeTransaction(ctx)
+	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 트랜잭션 시작: %w", err)
 	}
-	if own {
-		defer tx.Rollback(ctx)
-	}
+	defer tx.Rollback(ctx)
 
 	if err := consumeWriteRate(ctx, tx, limits); err != nil {
 		return model.Context{}, err
@@ -308,8 +302,8 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{contextID}, EmbeddingExpectation{}); err != nil {
 		return model.Context{}, err
 	}
-	if err := commitWriteTransaction(ctx, tx, own, "컨텍스트 상태 전이"); err != nil {
-		return model.Context{}, err
+	if err := tx.Commit(ctx); err != nil {
+		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 커밋: %w", err)
 	}
 	// 상태 전이는 참조를 바꾸지 않으므로 전이 전 판에서 그대로 옮긴다.
 	return withReferences(stored, previousReferences(previous), previous), nil
@@ -387,13 +381,11 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 
 // createContext은 원천 중복 확인과 그래프 활동 갱신을 포함한 실제 쓰기 트랜잭션이다.
 func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits) (model.Context, error) {
-	tx, own, err := s.writeTransaction(ctx)
+	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 생성 트랜잭션 시작: %w", err)
 	}
-	if own {
-		defer tx.Rollback(ctx)
-	}
+	defer tx.Rollback(ctx)
 
 	if err := consumeWriteRate(ctx, tx, limits); err != nil {
 		return model.Context{}, err
@@ -457,8 +449,8 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	if err := s.checkWriteInvariants(ctx, tx, graphID, createdScope(value, derivedFrom, supersededID), EmbeddingExpectation{}); err != nil {
 		return model.Context{}, err
 	}
-	if err := commitWriteTransaction(ctx, tx, own, "컨텍스트 생성"); err != nil {
-		return model.Context{}, err
+	if err := tx.Commit(ctx); err != nil {
+		return model.Context{}, fmt.Errorf("컨텍스트 생성 커밋: %w", err)
 	}
 	// 참조 목록은 방금 같은 트랜잭션에서 만든 값이므로 커밋 뒤 다시 읽지 않는다. 재조회가
 	// 실패하면 이미 적용된 연산이 실패로 응답되어 적용 기록과 거부 기록이 모순되고,

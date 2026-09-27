@@ -11,7 +11,8 @@
 
 ## 로컬 계약
 
-- `server/discover`는 지원 protocol revision과 `tools` 기능만 알린다.
+- `server/discover`는 지원 protocol revision, `tools` 기능과 `io.github.alpha-gone/write-idempotency` 확장만 알린다.
+- 협상된 쓰기에서 전송 계층은 `Idempotency-Key` 헤더 값과 요청 지문만 넘기고, 키 형식 검증과 결과 재생은 권한 확인 뒤 처리기가 맡는다.
 - `tools/list`는 `SRS.md`의 MCP 연산 13종만 이름, 설명과 `inputSchema`로 노출하며 캐시 힌트를 함께 싣는다.
 - 모든 결과는 `resultType`과 서버 정보를 담은 응답 외피 안에 넣는다.
 - `tools/call`은 `SDD.md`의 「요청 처리 순서」에서 전송·인증 뒤에 파라미터 형식과 상한을 검증하고, 계층별 속성 규칙은 `model`에 위임한다.

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -764,49 +765,55 @@ func TestServerDiscoverAnnouncesVersionAndCapabilities(t *testing.T) {
 	assertCacheHints(t, result, 3600000)
 }
 
-func TestNegotiatedWriteIdempotencyValidatesAndForwardsKey(t *testing.T) {
+func TestNegotiatedWriteIdempotencyForwardsKeyHeader(t *testing.T) {
 	key := newTestID(t)
-	called := false
-	server := testServer(t, func(ctx context.Context, _ model.ID, name string, arguments map[string]any) (ToolResult, error) {
-		called = true
-		if name != "graph_create" || arguments["name"] != "그래프" {
-			t.Fatalf("호출 = %s %#v", name, arguments)
+	arguments := map[string]any{"name": "그래프"}
+	fingerprint, err := requestFingerprint("graph_create", arguments)
+	if err != nil {
+		t.Fatalf("요청 지문: %v", err)
+	}
+	for _, header := range []string{key, "bad-key"} {
+		called := false
+		server := testServer(t, func(ctx context.Context, _ model.ID, name string, arguments map[string]any) (ToolResult, error) {
+			called = true
+			if name != "graph_create" || arguments["name"] != "그래프" {
+				t.Fatalf("호출 = %s %#v", name, arguments)
+			}
+			request, ok := IdempotencyFromContext(ctx)
+			if !ok || !slices.Equal(request.KeyHeader, []string{"\"" + header + "\""}) || request.Fingerprint != fingerprint {
+				t.Fatalf("멱등성 요청 = %#v, found = %t", request, ok)
+			}
+			return result(map[string]any{"ok": true}), nil
+		})
+		request := idempotencyToolCallRequest(t, "graph_create", arguments, header)
+		request.Header.Set("Authorization", "Bearer valid-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		// 키 형식 검증은 권한 확인 뒤의 7단계이므로 전송 계층은 형식과 무관하게 넘긴다.
+		if !called || response.Code != http.StatusOK {
+			t.Fatalf("키 %q: 상태 = %d, 호출됨 = %t: %s", header, response.Code, called, response.Body.String())
 		}
-		request, ok := IdempotencyFromContext(ctx)
-		if !ok || request.Key != key {
-			t.Fatalf("멱등성 요청 = %#v, found = %t", request, ok)
+	}
+}
+
+func TestParseIdempotencyKey(t *testing.T) {
+	key := newTestID(t)
+	valid, ok := parseIdempotencyKey([]string{"\"" + key + "\""})
+	if !ok || valid.String() != key {
+		t.Fatalf("올바른 키 = %v, ok = %t", valid, ok)
+	}
+	for name, values := range map[string][]string{
+		"없음":     nil,
+		"따옴표 없음": {key},
+		"하이픈 없음": {"\"" + strings.ReplaceAll(key, "-", "") + "\""},
+		"UUIDv4": {"\"0b4a6b56-8c1d-4c43-9f2e-6f1d2a3b4c5d\""},
+		"형식 오류":  {"\"bad-key\""},
+		"헤더 두 개": {"\"" + key + "\"", "\"" + key + "\""},
+	} {
+		if _, ok := parseIdempotencyKey(values); ok {
+			t.Fatalf("%s 키 %#v를 받아들였다", name, values)
 		}
-		return result(map[string]any{"ok": true}), nil
-	})
-	request := idempotencyToolCallRequest(t, "graph_create", map[string]any{"name": "그래프"}, key)
-	request.Header.Set("Authorization", "Bearer valid-token")
-	response := httptest.NewRecorder()
-	server.ServeHTTP(response, request)
-	if !called || response.Code != http.StatusOK {
-		t.Fatalf("상태 = %d, 호출됨 = %t: %s", response.Code, called, response.Body.String())
 	}
-
-	called = false
-	request = idempotencyToolCallRequest(t, "graph_create", map[string]any{"name": "그래프"}, "bad-key")
-	request.Header.Set("Authorization", "Bearer valid-token")
-	response = httptest.NewRecorder()
-	server.ServeHTTP(response, request)
-	if called {
-		t.Fatal("잘못된 멱등성 키가 호출 처리기에 도달했다")
-	}
-	assertDomainCode(t, response, "invalid_argument")
-	assertDomainField(t, response, "field", "Idempotency-Key")
-
-	called = false
-	request = idempotencyToolCallRequest(t, "graph_create", map[string]any{"name": "그래프"}, strings.ReplaceAll(key, "-", ""))
-	request.Header.Set("Authorization", "Bearer valid-token")
-	response = httptest.NewRecorder()
-	server.ServeHTTP(response, request)
-	if called {
-		t.Fatal("하이픈 없는 UUIDv7 키가 호출 처리기에 도달했다")
-	}
-	assertDomainCode(t, response, "invalid_argument")
-	assertDomainField(t, response, "field", "Idempotency-Key")
 }
 
 // TestResultsCarryEnvelope는 모든 결과가 규약의 응답 외피를 갖는지 확인한다.

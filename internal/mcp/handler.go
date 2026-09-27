@@ -84,13 +84,17 @@ func (h handler) callWithIdempotency(ctx context.Context, accountID model.ID, na
 	if err := h.authorizeIdempotencyReplay(ctx, accountID, name, arguments); err != nil {
 		return ToolResult{}, err
 	}
+	key, ok := parseIdempotencyKey(request.KeyHeader)
+	if !ok {
+		return ToolResult{}, &Error{Code: "invalid_argument", Data: map[string]any{"field": "Idempotency-Key"}}
+	}
 	operations, ok := h.operations.(idempotencyOperations)
 	if !ok {
 		return ToolResult{}, fmt.Errorf("멱등성 저장소 계약이 없다")
 	}
 	stored, err := operations.ReplayIdempotent(ctx, store.IdempotencyRequest{
 		AccountID:   accountID,
-		Key:         mustID(request.Key),
+		Key:         key,
 		ToolName:    name,
 		Fingerprint: request.Fingerprint,
 	}, func(transactionContext context.Context) ([]byte, error) {
@@ -119,17 +123,40 @@ func (h handler) callWithIdempotency(ctx context.Context, accountID model.ID, na
 	if err := json.Unmarshal(stored, &result); err != nil {
 		return ToolResult{}, fmt.Errorf("멱등성 결과 해석: %w", err)
 	}
+	if name == "graph_create" {
+		if err := h.authorizeCreatedGraph(ctx, accountID, result); err != nil {
+			return ToolResult{}, err
+		}
+	}
 	return result, nil
 }
 
 // authorizeIdempotencyReplay는 저장된 완료 결과를 돌려주기 전에 현재 그래프 권한을 다시
 // 확인한다. 최초 호출은 아래 h.call이 같은 검사를 트랜잭션 안에서 한 번 더 수행해, 재생
 // 경로가 저장 결과를 읽는 순서와 실제 업무 변경의 동시성 계약을 함께 지킨다.
+// graph_create는 요청에 대상 그래프가 없어 authorizeCreatedGraph가 결과로 확인한다.
 func (h handler) authorizeIdempotencyReplay(ctx context.Context, accountID model.ID, name string, arguments map[string]any) error {
 	if name == "graph_create" {
 		return nil
 	}
 	_, err := h.requireActiveGraph(ctx, argumentID(arguments, "graph_id"), accountID, model.GraphGradeEditor)
+	return err
+}
+
+// authorizeCreatedGraph는 graph_create 성공 결과의 graph_id에 계정이 지금도 등급을 갖는지
+// 확인한다. 소유권을 잃은 계정이 같은 키로 그래프 정보를 다시 받지 못하게 하며, 등급이
+// 없으면 존재를 알리지 않도록 not_found로 답한다. 거부 결과는 그래프를 담지 않는다.
+func (h handler) authorizeCreatedGraph(ctx context.Context, accountID model.ID, result ToolResult) error {
+	if result.IsError {
+		return nil
+	}
+	value, _ := result.StructuredContent.(map[string]any)
+	raw, _ := value["graph_id"].(string)
+	graphID, err := model.ParseID(raw)
+	if err != nil {
+		return fmt.Errorf("멱등성 결과의 graph_id 해석: %w", err)
+	}
+	_, err = h.requireActiveGraph(ctx, graphID, accountID, model.GraphGradeViewer)
 	return err
 }
 
@@ -695,11 +722,6 @@ func optionalString(arguments map[string]any, name string) string {
 
 func argumentID(arguments map[string]any, name string) model.ID {
 	id, _ := model.ParseID(arguments[name].(string))
-	return id
-}
-
-func mustID(value string) model.ID {
-	id, _ := model.ParseID(value)
 	return id
 }
 

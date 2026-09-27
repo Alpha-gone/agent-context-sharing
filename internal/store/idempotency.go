@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -65,21 +66,21 @@ func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO public.idempotency_record (
-			actor_account_id, idempotency_key, tool_name, request_digest, result_json, accepted_at, expires_at
+			actor_account_id, idempotency_key, tool_name, request_fingerprint, tool_result, received_at, expires_at
 		) VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $6)
 		ON CONFLICT DO NOTHING`, request.AccountID.String(), request.Key.String(), request.ToolName, request.Fingerprint[:], now, now.Add(idempotencyRetention)); err != nil {
 		return nil, fmt.Errorf("멱등성 요청 예약: %w", err)
 	}
 	var toolName string
-	var digest, stored []byte
+	var fingerprint, stored []byte
 	if err := tx.QueryRow(ctx, `
-		SELECT tool_name, request_digest, result_json
+		SELECT tool_name, request_fingerprint, tool_result
 		FROM public.idempotency_record
 		WHERE actor_account_id = $1 AND idempotency_key = $2
-		FOR UPDATE`, request.AccountID.String(), request.Key.String()).Scan(&toolName, &digest, &stored); err != nil {
+		FOR UPDATE`, request.AccountID.String(), request.Key.String()).Scan(&toolName, &fingerprint, &stored); err != nil {
 		return nil, fmt.Errorf("멱등성 요청 조회: %w", err)
 	}
-	if toolName != request.ToolName || !equalDigest(digest, request.Fingerprint) {
+	if toolName != request.ToolName || !bytes.Equal(fingerprint, request.Fingerprint[:]) {
 		return nil, ErrIdempotencyConflict
 	}
 	if string(stored) != "{}" {
@@ -97,7 +98,7 @@ func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE public.idempotency_record
-		SET result_json = $3::jsonb
+		SET tool_result = $3::jsonb
 		WHERE actor_account_id = $1 AND idempotency_key = $2`, request.AccountID.String(), request.Key.String(), result); err != nil {
 		return nil, fmt.Errorf("멱등성 결과 저장: %w", err)
 	}
@@ -121,40 +122,17 @@ func deferAfterWriteCommit(ctx context.Context, callback func()) bool {
 	return true
 }
 
-func (s *Store) writeTransaction(ctx context.Context) (pgx.Tx, bool, error) {
+// writeTransaction은 업무 쓰기 트랜잭션을 연다. 멱등성 트랜잭션 안에서는 저장점을 열어,
+// 쓰기 뒤에 드러난 도메인 거부가 앞선 변경을 되돌린 채 거부 기록과 완료 결과만 확정되게
+// 한다. 저장점의 Commit은 해제일 뿐이고 실제 커밋은 멱등성 트랜잭션이 한다.
+func (s *Store) writeTransaction(ctx context.Context) (pgx.Tx, error) {
 	if tx, ok := ctx.Value(writeTransactionContextKey{}).(pgx.Tx); ok {
-		return tx, false, nil
+		return tx.Begin(ctx)
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return nil, false, err
-	}
-	return tx, true, nil
-}
-
-func commitWriteTransaction(ctx context.Context, tx pgx.Tx, own bool, action string) error {
-	if !own {
-		return nil
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("%s 커밋: %w", action, err)
-	}
-	return nil
+	return s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 }
 
 // CleanupExpiredIdempotencyRecords는 보관 기간이 끝난 재시도 결과를 지운다.
 func (s *Store) CleanupExpiredIdempotencyRecords(ctx context.Context, now time.Time) (int, error) {
 	return s.deleteBefore(ctx, "멱등성 결과 정리", `DELETE FROM public.idempotency_record WHERE expires_at <= $1`, now)
-}
-
-func equalDigest(value []byte, expected [sha256.Size]byte) bool {
-	if len(value) != len(expected) {
-		return false
-	}
-	for i := range value {
-		if value[i] != expected[i] {
-			return false
-		}
-	}
-	return true
 }

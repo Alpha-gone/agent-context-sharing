@@ -7,8 +7,25 @@ import (
 	"agent_context_sharing/internal/search"
 )
 
+// outcome은 회차 셋의 지연이 모두 같은 반복 평균을 만든다. 잡음이 없으므로 지연 차이가
+// 있으면 언제나 유의하다.
 func outcome(useCase, route string, chars, latency float64, quality ...float64) queryOutcome {
-	return queryOutcome{useCase: useCase, route: route, quality: quality, chars: chars, latency: latency}
+	return queryOutcome{useCase: useCase, route: route, quality: quality, chars: chars, latency: latency, latencies: []float64{latency, latency, latency}}
+}
+
+// TestCompareOutcomeTreatsNoisyLatencyAsTie는 지연 차이가 회차 잡음 안이면 지연 대신 실행
+// 비용이 작은 경로를 고르는지 확인한다.
+func TestCompareOutcomeTreatsNoisyLatencyAsTie(t *testing.T) {
+	direct := queryOutcome{route: "direct", quality: []float64{1}, chars: 100, latency: 12, latencies: []float64{8, 12, 16}}
+	local := queryOutcome{route: "local", quality: []float64{1}, chars: 100, latency: 11, latencies: []float64{7, 11, 15}}
+	if compareOutcome(direct, local) >= 0 {
+		t.Fatal("잡음 안의 지연 차이로 국소 확장을 골랐다")
+	}
+	local.latencies, local.latency = []float64{2, 2.1, 2.2}, 2.1
+	direct.latencies = []float64{12, 12.1, 12.2}
+	if compareOutcome(local, direct) >= 0 {
+		t.Fatal("잡음보다 큰 지연 차이를 무시했다")
+	}
 }
 
 // TestOracleRoutesPrefersQualityThenCost는 품질, 문자 수, 지연 순으로 최적 경로를 고르고

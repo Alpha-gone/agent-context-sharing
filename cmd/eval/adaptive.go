@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,7 +20,9 @@ import (
 
 // 비교 구성 이름이다. 강제 경로 셋은 오프라인 최적 경로를 정하는 데만 쓴다.
 const (
-	variantAuto     = "auto"
+	variantAuto = "auto"
+	// variantAutoGrid는 강제 경로와 같은 회차에서 잰 기존 auto다. 임계값 격자의 품질 기준이다.
+	variantAutoGrid = "auto-grid"
 	variantAdaptive = "adaptive"
 	variantPrefix   = "route-"
 )
@@ -79,13 +82,32 @@ type thresholdUseCase struct {
 	Reasons      map[string]int     `json:"route_reasons"`
 }
 
-// queryOutcome은 한 구성에서 질의 하나의 반복 평균이다.
+// queryOutcome은 한 구성에서 질의 하나의 반복 평균이다. latencies에는 회차별 지연을 둬
+// 지연 차이가 잡음보다 큰지 판정한다.
 type queryOutcome struct {
-	useCase string
-	route   string
-	quality []float64
-	chars   float64
-	latency float64
+	useCase   string
+	route     string
+	quality   []float64
+	chars     float64
+	latency   float64
+	latencies []float64
+}
+
+// routeCost는 품질과 문자 수, 지연이 모두 같을 때 쓰는 실행 비용 순서다. 직접 경로는 확장
+// 채널을 돌리지 않고, 전역 진입은 요약 조회와 확장을 모두 돌린다.
+var routeCost = map[string]int{string(search.RouteDirect): 0, string(search.RouteLocal): 1, string(search.RouteGlobal): 2}
+
+// latencyDiffers는 두 구성의 지연 차이가 반복 측정의 잡음보다 큰지 본다. 회차별 지연의 95%
+// 신뢰구간이 겹치지 않을 때만 차이로 인정한다.
+func latencyDiffers(left, right queryOutcome) bool {
+	if len(left.latencies) < 2 || len(right.latencies) < 2 {
+		return false
+	}
+	half := func(values []float64) float64 {
+		return criticalValue(len(values)-1) * math.Sqrt(variance(values)/float64(len(values)))
+	}
+	return left.latency+half(left.latencies) < right.latency-half(right.latencies) ||
+		right.latency+half(right.latencies) < left.latency-half(left.latencies)
 }
 
 // parseFloats는 쉼표로 나눈 임계값 후보를 읽는다.
@@ -123,37 +145,54 @@ func runAdaptive(ctx context.Context, database *store.Store, worker search.Embed
 	result := adaptiveReport{StartedAt: time.Now().UTC(), ContextVersion: contexts.Version, QueryVersion: queries.Version, Conditions: conditions}
 	runs := map[string][]runMetrics{}
 	signals := map[string]search.RouteSignals{}
-	measureVariant := func(name string, config search.Config) error {
-		service, err := search.New(database, worker, config, slog.Default())
-		if err != nil {
-			return fmt.Errorf("구성 %q 검색 실행기 준비: %w", name, err)
+	// measureRounds는 구성을 회차마다 돌아가며 실행한다. 한 구성의 반복을 몰아 재면 뒤에 도는
+	// 구성만 데워진 캐시를 쓰게 되어 지연 비교에 실행 순서가 섞인다.
+	measureRounds := func(names []string, configs map[string]search.Config, key func(string) string) error {
+		services := make(map[string]*search.Service, len(names))
+		for _, name := range names {
+			service, err := search.New(database, worker, configs[name], slog.Default())
+			if err != nil {
+				return fmt.Errorf("구성 %q 검색 실행기 준비: %w", name, err)
+			}
+			services[name] = service
 		}
 		for repeat := 1; repeat <= conditions.Repeats; repeat++ {
-			started := time.Now()
-			measured, err := measure(ctx, service, graph, queries, conditions.Budget, conditions.MaxHops, conditions.MaxHopNodes)
-			if err != nil {
-				return fmt.Errorf("구성 %q 회차 %d: %w", name, repeat, err)
-			}
-			if strings.HasPrefix(name, variantPrefix) {
-				for id, value := range measured.Signals {
-					signals[id] = value
+			for offset := range names {
+				name := names[(offset+repeat-1)%len(names)]
+				started := time.Now()
+				measured, err := measure(ctx, services[name], graph, queries, conditions.Budget, conditions.MaxHops, conditions.MaxHopNodes)
+				if err != nil {
+					return fmt.Errorf("구성 %q 회차 %d: %w", name, repeat, err)
 				}
+				if strings.HasPrefix(name, variantPrefix) {
+					for id, value := range measured.Signals {
+						signals[id] = value
+					}
+				}
+				runs[key(name)] = append(runs[key(name)], runMetrics{Stage: key(name), Repeat: repeat, DurationMS: time.Since(started).Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered})
+				slog.Info("회차 완료", "variant", key(name), "repeat", repeat, "duration", time.Since(started).String())
 			}
-			runs[name] = append(runs[name], runMetrics{Stage: name, Repeat: repeat, DurationMS: time.Since(started).Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered})
-			slog.Info("회차 완료", "variant", name, "repeat", repeat, "duration", time.Since(started).String())
 		}
 		return nil
 	}
-	if err := measureVariant(variantAuto, base); err != nil {
-		return adaptiveReport{}, err
-	}
+	configs := map[string]search.Config{variantAuto: base}
+	names := []string{variantAuto}
 	for _, route := range forcedRoutes {
 		config := base
 		config.AdaptiveRouting, config.Route = true, route
 		config.AdaptiveDirectThreshold, config.AdaptiveMarginThreshold = directs[0], margins[0]
-		if err := measureVariant(variantPrefix+string(route), config); err != nil {
-			return adaptiveReport{}, err
+		configs[variantPrefix+string(route)] = config
+		names = append(names, variantPrefix+string(route))
+	}
+	// 격자의 품질 기준인 기존 auto는 강제 경로와 같은 회차에서 잰 값을 쓴다.
+	gridKey := func(name string) string {
+		if name == variantAuto {
+			return variantAutoGrid
 		}
+		return name
+	}
+	if err := measureRounds(names, configs, gridKey); err != nil {
+		return adaptiveReport{}, err
 	}
 
 	forced := map[string]map[string]queryOutcome{}
@@ -162,7 +201,7 @@ func runAdaptive(ctx context.Context, database *store.Store, worker search.Embed
 	}
 	oracle := oracleRoutes(forced)
 	result.Oracle = oracleDistribution(oracle, forced)
-	legacy := outcomes(runs[variantAuto], queries)
+	legacy := outcomes(runs[variantAutoGrid], queries)
 	result.LegacyQuality = useCaseQuality(legacy)
 	result.Grid = thresholdGrid(directs, margins, signals, forced, oracle, legacy)
 	chosen, err := chooseThresholds(result.Grid)
@@ -170,24 +209,27 @@ func runAdaptive(ctx context.Context, database *store.Store, worker search.Embed
 		// 품질 비악화를 만족하는 후보가 없으면 승격 조건을 넘을 수 없다. 판단 근거가 되는
 		// 격자와 강제 경로 결과를 남기고 기존 auto만 오선택률을 채워 끝낸다.
 		slog.Warn("적응형 구성을 실행하지 않는다", "reason", err.Error())
-		markMisroutes(runs[variantAuto], oracle)
-		for _, name := range []string{variantAuto, variantPrefix + "direct", variantPrefix + "local", variantPrefix + "global"} {
+		markMisroutes(runs[variantAutoGrid], oracle)
+		for _, name := range []string{variantAutoGrid, variantPrefix + "direct", variantPrefix + "local", variantPrefix + "global"} {
 			result.Runs = append(result.Runs, runs[name]...)
 		}
 		return result, nil
 	}
 	result.Chosen = &chosen
 
-	config := base
-	config.AdaptiveRouting = true
-	config.AdaptiveDirectThreshold, config.AdaptiveMarginThreshold = chosen.Direct, chosen.Margin
-	if err := measureVariant(variantAdaptive, config); err != nil {
+	adaptiveConfig := base
+	adaptiveConfig.AdaptiveRouting = true
+	adaptiveConfig.AdaptiveDirectThreshold, adaptiveConfig.AdaptiveMarginThreshold = chosen.Direct, chosen.Margin
+	// 판정에 쓰는 기존 auto를 적응형과 같은 회차에서 다시 재 두 구성의 지연을 같은 시간대에서
+	// 견준다.
+	if err := measureRounds([]string{variantAuto, variantAdaptive}, map[string]search.Config{variantAuto: base, variantAdaptive: adaptiveConfig}, func(name string) string { return name }); err != nil {
 		return adaptiveReport{}, err
 	}
 	for _, name := range []string{variantAuto, variantAdaptive} {
 		markMisroutes(runs[name], oracle)
 	}
-	for _, name := range append([]string{variantAuto, variantAdaptive}, variantPrefix+"direct", variantPrefix+"local", variantPrefix+"global") {
+	markMisroutes(runs[variantAutoGrid], oracle)
+	for _, name := range append([]string{variantAuto, variantAdaptive, variantAutoGrid}, variantPrefix+"direct", variantPrefix+"local", variantPrefix+"global") {
 		result.Runs = append(result.Runs, runs[name]...)
 	}
 	result.Judgements = judge([]string{variantAuto, variantAdaptive}, runs)
@@ -218,13 +260,16 @@ func outcomes(runs []runMetrics, queries querySet) map[string]queryOutcome {
 			}
 			current.chars += float64(sample.BudgetUsed) / float64(len(runs))
 			current.latency += sample.LatencyMS / float64(len(runs))
+			current.latencies = append(current.latencies, sample.LatencyMS)
 			result[sample.ID] = current
 		}
 	}
 	return result
 }
 
-// compareOutcome은 품질이 높고 문자 수와 지연이 작은 쪽을 앞에 둔다.
+// compareOutcome은 품질이 높고 문자 수와 지연이 작은 쪽을 앞에 둔다. 지연 차이가 잡음 안이면
+// 실행 비용이 작은 경로를 앞에 둔다. 잡음이 최적 경로를 정하면 두 정책의 오선택률이 함께
+// 부풀기 때문이다.
 func compareOutcome(left, right queryOutcome) int {
 	if order := slices.Compare(right.quality, left.quality); order != 0 {
 		return order
@@ -232,7 +277,10 @@ func compareOutcome(left, right queryOutcome) int {
 	if order := cmp.Compare(left.chars, right.chars); order != 0 {
 		return order
 	}
-	return cmp.Compare(left.latency, right.latency)
+	if latencyDiffers(left, right) {
+		return cmp.Compare(left.latency, right.latency)
+	}
+	return cmp.Compare(routeCost[left.route], routeCost[right.route])
 }
 
 // oracleRoutes는 질의별 오프라인 최적 경로를 정한다. 전역 요약이 없어 직접 경로로 되돌아간

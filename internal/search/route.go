@@ -25,6 +25,7 @@ const (
 // 이유 코드로 남긴다.
 const (
 	ReasonNoRelevantLocal       = "no_relevant_local"
+	ReasonEventAnchor           = "event_anchor"
 	ReasonCrossChannelAgreement = "cross_channel_agreement"
 	ReasonSemanticSeparation    = "semantic_separation"
 	ReasonAmbiguousLocal        = "ambiguous_local"
@@ -42,6 +43,8 @@ const (
 type RouteSignals struct {
 	// RelevantLocal 필드에는 유사도 하한을 넘은 의미 후보나 키워드 후보가 있는지를 둔다.
 	RelevantLocal bool
+	// TopIsEvent 필드에는 진입 채널 통합 순위 1위가 사건인지를 둔다.
+	TopIsEvent bool
 	// CrossChannelAgreement 필드에는 진입 채널 통합 순위 1위가 의미·키워드 양쪽 후보인지를 둔다.
 	CrossChannelAgreement bool
 	// SemanticCount 필드에는 의미 후보 수를 둔다. 채널이 실패하면 0이다.
@@ -51,11 +54,15 @@ type RouteSignals struct {
 	SemanticSecond float64
 }
 
-// Decide는 「질의 적응형 라우팅」의 네 규칙을 순서대로 적용한다. 전역 요약 부재에 따른
+// Decide는 「질의 적응형 라우팅」의 다섯 규칙을 순서대로 적용한다. 전역 요약 부재에 따른
 // 직접 경로 되돌림은 요약을 조회한 뒤에만 알 수 있으므로 여기서 판정하지 않는다.
 func (signals RouteSignals) Decide(directThreshold, marginThreshold float64) (Route, string) {
 	if !signals.RelevantLocal {
 		return RouteGlobal, ReasonNoRelevantLocal
+	}
+	// 사건 관계는 사건끼리만 이으므로 1위가 사건이면 답이 한 홉 떨어진 사건일 수 있다.
+	if signals.TopIsEvent {
+		return RouteLocal, ReasonEventAnchor
 	}
 	if signals.CrossChannelAgreement {
 		return RouteDirect, ReasonCrossChannelAgreement
@@ -77,6 +84,7 @@ func routeSignals(results []channelResult, combined []combinedCandidate, semanti
 	}
 	if len(combined) > 0 {
 		channels := combined[0].channels
+		signals.TopIsEvent = combined[0].value.Layer == model.LayerEvent
 		signals.CrossChannelAgreement = slices.Contains(channels, "semantic") && slices.Contains(channels, "keyword")
 	}
 	if len(semantic) > 0 {

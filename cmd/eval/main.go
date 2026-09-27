@@ -238,6 +238,7 @@ func run() error {
 		},
 	}
 	runs := map[string][]runMetrics{}
+	services := make(map[string]*search.Service, len(stages))
 	for _, stage := range stages {
 		graphStage, evidence := stageConfig(stage)
 		service, err := search.New(database, worker, search.Config{
@@ -252,7 +253,14 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("단계 %q 검색 실행기 준비: %w", stage, err)
 		}
-		for repeat := 1; repeat <= *repeats; repeat++ {
+		services[stage] = service
+	}
+	// 단계 순서를 회차마다 돌린다. 한 단계의 반복을 몰아 재면 뒤 단계만 데워진 캐시를 써서
+	// 단계 사이 지연 차이에 실행 순서가 섞인다.
+	for repeat := 1; repeat <= *repeats; repeat++ {
+		for offset := range stages {
+			stage := stages[(offset+repeat-1)%len(stages)]
+			service := services[stage]
 			started := time.Now()
 			measured, err := measure(ctx, service, graph, queries, *budget, *maxHops, *maxHopNodes)
 			if err != nil {

@@ -753,7 +753,60 @@ func TestServerDiscoverAnnouncesVersionAndCapabilities(t *testing.T) {
 	if _, found := capabilities["tools"]; !found {
 		t.Fatalf("tools 기능을 알리지 않았다: %#v", capabilities)
 	}
+	extensions, ok := capabilities["extensions"].(map[string]any)
+	if !ok {
+		t.Fatalf("extensions = %#v", capabilities["extensions"])
+	}
+	idempotency, ok := extensions[writeIdempotencyExtension].(map[string]any)
+	if !ok || idempotency["retentionMs"] != float64(writeIdempotencyRetention.Milliseconds()) {
+		t.Fatalf("쓰기 멱등성 확장 = %#v", extensions[writeIdempotencyExtension])
+	}
 	assertCacheHints(t, result, 3600000)
+}
+
+func TestNegotiatedWriteIdempotencyValidatesAndForwardsKey(t *testing.T) {
+	key := newTestID(t)
+	called := false
+	server := testServer(t, func(ctx context.Context, _ model.ID, name string, arguments map[string]any) (ToolResult, error) {
+		called = true
+		if name != "graph_create" || arguments["name"] != "그래프" {
+			t.Fatalf("호출 = %s %#v", name, arguments)
+		}
+		request, ok := IdempotencyFromContext(ctx)
+		if !ok || request.Key != key {
+			t.Fatalf("멱등성 요청 = %#v, found = %t", request, ok)
+		}
+		return result(map[string]any{"ok": true}), nil
+	})
+	request := idempotencyToolCallRequest(t, "graph_create", map[string]any{"name": "그래프"}, key)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if !called || response.Code != http.StatusOK {
+		t.Fatalf("상태 = %d, 호출됨 = %t: %s", response.Code, called, response.Body.String())
+	}
+
+	called = false
+	request = idempotencyToolCallRequest(t, "graph_create", map[string]any{"name": "그래프"}, "bad-key")
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if called {
+		t.Fatal("잘못된 멱등성 키가 호출 처리기에 도달했다")
+	}
+	assertDomainCode(t, response, "invalid_argument")
+	assertDomainField(t, response, "field", "Idempotency-Key")
+
+	called = false
+	request = idempotencyToolCallRequest(t, "graph_create", map[string]any{"name": "그래프"}, strings.ReplaceAll(key, "-", ""))
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if called {
+		t.Fatal("하이픈 없는 UUIDv7 키가 호출 처리기에 도달했다")
+	}
+	assertDomainCode(t, response, "invalid_argument")
+	assertDomainField(t, response, "field", "Idempotency-Key")
 }
 
 // TestResultsCarryEnvelope는 모든 결과가 규약의 응답 외피를 갖는지 확인한다.
@@ -857,5 +910,23 @@ func toolCallRequest(t *testing.T, name string, arguments map[string]any) *http.
 	t.Helper()
 	request := mcpRequest(t, "tools/call", map[string]any{"name": name, "arguments": arguments})
 	request.Header.Set("Mcp-Name", name)
+	return request
+}
+
+func idempotencyToolCallRequest(t *testing.T, name string, arguments map[string]any, key string) *http.Request {
+	t.Helper()
+	meta := requestMeta(ProtocolVersion)
+	meta["io.modelcontextprotocol/clientCapabilities"] = map[string]any{
+		"extensions": map[string]any{writeIdempotencyExtension: map[string]any{}},
+	}
+	payload := map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": name, "arguments": arguments, "_meta": meta},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/mcp", jsonBody(t, payload))
+	request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
+	request.Header.Set("Mcp-Method", "tools/call")
+	request.Header.Set("Mcp-Name", name)
+	request.Header.Set("Idempotency-Key", "\""+key+"\"")
 	return request
 }

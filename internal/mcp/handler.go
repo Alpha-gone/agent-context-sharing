@@ -39,6 +39,10 @@ type Operations interface {
 	OwnedGraphCount(context.Context, model.ID) (int, error)
 }
 
+type idempotencyOperations interface {
+	ReplayIdempotent(context.Context, store.IdempotencyRequest, func(context.Context) ([]byte, error)) ([]byte, error)
+}
+
 // NewHandler는 전송 계층이 검증한 tools/call을 핵심 그래프·노드 연산으로 분배한다.
 //
 // logger는 거부 기록 실패처럼 연산을 되돌리지는 않지만 감사 근거에 구멍을 내는 사건을
@@ -61,7 +65,7 @@ func newHandler(operations Operations, accountPlans plan.AccountPlans, flow *sea
 			return ToolResult{}, fmt.Errorf("MCP 처리 접근 계층이 없다")
 		}
 		handler := handler{operations: operations, limits: accountPlans.For(accountID), flow: flow, logger: logger}
-		return handler.call(ctx, accountID, name, arguments)
+		return handler.callWithIdempotency(ctx, accountID, name, arguments)
 	}
 }
 
@@ -70,6 +74,63 @@ type handler struct {
 	limits     plan.Limits
 	flow       *search.Service
 	logger     *slog.Logger
+}
+
+func (h handler) callWithIdempotency(ctx context.Context, accountID model.ID, name string, arguments map[string]any) (ToolResult, error) {
+	request, negotiated := IdempotencyFromContext(ctx)
+	if !negotiated {
+		return h.call(ctx, accountID, name, arguments)
+	}
+	if err := h.authorizeIdempotencyReplay(ctx, accountID, name, arguments); err != nil {
+		return ToolResult{}, err
+	}
+	operations, ok := h.operations.(idempotencyOperations)
+	if !ok {
+		return ToolResult{}, fmt.Errorf("멱등성 저장소 계약이 없다")
+	}
+	stored, err := operations.ReplayIdempotent(ctx, store.IdempotencyRequest{
+		AccountID:   accountID,
+		Key:         mustID(request.Key),
+		ToolName:    name,
+		Fingerprint: request.Fingerprint,
+	}, func(transactionContext context.Context) ([]byte, error) {
+		result, callErr := h.call(transactionContext, accountID, name, arguments)
+		if callErr != nil {
+			mapped := mapError(callErr)
+			domain, ok := errors.AsType[*Error](mapped)
+			if !ok || domain.Code == "internal" {
+				return nil, callErr
+			}
+			result = domainError(domain.Code, domain.Data)
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, fmt.Errorf("멱등성 결과 직렬화: %w", err)
+		}
+		return encoded, nil
+	})
+	if errors.Is(err, store.ErrIdempotencyConflict) {
+		return ToolResult{}, &Error{Code: "invalid_argument", Data: map[string]any{"field": "Idempotency-Key"}}
+	}
+	if err != nil {
+		return ToolResult{}, err
+	}
+	var result ToolResult
+	if err := json.Unmarshal(stored, &result); err != nil {
+		return ToolResult{}, fmt.Errorf("멱등성 결과 해석: %w", err)
+	}
+	return result, nil
+}
+
+// authorizeIdempotencyReplay는 저장된 완료 결과를 돌려주기 전에 현재 그래프 권한을 다시
+// 확인한다. 최초 호출은 아래 h.call이 같은 검사를 트랜잭션 안에서 한 번 더 수행해, 재생
+// 경로가 저장 결과를 읽는 순서와 실제 업무 변경의 동시성 계약을 함께 지킨다.
+func (h handler) authorizeIdempotencyReplay(ctx context.Context, accountID model.ID, name string, arguments map[string]any) error {
+	if name == "graph_create" {
+		return nil
+	}
+	_, err := h.requireActiveGraph(ctx, argumentID(arguments, "graph_id"), accountID, model.GraphGradeEditor)
+	return err
 }
 
 func (h handler) call(ctx context.Context, accountID model.ID, name string, arguments map[string]any) (ToolResult, error) {
@@ -634,6 +695,11 @@ func optionalString(arguments map[string]any, name string) string {
 
 func argumentID(arguments map[string]any, name string) model.ID {
 	id, _ := model.ParseID(arguments[name].(string))
+	return id
+}
+
+func mustID(value string) model.ID {
+	id, _ := model.ParseID(value)
 	return id
 }
 

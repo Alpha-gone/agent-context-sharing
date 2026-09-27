@@ -40,11 +40,13 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 	if err := graph.Validate(); err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 검증: %w", err)
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	tx, own, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 생성 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	if own {
+		defer tx.Rollback(ctx)
+	}
 	// 소유 그래프 수를 같은 트랜잭션에서 센다. 밖에서 읽은 값으로만 판정하면 한도 직전
 	// 계정의 동시 생성이 둘 다 통과한다.
 	if limits.GraphsPerAccount > 0 {
@@ -76,8 +78,8 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 		VALUES ($1, 'account', $2, 'owner')`, graph.ID.String(), graph.CreatedBy.String()); err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 소유자 등급 부여: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.Graph{}, fmt.Errorf("그래프 생성 커밋: %w", err)
+	if err := commitWriteTransaction(ctx, tx, own, "그래프 생성"); err != nil {
+		return model.Graph{}, err
 	}
 	return stored, nil
 }
@@ -216,11 +218,13 @@ func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersi
 	if !graphID.IsV7() || expectedVersion < 1 || name == "" {
 		return model.Graph{}, fmt.Errorf("그래프 갱신 인자가 올바르지 않다")
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	tx, own, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 갱신 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	if own {
+		defer tx.Rollback(ctx)
+	}
 
 	row := tx.QueryRow(ctx, `
 		UPDATE public.context_graph
@@ -240,8 +244,8 @@ func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersi
 		}
 		return model.Graph{}, fmt.Errorf("그래프 갱신: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.Graph{}, fmt.Errorf("그래프 갱신 커밋: %w", err)
+	if err := commitWriteTransaction(ctx, tx, own, "그래프 갱신"); err != nil {
+		return model.Graph{}, err
 	}
 	return graph, nil
 }

@@ -3,6 +3,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -26,9 +27,26 @@ const (
 	cacheScopePublic = "public"
 	// toolsListTTL과 discoverTTL은 「MCP 표면」이 정한 캐시 힌트다. 두 값이 배포로만
 	// 바뀌므로 배포 주기보다 짧게 잡은 시작값이며 측정 근거는 아직 없다.
-	toolsListTTL = 5 * time.Minute
-	discoverTTL  = time.Hour
+	toolsListTTL              = 5 * time.Minute
+	discoverTTL               = time.Hour
+	writeIdempotencyExtension = "io.github.alpha-gone/write-idempotency"
+	writeIdempotencyRetention = 24 * time.Hour
 )
+
+// IdempotencyRequest는 협상된 쓰기 요청을 재생할 때 필요한 전송 외피 값이다.
+// 도구 인자와 분리해, 재시도 식별자가 도메인 입력이나 도구 스키마에 섞이지 않게 한다.
+type IdempotencyRequest struct {
+	Key         string
+	Fingerprint [sha256.Size]byte
+}
+
+type idempotencyContextKey struct{}
+
+// IdempotencyFromContext는 전송 계층이 검증해 연결한 멱등성 요청을 돌려준다.
+func IdempotencyFromContext(ctx context.Context) (IdempotencyRequest, bool) {
+	request, ok := ctx.Value(idempotencyContextKey{}).(IdempotencyRequest)
+	return request, ok
+}
 
 // ErrUnauthenticated는 제시한 자격 증명 자체가 유효하지 않다는 검증 결과다.
 //
@@ -194,7 +212,21 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.writeResult(writer, message.ID, domainError("internal", nil))
 		return
 	}
-	result, err := s.call(request.Context(), accountID, message.Params.Name, message.Params.Arguments)
+	callContext := request.Context()
+	if message.Params.Meta.supportsWriteIdempotency() && isIdempotentWrite(message.Params.Name) {
+		key, ok := idempotencyKey(request)
+		if !ok {
+			s.writeResult(writer, message.ID, domainError("invalid_argument", map[string]any{"field": "Idempotency-Key"}))
+			return
+		}
+		fingerprint, err := requestFingerprint(message.Params.Name, message.Params.Arguments)
+		if err != nil {
+			s.writeResult(writer, message.ID, domainError("internal", nil))
+			return
+		}
+		callContext = context.WithValue(callContext, idempotencyContextKey{}, IdempotencyRequest{Key: key, Fingerprint: fingerprint})
+	}
+	result, err := s.call(callContext, accountID, message.Params.Name, message.Params.Arguments)
 	if err != nil {
 		if domain, ok := errors.AsType[*Error](err); ok && validDomainCode(domain.Code) {
 			s.writeResult(writer, message.ID, domainError(domain.Code, domain.Data))
@@ -449,6 +481,17 @@ func (meta rpcMeta) missing() []string {
 	return missing
 }
 
+func (meta rpcMeta) supportsWriteIdempotency() bool {
+	var capabilities struct {
+		Extensions map[string]jsontext.Value `json:"extensions"`
+	}
+	if err := json.Unmarshal(meta.ClientCapabilities, &capabilities); err != nil {
+		return false
+	}
+	_, ok := capabilities.Extensions[writeIdempotencyExtension]
+	return ok
+}
+
 type rpcErrorResponse struct {
 	JSONRPC string         `json:"jsonrpc"`
 	ID      jsontext.Value `json:"id"`
@@ -485,10 +528,46 @@ type Implementation struct {
 func discoverResult() map[string]any {
 	return map[string]any{
 		"supportedVersions": []string{ProtocolVersion},
-		"capabilities":      map[string]any{"tools": map[string]any{}},
-		"ttlMs":             discoverTTL.Milliseconds(),
-		"cacheScope":        cacheScopePublic,
+		"capabilities": map[string]any{
+			"tools": map[string]any{},
+			"extensions": map[string]any{writeIdempotencyExtension: map[string]any{
+				"retentionMs": writeIdempotencyRetention.Milliseconds(),
+			}},
+		},
+		"ttlMs":      discoverTTL.Milliseconds(),
+		"cacheScope": cacheScopePublic,
 	}
+}
+
+func isIdempotentWrite(name string) bool {
+	return slices.Contains([]string{
+		"graph_create", "graph_update", "node_create", "node_update",
+		"node_discard", "node_restore", "relation_confirm", "relation_discard",
+	}, name)
+}
+
+func idempotencyKey(request *http.Request) (string, bool) {
+	values := request.Header.Values("Idempotency-Key")
+	if len(values) != 1 || len(values[0]) < 3 || values[0][0] != '"' || values[0][len(values[0])-1] != '"' {
+		return "", false
+	}
+	key := values[0][1 : len(values[0])-1]
+	if strings.ContainsAny(key, "\"\\\r\n") {
+		return "", false
+	}
+	if len(key) != 36 {
+		return "", false
+	}
+	parsed, err := model.ParseID(key)
+	return key, err == nil && parsed.IsV7()
+}
+
+func requestFingerprint(name string, arguments map[string]any) ([sha256.Size]byte, error) {
+	encoded, err := json.Marshal(map[string]any{"arguments": arguments, "name": name}, json.Deterministic(true))
+	if err != nil {
+		return [sha256.Size]byte{}, fmt.Errorf("멱등성 요청 지문 직렬화: %w", err)
+	}
+	return sha256.Sum256(encoded), nil
 }
 
 // listToolsResult는 도구 목록과 규약이 요구하는 캐시 힌트를 함께 만든다.

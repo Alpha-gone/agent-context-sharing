@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
@@ -41,6 +42,22 @@ type SigningKey struct {
 	PrivateKey string
 	State      string
 	CreatedAt  time.Time
+}
+
+// ReserveDPoPProof는 검증을 끝낸 proof를 모든 인스턴스에서 한 번만 쓸 수 있게 기록한다.
+// false는 같은 공개 키와 jti 조합이 이미 사용됐다는 뜻이며, 원문 jti는 받거나 저장하지 않는다.
+func (s *Store) ReserveDPoPProof(ctx context.Context, jwkThumbprint string, proofIDHash []byte, expiresAt time.Time) (bool, error) {
+	if jwkThumbprint == "" || len(proofIDHash) != sha256.Size || expiresAt.IsZero() {
+		return false, fmt.Errorf("DPoP proof 예약 인자가 올바르지 않다")
+	}
+	result, err := s.pool.Exec(ctx, `
+		INSERT INTO public.dpop_proof_replay (jwk_thumbprint, proof_id_hash, expires_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (jwk_thumbprint, proof_id_hash) DO NOTHING`, jwkThumbprint, proofIDHash, expiresAt.UTC())
+	if err != nil {
+		return false, fmt.Errorf("DPoP proof 예약: %w", err)
+	}
+	return result.RowsAffected() == 1, nil
 }
 
 // CodeUsedError는 이미 소비된 인가 코드를 다시 제시했음을 나타낸다.

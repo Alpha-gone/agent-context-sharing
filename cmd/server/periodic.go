@@ -21,6 +21,7 @@ const (
 	rateCleanupLockKey        int64 = 4182026106
 	embeddingTierLockKey      int64 = 4182026107
 	idempotencyCleanupLockKey int64 = 4182026108
+	dpopProofCleanupLockKey   int64 = 4182026109
 )
 
 type periodicStore interface {
@@ -32,6 +33,7 @@ type periodicStore interface {
 	CleanupExpiredAuthorizationCodes(context.Context, time.Time) (int, error)
 	CleanupRequestRateWindows(context.Context, time.Time) (int, error)
 	CleanupExpiredIdempotencyRecords(context.Context, time.Time) (int, error)
+	CleanupExpiredDPoPProofs(context.Context, time.Time) (int, error)
 	MoveColdEmbeddings(context.Context, time.Time, store.RetentionDays) (int, error)
 }
 
@@ -42,7 +44,7 @@ type periodicTask struct {
 	run      func(context.Context) (int, error)
 }
 
-// periodicWorker는 모든 애플리케이션 인스턴스에 내장되는 여덟 주기 작업의 시작과 종료를 관리한다.
+// periodicWorker는 모든 애플리케이션 인스턴스에 내장되는 아홉 주기 작업의 시작과 종료를 관리한다.
 type periodicWorker struct {
 	store  periodicStore
 	logger *slog.Logger
@@ -88,6 +90,9 @@ func newPeriodicWorker(database *store.Store, plans plan.AccountPlans, logger *s
 		}},
 		{name: "idempotency_cleanup", interval: time.Hour, lockKey: idempotencyCleanupLockKey, run: func(ctx context.Context) (int, error) {
 			return database.CleanupExpiredIdempotencyRecords(ctx, worker.now().UTC())
+		}},
+		{name: "dpop_proof_cleanup", interval: time.Minute, lockKey: dpopProofCleanupLockKey, run: func(ctx context.Context) (int, error) {
+			return database.CleanupExpiredDPoPProofs(ctx, worker.now().UTC())
 		}},
 	}
 	return worker, nil

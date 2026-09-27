@@ -180,13 +180,15 @@ func TestRequestLogExcludesSensitiveValues(t *testing.T) {
 	var output bytes.Buffer
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(&output, nil)), proxyTransport(), nil)
 	request := httptest.NewRequest(http.MethodGet, "/healthz?access_token=secret-token", strings.NewReader("secret-body"))
+	request.Header.Set("Authorization", "DPoP secret-access-token")
+	request.Header.Set("DPoP", "secret-proof-with-jti")
 	response := httptest.NewRecorder()
 	app.handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("healthz 상태 = %d, want 200", response.Code)
 	}
 	logged := output.String()
-	for _, sensitive := range []string{"secret-token", "secret-body", "access_token"} {
+	for _, sensitive := range []string{"secret-token", "secret-body", "access_token", "secret-access-token", "secret-proof-with-jti"} {
 		if strings.Contains(logged, sensitive) {
 			t.Fatalf("구조화 로그에 민감한 값이 남았다: %q", sensitive)
 		}

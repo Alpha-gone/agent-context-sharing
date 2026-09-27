@@ -1572,7 +1572,7 @@ AGE 그래프는 하나만 만든다. 이름은 배포 구성으로 두되 인�
 
 `revoked_token`에 `expires_at`을 두는 이유는 「토큰 형식과 검증」이 "해당 토큰의 `exp`가 지나면 목록에서 지운다"로 확정했기 때문이다. 만료된 토큰은 이미 만료 검증에서 걸러지므로 목록이 무한히 자라지 않는다.
 
-`dpop_proof_replay`의 삽입은 `(jwk_thumbprint, proof_id_hash)` 기본 키에 대해 충돌 시 아무 행도 만들지 않는 한 문장으로 수행한다. 삽입된 행이 없으면 이미 사용한 proof이므로 보호 요청은 `401`과 `invalid_dpop_proof`, 토큰 엔드포인트는 OAuth `invalid_dpop_proof`로 거부한다. 데이터베이스 장애는 자격 증명 실패로 숨기지 않고 `500`으로 답한다. `expires_at`은 proof의 `iat + 60초`이며, 그 뒤에는 같은 proof가 와도 `iat` 검증에서 먼저 거부되므로 기록을 지워도 안전하다.
+`dpop_proof_replay`의 삽입은 `(jwk_thumbprint, proof_id_hash)` 기본 키에 대해 충돌 시 아무 행도 만들지 않는 한 문장으로 수행한다. 삽입된 행이 없으면 이미 사용한 proof이므로 보호 요청은 `401`과 `invalid_dpop_proof`, 토큰 엔드포인트는 OAuth `invalid_dpop_proof`로 거부한다. 데이터베이스 장애는 자격 증명 실패로 숨기지 않고 `500`으로 답한다. `expires_at`은 proof의 `iat + 60초`이며, 그 뒤에는 같은 proof가 와도 `iat` 검증에서 먼저 거부된다. 다만 `iat` 검증은 요청을 받은 인스턴스의 시계로, 정리는 정리 작업을 맡은 인스턴스의 시계로 판정하므로 정리하는 쪽 시계가 앞서면 그 차이만큼 기록이 먼저 사라진다. 이 틈으로 같은 proof가 다시 통과하지 않도록 정리는 `expires_at`에서 시계 차이 여유 1분이 더 지난 행만 지운다.
 
 `authorization_code`는 「인가 코드 흐름」이 정한 검증에 필요한 값만 담는다.
 
@@ -1929,14 +1929,14 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 
 | 항목          | 설계 |
 |---------------|------|
-| 인증 방식     | `Authorization: DPoP <token>`과 `DPoP: <proof>`를 정확히 하나씩 요구하고 Bearer 제시는 거부한다 |
+| 인증 방식     | `Authorization: DPoP <token>`과 `DPoP: <proof>`를 정확히 하나씩 요구하고 Bearer 제시는 거부한다. 스킴 이름은 RFC 9110대로 대소문자를 구분하지 않는다 |
 | 토큰 서명     | JWKS의 공개 키로 검증하며 키를 `kid`로 고른다 |
 | JWKS 캐시     | 데이터베이스에서 읽어 메모리에 두고 모르는 `kid`를 만나면 다시 읽는다 |
 | 토큰 클레임   | `iss`, `sub`, `aud`, `exp`, `iat`, `jti`, `cnf.jkt`가 모두 있어야 한다 |
 | 토큰 값       | `iss`가 이 인가 서버, `aud`가 이 리소스 서버, `exp`가 서버 시계 기준 미래여야 한다 |
 | 폐기 확인     | 토큰 `jti`가 폐기 목록에 있으면 거부한다. 목록은 10초 간격으로 다시 읽는다 |
 | proof JOSE    | `typ=dpop+jwt`, `alg=ES256`, 공개 키만 담은 JWK와 그 키의 유효한 서명을 요구한다 |
-| proof 요청 결합 | `htm=POST`, `htu`가 query와 fragment를 뺀 정규 MCP URL, `iat`가 서버 시각 ±60초, `jti`가 비어 있지 않아야 한다 |
+| proof 요청 결합 | `htm=POST`, `htu`가 query와 fragment 없이 정규 MCP URL과 같고, `iat`가 서버 시각 ±60초, `jti`가 비어 있지 않아야 한다. `htu` 대조는 RFC 3986의 구문·scheme 기반 정규화 뒤에 한다 |
 | proof 토큰 결합 | `ath`가 접근 토큰 원문의 SHA-256 base64url 값이고 proof JWK thumbprint가 토큰 `cnf.jkt`와 같아야 한다 |
 | proof 재생    | `(jkt, SHA-256(jti))`를 `dpop_proof_replay`에 원자적으로 삽입하고 충돌하면 거부한다 |
 | nonce         | 첫 구현은 `DPoP-Nonce`를 발급하거나 요구하지 않는다 |
@@ -1953,6 +1953,8 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 장애를 자격 증명 실패와 나누는 이유는 재인증이 답이 아니기 때문이다. 서명 키·폐기 목록을 읽지 못하거나 proof 재생을 기록하지 못한 것은 제시한 자격 증명과 무관하므로 `401`을 받은 클라이언트가 다시 인가를 받아 와도 같은 자리에서 다시 막힌다. `SRS.md`의 「예외와 오류 처리」가 이 경우를 처음부터 `internal` 범주로 두었으므로 구현을 그 결정에 맞춘다. 이 구분도 사유를 노출하지 않는다. 어느 조회나 기록이 실패했는지는 응답에 담지 않고 로그에만 남기며, 응답이 말하는 것은 서버 쪽 문제라는 사실까지다.
 
 구현에서는 `authz`가 토큰 실패, proof 실패와 내부 장애를 판별 가능한 오류 타입으로 나눠 반환하고 `mcp`가 그것을 상태 코드와 DPoP 오류 매개변수로 옮긴다. proof 재생 기록은 토큰·proof의 나머지 검증을 모두 통과한 뒤 도메인 연산 전에 수행한다. 실패한 proof로 저장소를 채우지 않으면서 동시 재생은 하나만 통과시키기 위한 순서다.
+
+`htu` 정규화는 scheme과 host를 소문자로 바꾸고, scheme의 기본 포트(`https`는 443, `http`는 80)를 지우며, 빈 경로를 `/`로 두고, 경로의 퍼센트 인코딩 표기를 한 가지로 맞춘다. RFC 9449가 `htu` 비교에 RFC 3986의 정규화를 참조하므로, 같은 URL을 다르게 적었다는 이유만으로 정상 클라이언트의 proof를 거부하지 않기 위해서다. query나 fragment가 있는 `htu`, 사용자 정보가 있는 `htu`는 정규화하지 않고 거부한다.
 
 ### 세션 쿠키 검증
 
@@ -2196,7 +2198,7 @@ Row Level Security는 채택하지 않은 채로 둔다. `SRS.md`가 읽기 경�
 | 멱등성 결과 정리      | 1시간 | `expires_at`이 지난 `idempotency_record`           | 지운다                              |
 | 폐기 목록 정리        | 1시간 | `expires_at`이 지난 `revoked_token`                | 지운다                              |
 | 인가 코드 정리        | 1시간 | `expires_at`이 지난 `authorization_code`           | 지운다                              |
-| DPoP proof 재생 정리  | 1분   | `expires_at`이 지난 `dpop_proof_replay`            | 지운다                              |
+| DPoP proof 재생 정리  | 1분   | `expires_at`에서 시계 차이 여유 1분이 더 지난 `dpop_proof_replay` | 지운다                   |
 | 요청 빈도 창 정리     | 1시간 | 현재 창보다 오래된 `request_rate` 행               | 지운다                              |
 | 임베딩 계층 이동      | 1일   | 접근 차단 또는 플랜 기준보다 오래된 임베딩         | `cold` 파티션으로 옮긴다            |
 

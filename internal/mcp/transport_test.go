@@ -88,15 +88,36 @@ func TestTransportValidationOrder(t *testing.T) {
 	})
 }
 
-func TestToolsListRequiresBearerTokenAndReturnsAllTools(t *testing.T) {
+// TestDPoPAuthorizationSchemeIsCaseInsensitive는 RFC 9110대로 인증 스킴의 대소문자를
+// 구분하지 않고, 스킴 뒤 토큰 형식은 그대로 검사하는지 확인한다.
+func TestDPoPAuthorizationSchemeIsCaseInsensitive(t *testing.T) {
+	server := testServer(t, nil)
+	for authorization, status := range map[string]int{
+		"dpop valid-token":  http.StatusOK,
+		"DPOP valid-token":  http.StatusOK,
+		"DPoP  valid-token": http.StatusUnauthorized,
+		"DPoPvalid-token":   http.StatusUnauthorized,
+	} {
+		request := mcpRequest(t, "tools/list", map[string]any{})
+		request.Header.Set("Authorization", authorization)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != status {
+			t.Fatalf("Authorization %q 상태 = %d, want %d", authorization, response.Code, status)
+		}
+	}
+}
+
+func TestToolsListRequiresDPoPAuthenticationAndReturnsAllTools(t *testing.T) {
 	server := testServer(t, nil)
 	request := mcpRequest(t, "tools/list", map[string]any{})
+	request.Header.Del("DPoP")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("토큰 없는 요청 상태 = %d, want 401", response.Code)
 	}
-	const metadata = `Bearer resource_metadata="https://service.test/.well-known/oauth-protected-resource", scope="agent-context"`
+	const metadata = `DPoP algs="ES256", resource_metadata="https://service.test/.well-known/oauth-protected-resource", scope="agent-context"`
 	if response.Header().Get("WWW-Authenticate") != metadata {
 		t.Fatalf("WWW-Authenticate = %q, want %q", response.Header().Get("WWW-Authenticate"), metadata)
 	}
@@ -108,29 +129,31 @@ func TestToolsListRequiresBearerTokenAndReturnsAllTools(t *testing.T) {
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("Bearer가 아닌 인증 헤더 상태 = %d, want %d", response.Code, http.StatusUnauthorized)
 	}
-	if response.Header().Get("WWW-Authenticate") != metadata {
-		t.Fatalf("Bearer가 아닌 인증 헤더의 WWW-Authenticate = %q, want %q", response.Header().Get("WWW-Authenticate"), metadata)
+	const invalidProof = `DPoP error="invalid_dpop_proof", algs="ES256", resource_metadata="https://service.test/.well-known/oauth-protected-resource", scope="agent-context"`
+	if response.Header().Get("WWW-Authenticate") != invalidProof {
+		t.Fatalf("DPoP가 아닌 인증 헤더의 WWW-Authenticate = %q, want %q", response.Header().Get("WWW-Authenticate"), invalidProof)
 	}
 
 	// 제시된 토큰의 검증 실패도 401이다. OAuth 2.1이 유효하지 않은 접근 토큰에 그것을
 	// 요구하며, 도메인 결과로 내려보내면 응답이 HTTP 수준에서 성공으로 보여 표준
 	// 클라이언트가 재인증 흐름을 시작하지 못한다.
 	request = mcpRequest(t, "tools/list", map[string]any{})
-	request.Header.Set("Authorization", "Bearer invalid-token")
+	request.Header.Set("Authorization", "DPoP invalid-token")
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("검증 실패 상태 = %d, want 401", response.Code)
 	}
-	if response.Header().Get("WWW-Authenticate") != metadata {
-		t.Fatalf("검증 실패의 WWW-Authenticate = %q, want %q", response.Header().Get("WWW-Authenticate"), metadata)
+	const invalidToken = `DPoP error="invalid_token", algs="ES256", resource_metadata="https://service.test/.well-known/oauth-protected-resource", scope="agent-context"`
+	if response.Header().Get("WWW-Authenticate") != invalidToken {
+		t.Fatalf("검증 실패의 WWW-Authenticate = %q, want %q", response.Header().Get("WWW-Authenticate"), invalidToken)
 	}
 	if strings.Contains(response.Body.String(), "unauthenticated") {
 		t.Fatalf("인증 실패가 도메인 오류로도 실렸다: %s", response.Body.String())
 	}
 
 	request = mcpRequest(t, "tools/list", map[string]any{})
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Authorization", "DPoP valid-token")
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -166,14 +189,14 @@ func TestToolsCallValidatesMcpNameHeader(t *testing.T) {
 		return ToolResult{StructuredContent: map[string]any{"ok": true}}, nil
 	})
 	request := mcpRequest(t, "tools/call", map[string]any{"name": "graph_list", "arguments": map[string]any{}})
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Authorization", "DPoP valid-token")
 	request.Header.Set("Mcp-Name", "other_tool")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	assertRPCError(t, response, http.StatusBadRequest, -32020)
 
 	request = mcpRequest(t, "tools/call", map[string]any{"name": "graph_list", "arguments": map[string]any{}})
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Authorization", "DPoP valid-token")
 	request.Header.Set("Mcp-Name", "graph_list")
 	response = httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -189,7 +212,7 @@ func TestToolsCallValidatesArgumentsBeforeDispatch(t *testing.T) {
 		return ToolResult{}, nil
 	})
 	request := mcpRequest(t, "tools/call", map[string]any{"name": "node_create", "arguments": map[string]any{"graph_id": "not-a-uuid", "layer": "source", "body": "본문"}})
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Authorization", "DPoP valid-token")
 	request.Header.Set("Mcp-Name", "node_create")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -214,7 +237,7 @@ func TestToolsCallRejectsInvalidDateTimeBeforeDispatch(t *testing.T) {
 		"body":             "본문",
 		"occurred_at":      "banana",
 	}})
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Authorization", "DPoP valid-token")
 	request.Header.Set("Mcp-Name", "node_create")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -349,7 +372,7 @@ func TestToolsCallRejectsWebOnlyToolBeforeArgumentValidation(t *testing.T) {
 				return ToolResult{}, nil
 			})
 			request := mcpRequest(t, "tools/call", map[string]any{"name": name, "arguments": map[string]any{"unexpected": true}})
-			request.Header.Set("Authorization", "Bearer valid-token")
+			request.Header.Set("Authorization", "DPoP valid-token")
 			request.Header.Set("Mcp-Name", name)
 			response := httptest.NewRecorder()
 			server.ServeHTTP(response, request)
@@ -369,7 +392,7 @@ func TestToolsCallDoesNotInferWebOnlyToolFromNamePattern(t *testing.T) {
 		return ToolResult{}, nil
 	})
 	request := mcpRequest(t, "tools/call", map[string]any{"name": "graph_permission_report", "arguments": map[string]any{}})
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Authorization", "DPoP valid-token")
 	request.Header.Set("Mcp-Name", "graph_permission_report")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -388,7 +411,7 @@ func TestToolsCallWithoutHandlerDoesNotSuggestWebChannel(t *testing.T) {
 		"layer":            "source",
 		"body":             "본문",
 	}})
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Authorization", "DPoP valid-token")
 	request.Header.Set("Mcp-Name", "node_create")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -401,7 +424,7 @@ func TestToolsCallMapsDomainError(t *testing.T) {
 		return ToolResult{}, &Error{Code: "permission_denied", Data: map[string]any{"required_grade": "editor"}}
 	})
 	request := mcpRequest(t, "tools/call", map[string]any{"name": "graph_list", "arguments": map[string]any{}})
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Authorization", "DPoP valid-token")
 	request.Header.Set("Mcp-Name", "graph_list")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -413,7 +436,7 @@ func TestToolsCallDoesNotExposeUnknownDomainCode(t *testing.T) {
 		return ToolResult{}, &Error{Code: "database_timeout"}
 	})
 	request := mcpRequest(t, "tools/call", map[string]any{"name": "graph_list", "arguments": map[string]any{}})
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Authorization", "DPoP valid-token")
 	request.Header.Set("Mcp-Name", "graph_list")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -426,6 +449,17 @@ func TestMetadataDocuments(t *testing.T) {
 	server.ProtectedResourceMetadata(protected, httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil))
 	if protected.Code != http.StatusOK || !bytes.Contains(protected.Body.Bytes(), []byte(`"resource":"https://service.test/mcp"`)) {
 		t.Fatalf("보호 리소스 문서 = %d, %s", protected.Code, protected.Body.String())
+	}
+	var protectedMetadata map[string]any
+	if err := json.Unmarshal(protected.Body.Bytes(), &protectedMetadata); err != nil {
+		t.Fatalf("보호 리소스 문서 해석: %v", err)
+	}
+	if protectedMetadata["dpop_bound_access_tokens_required"] != true {
+		t.Fatalf("dpop_bound_access_tokens_required = %#v, want true", protectedMetadata["dpop_bound_access_tokens_required"])
+	}
+	protectedAlgorithms, ok := protectedMetadata["dpop_signing_alg_values_supported"].([]any)
+	if !ok || len(protectedAlgorithms) != 1 || protectedAlgorithms[0] != "ES256" {
+		t.Fatalf("보호 리소스 DPoP 알고리즘 = %#v, want [ES256]", protectedMetadata["dpop_signing_alg_values_supported"])
 	}
 
 	authorization := httptest.NewRecorder()
@@ -454,6 +488,10 @@ func TestMetadataDocuments(t *testing.T) {
 	if !ok || len(scopes) != 1 || scopes[0] != Scope {
 		t.Fatalf("scopes_supported = %#v, want [%s]", metadata["scopes_supported"], Scope)
 	}
+	algorithms, ok := metadata["dpop_signing_alg_values_supported"].([]any)
+	if !ok || len(algorithms) != 1 || algorithms[0] != "ES256" {
+		t.Fatalf("인가 서버 DPoP 알고리즘 = %#v, want [ES256]", metadata["dpop_signing_alg_values_supported"])
+	}
 }
 
 func testServer(t *testing.T, call CallFunc) *Server {
@@ -470,12 +508,12 @@ func testServer(t *testing.T, call CallFunc) *Server {
 		AuthorizationServerURL: issuer,
 		AllowedOrigins:         []*url.URL{origin},
 		ServerInfo:             Implementation{Name: "agent-context", Version: "0.1.0"},
-	}, func(_ context.Context, token, audience string) (model.ID, error) {
+	}, func(_ context.Context, authentication Authentication) (model.ID, error) {
 		switch {
-		case token == "unavailable-token":
+		case authentication.AccessToken == "unavailable-token":
 			// 자격 증명이 아니라 검증을 끝내지 못한 경우다. 401로 답하면 안 된다.
 			return model.ID{}, errVerificationUnavailable
-		case token != "valid-token" || audience != resource.String():
+		case authentication.AccessToken != "valid-token" || authentication.Proof != "valid-proof" || authentication.Method != http.MethodPost || authentication.Target != resource.String():
 			return model.ID{}, errUnauthorized
 		}
 		return accountID, nil
@@ -511,6 +549,7 @@ func mcpRequest(t *testing.T, method string, params map[string]any) *http.Reques
 	request := httptest.NewRequest(http.MethodPost, "/mcp", jsonBody(t, payload))
 	request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
 	request.Header.Set("Mcp-Method", method)
+	request.Header.Set("DPoP", "valid-proof")
 	return request
 }
 
@@ -585,8 +624,8 @@ func assertDomainFieldAbsent(t *testing.T, response *httptest.ResponseRecorder, 
 }
 
 // errUnauthorized는 제시한 자격 증명 자체가 유효하지 않은 경우다. 검증 함수를 채우는
-// 쪽이 그렇듯 ErrUnauthenticated로 감싸 전송 계층이 401로 옮길 수 있게 한다.
-var errUnauthorized = fmt.Errorf("%w: 서명 불일치", ErrUnauthenticated)
+// 쪽이 그렇듯 ErrInvalidToken으로 감싸 전송 계층이 401로 옮길 수 있게 한다.
+var errUnauthorized = fmt.Errorf("%w: 서명 불일치", ErrInvalidToken)
 
 // errVerificationUnavailable은 자격 증명의 문제가 아니라 검증을 끝내지 못한 경우다.
 var errVerificationUnavailable = errors.New("폐기 목록 조회 실패")
@@ -786,7 +825,7 @@ func TestNegotiatedWriteIdempotencyForwardsKeyHeader(t *testing.T) {
 			return result(map[string]any{"ok": true}), nil
 		})
 		request := idempotencyToolCallRequest(t, "graph_create", arguments, header)
-		request.Header.Set("Authorization", "Bearer valid-token")
+		request.Header.Set("Authorization", "DPoP valid-token")
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
 		// 키 형식 검증은 권한 확인 뒤의 7단계이므로 전송 계층은 형식과 무관하게 넘긴다.
@@ -831,7 +870,7 @@ func TestResultsCarryEnvelope(t *testing.T) {
 	}
 	for name, request := range requests {
 		t.Run(name, func(t *testing.T) {
-			request.Header.Set("Authorization", "Bearer valid-token")
+			request.Header.Set("Authorization", "DPoP valid-token")
 			response := httptest.NewRecorder()
 			server.ServeHTTP(response, request)
 			if response.Code != http.StatusOK {
@@ -858,7 +897,7 @@ func TestResultsCarryEnvelope(t *testing.T) {
 func TestToolsListCarriesCacheHints(t *testing.T) {
 	server := testServer(t, nil)
 	request := mcpRequest(t, "tools/list", map[string]any{})
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Authorization", "DPoP valid-token")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	assertCacheHints(t, decodeResult(t, response), 300000)
@@ -872,7 +911,7 @@ func TestToolsListCarriesCacheHints(t *testing.T) {
 func TestVerificationFailureSeparatesCredentialFromOutage(t *testing.T) {
 	server := testServer(t, nil)
 	request := mcpRequest(t, "tools/list", map[string]any{})
-	request.Header.Set("Authorization", "Bearer unavailable-token")
+	request.Header.Set("Authorization", "DPoP unavailable-token")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError {
@@ -934,6 +973,7 @@ func idempotencyToolCallRequest(t *testing.T, name string, arguments map[string]
 	request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
 	request.Header.Set("Mcp-Method", "tools/call")
 	request.Header.Set("Mcp-Name", name)
+	request.Header.Set("DPoP", "valid-proof")
 	request.Header.Set("Idempotency-Key", "\""+key+"\"")
 	return request
 }

@@ -111,7 +111,7 @@ func run() error {
 		workers = append(workers, indexer)
 	}
 	periodic.Start(context.Background())
-	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, SemanticThreshold: cfg.SearchSemanticThreshold, FoldThreshold: cfg.SearchFoldThreshold, GraphStage: search.GraphStage(cfg.SearchGraphStage), GlobalFallback: cfg.SearchGlobalFallback}, slog.Default())
+	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, SemanticThreshold: cfg.SearchSemanticThreshold, FoldThreshold: cfg.SearchFoldThreshold, GraphStage: search.GraphStage(cfg.SearchGraphStage), GlobalFallback: cfg.SearchGlobalFallback, EvidencePathSelection: cfg.SearchEvidencePathSelection}, slog.Default())
 	if err != nil {
 		return fmt.Errorf("검색 실행기 준비: %w", err)
 	}

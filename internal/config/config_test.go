@@ -23,6 +23,21 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// TestLoadEvidencePathSelection은 근거 경로 보존 선택이 비어 있으면 꺼지고 명시한
+// 값만 켜지는지 확인한다. 통제 비교 전 운영 기본값은 기존 통합 순위 절단이다.
+func TestLoadEvidencePathSelection(t *testing.T) {
+	values := validValues()
+	cfg, err := Load(func(name string) string { return values[name] })
+	if err != nil || cfg.SearchEvidencePathSelection {
+		t.Fatalf("비어 있는 근거 경로 선택 = %v, %v", cfg.SearchEvidencePathSelection, err)
+	}
+	values["SEARCH_EVIDENCE_PATH_SELECTION_ENABLED"] = "true"
+	cfg, err = Load(func(name string) string { return values[name] })
+	if err != nil || !cfg.SearchEvidencePathSelection {
+		t.Fatalf("켠 근거 경로 선택 = %v, %v", cfg.SearchEvidencePathSelection, err)
+	}
+}
+
 func TestLoadAccountPlanLimits(t *testing.T) {
 	accountID, err := model.NewID()
 	if err != nil {
@@ -118,6 +133,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		"검색 의미 유사도 하한 오류": func(values map[string]string) { values["SEARCH_SEMANTIC_SIMILARITY_THRESHOLD"] = "1.1" },
 		"그래프 검색 단계 오류":    func(values map[string]string) { values["SEARCH_GRAPH_STAGE"] = "unknown" },
 		"전역 전환 활성화 오류":    func(values map[string]string) { values["SEARCH_GLOBAL_FALLBACK_ENABLED"] = "unknown" },
+		"근거 경로 선택 활성화 오류": func(values map[string]string) { values["SEARCH_EVIDENCE_PATH_SELECTION_ENABLED"] = "unknown" },
 		"색인 대상 계층 오류":     func(values map[string]string) { values["INDEX_TARGET_LAYERS"] = "derived_only" },
 		"관계 시간 인접 임계값 오류": func(values map[string]string) { values["RELATION_ADJACENCY_WINDOW"] = "0" },
 		"관계 유사도 임계값 오류":   func(values map[string]string) { values["RELATION_SIMILARITY_THRESHOLD"] = "1.1" },

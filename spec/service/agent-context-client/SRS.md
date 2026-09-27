@@ -8,7 +8,7 @@
 | 최종 수정일 | 2026-09-27 |
 | 서비스 식별자 | `AGENT_CONTEXT_CLIENT` |
 | 담당 범위 | 에이전트 호스트와 에이전트 컨텍스트 관리 시스템 사이에서 인증과 MCP 도구 호출을 중계하는 로컬 클라이언트 프로세스 |
-| 기준 프로토콜 | MCP `2026-07-28`, OAuth 2.1 Authorization Code with PKCE |
+| 기준 프로토콜 | 호스트 경계의 MCP `2026-07-28`, 원격 경계의 MCP `2026-07-28` 메시지·수명주기·도구 계약과 서비스 전용 RFC 9449 DPoP 인증 프로필 |
 | 정본 연동 계약 | `../agent-context/SRS.md`, `../agent-context/SDD.md` |
 
 이 문서는 2026-09-19에 작성한 초안을 대체한다. 이전 초안의 요구사항과 미정 사항은 새 문서의 입력으로 승계하지 않았으며, 서버의 현재 공개 계약과 MCP `2026-07-28`의 무상태 요청 모델에서 다시 도출했다.
@@ -27,14 +27,14 @@
 |------|--------|
 | 배포 형태 | 에이전트 호스트가 자식 프로세스로 실행할 수 있는 독립 실행 파일 |
 | 구현 언어 | Go `1.27.1` |
-| MCP 구현 | MCP `2026-07-28`을 지원하는 공식 MCP Go SDK |
+| MCP 구현 | MCP `2026-07-28`의 메시지·수명주기·도구 계약을 지원하는 공식 MCP Go SDK |
 | 저장소 배치 | 이 저장소의 루트 Go 모듈 안에 서버와 분리된 실행 파일로 배치하고 세부 명령·패키지 경계는 SDD에서 확정 |
 | 지원 운영체제 판 | Apple 보안 업데이트 대상인 macOS 14 Sonoma 이상, Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상 또는 Debian Security·LTS 지원 기간인 Debian 12 이상, Microsoft 지원 기간인 Windows 11 25H2 이상에서 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상 실행 |
 | 첫 지원 에이전트 호스트 | Codex CLI `0.156.1` |
 | 호스트 연결 | 표준 입출력을 사용하는 MCP `stdio` transport |
 | 호스트 프로토콜 기능 | Codex `config.toml`에서 `features.mcp_2026_07_28`을 활성화 |
 | 원격 연결 | TLS로 보호된 HTTP 기반 Streamable HTTP |
-| 프로토콜 revision | 호스트와 원격 경계 모두 `2026-07-28`로 고정 |
+| 프로토콜 revision | 호스트 경계는 MCP `2026-07-28` 전체 계약을 따르고, 원격 경계는 같은 revision의 메시지·수명주기·도구 계약에 서비스 전용 DPoP 인증 프로필을 적용 |
 | 프로세스 범위 | 사용자 계정 하나와 행위 에이전트 하나를 대표하며 여러 컨텍스트 그래프를 사용할 수 있음 |
 | 도구 범위 | 원격 서버가 공개한 도구 13종 전체 |
 | 인증 | 시스템 브라우저와 루프백 콜백을 이용한 Authorization Code with PKCE(`S256`) |
@@ -43,6 +43,8 @@
 | 쓰기 멱등성 | 원격 서버와 `io.github.alpha-gone/write-idempotency` 확장을 협상하고 쓰기 호출마다 클라이언트 생성 UUIDv7 키 사용 |
 | 자동 전송 재시도 | 허용된 읽기, 전달 전 실패가 확실한 쓰기와 멱등성 협상 쓰기에 최초 시도 제외 최대 3회, 250ms·500ms·1초 상한의 무작위 지연 적용 |
 | 재시작 | 인증 상태를 복원하지 않고 다시 인가함 |
+
+서비스 전용 DPoP 인증 프로필은 RFC 9449를 따르지만, 보호 요청에 `Authorization: Bearer`를 요구하는 MCP `2026-07-28` 핵심 인증 계약을 대체한다. 따라서 원격 경계는 MCP `2026-07-28` 인증 적합성을 주장하지 않으며 범용 MCP 클라이언트와의 인증 상호운용도 지원 범위가 아니다. `server/discover`의 `supportedVersions=2026-07-28`은 원격 경계의 메시지 외피, 수명주기와 `tools` 계약을 식별하고 서비스 전용 인증 프로필까지 표준 MCP 계약으로 승격하지 않는다.
 
 ### 호스트 SRS 변경 영향
 
@@ -57,7 +59,7 @@
 | `FR-AGENT_CONTEXT-153` 불변식 감사 | 전체 감사는 MCP가 아닌 서버의 `cmd/audit`가 수행한다. | `cmd/audit` 또는 감사 전용 도구를 호스트에 노출하지 않는다. |
 | `FR-AGENT_CONTEXT-154` 오염 적대적 평가 | 적대적 표본과 홉별 진단은 MCP가 아닌 서버의 `cmd/eval -adversarial`이 오프라인에서 수행한다. | 평가·진단 전용 도구나 경고를 새 MCP 계약으로 만들지 않으며 서버 도메인 판단을 로컬에서 재현하지 않는다. |
 | `FR-AGENT_CONTEXT-155` 쓰기 멱등성 | 선택 확장과 `Idempotency-Key` 헤더를 추가하되 도구 13종의 입력·출력 스키마는 유지한다. | 확장을 요청별로 선언하고 8종 쓰기에 호출별 UUIDv7 키를 보내며 비협상 서버에는 기존 계약으로 호출한다. |
-| `FR-AGENT_CONTEXT-156`~`FR-AGENT_CONTEXT-159` DPoP | 접근 토큰 발급·보호 요청·재생 방어·자동 갱신에 RFC 9449 발신자 제한을 추가하는 breaking 인증 변경이다. | 원격 HTTP 구간에서 프로세스 수명 키와 요청별 proof를 사용한다. 호스트 측 `stdio`와 도구 스키마는 바꾸지 않으며 Bearer 전용 서버로 하향하지 않는다. |
+| `FR-AGENT_CONTEXT-156`~`FR-AGENT_CONTEXT-159` DPoP | 접근 토큰 발급·보호 요청·재생 방어·자동 갱신에 RFC 9449 발신자 제한을 적용하고 MCP `2026-07-28` 핵심 Bearer 인증과 호환되지 않는 서비스 전용 프로필을 만든다. | 원격 HTTP 구간에서 프로세스 수명 키와 요청별 proof를 사용한다. 호스트 측 `stdio`와 도구 스키마는 바꾸지 않으며 Bearer 전용 서버로 하향하거나 원격 인증을 MCP 핵심 인증 적합으로 보고하지 않는다. |
 
 ## 목표와 비목표
 
@@ -164,7 +166,7 @@
 | `FR-AGENT_CONTEXT_CLIENT-016` | 클라이언트는 호스트 요청과 원격 요청에 서로 충돌하지 않는 식별자를 사용하고 응답을 원래 호스트 요청에 연결해야 한다. | 100개 이상의 동시 호출에서도 응답, 오류와 취소가 다른 호출에 전달되지 않는다. | 검토 필요 | agent-context SDD 「요청 처리 순서」, 제품 기준선 |
 | `FR-AGENT_CONTEXT_CLIENT-017` | 클라이언트는 원격 성공 결과와 `tools` 결과 안의 도메인 오류를 구조를 잃지 않고 호스트에 전달해야 한다. | `structuredContent`, `content`, `isError`, 현재 `version`, 커서와 부분 상태가 보존된다. `context_flow_get`의 평면 응답과 컨텍스트별 검색 메타데이터도 필드 누락·목록 재정렬·의미 변환 없이 전달된다. | 검토 필요 | agent-context SRS 「응답 구성」, agent-context SDD 「MCP 표면」, 「응답 직렬화」 |
 | `FR-AGENT_CONTEXT_CLIENT-018` | 클라이언트는 호스트 취소와 요청 제한 시간을 원격 HTTP 요청의 취소로 전파해야 한다. | 취소된 응답을 다른 요청에 사용하지 않고 제한 시간은 인증 대기와 도구 호출에 각각 적용한다. | 검토 필요 | MCP `2026-07-28` transport |
-| `FR-AGENT_CONTEXT_CLIENT-019` | 클라이언트는 전송 실패의 발생 시점과 쓰기 멱등성 협상 여부를 기준으로 자동 재시도 가능 여부와 공통 재시도 횟수를 판정해야 한다. | 원격에 요청이 전달되지 않았음이 확실하거나 서버와 쓰기 멱등성 확장을 협상하고 보관 기간 안에 같은 키를 재사용할 수 있을 때만 최초 시도 뒤 최대 3회 자동 재시도한다. 재시도 HTTP 시도마다 새 DPoP proof를 만들되 같은 논리적 쓰기의 `Idempotency-Key`는 유지하고, 그 밖의 쓰기 요청을 보낸 뒤 응답을 잃으면 `client_indeterminate`로 반환한다. | 검토 필요 | agent-context SDD 「연산 계약」, `TBD-AGENT_CONTEXT_CLIENT-003`, `-006`, `-007` |
+| `FR-AGENT_CONTEXT_CLIENT-019` | 클라이언트는 쓰기 전송 실패의 발생 시점과 멱등성 협상 여부를 기준으로 자동 재시도 가능 여부와 공통 재시도 횟수를 판정해야 한다. | 쓰기 요청은 원격에 전달되지 않았음이 확실하거나 서버와 쓰기 멱등성 확장을 협상하고 보관 기간 안에 같은 키를 재사용할 수 있을 때만 최초 시도 뒤 최대 3회 자동 재시도한다. 재시도 HTTP 시도마다 새 DPoP proof를 만들되 같은 논리적 쓰기의 `Idempotency-Key`는 유지하고, 그 밖의 쓰기 요청을 보낸 뒤 응답을 잃으면 `client_indeterminate`로 반환한다. 읽기 재시도 조건은 `FR-AGENT_CONTEXT_CLIENT-020`이 소유한다. | 검토 필요 | agent-context SDD 「연산 계약」, `TBD-AGENT_CONTEXT_CLIENT-003`, `-006`, `-007` |
 | `FR-AGENT_CONTEXT_CLIENT-020` | 클라이언트는 읽기 연산의 일시적 연결 실패만 공통 재시도 횟수와 지수형 지연 상한 안에서 재시도할 수 있어야 한다. | `graph_list`, `graph_get`, `node_get`, `context_flow_get`, `relation_list`만 대상이며 각 재시도 전 실제 대기는 0부터 차례로 250ms·500ms·1초인 상한 사이에서 무작위로 정한다. 도메인 오류, 프로토콜 오류와 완전한 HTTP 응답은 자동 재시도하지 않는다. | 검토 필요 | agent-context SDD 「연산 계약」, `TBD-AGENT_CONTEXT_CLIENT-003` |
 | `FR-AGENT_CONTEXT_CLIENT-021` | 클라이언트는 `version_conflict`를 자동 병합하거나 자동 재시도하지 않고 현재 `version`을 포함해 호스트에 반환해야 한다. | 에이전트가 재조회·재판단하지 않은 수정 요청이 자동 실행되지 않는다. | 검토 필요 | agent-context SRS 「오류 코드」 |
 | `FR-AGENT_CONTEXT_CLIENT-022` | 클라이언트는 커서를 불투명 값으로 취급하고 `result_truncated`를 성공 결과의 부분 상태로 유지해야 한다. | 커서를 해석·수정하지 않고 후속 요청에 그대로 전달하며 절단 표시를 일반 오류로 바꾸지 않는다. | 검토 필요 | agent-context SDD 「페이지 처리」, 「오류 코드」 |
@@ -254,7 +256,7 @@
 | `NFR-AGENT_CONTEXT_CLIENT-002` | 인가 무결성 | 클라이언트는 인가 요청마다 독립적인 `state`와 PKCE 값을 사용하고 콜백을 단 한 번 소비해야 한다. | 재사용, 불일치, 만료, 다른 포트·경로와 병렬 인가 혼선을 자동화 테스트가 거부함을 확인한다. | 검토 필요 | OAuth 2.1 |
 | `NFR-AGENT_CONTEXT_CLIENT-003` | 전송 보안 | 원격 통신은 검증된 TLS만 사용하고 인증서·호스트 이름 검증을 끄는 운영 구성을 제공해서는 안 된다. | 평문 URL과 인증서 오류를 연결 전에 또는 TLS 단계에서 거부한다. | 검토 필요 | agent-context `FR-AGENT_CONTEXT-140` |
 | `NFR-AGENT_CONTEXT_CLIENT-004` | 개인정보와 본문 보호 | 클라이언트는 `body`, `work_context`, `judgment_input`, 도구 결과 본문을 운영 로그나 원격 분석 서비스에 기록해서는 안 된다. | 로그에는 요청 식별자, 도구 이름, 상태, 지연과 크기만 남고 외부 telemetry는 기본 비활성이다. | 검토 필요 | agent-context SDD 「로그에서 제외하는 것」 |
-| `NFR-AGENT_CONTEXT_CLIENT-005` | 프로토콜 적합성 | 호스트와 원격 경계는 MCP `2026-07-28` 요청별 메타데이터와 무상태 규칙을 지켜야 한다. | 공식 conformance 시나리오와 서버 계약 테스트에서 구형 handshake·세션 의존이 없음을 확인한다. | 검토 필요 | MCP `2026-07-28` |
+| `NFR-AGENT_CONTEXT_CLIENT-005` | 프로토콜 적합성 | 호스트 경계는 MCP `2026-07-28` 전체 계약을, 원격 경계는 같은 revision의 요청별 메타데이터·무상태·수명주기·도구 계약과 서비스 전용 DPoP 인증 프로필을 지켜야 한다. | 호스트 경계는 공식 conformance 시나리오를 통과하고, 원격 경계는 메시지·수명주기·도구 계약과 DPoP 계약 시험을 분리해 통과한다. 원격 DPoP 인증 결과를 MCP `2026-07-28` 핵심 인증 적합성으로 보고하지 않는다. | 검토 필요 | MCP `2026-07-28`, RFC 9449, 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-006` | 동시성 | 동시 호출, 토큰 갱신과 재인증이 요청 상관관계와 자격 증명 상태를 손상해서는 안 된다. | 100개 동시 호출과 겹친 갱신·인증 테스트에서 응답 혼선, data race와 중복 브라우저 인가가 없다. | 검토 필요 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-007` | 지연 | 인증이 필요하지 않은 중계가 원격 왕복을 제외하고 과도한 지연을 추가해서는 안 된다. | 준비된 프로세스와 루프백 모의 서버에서 1KiB 요청·응답 100개를 동시에 중계할 때 클라이언트 자체 처리 시간 p95가 50ms 이하이다. | 검토 필요 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-008` | 장애 격리 | 한 요청의 취소·오류·잘못된 응답이 다른 진행 중 요청이나 인증 상태를 실패시켜서는 안 된다. | 오류 주입 테스트에서 영향이 해당 요청에 한정되고 프로세스는 후속 정상 요청을 처리한다. | 검토 필요 | 제품 기준선 |
@@ -275,7 +277,7 @@
 | 공개 클라이언트 사전 등록 | 서버는 사전 등록된 `client_id`와 루프백 `redirect_uri`만 허용한다. | 배포 환경마다 클라이언트 식별자와 등록된 콜백 경로를 제공한다. |
 | 호스트의 MCP `2026-07-28` 지원 | `TBD-AGENT_CONTEXT_CLIENT-001`이 Codex CLI `0.156.1`을 첫 지원 호스트로 확정했다. 호환성 검증은 아직 실행하지 않았다. | `features.mcp_2026_07_28`을 활성화한 Codex CLI `0.156.1`에서 `stdio` 종단 간 검증을 통과한다. |
 | 원격 수명주기·캐시 계약 | agent-context 서버 SRS 「외부 연동 요구사항」과 SDD 「MCP 표면」이 `server/discover`, 요청별 `_meta`, 응답 `resultType`과 `serverInfo`, `tools/list`의 `ttlMs`·`cacheScope`를 확정했다. | 서버 구현이 이 표면을 제공하고 계약 테스트를 통과한다. |
-| DPoP 발신자 제한 | agent-context 서버 SRS가 ES256 DPoP 토큰 발급, 보호 요청 proof 검증, 공유 재생 방어와 갱신 결합을 확정했다. | 서버 구현과 클라이언트가 RFC 9449 종단 간 계약 및 Bearer 하향 거부 시험을 통과한다. |
+| 서비스 전용 DPoP 인증 프로필 | agent-context 서버 SRS가 ES256 DPoP 토큰 발급, 보호 요청 proof 검증, 공유 재생 방어와 갱신 결합을 확정했다. 이 프로필은 MCP `2026-07-28` 핵심 Bearer 인증과 호환되지 않는다. | 서버 구현과 클라이언트가 RFC 9449 종단 간 계약 및 Bearer 하향 거부 시험을 통과하고, 원격 인증 결과를 공식 MCP 핵심 인증 conformance와 분리해 보고한다. |
 
 ## 구성과 데이터 정책
 
@@ -339,8 +341,8 @@ mcp_2026_07_28 = true
 ## 출시 완료 기준
 
 - [ ] 제품 기준선과 모든 요구사항의 `검토 필요` 상태가 사용자 검토를 거쳐 확정된다.
-- [ ] `features.mcp_2026_07_28`을 활성화한 Codex CLI `0.156.1`의 호스트 측 `stdio`와 원격 Streamable HTTP가 MCP `2026-07-28` 계약 테스트를 통과한다.
-- [ ] 호스트 측 `server/discover`, 원격 수명주기 검증, 원격 요청별 metadata와 `io.github.alpha-gone/write-idempotency` 확장 협상이 MCP `2026-07-28` 계약과 일치한다. 호스트 측에는 원격 전송용 확장을 광고하지 않는다.
+- [ ] `features.mcp_2026_07_28`을 활성화한 Codex CLI `0.156.1`의 호스트 측 `stdio`가 MCP `2026-07-28` 공식 계약 테스트를 통과한다.
+- [ ] 원격 Streamable HTTP의 메시지 외피, `server/discover`, 요청별 metadata, 수명주기, `tools`와 `io.github.alpha-gone/write-idempotency` 확장 협상이 MCP `2026-07-28` 기반 계약 테스트를 통과한다. 서비스 전용 DPoP 인증 시험은 별도로 수행하고 그 결과를 MCP 핵심 인증 적합성으로 보고하지 않는다. 호스트 측에는 원격 전송용 확장을 광고하지 않는다.
 - [ ] 브라우저 인가, 루프백 콜백, PKCE, DPoP 코드 교환, 토큰 갱신과 재인증 시나리오가 통과한다.
 - [ ] 원격 인가 서버가 성공·오류 응답에 발급자 식별 정보를 제공하고 클라이언트가 이를 검증한다.
 - [ ] 도구 13종의 목록·입력 스키마·성공·도메인 오류 중계가 실제 서버와 일치한다.
@@ -369,7 +371,7 @@ mcp_2026_07_28 = true
 | `TBD-AGENT_CONTEXT_CLIENT-004` | 지원 운영체제 판 | 첫 출시는 Apple 보안 업데이트 대상인 macOS 14 Sonoma 이상, Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상 또는 Debian Security·LTS 지원 기간인 Debian 12 이상, Microsoft 지원 기간인 Windows 11 25H2 이상에서 지원한다. Windows의 공식 실행 환경은 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상이며 브라우저 인가와 loopback callback을 Windows 호스트와 함께 검증한다. CPU 아키텍처별 배포본 범위는 SDD가 소유한다. | 확정 | 사용자 채택, Codex CLI 설치 요구사항, Go 최소 요구사항, 운영체제 수명 주기 |
 | `TBD-AGENT_CONTEXT_CLIENT-005` | 클라이언트 자원 상한 | 첫 출시의 입력은 256 KiB, 응답은 전송·압축 해제·`stdio` 출력 각각 32 MiB로 제한한다. 진행 중 원격 호출은 8개, 원격 호출과 공유 브라우저 인가 대기열은 각각 128개로 제한하며 출시 전 경계값·부하·오류 주입 시험으로 검증한다. | 확정 | 사용자 확정, 서버 공개 계약, MCP `stdio` transport |
 | `TBD-AGENT_CONTEXT_CLIENT-006` | 쓰기 멱등성 키 | 첫 출시는 MCP 확장 `io.github.alpha-gone/write-idempotency`를 협상하고 8종 쓰기 호출마다 클라이언트 생성 UUIDv7 키를 `Idempotency-Key`로 보낸다. 서버는 인증 계정과 키를 범위로 요청 지문과 최초 완료 결과를 24시간 보관하고, 같은 키·같은 요청에는 최초 결과를 반환하며 같은 키·다른 요청에는 `invalid_argument`를 반환한다. 협상된 같은 논리적 호출만 동일 키로 자동 재시도하고, 미협상·키 소실·보관 만료·재시도 한도 초과에는 `client_indeterminate`를 유지한다. | 확정 | 사용자 채택, agent-context `FR-AGENT_CONTEXT-155`, IETF Idempotency-Key 초안, MCP extension framework |
-| `TBD-AGENT_CONTEXT_CLIENT-007` | DPoP 지원 | 첫 출시는 RFC 9449 DPoP를 필수 적용한다. 클라이언트는 메모리에만 둔 프로세스 수명 ES256 키로 토큰과 각 HTTP 시도의 proof를 결합하고 서버는 60초 허용 창과 공유 `(jkt, jti)` 단일 사용 검사로 재생을 막는다. 자동 갱신된 접근 토큰은 같은 `cnf.jkt`를 유지하며 Bearer 방식으로 하향하지 않는다. 최초 구현에서는 서버 nonce를 사용하지 않는다. | 확정 | 사용자 채택, RFC 9449, RFC 9700, agent-context `FR-AGENT_CONTEXT-156`~`159` |
+| `TBD-AGENT_CONTEXT_CLIENT-007` | DPoP 지원 | 첫 출시는 RFC 9449 DPoP를 서비스 전용 원격 인증 프로필로 필수 적용한다. 클라이언트는 메모리에만 둔 프로세스 수명 ES256 키로 토큰과 각 HTTP 시도의 proof를 결합하고 서버는 60초 허용 창과 공유 `(jkt, jti)` 단일 사용 검사로 재생을 막는다. 자동 갱신된 접근 토큰은 같은 `cnf.jkt`를 유지하며 Bearer 방식으로 하향하지 않는다. 최초 구현에서는 서버 nonce를 사용하지 않는다. 이 프로필은 MCP `2026-07-28` 핵심 Bearer 인증과 호환되지 않으므로 원격 경계의 공식 MCP 인증 적합성을 주장하지 않는다. | 확정 | 사용자 채택, RFC 9449, RFC 9700, MCP `2026-07-28` 인증, agent-context `FR-AGENT_CONTEXT-156`~`159` |
 
 ## 미정 사항
 

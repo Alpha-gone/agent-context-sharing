@@ -44,6 +44,6 @@ MCP 클라이언트의 지원 운영체제 판(`TBD-AGENT_CONTEXT_CLIENT-004`)�
 
 MCP 클라이언트와 서버의 쓰기 멱등성 키 계약(`TBD-AGENT_CONTEXT_CLIENT-006`)은 `io.github.alpha-gone/write-idempotency` 확장, 호출별 UUIDv7 `Idempotency-Key`, 계정별 요청 지문과 최초 완료 결과의 24시간 보관으로 확정해 목록에서 뺐다. 같은 키·같은 요청은 최초 결과를 재생하고 같은 키·다른 요청은 `invalid_argument`로 거부한다.
 
-MCP 클라이언트와 서버의 DPoP 계약(`TBD-AGENT_CONTEXT_CLIENT-007`)은 RFC 9449, 보호 리소스·인가 서버 메타데이터의 DPoP 필수·ES256 선언, 프로세스 수명 ES256 키, `token_type=DPoP`와 `cnf.jkt`, HTTP 시도별 새 proof, 서버 시각 ±60초와 공유 `(jkt, jti)` 단일 사용 검사, 갱신 결합 유지, Bearer 하향 거부로 확정해 목록에서 뺐다. 보호 요청 오류는 `invalid_token`과 `invalid_dpop_proof`로 구분하고 최초 구현에서는 `DPoP-Nonce`를 사용하지 않는다.
+MCP 클라이언트와 서버의 DPoP 계약(`TBD-AGENT_CONTEXT_CLIENT-007`)은 RFC 9449, 보호 리소스·인가 서버 메타데이터의 DPoP 필수·ES256 선언, 프로세스 수명 ES256 키, `token_type=DPoP`와 `cnf.jkt`, HTTP 시도별 새 proof, 서버 시각 ±60초와 공유 `(jkt, jti)` 단일 사용 검사, 갱신 결합 유지, Bearer 하향 거부로 확정해 목록에서 뺐다. 보호 요청 오류는 `invalid_token`과 `invalid_dpop_proof`로 구분하고 최초 구현에서는 `DPoP-Nonce`를 사용하지 않는다. 이 인증은 MCP `2026-07-28` 핵심 Bearer 인증을 대체하는 서비스 전용 프로필이므로 원격 경계의 MCP 인증 적합성을 주장하지 않는다.
 
 MCP 클라이언트의 재시도 기본값(`TBD-AGENT_CONTEXT_CLIENT-003`)은 허용된 읽기, 원격 전달 전 실패가 확실한 쓰기와 멱등성 확장을 협상한 쓰기에 최초 시도 제외 최대 3회, 250ms·500ms·1초 상한의 무작위 대기를 적용하는 것으로 확정해 목록에서 뺐다. 취소와 도구 호출 제한 시간이 우선하며 재인증 뒤에도 같은 호출의 재시도 횟수를 초기화하지 않는다.

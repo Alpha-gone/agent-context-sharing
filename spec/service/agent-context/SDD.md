@@ -1178,6 +1178,8 @@ MCP의 11단계와 다른 곳은 둘이다. protocol version 확인이 없는 �
 
 `server/discover`를 구현하는 이유는 규약이 서버의 필수 구현으로 요구하기 때문이다. 이 서버는 core capability로 `tools`를, 선택 확장으로 `io.github.alpha-gone/write-idempotency`를 알리고 `supportedVersions`에는 지원하는 유일한 revision인 `2026-07-28`을 담는다. 확장 설정의 `retentionMs`는 최초 접수부터 24시간인 `86400000`으로 고정한다. 클라이언트가 이 응답으로 버전과 확장을 먼저 협상하면 지원하지 않는 요청을 보내고 되돌아오는 왕복이 줄어든다.
 
+`supportedVersions`의 `2026-07-28`은 메시지 외피·수명주기·도구 계약의 호환성을 알리는 값이다. 보호 요청 인증은 MCP 핵심의 Bearer 계약을 대체하는 서비스 전용 DPoP 인증 프로필을 쓰므로 이 값이 표준 MCP 인증 적합성까지 주장하지 않는다.
+
 쓰기 멱등성을 MCP 확장으로 광고하는 이유는 core `tools`의 입력·결과 스키마를 바꾸지 않으면서 지원 여부를 요청별로 합의하기 위해서다. 클라이언트는 `io.modelcontextprotocol/clientCapabilities.extensions`에 `"io.github.alpha-gone/write-idempotency": {}`를 선언하고, 서버와 클라이언트가 모두 선언한 호출에만 확장 계약을 적용한다. 기존 클라이언트는 확장 없이 13종 도구를 계속 호출할 수 있으므로 변경은 하위 호환이다. 키는 에이전트가 선택하는 도메인 입력이 아니라 전송 재시도의 식별자이므로 `inputSchema`나 `_meta`가 아니라 HTTP `Idempotency-Key`의 Structured Fields String으로 보낸다.
 
 `clientCapabilities`를 필수로 받는 이유는 규약이 세션을 두지 않기 때문이다. 이 서버가 요청마다 독립적으로 처리하므로 클라이언트가 무엇을 할 수 있는지 이전 요청에서 알 수 없고, 값이 빈 객체여도 선언 자체가 있어야 한다. 이 서비스의 연산은 어느 것도 클라이언트 기능을 요구하지 않으므로 1h에서 실제로 거절하는 경우는 지금 없지만, 필드를 받지 않으면 규약을 지키는 클라이언트와 지키지 않는 클라이언트를 구분하지 못한다.
@@ -1207,7 +1209,7 @@ SSE를 열지 않는 근거는 `SRS.md`의 「transport와 프로토콜」이다
 
 `code_challenge_methods_supported`에 `S256`만 담는다. 「인가 코드 흐름」이 `plain`을 받지 않기로 했으므로 그 사실이 메타데이터에 그대로 드러나야 클라이언트가 보내기 전에 안다.
 
-두 메타데이터 문서의 `dpop_signing_alg_values_supported`에는 `ES256`만 담는다. 보호 리소스 메타데이터의 `dpop_bound_access_tokens_required`는 `true`로 둔다. proof 헤더의 `alg`가 다른 요청은 토큰 엔드포인트와 리소스 서버 모두에서 거부하며, 클라이언트는 두 문서의 ES256 지원과 리소스 서버의 DPoP 필수를 모두 확인한다. RFC 9728에서 `dpop_bound_access_tokens_required`를 생략하면 기본값이 `false`이므로 필수 정책을 생략으로 표현하지 않으며 Bearer로 하향하는 경로도 두지 않는다.
+두 메타데이터 문서의 `dpop_signing_alg_values_supported`에는 `ES256`만 담는다. 보호 리소스 메타데이터의 `dpop_bound_access_tokens_required`는 `true`로 둔다. proof 헤더의 `alg`가 다른 요청은 토큰 엔드포인트와 리소스 서버 모두에서 거부하며, 클라이언트는 두 문서의 ES256 지원과 리소스 서버의 DPoP 필수를 모두 확인한다. RFC 9728에서 `dpop_bound_access_tokens_required`를 생략하면 기본값이 `false`이므로 필수 정책을 생략으로 표현하지 않으며 Bearer로 하향하는 경로도 두지 않는다. 이 선언은 MCP `2026-07-28` 인증 명세의 `Authorization: Bearer` 요구를 의도적으로 대체하는 서비스 전용 인증 프로필의 일부로, 문서 형식과 discovery 절차는 규약이 안내하는 RFC 9728·RFC 8414 구조를 따르더라도 표준 MCP 인증 적합성을 주장하지 않는다.
 
 `scopes_supported`는 `agent-context` 단일 scope 하나다. 「계정 매핑과 인가 범위」가 scope를 그래프별로 세분화하지 않기로 확정했으므로 값이 하나뿐이며, 그 결과 부족한 scope로 거절하는 경우가 생기지 않는다. 서비스 식별자와 같은 이름을 써 외부 클라이언트의 설정값과 내부 권한 등급을 혼동하지 않는다.
 

@@ -36,13 +36,15 @@ const (
 // IdempotencyRequest는 협상된 쓰기 요청을 재생할 때 필요한 전송 외피 값이다.
 // 도구 인자와 분리해, 재시도 식별자가 도메인 입력이나 도구 스키마에 섞이지 않게 한다.
 type IdempotencyRequest struct {
-	Key         string
+	// KeyHeader는 검증 전의 Idempotency-Key 헤더 값이다. 형식 검증은 「처리 순서」의
+	// 7단계라 권한 확인 뒤에 처리기가 한다.
+	KeyHeader   []string
 	Fingerprint [sha256.Size]byte
 }
 
 type idempotencyContextKey struct{}
 
-// IdempotencyFromContext는 전송 계층이 검증해 연결한 멱등성 요청을 돌려준다.
+// IdempotencyFromContext는 전송 계층이 협상을 확인해 연결한 멱등성 요청을 돌려준다.
 func IdempotencyFromContext(ctx context.Context) (IdempotencyRequest, bool) {
 	request, ok := ctx.Value(idempotencyContextKey{}).(IdempotencyRequest)
 	return request, ok
@@ -214,17 +216,14 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	callContext := request.Context()
 	if message.Params.Meta.supportsWriteIdempotency() && isIdempotentWrite(message.Params.Name) {
-		key, ok := idempotencyKey(request)
-		if !ok {
-			s.writeResult(writer, message.ID, domainError("invalid_argument", map[string]any{"field": "Idempotency-Key"}))
-			return
-		}
 		fingerprint, err := requestFingerprint(message.Params.Name, message.Params.Arguments)
 		if err != nil {
 			s.writeResult(writer, message.ID, domainError("internal", nil))
 			return
 		}
-		callContext = context.WithValue(callContext, idempotencyContextKey{}, IdempotencyRequest{Key: key, Fingerprint: fingerprint})
+		callContext = context.WithValue(callContext, idempotencyContextKey{}, IdempotencyRequest{
+			KeyHeader: request.Header.Values("Idempotency-Key"), Fingerprint: fingerprint,
+		})
 	}
 	result, err := s.call(callContext, accountID, message.Params.Name, message.Params.Arguments)
 	if err != nil {
@@ -546,20 +545,24 @@ func isIdempotentWrite(name string) bool {
 	}, name)
 }
 
-func idempotencyKey(request *http.Request) (string, bool) {
-	values := request.Header.Values("Idempotency-Key")
-	if len(values) != 1 || len(values[0]) < 3 || values[0][0] != '"' || values[0][len(values[0])-1] != '"' {
-		return "", false
+// parseIdempotencyKey는 하이픈 표기의 UUIDv7을 담은 Structured Fields String 하나만 받는다.
+func parseIdempotencyKey(values []string) (model.ID, bool) {
+	if len(values) != 1 {
+		return model.ID{}, false
 	}
-	key := values[0][1 : len(values[0])-1]
-	if strings.ContainsAny(key, "\"\\\r\n") {
-		return "", false
+	quoted, ok := strings.CutPrefix(values[0], "\"")
+	if !ok {
+		return model.ID{}, false
 	}
-	if len(key) != 36 {
-		return "", false
+	key, ok := strings.CutSuffix(quoted, "\"")
+	if !ok || len(key) != 36 {
+		return model.ID{}, false
 	}
 	parsed, err := model.ParseID(key)
-	return key, err == nil && parsed.IsV7()
+	if err != nil || !parsed.IsV7() {
+		return model.ID{}, false
+	}
+	return parsed, true
 }
 
 func requestFingerprint(name string, arguments map[string]any) ([sha256.Size]byte, error) {

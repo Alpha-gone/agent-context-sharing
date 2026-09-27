@@ -18,13 +18,11 @@ func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation m
 	if !graphID.IsV7() || relation.GraphID != graphID {
 		return model.Relation{}, fmt.Errorf("요청 graph_id와 관계 graph_id가 일치하지 않는다")
 	}
-	tx, own, err := s.writeTransaction(ctx)
+	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 생성 트랜잭션 시작: %w", err)
 	}
-	if own {
-		defer tx.Rollback(ctx)
-	}
+	defer tx.Rollback(ctx)
 
 	from, err := s.context(ctx, tx, graphID, relation.FromContextID)
 	if err != nil {
@@ -57,8 +55,8 @@ func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation m
 	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}); err != nil {
 		return model.Relation{}, err
 	}
-	if err := commitWriteTransaction(ctx, tx, own, "관계 생성"); err != nil {
-		return model.Relation{}, err
+	if err := tx.Commit(ctx); err != nil {
+		return model.Relation{}, fmt.Errorf("관계 생성 커밋: %w", err)
 	}
 	return stored, nil
 }
@@ -70,13 +68,11 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		return model.Relation{}, fmt.Errorf("요청 graph_id와 관계 graph_id가 일치하지 않는다")
 	}
 	relation = normalizeRelation(relation)
-	tx, own, err := s.writeTransaction(ctx)
+	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 확정 트랜잭션 시작: %w", err)
 	}
-	if own {
-		defer tx.Rollback(ctx)
-	}
+	defer tx.Rollback(ctx)
 
 	// 정체성 조회와 생성 사이를 그래프 행 잠금으로 직렬화한다. AGE 간선에는 유일
 	// 인덱스가 없어 같은 (유형, from, to)의 동시 확정이 간선을 여러 개 만들고, 순환
@@ -120,8 +116,8 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}); err != nil {
 			return model.Relation{}, err
 		}
-		if err := commitWriteTransaction(ctx, tx, own, "관계 확정"); err != nil {
-			return model.Relation{}, err
+		if err := tx.Commit(ctx); err != nil {
+			return model.Relation{}, fmt.Errorf("관계 확정 커밋: %w", err)
 		}
 		return stored, nil
 	}
@@ -153,8 +149,8 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}); err != nil {
 		return model.Relation{}, err
 	}
-	if err := commitWriteTransaction(ctx, tx, own, "관계 확정"); err != nil {
-		return model.Relation{}, err
+	if err := tx.Commit(ctx); err != nil {
+		return model.Relation{}, fmt.Errorf("관계 확정 커밋: %w", err)
 	}
 	return existing, nil
 }
@@ -164,13 +160,11 @@ func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.I
 	if !graphID.IsV7() || !relationID.IsV7() {
 		return model.Relation{}, fmt.Errorf("그래프와 관계 식별자는 UUIDv7이어야 한다")
 	}
-	tx, own, err := s.writeTransaction(ctx)
+	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 폐기 트랜잭션 시작: %w", err)
 	}
-	if own {
-		defer tx.Rollback(ctx)
-	}
+	defer tx.Rollback(ctx)
 	// 확정과 같은 그래프 행을 잠근다. 관계에는 판 번호가 없어 낙관적 잠금으로 거를 수
 	// 없으므로, 같은 관계에 폐기가 동시에 오면 읽은 상태가 둘 다 통과해 AGE가 동시 갱신
 	// 오류를 낸다. 잠금이 조회와 갱신 사이를 직렬화해 뒤에 온 요청이 이미 폐기된 상태를
@@ -204,8 +198,8 @@ func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.I
 	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{stored.FromContextID, stored.ToContextID}, EmbeddingExpectation{}); err != nil {
 		return model.Relation{}, err
 	}
-	if err := commitWriteTransaction(ctx, tx, own, "관계 폐기"); err != nil {
-		return model.Relation{}, err
+	if err := tx.Commit(ctx); err != nil {
+		return model.Relation{}, fmt.Errorf("관계 폐기 커밋: %w", err)
 	}
 	return stored, nil
 }

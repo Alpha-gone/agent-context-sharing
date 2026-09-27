@@ -116,7 +116,7 @@ func TestHandlerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("멱등성 요청 지문: %v", err)
 	}
-	idempotencyContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{Key: idempotencyKey.String(), Fingerprint: fingerprint})
+	idempotencyContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{KeyHeader: idempotencyHeader(idempotencyKey), Fingerprint: fingerprint})
 	firstCreate, err := call(idempotencyContext, ownerID, "node_create", idempotencyArguments)
 	if err != nil {
 		t.Fatalf("멱등성 생성: %v", err)
@@ -143,7 +143,7 @@ func TestHandlerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("다른 멱등성 요청 지문: %v", err)
 	}
-	differentContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{Key: idempotencyKey.String(), Fingerprint: differentFingerprint})
+	differentContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{KeyHeader: idempotencyHeader(idempotencyKey), Fingerprint: differentFingerprint})
 	if _, err := call(differentContext, ownerID, "node_create", differentArguments); !hasCode(err, "invalid_argument") {
 		t.Fatalf("같은 키의 다른 요청 오류 = %v, want invalid_argument", err)
 	}
@@ -159,7 +159,7 @@ func TestHandlerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("동시 멱등성 요청 지문: %v", err)
 	}
-	concurrentContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{Key: concurrentKey.String(), Fingerprint: concurrentFingerprint})
+	concurrentContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{KeyHeader: idempotencyHeader(concurrentKey), Fingerprint: concurrentFingerprint})
 	type concurrentResult struct {
 		result ToolResult
 		err    error
@@ -191,6 +191,66 @@ func TestHandlerIntegration(t *testing.T) {
 	}
 	if addRecordCount != 1 {
 		t.Fatalf("동시 멱등성 생성 적용 기록 수 = %d, want 1", addRecordCount)
+	}
+
+	// 트랜잭션 밖 사전 검사가 낡은 저장량을 읽어 통과하면, 한도 초과는 정점과 색인 작업을
+	// 쓴 뒤에야 드러난다. 이 거부를 완료 결과로 확정할 때 앞선 업무 변경은 함께 커밋되면
+	// 안 된다.
+	limitedSource := sourceArguments()
+	limitedSource["body"] = "한도 경합 원천 본문"
+	limitedSource["locator"] = locator + "/limit-race"
+	var storedChars int64
+	if err := pool.QueryRow(t.Context(), `SELECT stored_chars FROM public.context_graph WHERE graph_id = $1`, graphID).Scan(&storedChars); err != nil {
+		t.Fatalf("그래프 저장량 조회: %v", err)
+	}
+	limitedPlans, err := plan.ParseAccountPlans(fmt.Sprintf(`{%q: {"stored_characters_per_graph": %d}}`, ownerID.String(), storedChars+int64(len([]rune(limitedSource["body"].(string))))-1))
+	if err != nil {
+		t.Fatalf("한도 플랜 해석: %v", err)
+	}
+	limitedCall := NewHandler(staleStoredCharsOperations{database}, limitedPlans, nil)
+	contextsBefore := countGraphContexts(t, pool, graphName, graphID)
+	limitedKey := newHandlerID(t)
+	limitedFingerprint, err := requestFingerprint("node_create", limitedSource)
+	if err != nil {
+		t.Fatalf("한도 경합 요청 지문: %v", err)
+	}
+	limitedContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{KeyHeader: idempotencyHeader(limitedKey), Fingerprint: limitedFingerprint})
+	for attempt := range 2 {
+		limited, err := limitedCall(limitedContext, ownerID, "node_create", limitedSource)
+		if err != nil || !limited.IsError || structured(t, limited)["code"] != "limit_exceeded" {
+			t.Fatalf("한도 경합 %d번째 결과 = %#v, err = %v, want limit_exceeded", attempt+1, limited, err)
+		}
+	}
+	if contextsAfter := countGraphContexts(t, pool, graphName, graphID); contextsAfter != contextsBefore {
+		t.Fatalf("한도 초과로 거부한 생성이 정점을 남겼다: before=%d after=%d", contextsBefore, contextsAfter)
+	}
+
+	// 키 형식은 권한 확인 뒤의 7단계에서 검증하므로 권한 거부가 형식 오류에 가려지지 않는다.
+	updateArguments := map[string]any{"graph_id": graphID, "expected_version": float64(2), "name": "키 형식 검사"}
+	malformedContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{KeyHeader: []string{"bad-key"}})
+	if _, err := call(malformedContext, viewerID, "graph_update", updateArguments); !hasCode(err, "permission_denied") {
+		t.Fatalf("열람자의 잘못된 키 갱신 오류 = %v, want permission_denied", err)
+	}
+	if _, err := call(malformedContext, ownerID, "graph_update", updateArguments); !hasCode(err, "invalid_argument") {
+		t.Fatalf("잘못된 키 갱신 오류 = %v, want invalid_argument", err)
+	}
+
+	// graph_create 재생도 저장 결과의 그래프에 지금 등급이 있는지 다시 확인한다.
+	createArguments := map[string]any{"name": "멱등성 재생 권한 그래프"}
+	createFingerprint, err := requestFingerprint("graph_create", createArguments)
+	if err != nil {
+		t.Fatalf("그래프 생성 요청 지문: %v", err)
+	}
+	createContext := context.WithValue(t.Context(), idempotencyContextKey{}, IdempotencyRequest{KeyHeader: idempotencyHeader(newHandlerID(t)), Fingerprint: createFingerprint})
+	createdByViewer, err := call(createContext, viewerID, "graph_create", createArguments)
+	if err != nil {
+		t.Fatalf("멱등성 그래프 생성: %v", err)
+	}
+	if _, err := pool.Exec(t.Context(), `DELETE FROM public.graph_grant WHERE graph_id = $1 AND subject_id = $2`, structured(t, createdByViewer)["graph_id"], viewerID.String()); err != nil {
+		t.Fatalf("그래프 등급 회수: %v", err)
+	}
+	if _, err := call(createContext, viewerID, "graph_create", createArguments); !hasCode(err, "not_found") {
+		t.Fatalf("등급을 잃은 뒤 그래프 생성 재생 오류 = %v, want not_found", err)
 	}
 
 	rollbackKey, err := model.NewID()
@@ -523,6 +583,33 @@ func webDeleteContext(t *testing.T, pool *pgx.Conn, graphName, graphID, contextI
 	if _, err := pool.Exec(t.Context(), statement); err != nil {
 		t.Fatalf("웹 삭제 상태 표시: %v", err)
 	}
+}
+
+// staleStoredCharsOperations는 트랜잭션 밖 사전 검사가 동시 쓰기 전의 저장량을 읽은
+// 경합을 재현한다. 실제 한도 강제는 저장소의 쓰기 트랜잭션만 맡게 된다.
+type staleStoredCharsOperations struct{ *store.Store }
+
+func (operations staleStoredCharsOperations) Graph(ctx context.Context, graphID model.ID) (model.Graph, error) {
+	graph, err := operations.Store.Graph(ctx, graphID)
+	graph.StoredChars = 0
+	return graph, err
+}
+
+// idempotencyHeader는 키를 Structured Fields String 헤더 값으로 만든다.
+func idempotencyHeader(key model.ID) []string {
+	return []string{`"` + key.String() + `"`}
+}
+
+// countGraphContexts는 폐기 여부와 무관하게 그래프의 컨텍스트 정점 수를 센다.
+func countGraphContexts(t *testing.T, pool *pgx.Conn, graphName, graphID string) int {
+	t.Helper()
+	graphLiteral := strings.ReplaceAll(graphName, "'", "''")
+	cypher := fmt.Sprintf("MATCH (node:Context) WHERE node.graph_id = %q RETURN count(node)", graphID)
+	var count int
+	if err := pool.QueryRow(t.Context(), "SELECT count::text::int FROM ag_catalog.cypher('"+graphLiteral+"', $$"+cypher+"$$) AS (count agtype)").Scan(&count); err != nil {
+		t.Fatalf("컨텍스트 정점 수 조회: %v", err)
+	}
+	return count
 }
 
 // newHandlerID는 처리기 통합 테스트에 쓰는 UUIDv7 식별자를 만든다.

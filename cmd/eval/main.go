@@ -35,6 +35,7 @@ type report struct {
 	Conditions     conditions       `json:"conditions"`
 	Runs           []runMetrics     `json:"runs"`
 	Judgements     []stageJudgement `json:"judgements"`
+	Marginals      []marginal       `json:"marginal_contributions"`
 }
 
 // conditions는 단계를 제외하고 회차마다 고정한 통제 조건이다.
@@ -63,7 +64,7 @@ func run() error {
 	defaultLimits := plan.Default()
 	contextsPath := flag.String("contexts", "", "컨텍스트 집합 파일 경로")
 	queriesPath := flag.String("queries", "", "질의 집합 파일 경로")
-	stageList := flag.String("stages", "baseline,references,relations,global", "누적 비교 단계를 순서대로 지정한다")
+	stageList := flag.String("stages", "baseline,references,relations,global,evidence", "누적 비교 단계를 순서대로 지정한다")
 	repeats := flag.Int("repeat", minimumRepeats, "단계마다 반복할 회차 수")
 	budget := flag.Int("budget", 4000, "검색 예산 문자 수. 0은 한도 없음이다")
 	maxHops := flag.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
@@ -168,13 +169,15 @@ func run() error {
 	}
 	runs := map[string][]runMetrics{}
 	for _, stage := range stages {
+		graphStage, evidence := stageConfig(stage)
 		service, err := search.New(database, worker, search.Config{
-			Execution:         settings.execution,
-			CandidateLimit:    settings.candidateLimit,
-			SemanticThreshold: settings.semanticThreshold,
-			FoldThreshold:     settings.foldThreshold,
-			GraphStage:        search.GraphStage(stage),
-			GlobalFallback:    stage == string(search.GraphStageGlobal),
+			Execution:             settings.execution,
+			CandidateLimit:        settings.candidateLimit,
+			SemanticThreshold:     settings.semanticThreshold,
+			FoldThreshold:         settings.foldThreshold,
+			GraphStage:            graphStage,
+			GlobalFallback:        graphStage == search.GraphStageGlobal,
+			EvidencePathSelection: evidence,
 		}, slog.Default())
 		if err != nil {
 			return fmt.Errorf("단계 %q 검색 실행기 준비: %w", stage, err)
@@ -186,13 +189,14 @@ func run() error {
 				return fmt.Errorf("단계 %q 회차 %d: %w", stage, repeat, err)
 			}
 			elapsed := time.Since(started)
-			run := runMetrics{Stage: stage, Repeat: repeat, DurationMS: elapsed.Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples}
+			run := runMetrics{Stage: stage, Repeat: repeat, DurationMS: elapsed.Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered}
 			runs[stage] = append(runs[stage], run)
 			result.Runs = append(result.Runs, run)
 			slog.Info("회차 완료", "stage", stage, "repeat", repeat, "duration", elapsed.String())
 		}
 	}
 	result.Judgements = judge(stages, runs)
+	result.Marginals = marginals(stages, runs)
 	return writeReport(*outPath, result)
 }
 
@@ -274,12 +278,25 @@ func filterQuerySet(set querySet, useCase string) (querySet, error) {
 	return set, nil
 }
 
+// stageEvidence는 「그래프 효과 비교」의 4단계다. 3단계와 같은 채널 후보에 근거 경로
+// 보존 선택만 더하므로 그래프 단계는 global과 같다.
+const stageEvidence = "evidence"
+
+// stageConfig는 비교 단계 이름을 검색 구성의 그래프 단계와 근거 경로 선택 여부로 바꾼다.
+func stageConfig(stage string) (search.GraphStage, bool) {
+	if stage == stageEvidence {
+		return search.GraphStageGlobal, true
+	}
+	return search.GraphStage(stage), false
+}
+
 func parseStages(raw string) ([]string, error) {
 	known := []string{
 		string(search.GraphStageBaseline),
 		string(search.GraphStageReferences),
 		string(search.GraphStageRelations),
 		string(search.GraphStageGlobal),
+		stageEvidence,
 	}
 	stages := make([]string, 0, len(known))
 	for value := range strings.SplitSeq(raw, ",") {

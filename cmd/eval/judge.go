@@ -11,16 +11,24 @@ import "math"
 // 수준보다 넓으면 반복을 늘린다.
 const minimumRepeats = 3
 
-// metricNames는 판정에 쓰는 지표와 그 방향이다. 예산 효율은 문자 수이므로 값이
-// 작을수록 좋고 나머지는 클수록 좋다.
+// metricNames는 판정에 쓰는 지표와 그 방향이다. 예산 효율은 문자 수, 단절 근거·허브
+// 편중·중복 컨텍스트는 비율, 지연은 시간이므로 값이 작을수록 좋고 나머지는 클수록
+// 좋다. 모든 지표가 음수가 될 수 없으므로 음수는 정의되지 않은 값으로 보고 뺀다.
 var metricNames = []struct {
 	name          string
 	lowerIsBetter bool
 	value         func(useCaseMetrics) float64
+	sample        func(queryMetrics) float64
 }{
-	{"recall", false, func(m useCaseMetrics) float64 { return m.Recall }},
-	{"reciprocal_rank", false, func(m useCaseMetrics) float64 { return m.ReciprocalRank }},
-	{"budget_per_hit", true, func(m useCaseMetrics) float64 { return m.BudgetPerHit }},
+	{"recall", false, func(m useCaseMetrics) float64 { return m.Recall }, func(q queryMetrics) float64 { return q.Recall }},
+	{"reciprocal_rank", false, func(m useCaseMetrics) float64 { return m.ReciprocalRank }, func(q queryMetrics) float64 { return q.ReciprocalRank }},
+	{"budget_per_hit", true, func(m useCaseMetrics) float64 { return m.BudgetPerHit }, func(q queryMetrics) float64 { return q.BudgetPerHit }},
+	{"evidence_completeness", false, func(m useCaseMetrics) float64 { return m.EvidenceCompleteness }, func(q queryMetrics) float64 { return q.EvidenceCompleteness }},
+	{"path_continuity", false, func(m useCaseMetrics) float64 { return m.PathContinuity }, func(q queryMetrics) float64 { return q.PathContinuity }},
+	{"disconnected_ratio", true, func(m useCaseMetrics) float64 { return m.DisconnectedRatio }, func(q queryMetrics) float64 { return q.DisconnectedRatio }},
+	{"hub_concentration", true, func(m useCaseMetrics) float64 { return m.HubConcentration }, func(q queryMetrics) float64 { return q.HubConcentration }},
+	{"duplicate_ratio", true, func(m useCaseMetrics) float64 { return m.DuplicateRatio }, func(q queryMetrics) float64 { return q.DuplicateRatio }},
+	{"latency_ms", true, func(m useCaseMetrics) float64 { return m.LatencyMS }, func(q queryMetrics) float64 { return q.LatencyMS }},
 }
 
 // estimate는 한 지표의 반복 집계다.
@@ -97,8 +105,8 @@ func collectQuerySamples(runs []runMetrics) map[string]map[string]map[string]flo
 				totals[sample.UseCase][sample.ID] = map[string]values{}
 			}
 			for _, metric := range metricNames {
-				value := metric.value(useCaseMetrics{Recall: sample.Recall, ReciprocalRank: sample.ReciprocalRank, BudgetPerHit: sample.BudgetPerHit})
-				if metric.lowerIsBetter && value < 0 {
+				value := metric.sample(sample)
+				if value < 0 {
 					continue
 				}
 				current := totals[sample.UseCase][sample.ID][metric.name]
@@ -131,8 +139,8 @@ func collectSamples(runs []runMetrics) map[string]map[string][]float64 {
 			}
 			for _, metric := range metricNames {
 				value := metric.value(metrics)
-				// 정답을 못 찾아 정의되지 않은 예산 효율은 표본에서 뺀다.
-				if metric.lowerIsBetter && value < 0 {
+				// 정답이나 기대 근거가 없어 정의되지 않은 값은 표본에서 뺀다.
+				if value < 0 {
 					continue
 				}
 				samples[useCase][metric.name] = append(samples[useCase][metric.name], value)
@@ -244,4 +252,83 @@ func criticalValue(degrees int) float64 {
 		return 1.96
 	}
 	return tTable[degrees-1]
+}
+
+// marginal은 한 단계가 바로 앞 단계에 더한 한계 기여다. 「검색 품질 평가」가 정답·필수
+// 근거 증가량과 문자 수·지연 증가량을 나란히 남기고 하나의 합성 점수로 줄이지 말라고
+// 정했다. 회수 수는 검색이 결정적이므로 첫 회차로 세고, 문자 수와 지연은 반복 평균의
+// 질의당 차이다.
+type marginal struct {
+	Stage          string  `json:"stage"`
+	ComparedTo     string  `json:"compared_to"`
+	UseCase        string  `json:"use_case"`
+	Queries        int     `json:"queries"`
+	Recovered      int     `json:"newly_recovered"`
+	Lost           int     `json:"lost"`
+	AddedChars     float64 `json:"added_chars_per_query"`
+	AddedLatencyMS float64 `json:"added_latency_ms_per_query"`
+}
+
+// marginals는 단계 목록을 받은 순서대로 바로 앞 단계와 견준 한계 기여를 낸다.
+func marginals(stages []string, runs map[string][]runMetrics) []marginal {
+	result := make([]marginal, 0)
+	for index := 1; index < len(stages); index++ {
+		previous, current := runs[stages[index-1]], runs[stages[index]]
+		if len(previous) == 0 || len(current) == 0 {
+			continue
+		}
+		before, after := queryCosts(previous), queryCosts(current)
+		for _, useCase := range useCases {
+			entry := marginal{Stage: stages[index], ComparedTo: stages[index-1], UseCase: useCase}
+			chars, latency := 0.0, 0.0
+			for id, cost := range after[useCase] {
+				base, present := before[useCase][id]
+				if !present {
+					continue
+				}
+				entry.Queries++
+				chars += cost.chars - base.chars
+				latency += cost.latency - base.latency
+				for key := range current[0].recovered[id] {
+					if _, found := previous[0].recovered[id][key]; !found {
+						entry.Recovered++
+					}
+				}
+				for key := range previous[0].recovered[id] {
+					if _, found := current[0].recovered[id][key]; !found {
+						entry.Lost++
+					}
+				}
+			}
+			if entry.Queries == 0 {
+				continue
+			}
+			entry.AddedChars = chars / float64(entry.Queries)
+			entry.AddedLatencyMS = latency / float64(entry.Queries)
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+type queryCost struct {
+	chars   float64
+	latency float64
+}
+
+// queryCosts는 사용 사례와 질의별로 반복 회차의 문자 수와 지연을 평균낸다.
+func queryCosts(runs []runMetrics) map[string]map[string]queryCost {
+	totals := map[string]map[string]queryCost{}
+	for _, run := range runs {
+		for _, sample := range run.QuerySamples {
+			if totals[sample.UseCase] == nil {
+				totals[sample.UseCase] = map[string]queryCost{}
+			}
+			cost := totals[sample.UseCase][sample.ID]
+			cost.chars += float64(sample.BudgetUsed) / float64(len(runs))
+			cost.latency += sample.LatencyMS / float64(len(runs))
+			totals[sample.UseCase][sample.ID] = cost
+		}
+	}
+	return totals
 }

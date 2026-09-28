@@ -371,36 +371,19 @@ func (s *Store) loadAuditSnapshot(ctx context.Context, queryer cypherQueryer, gr
 		}
 		scopeList = "[" + strings.Join(quoted, ", ") + "]"
 	}
-	edgeFilter := "a.graph_id = " + graph + " OR b.graph_id = " + graph + " OR e.graph_id = " + graph
+	// 쓰기 검사는 나가는 간선과 들어오는 간선을 나눠 읽는다. 두 끝의 조건을 OR로 묶으면 조인
+	// 뒤에야 판정되어 context_id 인덱스를 쓰지 못하고 모든 그래프의 간선을 훑는다. 양 끝이 모두
+	// 범위인 간선은 두 질의에 함께 나오므로 간선 식별자로 한 번만 담는다.
+	edgeFilters := []string{"a.graph_id = " + graph + " OR b.graph_id = " + graph + " OR e.graph_id = " + graph}
 	if contextIDs != nil {
-		edgeFilter = "a.context_id IN " + scopeList + " OR b.context_id IN " + scopeList
-	}
-	rows, err := queryer.Query(ctx, s.cypherSQL("MATCH (a:Context)-[e]->(b:Context) WHERE "+edgeFilter+
-		" RETURN label(e), coalesce(e.graph_id, ''), coalesce(e.relation_id, ''), coalesce(e.state, ''), a.context_id, b.context_id",
-		"label agtype, graph agtype, relation agtype, state agtype, source agtype, target agtype"), pgx.QueryExecModeExec)
-	if err != nil {
-		return auditSnapshot{}, fmt.Errorf("불변식 간선 조회: %w", err)
+		edgeFilters = []string{"a.context_id IN " + scopeList, "b.context_id IN " + scopeList}
 	}
 	endpoints := map[string]struct{}{}
-	for rows.Next() {
-		var raw [6]string
-		if err := rows.Scan(&raw[0], &raw[1], &raw[2], &raw[3], &raw[4], &raw[5]); err != nil {
-			rows.Close()
-			return auditSnapshot{}, fmt.Errorf("불변식 간선 행 해석: %w", err)
+	seen := map[string]struct{}{}
+	for _, filter := range edgeFilters {
+		if err := s.loadAuditEdges(ctx, queryer, filter, &snapshot, endpoints, seen); err != nil {
+			return auditSnapshot{}, err
 		}
-		var values [6]string
-		for index := range raw {
-			if err := json.Unmarshal([]byte(raw[index]), &values[index]); err != nil {
-				rows.Close()
-				return auditSnapshot{}, fmt.Errorf("불변식 간선 값 해석: %w", err)
-			}
-		}
-		snapshot.edges = append(snapshot.edges, auditEdge{label: values[0], graphID: values[1], relationID: values[2], state: values[3], from: values[4], to: values[5]})
-		endpoints[values[4]], endpoints[values[5]] = struct{}{}, struct{}{}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return auditSnapshot{}, fmt.Errorf("불변식 간선 행 읽기: %w", err)
 	}
 
 	nodeFilter := "n.graph_id = " + graph
@@ -538,6 +521,41 @@ func (s *Store) writeInvariantViolations(ctx context.Context, tx pgx.Tx, graphID
 		return paths(label, from, to)
 	}
 	return runInvariantRules(snapshot)
+}
+
+// loadAuditEdges는 filter에 맞는 간선을 snapshot에 더하고 양 끝을 endpoints에 모은다. seen에
+// 이미 있는 간선은 건너뛴다.
+func (s *Store) loadAuditEdges(ctx context.Context, queryer cypherQueryer, filter string, snapshot *auditSnapshot, endpoints, seen map[string]struct{}) error {
+	rows, err := queryer.Query(ctx, s.cypherSQL("MATCH (a:Context)-[e]->(b:Context) WHERE "+filter+
+		" RETURN id(e), label(e), coalesce(e.graph_id, ''), coalesce(e.relation_id, ''), coalesce(e.state, ''), a.context_id, b.context_id",
+		"edge agtype, label agtype, graph agtype, relation agtype, state agtype, source agtype, target agtype"), pgx.QueryExecModeExec)
+	if err != nil {
+		return fmt.Errorf("불변식 간선 조회: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var edgeID string
+		var raw [6]string
+		if err := rows.Scan(&edgeID, &raw[0], &raw[1], &raw[2], &raw[3], &raw[4], &raw[5]); err != nil {
+			return fmt.Errorf("불변식 간선 행 해석: %w", err)
+		}
+		if _, ok := seen[edgeID]; ok {
+			continue
+		}
+		seen[edgeID] = struct{}{}
+		var values [6]string
+		for index := range raw {
+			if err := json.Unmarshal([]byte(raw[index]), &values[index]); err != nil {
+				return fmt.Errorf("불변식 간선 값 해석: %w", err)
+			}
+		}
+		snapshot.edges = append(snapshot.edges, auditEdge{label: values[0], graphID: values[1], relationID: values[2], state: values[3], from: values[4], to: values[5]})
+		endpoints[values[4]], endpoints[values[5]] = struct{}{}, struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("불변식 간선 행 읽기: %w", err)
+	}
+	return nil
 }
 
 // loadAuditContexts는 filter에 맞는 정점의 판정 속성만 읽어 contexts에 더한다. 본문은 규칙에

@@ -42,6 +42,13 @@ func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest
 	if !request.AccountID.IsV7() || !request.Key.IsV7() || request.ToolName == "" || run == nil {
 		return nil, fmt.Errorf("멱등성 요청 인자가 올바르지 않다")
 	}
+	// 업무 함수의 권한·대상 조회는 이 트랜잭션을 쥔 채 풀에서 연결을 하나 더 쓴다. 같은 키의
+	// 재시도도 자문 잠금을 기다리는 동안 연결을 쥐므로 「데이터베이스 연결」대로 먼저 예약한다.
+	release, err := s.reserveConnections(ctx, idempotencyConnections)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return nil, fmt.Errorf("멱등성 트랜잭션 시작: %w", err)

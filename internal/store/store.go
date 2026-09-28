@@ -12,6 +12,7 @@ import (
 	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/semaphore"
 )
 
 // minPoolConns는 접속 문자열이 값을 정하지 않았을 때 쓸 연결 수 하한이다.
@@ -62,6 +63,8 @@ type Store struct {
 	// indexTargets 필드는 색인 작업으로 등록할 계층 범위다. 비어 있으면 모든 계층을
 	// 등록한다.
 	indexTargets IndexTargets
+	// reservations 필드는 연결을 쥔 채 연결을 더 기다리는 경계의 연결 예약이다.
+	reservations *semaphore.Weighted
 }
 
 // IndexTargets는 색인 작업 등록 조건의 계층 범위다.
@@ -175,11 +178,16 @@ func New(ctx context.Context, databaseURL, graphName string, relationProposals *
 		return nil
 	}
 
+	reservations, err := newReservations(cfg.MaxConns)
+	if err != nil {
+		return nil, err
+	}
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("연결 풀 생성: %w", err)
 	}
-	return &Store{pool: pool, graphName: graphName, relationProposals: proposalConfig, graceDays: graceDays, indexTargets: indexTargets}, nil
+	return &Store{pool: pool, graphName: graphName, relationProposals: proposalConfig, graceDays: graceDays, indexTargets: indexTargets, reservations: reservations}, nil
 }
 
 // Ping은 데이터베이스 연결과 AGE 준비가 현재 요청을 받을 수 있는지 확인한다.

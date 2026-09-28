@@ -59,9 +59,10 @@ CREATE TABLE IF NOT EXISTS public.account (
     created_at    timestamptz NOT NULL
 );
 
--- 「컨텍스트 그래프 속성」의 10개 열에 「소프트 삭제 수명주기」의 내부 열
--- grace_expires_at을 더한다. 만료 시각을 유예 시작 트랜잭션에서 계산해 남겨야
--- 유예 중에 바뀐 보관 기간이 이미 시작된 유예에 소급되지 않는다.
+-- 「컨텍스트 그래프 속성」의 10개 열에 「소프트 삭제 수명주기」와
+-- 요청 단위 일관 읽기 비교의 내부 열을 더한다. grace_expires_at은 유예 시작
+-- 트랜잭션에서 계산해, 보관 기간 변경이 이미 시작된 유예에 소급되지 않게 한다.
+-- content_revision은 검색 후보·간선·출처·임베딩 변경을 표시하는 64비트 판이다.
 CREATE TABLE IF NOT EXISTS public.context_graph (
     graph_id         uuid        PRIMARY KEY,
     name             text        NOT NULL CHECK (name <> ''),
@@ -73,6 +74,7 @@ CREATE TABLE IF NOT EXISTS public.context_graph (
     grace_expires_at timestamptz,
     stored_chars     bigint      NOT NULL DEFAULT 0 CHECK (stored_chars >= 0),
     version          integer     NOT NULL DEFAULT 1 CHECK (version >= 1),
+    content_revision bigint      NOT NULL DEFAULT 1,
     deleted_at       timestamptz
 );
 
@@ -175,6 +177,20 @@ CREATE TABLE IF NOT EXISTS public.operation_log (
         relation_id IS NULL OR operation_kind IN ('add', 'discard'))
 );
 
+-- 협상된 MCP 쓰기 재시도 결과를 계정과 키 단위로 보관한다. 도구 이름과
+-- 검증한 전체 인자의 SHA-256 지문으로 같은 키의 다른 호출을 거부하고, 최초
+-- 접수부터 24시간이 지난 행은 주기 작업이 지운다.
+CREATE TABLE IF NOT EXISTS public.idempotency_record (
+    actor_account_id    uuid        NOT NULL,
+    idempotency_key     uuid        NOT NULL,
+    tool_name           text        NOT NULL,
+    request_fingerprint bytea      NOT NULL,
+    tool_result         jsonb       NOT NULL,
+    received_at         timestamptz NOT NULL,
+    expires_at          timestamptz NOT NULL,
+    PRIMARY KEY (actor_account_id, idempotency_key)
+);
+
 -- 「감사 기록」의 대상 여섯 종. 공통 다섯 열 외에는 대상에 따라 비어 있을 수 있다.
 -- 복구 요청과 운영자 복구를 나누는 이유는 요청과 처리가 다른 시점의 다른 행위이고,
 -- 대기 중인 요청을 두 대상의 차이로 계산하기 때문이다.
@@ -215,6 +231,15 @@ CREATE TABLE IF NOT EXISTS public.signing_key (
 CREATE TABLE IF NOT EXISTS public.revoked_token (
     token_id   text        PRIMARY KEY,
     expires_at timestamptz NOT NULL
+);
+
+-- DPoP proof의 원문 jti는 저장하지 않는다. 같은 공개 키와 jti의 재생을 모든
+-- 인스턴스에서 한 번만 허용하려고 SHA-256 해시를 기본 키로 둔다.
+CREATE TABLE IF NOT EXISTS public.dpop_proof_replay (
+    jwk_thumbprint text        NOT NULL,
+    proof_id_hash  bytea       NOT NULL,
+    expires_at     timestamptz NOT NULL,
+    PRIMARY KEY (jwk_thumbprint, proof_id_hash)
 );
 
 -- 「계정 플랜 값」의 1분 고정 창 카운터. 한도를 켠 계정만 행을 가지므로 기본
@@ -292,6 +317,10 @@ CREATE INDEX IF NOT EXISTS operation_log_relation_idx
     ON public.operation_log (relation_id, applied_at)
     WHERE relation_id IS NOT NULL;
 
+-- 24시간이 지난 멱등성 재시도 결과의 주기 정리
+CREATE INDEX IF NOT EXISTS idempotency_record_expires_idx
+    ON public.idempotency_record (expires_at);
+
 -- 감사 기록 화면과 그래프별 보존 정리. 두 기록 모두 graph_id로 거르며, 보존 정리는
 -- 그래프마다 삭제문을 반복하므로 인덱스가 없으면 비용이 그래프 수와 테이블 크기의
 -- 곱으로 커진다.
@@ -317,6 +346,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS signing_key_active_idx
 CREATE INDEX IF NOT EXISTS authorization_code_expires_idx
     ON public.authorization_code (expires_at);
 
+-- 60초 허용 창이 지난 DPoP proof 재생 방어 행의 주기 정리
+CREATE INDEX IF NOT EXISTS dpop_proof_replay_expires_at_idx
+    ON public.dpop_proof_replay (expires_at);
+
 -- 지난 창의 주기 정리
 CREATE INDEX IF NOT EXISTS request_rate_window_idx
     ON public.request_rate (window_started_at);
@@ -328,6 +361,12 @@ CREATE INDEX IF NOT EXISTS request_rate_window_idx
 -- 인덱스를 쓰지 못하고 label 테이블 전체를 훑는다.
 CREATE INDEX IF NOT EXISTS context_graph_id_text_idx
     ON "{{.GraphName}}"."Context" ((properties ->> 'graph_id'::text));
+
+-- 그래프 불변식 쓰기 검사는 openCypher로 영향 주변부 정점을 찾는다. AGE가
+-- 속성 접근을 번역한 agtype 표현식과 같은 인덱스를 써야 정점 전체를 훑지 않는다.
+CREATE INDEX IF NOT EXISTS context_context_id_agtype_idx
+    ON "{{.GraphName}}"."Context" (
+        ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"context_id"'::ag_catalog.agtype]));
 
 -- 키워드 채널. 「채널 구현」이 텍스트 검색 구성을 simple로 확정했다. PostgreSQL이
 -- 기본 제공하는 구성 중 한국어를 다루는 것이 없고 형태소 분석을 붙이려면 확장
@@ -346,3 +385,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS context_source_ref_idx
         (properties ->> 'graph_id'::text),
         (properties ->> 'source_ref_locator'::text))
     WHERE (properties ->> 'layer'::text) = 'source';
+
+-- 순환 판정이 그래프의 확정 관계를 읽는 세 label에 openCypher 속성 접근과
+-- 같은 표현식 인덱스를 건다.
+CREATE INDEX IF NOT EXISTS precedes_graph_id_agtype_idx
+    ON "{{.GraphName}}"."PRECEDES" (
+        ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"graph_id"'::ag_catalog.agtype]));
+
+CREATE INDEX IF NOT EXISTS causes_graph_id_agtype_idx
+    ON "{{.GraphName}}"."CAUSES" (
+        ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"graph_id"'::ag_catalog.agtype]));
+
+CREATE INDEX IF NOT EXISTS part_of_graph_id_agtype_idx
+    ON "{{.GraphName}}"."PART_OF" (
+        ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"graph_id"'::ag_catalog.agtype]));
+
+-- 표현식 통계가 없으면 플래너가 선택도를 과대 추정하므로 인덱스를 만든
+-- 같은 적용에서 통계를 모은다.
+ANALYZE "{{.GraphName}}"."Context";
+ANALYZE "{{.GraphName}}"."PRECEDES";
+ANALYZE "{{.GraphName}}"."CAUSES";
+ANALYZE "{{.GraphName}}"."PART_OF";

@@ -28,6 +28,8 @@
 - 스키마를 바꿀 때는 `SDD.md`를 먼저 갱신하고 그다음에 SQL을 쓴다.
 - AGE 함수는 인자 타입에 주의한다. `create_vlabel`과 `create_elabel`은 `cstring`을 받으므로 변수는 `format`의 `%L`로 리터럴을 만들어 넘긴다.
 - agtype property에 접근할 때는 키의 타입을 `::text`로 명시한다. 명시하지 않으면 agtype으로 해석해 실패한다.
+- 인덱스의 표현식은 그 인덱스를 쓸 질의의 표현식과 같아야 한다. SQL 질의는 `properties ->> 'key'::text`를, openCypher 질의는 AGE가 속성 접근을 번역한 `ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"key"'::ag_catalog.agtype])`를 쓴다.
+- 표현식 인덱스를 만든 파일은 같은 파일에서 대상 테이블을 `ANALYZE`한다. 통계가 모이기 전에는 플래너가 새 인덱스의 선택도를 잘못 추정해 인덱스를 쓰지 않는다.
 
 ## 검증
 

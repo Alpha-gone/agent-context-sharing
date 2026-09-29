@@ -79,7 +79,7 @@ func TestPackageDependenciesMatchDesign(t *testing.T) {
 	}
 }
 
-// TestDatabaseHandleStaysInStore는 데이터베이스 핸들이 `store` 밖으로 나가지 않는지 본다.
+// TestDatabaseHandleStaysInStore는 서버 모듈의 데이터베이스 핸들이 `store` 밖으로 나가지 않는지 본다.
 //
 // 「접근 계층」이 우회 경로를 막는 방법으로 연결을 내보내지 않는 것을 들었다. 드라이버를
 // 직접 import할 수 있는 곳은 `store`와 업무 패키지 밖의 마이그레이션 실행기뿐이다.
@@ -95,6 +95,9 @@ func TestDatabaseHandleStaysInStore(t *testing.T) {
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if entry.IsDir() && path == filepath.Join(root, "client") {
+			return filepath.SkipDir
 		}
 		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil

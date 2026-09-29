@@ -14,6 +14,7 @@
 - `server/discover`는 지원 protocol revision, `tools` 기능과 `io.github.alpha-gone/write-idempotency` 확장만 알린다.
 - 협상된 쓰기에서 전송 계층은 `Idempotency-Key` 헤더 값과 요청 지문만 넘기고, 키 형식 검증과 결과 재생은 권한 확인 뒤 처리기가 맡는다.
 - `tools/list`는 `SRS.md`의 MCP 연산 13종만 이름, 설명과 `inputSchema`로 노출하며 캐시 힌트를 함께 싣는다.
+- 공개 도구 정의는 별도 클라이언트 모듈의 `client/internal/client/contract/tool_manifest.json`과 스냅샷 시험으로 대조한다. 서버 계약을 의도적으로 바꿀 때만 검토 후 스냅샷을 갱신한다.
 - 모든 결과는 `resultType`과 서버 정보를 담은 응답 외피 안에 넣는다.
 - `tools/call`은 `SDD.md`의 「요청 처리 순서」에서 전송·인증 뒤에 파라미터 형식과 상한을 검증하고, 계층별 속성 규칙은 `model`에 위임한다.
 - 보호 요청은 `Authorization: DPoP`와 `DPoP` 헤더를 각각 하나만 받고, 토큰 실패와 proof 실패를 `invalid_token`·`invalid_dpop_proof` DPoP 도전으로 구분한다. 인증 정보가 없을 때의 도전에는 오류 값을 넣지 않으며 Bearer 하향을 허용하지 않는다.
@@ -31,6 +32,7 @@
 ## 검증
 
 - 전송 검증 순서, Origin·헤더 대조, 인증 실패, 도구 정의와 도메인 오류 사상 단위 테스트를 실행한다.
+- `TestToolManifestMatchesClient`로 클라이언트 공유 계약과 실제 도구 정의의 일치를 확인한다.
 - 그래프·노드 처리기의 등급, 트랜잭션 경계, 멱등성과 채널 구분은 실제 AGE 통합 테스트로 검증한다.
 - Go 코드 변경 뒤 Go 1.27.1로 `gofmt`, 관련 테스트, `go build ./...`, `go vet ./...`를 실행한다.
 

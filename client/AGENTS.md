@@ -1,0 +1,32 @@
+# 에이전트 컨텍스트 MCP 클라이언트 모듈
+
+## 목적
+
+- `client/`는 에이전트 호스트와 원격 MCP 서버 사이에서 실행할 클라이언트의 독립 Go 모듈을 보관한다.
+
+## 소유권
+
+- 루트 `AGENTS.md`가 구현 공통 계약을 소유한다.
+- 클라이언트의 요구사항과 패키지별 책임은 `spec/service/agent-context-client/SRS.md`와 `SDD.md`가 소유한다.
+- 이 문서는 클라이언트 구현 영역의 로컬 계약을 소유한다.
+
+## 로컬 계약
+
+- `client/go.mod`의 모듈 경로는 `agent_context_sharing/client`이며 서버 루트 모듈의 패키지를 import하거나 `replace`로 참조하지 않는다.
+- `internal/client/contract/tool_manifest.json`은 서버 `internal/mcp`의 공개 도구 13종과 입력 스키마를 고정한 공유 검증 자료다. 클라이언트 계약 검사는 이를 사용하고 서버의 스냅샷 테스트가 실제 도구 정의와 대조한다.
+- 공식 MCP Go SDK 판은 `client/go.mod`에 고정한다. `contract`의 SDK 확인 테스트는 호스트 `2026-07-28` lifecycle·`stdio` 타입의 존재를 검증한다.
+- 실제 서버 시험은 `client_live` 빌드 태그의 `TestClientLive*`로 분리하며, 접속 정보나 시험 함수가 없거나 시험을 건너뛰면 통과로 판정하지 않는다.
+
+## 작업 지침
+
+- 패키지 경계와 의존 방향은 클라이언트 SDD의 「패키지 경계」를 따른다.
+- 서버의 공개 도구 계약을 의도적으로 바꿀 때만 루트 모듈 `internal/mcp`의 스냅샷 시험 갱신 옵션으로 manifest를 재생성한다.
+
+## 검증
+
+- `client/`에서 클라이언트 빌드·vet·계약 시험을, 저장소 루트에서 서버 `TestToolManifestMatchesClient`를 각각 실행한다.
+- 실제 서버 경로는 저장소 루트에서 `sh client/internal/client/test-live.sh`로 실행하고 기본 모의 시험 결과와 구분한다.
+
+## Child DOX Index
+
+- 현재 하위 `AGENTS.md` 문서는 없다.

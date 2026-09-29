@@ -5,7 +5,7 @@
 | 항목 | 내용 |
 |------|------|
 | 문서 상태 | 확정 |
-| 최종 수정일 | 2026-09-29 |
+| 최종 수정일 | 2026-09-30 |
 | 서비스 식별자 | `AGENT_CONTEXT_CLIENT` |
 | 기준 요구사항 | `SRS.md`의 `FR-AGENT_CONTEXT_CLIENT-001`~`035`, `NFR-AGENT_CONTEXT_CLIENT-001`~`016` |
 | 정본 연동 계약 | `../agent-context/SRS.md`, `../agent-context/SDD.md` |
@@ -47,7 +47,7 @@ flowchart LR
 
 | 항목 | 설계 |
 |------|------|
-| Go 명령 경로 | `cmd/client` |
+| Go 명령 경로 | `client/cmd/client` |
 | 배포 실행 파일명 | `agent-context-client` |
 | 호스트 실행 명령 | `agent-context-client serve` |
 | 진단 명령 | `agent-context-client doctor`, JSON 출력은 `agent-context-client doctor --json` |
@@ -96,18 +96,20 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 
 ## 패키지 경계
 
-클라이언트 구현은 기존 서버 패키지와 섞지 않고 `internal/client/` 아래에 둔다.
+서버는 저장소 루트의 `agent_context_sharing` Go 모듈과 기존 `cmd/`, `internal/`, `migrations/`를 유지한다. 클라이언트는 `client/go.mod`의 `agent_context_sharing/client` Go 모듈로 분리하고 실행 명령과 내부 패키지를 모두 `client/` 아래에 둔다. 각 모듈의 의존성은 자체 `go.mod`와 `go.sum`이 소유하며, 클라이언트는 서버 모듈의 `internal/` 패키지를 import하거나 `replace`로 참조하지 않는다. 서버 공개 계약은 MCP 전송과 도구 스냅샷으로 검증한다.
+
+다음 경로는 저장소 루트 기준이다.
 
 | 경로 | 책임 | 의존 가능 대상 |
 |------|------|----------------|
-| `cmd/client` | 명령 해석, 빌드 정보, 신호 처리와 조립 | 아래 모든 클라이언트 패키지 |
-| `internal/client` | `serve` 수명주기와 구성 요소 조립 | `config`, `host`, `remote`, `authorize`, `contract` |
-| `internal/client/config` | 환경 변수 읽기와 기동 전 검증 | 표준 라이브러리, `internal/model` |
-| `internal/client/contract` | 도구 13종 manifest, 읽기·쓰기 분류, 정책, 스키마 비교·변환·입력 선검증 | 표준 라이브러리, MCP SDK 타입 |
-| `internal/client/host` | MCP `stdio` 서버, 요청 상관관계, 로컬 오류 직렬화와 단일 stdout writer | `contract`, 원격 호출 인터페이스 |
-| `internal/client/authorize` | 메타데이터 발견, 브라우저 PKCE, 루프백 콜백, DPoP 키·proof와 토큰 상태 | `config`, 표준 HTTP·암호 패키지 |
-| `internal/client/remote` | Streamable HTTP, lifecycle·도구 캐시, 크기 제한, 재시도와 토큰 갱신 헤더 처리 | `authorize`, `contract`, MCP SDK 타입 |
-| `internal/client/doctor` | 구성·네트워크·브라우저·인가·원격 계약 진단과 결과 출력 | `config`, `authorize`, `remote`의 진단 인터페이스 |
+| `client/cmd/client` | 명령 해석, 빌드 정보, 신호 처리와 조립 | 아래 모든 클라이언트 패키지 |
+| `client/internal/client` | `serve` 수명주기와 구성 요소 조립 | `config`, `host`, `remote`, `authorize`, `contract` |
+| `client/internal/client/config` | 환경 변수 읽기와 기동 전 검증 | 표준 라이브러리 |
+| `client/internal/client/contract` | 도구 13종 manifest, 읽기·쓰기 분류, 정책, 스키마 비교·변환·입력 선검증 | 표준 라이브러리, MCP SDK 타입 |
+| `client/internal/client/host` | MCP `stdio` 서버, 요청 상관관계, 로컬 오류 직렬화와 단일 stdout writer | `contract`, 원격 호출 인터페이스 |
+| `client/internal/client/authorize` | 메타데이터 발견, 브라우저 PKCE, 루프백 콜백, DPoP 키·proof와 토큰 상태 | `config`, 표준 HTTP·암호 패키지 |
+| `client/internal/client/remote` | Streamable HTTP, lifecycle·도구 캐시, 크기 제한, 재시도와 토큰 갱신 헤더 처리 | `authorize`, `contract`, MCP SDK 타입 |
+| `client/internal/client/doctor` | 구성·네트워크·브라우저·인가·원격 계약 진단과 결과 출력 | `config`, `authorize`, `remote`의 진단 인터페이스 |
 
 `host`는 `remote`의 구체 타입이 아니라 `Discover`, `ListTools`, `CallTool` 인터페이스에 의존한다. `authorize`는 원격 도구 호출을 알지 못하고 토큰과 proof만 제공한다. 이 방향으로 인증, 전송과 MCP 호스트 처리를 각각 대역으로 교체할 수 있고 순환 의존을 막는다.
 
@@ -421,6 +423,8 @@ sequenceDiagram
 
 모의 서버는 시스템 브라우저를 대체할 수 있는 opener와 loopback callback driver, 인가·리소스 서버 clock, 난수와 HTTP transport를 주입받는다. 실제 서버 통합 테스트는 모의 테스트와 별도 표식으로 실행하고 접속 정보가 없을 때 건너뛴 사실을 통과로 보고하지 않는다.
 
+서버의 빌드·vet·단위 시험은 저장소 루트에서, 클라이언트의 빌드·vet·단위 시험은 `client/`에서 각각 `go build ./...`, `go vet ./...`, `go test ./...`로 실행한다. 루트 명령은 중첩 모듈을 검증하지 않으므로 두 결과를 별도로 확인한다. 실제 서버 종단 간 검증은 클라이언트 모듈의 별도 실행 경로에서 클라이언트 시험과 서버 통합 시험을 각각 실행한다.
+
 ### 필수 오류 주입
 
 - callback 주소·포트·경로·`state`·`iss` 불일치, 중복 callback과 시간 초과
@@ -492,7 +496,7 @@ sequenceDiagram
 ## 변경 영향과 호환성
 
 - 이 설계는 기존 agent-context 서버의 공개 계약을 소비하며 서버 API나 데이터베이스를 변경하지 않는다.
-- 새 클라이언트 구현은 `cmd/client`와 `internal/client/`에 추가되므로 기존 `cmd/server`와 서버 패키지의 실행 경로를 바꾸지 않는다.
+- 새 클라이언트 구현은 독립 `client/` 모듈에 두므로 기존 루트 모듈의 `cmd/server`와 서버 패키지 실행 경로를 바꾸지 않는다.
 - 호스트 경계에는 원격 쓰기 멱등성 확장이나 인증 헤더를 노출하지 않아 기존 MCP 도구 스키마가 바뀌지 않는다.
 - 원격 서버 계약이 도구 이름·스키마, lifecycle, 인증 또는 오류를 바꾸면 서버 SRS·SDD와 이 SRS를 먼저 갱신하고, 이후 이 설계의 manifest와 계약 테스트를 함께 변경한다.
 

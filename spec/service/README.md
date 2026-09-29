@@ -40,7 +40,7 @@ MCP 클라이언트의 첫 지원 에이전트 호스트(`TBD-AGENT_CONTEXT_CLIE
 
 MCP 클라이언트의 메시지·응답·동시성 자원 상한(`TBD-AGENT_CONTEXT_CLIENT-005`)은 입력 256 KiB, 응답 32 MiB, 진행 중 원격 호출 8개와 호출·인증 대기열 각 128개로 확정해 목록에서 뺐다.
 
-MCP 클라이언트의 구현 언어와 저장소 배치(`TBD-AGENT_CONTEXT_CLIENT-002`)는 Go `1.27.1`과 공식 MCP Go SDK를 사용하는 이 저장소의 독립 실행 파일로 확정해 목록에서 뺐다. 클라이언트 SDD는 `cmd/client`의 `agent-context-client` 실행 파일, `serve`·`doctor` 명령과 `internal/client/` 패키지 경계를 확정했다.
+MCP 클라이언트의 구현 언어와 저장소 배치(`TBD-AGENT_CONTEXT_CLIENT-002`)는 Go `1.27.1`과 공식 MCP Go SDK를 사용하는 별도 `client/` Go 모듈의 독립 실행 파일로 확정해 목록에서 뺐다. 클라이언트 SDD는 `client/cmd/client`의 `agent-context-client` 실행 파일, `serve`·`doctor` 명령과 `client/internal/client/` 패키지 경계를 확정했다.
 
 MCP 클라이언트의 지원 운영체제 판(`TBD-AGENT_CONTEXT_CLIENT-004`)은 공급자의 보안 지원 기간에 있는 macOS 14 Sonoma 이상, Ubuntu LTS 22.04 이상 또는 Debian 12 이상, Windows 11 25H2 이상으로 확정해 목록에서 뺐다. Windows의 공식 실행 환경은 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상이며 브라우저 인가와 loopback callback을 Windows 호스트와 함께 검증한다.
 

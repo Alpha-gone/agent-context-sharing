@@ -9,11 +9,13 @@
 | 서비스                 | 역할                                                                                                                                 | 상태                 | 주요 문서                                                |
 |------------------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------|----------------------------------------------------------|
 | 에이전트 컨텍스트 관리 | AI 에이전트 제텔카스텐을 공유 컨텍스트 그래프로 구현하고, MCP 기반 작업 컨텍스트 흐름과 여러 작업자의 컨텍스트 공유·협업을 지원한다. | 요구사항과 설계 확정 | [SRS](agent-context/SRS.md), [SDD](agent-context/SDD.md) |
-| 에이전트 컨텍스트 MCP 클라이언트 | 에이전트 호스트에 `stdio` 도구를 제공하고 원격 에이전트 컨텍스트 관리 시스템에는 Streamable HTTP로 접속하는 로컬 클라이언트 프로세스다. 브라우저 인가와 도구 13종의 안전한 중계를 담당한다. | 요구사항 검토 필요 | [SRS](agent-context-client/SRS.md) |
+| 에이전트 컨텍스트 MCP 클라이언트 | 에이전트 호스트에 `stdio` 도구를 제공하고 원격 에이전트 컨텍스트 관리 시스템에는 Streamable HTTP로 접속하는 로컬 클라이언트 프로세스다. 브라우저 인가와 도구 13종의 안전한 중계를 담당한다. | 요구사항과 설계 확정, 구현 예정 | [개발 기준](agent-context-client/CANONICAL.md), [SRS](agent-context-client/SRS.md), [SDD](agent-context-client/SDD.md), [개발 계획](agent-context-client/DEVELOPMENT_PLAN.md) |
 
 ## 서비스 관계
 
 서비스는 두 개다. 에이전트 컨텍스트 관리 서비스가 공유 컨텍스트 그래프를 소유하는 본체이고, 에이전트 컨텍스트 MCP 클라이언트는 그 공개 계약을 소비하는 연결 서비스다. 클라이언트 프로세스는 호스트 측에서 MCP 서버, 원격 시스템 측에서 MCP 클라이언트 역할을 하며 접근 토큰을 발급받아 도구 호출을 중계한다. 서버의 공개 계약이 바뀌면 클라이언트의 요구사항도 함께 갱신된다.
+
+클라이언트의 [개발 기준](agent-context-client/CANONICAL.md)은 정본 문서의 위치와 변경 경로를 안내한다. 요구사항 정본은 [SRS](agent-context-client/SRS.md), 상세 설계 정본은 [SDD](agent-context-client/SDD.md)다. [개발 계획](agent-context-client/DEVELOPMENT_PLAN.md)은 구현 단계와 검증 진행 상태를 추적한다.
 
 ## 공통 미정 사항
 
@@ -38,7 +40,7 @@ MCP 클라이언트의 첫 지원 에이전트 호스트(`TBD-AGENT_CONTEXT_CLIE
 
 MCP 클라이언트의 메시지·응답·동시성 자원 상한(`TBD-AGENT_CONTEXT_CLIENT-005`)은 입력 256 KiB, 응답 32 MiB, 진행 중 원격 호출 8개와 호출·인증 대기열 각 128개로 확정해 목록에서 뺐다.
 
-MCP 클라이언트의 구현 언어와 저장소 배치(`TBD-AGENT_CONTEXT_CLIENT-002`)는 Go `1.27.1`과 공식 MCP Go SDK를 사용하는 이 저장소의 독립 실행 파일로 확정해 목록에서 뺐다. 세부 실행 명령 경로와 내부 패키지 경계는 클라이언트 SDD가 정한다.
+MCP 클라이언트의 구현 언어와 저장소 배치(`TBD-AGENT_CONTEXT_CLIENT-002`)는 Go `1.27.1`과 공식 MCP Go SDK를 사용하는 이 저장소의 독립 실행 파일로 확정해 목록에서 뺐다. 클라이언트 SDD는 `cmd/client`의 `agent-context-client` 실행 파일, `serve`·`doctor` 명령과 `internal/client/` 패키지 경계를 확정했다.
 
 MCP 클라이언트의 지원 운영체제 판(`TBD-AGENT_CONTEXT_CLIENT-004`)은 공급자의 보안 지원 기간에 있는 macOS 14 Sonoma 이상, Ubuntu LTS 22.04 이상 또는 Debian 12 이상, Windows 11 25H2 이상으로 확정해 목록에서 뺐다. Windows의 공식 실행 환경은 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상이며 브라우저 인가와 loopback callback을 Windows 호스트와 함께 검증한다.
 
@@ -47,3 +49,5 @@ MCP 클라이언트와 서버의 쓰기 멱등성 키 계약(`TBD-AGENT_CONTEXT_
 MCP 클라이언트와 서버의 DPoP 계약(`TBD-AGENT_CONTEXT_CLIENT-007`)은 RFC 9449, 보호 리소스·인가 서버 메타데이터의 DPoP 필수·ES256 선언, 프로세스 수명 ES256 키, `token_type=DPoP`와 `cnf.jkt`, HTTP 시도별 새 proof, 서버 시각 ±60초와 공유 `(jkt, jti)` 단일 사용 검사, 갱신 결합 유지, Bearer 하향 거부로 확정해 목록에서 뺐다. 보호 요청 오류는 `invalid_token`과 `invalid_dpop_proof`로 구분하고 최초 구현에서는 `DPoP-Nonce`를 사용하지 않는다. 이 인증은 MCP `2026-07-28` 핵심 Bearer 인증을 대체하는 서비스 전용 프로필이므로 원격 경계의 MCP 인증 적합성을 주장하지 않는다.
 
 MCP 클라이언트의 재시도 기본값(`TBD-AGENT_CONTEXT_CLIENT-003`)은 허용된 읽기, 원격 전달 전 실패가 확실한 쓰기와 멱등성 확장을 협상한 쓰기에 최초 시도 제외 최대 3회, 250ms·500ms·1초 상한의 무작위 대기를 적용하는 것으로 확정해 목록에서 뺐다. 취소와 도구 호출 제한 시간이 우선하며 재인증 뒤에도 같은 호출의 재시도 횟수를 초기화하지 않는다.
+
+MCP 클라이언트의 SRS와 SDD에는 요구사항 또는 설계 수준의 미정 사항이 없다.

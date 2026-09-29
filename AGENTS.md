@@ -8,7 +8,7 @@
 - `AGENTS.md`는 해당 하위 트리에 대한 구속력 있는 작업 계약이다.
 - 더 가까운 하위 문서가 로컬 세부 규칙을 정하지만, 하위 문서는 이 루트 DOX 계약을 약화할 수 없다.
 - 이 저장소는 프로젝트의 스펙 명세와 그 구현을 함께 담는다. 스펙은 `spec/`에 Markdown으로 정의하고, 구현은 `cmd/`, `internal/`, `migrations/`와 루트의 개발 환경 구성 파일에 둔다.
-- 구현은 스펙을 따른다. 설계와 어긋나는 구현이 필요하면 `spec/service/agent-context/SDD.md`를 먼저 고친다.
+- 구현은 스펙을 따른다. 설계와 어긋나는 구현이 필요하면 해당 서비스의 `SDD.md`를 먼저 고친다.
 - 작업별 세부 절차와 검증 기준은 프로젝트에 복제하지 않고 에이전트 루트에서 로드되는 전역 스킬을 사용한다.
 - 모든 작업 간 용어는 `$(project_root)/spec/DICTIONARY.md`를 확인하여 사용한다. 해당 파일에 등록되지 않은 용어라면 `project-glossary` 스킬을 사용하여 업데이트한다.
 - 전문적이고 공식적인 말투를 사용한다.
@@ -78,9 +78,9 @@
 
 ## 구현 코드와 개발 환경
 
-- 무엇을 만들지는 `spec/service/agent-context/SDD.md`가 소유한다. 이 절은 그것을 저장소에 어떻게 두는지만 정한다.
+- 에이전트 컨텍스트 관리 시스템의 구현 설계는 `spec/service/agent-context/SDD.md`가, MCP 클라이언트의 구현 설계는 `spec/service/agent-context-client/SDD.md`가 소유한다. 이 절은 그것을 저장소에 어떻게 두는지만 정한다.
 - Go 1.27.1 검증 도구가 기본 셸의 `PATH`에 없으면 IntelliJ IDEA에 설치·등록된 프로젝트 Go SDK를 사용한다. IntelliJ IDEA의 Go SDK를 선택한 실행 구성 또는 해당 SDK를 사용하는 IDE 통합 터미널에서 `go version`, `go test`, `go build`, `go vet`, `gofmt`를 실행하며, 기본 셸에서 `go`를 찾지 못한 것만으로 Go 미설치나 검증 불가로 판단하지 않는다.
-- 패키지 배치는 `SDD.md`의 「패키지 경계」를 따른다. 그 표에 없는 코드는 마이그레이션 실행기처럼 애플리케이션 밖의 도구뿐이며, 도구는 `cmd/`와 `internal/`에 둔다.
+- 패키지 배치는 해당 서비스 `SDD.md`의 「패키지 경계」를 따른다. 그 표에 없는 코드는 마이그레이션 실행기처럼 애플리케이션 밖의 도구뿐이며, 도구는 `cmd/`와 `internal/`에 둔다.
 - 배포 구성 값은 환경 변수로 받고 목록을 `.env.example`에 유지한다. `SDD.md`의 「배포 구성」에 없는 값을 새로 열지 않는다.
 - `Dockerfile`과 `compose.yaml`은 개발 환경만 다룬다. 운영 배포 형상은 이 저장소가 아직 소유하지 않는다.
 - 개발 환경을 처음부터 다시 만들 때는 `docker compose down -v`로 볼륨을 지운 뒤 다시 올린다.

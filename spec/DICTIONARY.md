@@ -109,6 +109,7 @@
 | 도구 공개 정책    | 로컬 MCP 클라이언트가 호스트에 노출할 도구를 축소하는 기동 정책이다.                                      | `all`, `read_only`, allowlist를 사용하며 원격 서버 권한을 확대하지 않는다. `FR-AGENT_CONTEXT_CLIENT-030`이 정의한다.                  |
 | Effective Go      | 명확하고 관용적인 Go 코드 작성 방법을 설명하는 공식 Go 문서다.                                           | https://go.dev/doc/effective_go                                                                                                      |
 | GitHub 이슈       | 명세에 근거한 구현, 조사 또는 결정 작업을 추적하는 GitHub 작업 단위다.                                   | 생성·수정 전 사용자 승인이 필요하다.                                                                                                 |
+| Go 모듈 경계      | 서버와 클라이언트의 소스·의존성·빌드·시험을 각각의 `go.mod`와 `go.sum`으로 분리하는 저장소 경계다.      | 서버는 루트 `agent_context_sharing`, 클라이언트는 `client/`의 `agent_context_sharing/client` 모듈이다. 공개 MCP 도구 계약만 공유 스냅샷 시험으로 대조한다. |
 | GraphRAG          | 지식 그래프와 관련 집단의 요약을 이용해 국소 검색과 전역 질문을 다루는 그래프 기반 RAG 접근법이다.       | 현재는 전역 요약의 연구 근거이며 채택 여부는 확정하지 않았다.                                                                        |
 | MCP               | AI 애플리케이션과 외부 데이터·기능 사이의 컨텍스트 교환을 표준화하는 Model Context Protocol이다.         | 관리 시스템은 `2026-07-28` revision의 HTTP 기반 Streamable HTTP와 `tools` primitive만 사용한다. 클라이언트는 호스트 측에서 같은 revision의 `stdio` 서버로 동작한다. |
 | 멱등성 키         | 같은 논리적 쓰기 호출의 중복 적용을 판별하기 위해 클라이언트가 생성해 전송 시도마다 함께 보내는 UUIDv7 식별 값이다. | `Idempotency-Key` 헤더로 보내며 인증 계정과 키를 범위로 24시간 보관한다. 같은 키·같은 요청은 최초 결과를 재생하고 같은 키·다른 요청은 `invalid_argument`로 거부한다. `TBD-AGENT_CONTEXT_CLIENT-006`과 `FR-AGENT_CONTEXT-155`가 정의한다. |

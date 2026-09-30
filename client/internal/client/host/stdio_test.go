@@ -88,9 +88,9 @@ func TestOversizedFrameWithoutSafeIDUsesNullID(t *testing.T) {
 
 func TestInvalidAndLegacyRequestsDoNotBreakFraming(t *testing.T) {
 	var output bytes.Buffer
-	input := "not-json\n" + `{"jsonrpc":"2.0","id":false,"method":"server/discover"}` + "\n" +
+	input := "\n\r\n \t\r\nnot-json\n\n" + `{"jsonrpc":"2.0","id":false,"method":"server/discover"}` + "\n" +
 		`{"jsonrpc":"2.0","id":2,"method":"initialize"}` + "\n" +
-		`{"jsonrpc":"2.0","id":3,"method":"server/discover"}` + "\n" + discoverRequest + "\n"
+		`{"jsonrpc":"2.0","id":3,"method":"server/discover"}` + "\n\n" + discoverRequest + "\n"
 	connection := newTestConnection(t, input, &output)
 	message, err := connection.Read(t.Context())
 	if err != nil {
@@ -122,6 +122,17 @@ func TestInvalidAndLegacyRequestsDoNotBreakFraming(t *testing.T) {
 	if errors[0].Error.Code != jsonrpc.CodeParseError || errors[1].Error.Code != jsonrpc.CodeInvalidRequest ||
 		errors[2].Error.Code != jsonrpc.CodeMethodNotFound || errors[3].Error.Code != jsonrpc.CodeInvalidParams {
 		t.Fatalf("오류 코드가 다릅니다: %+v", errors)
+	}
+}
+
+func TestBlankLinesBeforeEOFProduceNoResponse(t *testing.T) {
+	var output bytes.Buffer
+	connection := newTestConnection(t, "\n\r\n \t\r\n \t", &output)
+	if _, err := connection.Read(t.Context()); !errors.Is(err, io.EOF) {
+		t.Fatalf("빈 줄 뒤 EOF = %v", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("빈 줄에 응답했습니다: %q", output.String())
 	}
 }
 

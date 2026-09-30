@@ -109,6 +109,9 @@ func (c *stdioConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 			}
 			continue
 		}
+		if len(bytes.Trim(next.frame, " \t\r\n")) == 0 {
+			continue
+		}
 		message, err := jsonrpc.DecodeMessage(next.frame)
 		if err != nil {
 			code := int64(jsonrpc.CodeParseError)

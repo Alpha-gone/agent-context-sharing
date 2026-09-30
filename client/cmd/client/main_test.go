@@ -46,15 +46,86 @@ func TestCommandValidationDoesNotReadInput(t *testing.T) {
 }
 
 func TestServeRejectsConfigurationBeforeInput(t *testing.T) {
-	env := validEnvironment()
-	env["AGENT_CONTEXT_CLIENT_REMOTE_URL"] = "https://private.example/mcp?secret=private"
-	var stdout, stderr bytes.Buffer
-	code := run(t.Context(), []string{"serve"}, func(key string) string { return env[key] },
-		forbiddenInput{}, &stdout, &stderr)
-	if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "serve_failed") ||
-		strings.Contains(stderr.String(), "private") {
-		t.Fatalf("구성 실패가 출력 경계를 지키지 못했습니다: code=%d stdout=%q stderr=%q",
-			code, stdout.String(), stderr.String())
+	for _, key := range []string{
+		"AGENT_CONTEXT_CLIENT_REMOTE_URL", "AGENT_CONTEXT_CLIENT_ID", "AGENT_CONTEXT_CLIENT_AGENT_ID",
+		"AGENT_CONTEXT_CLIENT_AUTH_TIMEOUT", "AGENT_CONTEXT_CLIENT_REQUEST_TIMEOUT",
+		"AGENT_CONTEXT_CLIENT_TOOL_POLICY", "AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST",
+	} {
+		t.Run(key, func(t *testing.T) {
+			env := validEnvironment()
+			env[key] = " private-value "
+			var stdout, stderr bytes.Buffer
+			code := run(t.Context(), []string{"serve"}, func(key string) string { return env[key] },
+				forbiddenInput{}, &stdout, &stderr)
+			if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "serve_failed") ||
+				!strings.Contains(stderr.String(), key) || strings.Contains(stderr.String(), "private-value") {
+				t.Fatalf("구성 실패가 출력 경계를 지키지 못했습니다: code=%d stdout=%q stderr=%q",
+					code, stdout.String(), stderr.String())
+			}
+			assertStructuredLogs(t, stderr.Bytes())
+		})
+	}
+}
+
+func TestDoctorReportsConfigurationFailure(t *testing.T) {
+	for _, args := range [][]string{{"doctor"}, {"doctor", "--json"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			env := validEnvironment()
+			env["AGENT_CONTEXT_CLIENT_REMOTE_URL"] = "https://private.example/mcp?secret=private"
+			var stdout, stderr bytes.Buffer
+			code := run(t.Context(), args, func(key string) string { return env[key] },
+				forbiddenInput{}, &stdout, &stderr)
+			if code != 1 || !strings.Contains(stderr.String(), "AGENT_CONTEXT_CLIENT_REMOTE_URL") ||
+				strings.Contains(stdout.String()+stderr.String(), "private") {
+				t.Fatalf("구성 실패 진단이 잘못됐습니다: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			assertStructuredLogs(t, stderr.Bytes())
+			if len(args) == 1 {
+				if !strings.Contains(stdout.String(), "configuration: fail") ||
+					!strings.Contains(stdout.String(), "AGENT_CONTEXT_CLIENT_REMOTE_URL") {
+					t.Fatalf("구성 실패 진단이 없습니다: %q", stdout.String())
+				}
+				return
+			}
+			var result struct {
+				Status string `json:"status"`
+				Checks []struct {
+					Name   string `json:"name"`
+					Status string `json:"status"`
+				} `json:"checks"`
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Status != "fail" || len(result.Checks) != 1 ||
+				result.Checks[0].Name != "configuration" || result.Checks[0].Status != "fail" {
+				t.Fatalf("구성 실패 JSON 외피 = %+v", result)
+			}
+		})
+	}
+}
+
+func assertStructuredLogs(t *testing.T, logs []byte) {
+	t.Helper()
+	allowed := map[string]bool{
+		"time": true, "level": true, "event": true, "correlation_id": true, "tool": true,
+		"outcome": true, "duration_ms": true, "request_bytes": true, "response_bytes": true, "retry_index": true,
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(logs), []byte{'\n'}) {
+		var record map[string]any
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		for key := range record {
+			if !allowed[key] {
+				t.Fatalf("허용되지 않은 로그 필드 %q: %s", key, line)
+			}
+		}
+		for _, key := range []string{"time", "level", "event"} {
+			if record[key] == nil || record[key] == "" {
+				t.Fatalf("필수 로그 필드 %q가 없습니다: %s", key, line)
+			}
+		}
 	}
 }
 
@@ -78,6 +149,7 @@ func TestServeEOFHasNoNonMCPStdout(t *testing.T) {
 		t.Fatalf("EOF 종료가 출력 경계를 지키지 못했습니다: code=%d stdout=%q stderr=%q",
 			code, stdout.String(), stderr.String())
 	}
+	assertStructuredLogs(t, stderr.Bytes())
 }
 
 func TestServeDiscoverImmediatelyBeforeEOF(t *testing.T) {

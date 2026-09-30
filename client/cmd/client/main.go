@@ -33,7 +33,14 @@ func run(ctx context.Context, args []string, getenv func(string) string, in io.R
 		usage(stderr)
 		return 2
 	}
-	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, attr slog.Attr) slog.Attr {
+			if len(groups) == 0 && attr.Key == slog.MessageKey {
+				return slog.Attr{}
+			}
+			return attr
+		},
+	}))
 	switch args[0] {
 	case "serve":
 		if len(args) != 1 {
@@ -51,7 +58,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, in io.R
 			return 2
 		}
 		if _, err := config.Load(getenv); err != nil {
-			logger.Error("", "event", "configuration_rejected")
+			logger.Error("", "event", "configuration_rejected", "outcome", err.Error())
+			if len(args) == 2 {
+				fmt.Fprintln(out, `{"status":"fail","checks":[{"name":"configuration","status":"fail"}]}`)
+			} else {
+				fmt.Fprintf(out, "configuration: fail; %s\n", err)
+			}
 			return 1
 		}
 		// 진단 절차는 5단계에서 구현한다. 현재 결과를 성공으로 보고하지 않는다.

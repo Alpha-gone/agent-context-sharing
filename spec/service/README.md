@@ -9,7 +9,7 @@
 | 서비스                 | 역할                                                                                                                                 | 상태                 | 주요 문서                                                |
 |------------------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------|----------------------------------------------------------|
 | 에이전트 컨텍스트 관리 | AI 에이전트 제텔카스텐을 공유 컨텍스트 그래프로 구현하고, MCP 기반 작업 컨텍스트 흐름과 여러 작업자의 컨텍스트 공유·협업을 지원한다. | 요구사항과 설계 확정 | [SRS](agent-context/SRS.md), [SDD](agent-context/SDD.md) |
-| 에이전트 컨텍스트 MCP 클라이언트 | 에이전트 호스트에 `stdio` 도구를 제공하고 원격 에이전트 컨텍스트 관리 시스템에는 Streamable HTTP로 접속하는 로컬 클라이언트 프로세스다. 브라우저 인가와 도구 13종의 안전한 중계를 담당한다. | 요구사항과 설계 확정, 구현 예정 | [개발 기준](agent-context-client/CANONICAL.md), [SRS](agent-context-client/SRS.md), [SDD](agent-context-client/SDD.md), [개발 계획](agent-context-client/DEVELOPMENT_PLAN.md) |
+| 에이전트 컨텍스트 MCP 클라이언트 | 에이전트 호스트에 `stdio` 도구를 제공하고 원격 에이전트 컨텍스트 관리 시스템에는 Streamable HTTP로 접속하는 로컬 클라이언트 프로세스다. 브라우저 인가와 도구 13종의 안전한 중계를 담당한다. | 요구사항과 설계 확정, 구현 진행 중 | [개발 기준](agent-context-client/CANONICAL.md), [SRS](agent-context-client/SRS.md), [SDD](agent-context-client/SDD.md), [개발 계획](agent-context-client/DEVELOPMENT_PLAN.md) |
 
 ## 서비스 관계
 

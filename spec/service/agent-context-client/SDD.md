@@ -349,7 +349,7 @@ sequenceDiagram
 
 상한을 넘은 `stdio` 입력은 다음 줄바꿈까지 버려 프레이밍을 복구한다. 상한 안에서 JSON-RPC 식별자를 안전하게 읽었으면 그 식별자로 `client_busy`를 반환하고, 식별자를 확정할 수 없으면 `id=null`인 JSON-RPC 오류의 data에 `client_busy`를 담는다.
 
-표준 입력 reader와 표준 출력 writer는 각각 하나만 둔다. reader가 유효한 요청을 dispatcher에 넘기고, 동시 처리된 결과는 하나의 writer goroutine이 줄 단위로 직렬화한다. EOF나 종료 신호를 받으면 새 요청 수락을 멈추고 모든 호출 context를 취소한다.
+표준 입력 reader와 표준 출력 writer는 각각 하나만 둔다. reader가 유효한 요청을 dispatcher에 넘기고, 동시 처리된 결과는 하나의 writer goroutine이 줄 단위로 직렬화한다. stdin EOF는 입력 방향의 종료로 처리한다. 새 요청 수락을 멈추고 진행 중인 원격 호출은 취소하되, 이미 접수한 요청의 로컬 결과와 취소 결과를 기록한 뒤 SDK에 EOF를 전달한다. 종료 신호는 모든 호출 context를 취소한다.
 
 ## `doctor` 진단 설계
 
@@ -396,13 +396,13 @@ sequenceDiagram
 
 ### 종료
 
-`serve`는 stdin EOF, `SIGINT`와 `SIGTERM`을 같은 종료 경로로 처리한다.
+`serve`는 stdin EOF, `SIGINT`와 `SIGTERM` 뒤 같은 자원 정리 경로로 종료한다. EOF는 입력 방향 종료이므로 SDK에 곧바로 전달해 응답 쓰기를 막지 않는다.
 
 1. 새 호스트 요청 수락을 멈춘다.
-2. 루트 context를 취소해 호출 대기, 재시도 지연과 HTTP 요청을 끝낸다.
+2. EOF에서는 진행 중인 원격 호출을 취소하고 접수한 요청의 응답 기록을 기다린다. 종료 신호에서는 루트 context를 취소해 호출 대기, 재시도 지연과 HTTP 요청을 끝낸다.
 3. 진행 중 공유 인가와 루프백 listener를 닫는다.
 4. HTTP transport의 idle connection을 닫는다.
-5. stdout writer가 이미 완성된 응답만 기록하도록 끝낸다.
+5. stdout writer가 처리 완료된 응답을 끝까지 기록한 뒤 닫는다. EOF에서는 이때까지 SDK의 응답 쓰기 경로를 유지한다.
 6. 토큰, 일회성 인가 상태와 DPoP 키 참조를 폐기하고 종료한다.
 
 영속 상태가 없으므로 장애 복구는 새 프로세스 시작이다. 재시작한 프로세스는 새 DPoP 키를 만들고 다시 인증하며 이전 호출, callback, 토큰과 멱등성 키를 복구하지 않는다.
@@ -414,7 +414,7 @@ sequenceDiagram
 | 계층 | 범위 |
 |------|------|
 | 단위 테스트 | 구성 검증, 정책, 스키마 변환·검증, URL 정규화, DPoP claim, 토큰 원자 교체, 오류 사상, 재시도 판정 |
-| 전송 계약 테스트 | 줄 구분 `stdio`, 요청별 `_meta`, 필수 헤더, JSON-RPC ID 상관, 본문 상한과 부분 stdout 방지 |
+| 전송 계약 테스트 | 줄 구분 `stdio`, 요청 직후 EOF의 응답 보존, 요청별 `_meta`, 필수 헤더, JSON-RPC ID 상관, 본문 상한과 부분 stdout 방지 |
 | 모의 서버 통합 테스트 | 메타데이터·PKCE·DPoP, 갱신 헤더, 단일 공유 인가, redirect, retry, 13종 도구와 오류 보존 |
 | 실제 서버 통합 테스트 | 로컬 agent-context 서버와 도구 13종, 쓰기 멱등성, DPoP 재생·하향 거부, `context_flow_get` 보존 |
 | 호스트 종단 간 테스트 | `features.mcp_2026_07_28`을 켠 Codex CLI `0.156.1`의 발견·목록·호출·취소 |
@@ -441,7 +441,7 @@ sequenceDiagram
 
 | 요구사항 | 설계 반영 | 주요 검증 |
 |----------|-----------|-----------|
-| `FR-AGENT_CONTEXT_CLIENT-001` | 「명령과 배포 단위」, 「호스트 MCP 경계」, 「자원 상한과 입출력」 | `stdio` 전송 계약, stdout 오염·EOF 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-001` | 「명령과 배포 단위」, 「호스트 MCP 경계」, 「자원 상한과 입출력」 | `stdio` 전송 계약, stdout 오염·요청 직후 EOF 응답 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-002` | 「lifecycle과 도구 공개」, 「HTTP 요청 구성」 | 요청별 `_meta`, 구형 handshake 비사용 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-003` | 「lifecycle과 도구 공개」 | `server/discover`, 13종 목록과 primitive 회귀 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-004` | 「lifecycle과 도구 공개」 | 원격 목록·스키마 누락/추가/불일치 시험 |
@@ -466,7 +466,7 @@ sequenceDiagram
 | `FR-AGENT_CONTEXT_CLIENT-023` | 「배포 구성」 | 필수 환경 변수, HTTPS·경로·UUIDv7 기동 전 검증 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-024` | 「토큰 갱신과 재인증」 | 단일 토큰·행위 에이전트와 재시작 전환 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-025` | 「공유 브라우저 인가」 | opener 실패, listener 정리와 URL 비노출 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-026` | 「종료」 | EOF·신호·비정상 입력 뒤 자원 정리 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-026` | 「종료」 | EOF 직전 로컬·취소 결과 보존, 신호·비정상 입력 뒤 자원 정리 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-027` | 「lifecycle과 도구 공개」 | 양쪽 발견, revision·capability·확장 협상 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-028` | 「lifecycle과 도구 공개」 | TTL 0·만료·scope·fingerprint 변경 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-029` | 「공유 브라우저 인가」 | 대기자별 취소와 마지막 대기자 종료 시험 |

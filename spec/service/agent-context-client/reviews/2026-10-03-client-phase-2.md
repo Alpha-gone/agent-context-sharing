@@ -33,7 +33,7 @@
 ### DEF-004: 조회 중 정상 계정 전환을 프로토콜 위반으로 처리
 
 - 심각도: 낮음
-- 상태: 계약·패키지 수정·검증 완료, 실제 인증 연결은 3단계
+- 상태: 계약·패키지 수정·검증 완료. 후속 4단계에서 실제 인증 조정자·로컬 TLS 시험 서버 연결을 검증했으며 호스트 오류 직렬화는 5단계다.
 - 근거: 발견·목록 조회 중 인증 주체 변경을 `ErrProtocol`로 반환했다.
 - 처리: SRS·SDD에서 `client_authorization`·`retryable=true`로 정하고 `ErrIdentityChanged`를 반환한다. 다른 주체의 응답은 캐시·공개·최초 지문 변경 판정에 쓰지 않는다. 취소가 우선하며 이 오류 자체로 자동 재인가·도구 호출·재시도를 시작하지 않는다. 호출자는 계정을 확인하고 다시 인가한 뒤 새 요청을 보낸다.
 - 회귀 시험: `TestIdentityChangeDiscardsResponseAndAllowsNewRequest`, `TestCancellationPrecedesIdentityChange`와 기존 조회 중 주체 변경 시험.

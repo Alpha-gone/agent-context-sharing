@@ -220,6 +220,48 @@ func TestIdentityIsNonInteractiveAndExpiryHasLeeway(t *testing.T) {
 	}
 }
 
+func TestApplyIsNonInteractive(t *testing.T) {
+	f := newFixture(t)
+	m := f.manager("5s")
+	apply := func(ctx context.Context) (*http.Request, error) {
+		t.Helper()
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, resourceURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = m.Apply(ctx, request)
+		return request, err
+	}
+	if request, err := apply(t.Context()); !errors.Is(err, ErrAuthorization) || f.opens.Load() != 0 || len(request.Header) != 0 {
+		t.Fatal("토큰 없는 적용이 인가를 시작했거나 헤더를 남겼습니다")
+	}
+	credential, err := m.Credentials(t.Context(), Challenge{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := apply(t.Context())
+	if err != nil || first.Header.Get("Authorization") != "DPoP "+credential.raw || first.Header.Get("DPoP") == "" {
+		t.Fatal("현재 자격 증명·proof를 적용하지 않았습니다")
+	}
+	second, err := apply(t.Context())
+	if err != nil || second.Header.Get("DPoP") == first.Header.Get("DPoP") {
+		t.Fatal("요청 적용에서 proof를 재사용했습니다")
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if request, err := apply(canceled); !errors.Is(err, context.Canceled) || len(request.Header) != 0 {
+		t.Fatal("취소한 요청에 자격 증명을 적용했습니다")
+	}
+	f.now = credential.expires.Add(-expiryLeeway)
+	if request, err := apply(t.Context()); !errors.Is(err, ErrAuthorization) || len(request.Header) != 0 {
+		t.Fatal("만료 여유 안의 토큰을 적용했습니다")
+	}
+	m.Close()
+	if request, err := apply(t.Context()); !errors.Is(err, ErrAuthorization) || len(request.Header) != 0 || f.opens.Load() != 1 {
+		t.Fatal("비대화형 적용이 종료 뒤 자격 증명을 적용하거나 인가를 시작했습니다")
+	}
+}
+
 func TestTokensWithinExpiryLeewayAreRejected(t *testing.T) {
 	for _, initial := range []bool{false, true} {
 		t.Run(fmt.Sprint(initial), func(t *testing.T) {

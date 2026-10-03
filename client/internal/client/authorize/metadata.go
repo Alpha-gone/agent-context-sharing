@@ -112,6 +112,14 @@ func readJSON(ctx context.Context, client *http.Client, request *http.Request, o
 }
 
 func (m *Manager) getJSON(ctx context.Context, target string, out any) error {
+	err := m.getJSONStatus(ctx, target, out)
+	if _, ok := errors.AsType[statusError](err); ok {
+		return contract.ErrProtocol
+	}
+	return err
+}
+
+func (m *Manager) getJSONStatus(ctx context.Context, target string, out any) error {
 	if _, err := httpsURL(target); err != nil {
 		return err
 	}
@@ -120,11 +128,7 @@ func (m *Manager) getJSON(ctx context.Context, target string, out any) error {
 		return contract.ErrProtocol
 	}
 	req.Header.Set("Accept", "application/json")
-	err = readJSON(ctx, m.httpClient(true), req, out)
-	if _, ok := errors.AsType[statusError](err); ok {
-		return contract.ErrProtocol
-	}
-	return err
+	return readJSON(ctx, m.httpClient(true), req, out)
 }
 
 func (m *Manager) discover(ctx context.Context, challenge Challenge) (metadata, error) {
@@ -151,6 +155,7 @@ func (m *Manager) CheckProtectedResource(ctx context.Context) (ResourceMetadata,
 
 func (m *Manager) protectedResource(ctx context.Context, location string) (ResourceMetadata, error) {
 	var md ResourceMetadata
+	explicitLocation := location != ""
 	if location == "" {
 		var err error
 		location, err = wellKnown(m.cfg.RemoteURL(), "oauth-protected-resource")
@@ -165,7 +170,25 @@ func (m *Manager) protectedResource(ctx context.Context, location string) (Resou
 		Algorithms []string `json:"dpop_signing_alg_values_supported"`
 		Scopes     []string `json:"scopes_supported"`
 	}
-	if err := m.getJSON(ctx, location, &resource); err != nil {
+	err := m.getJSONStatus(ctx, location, &resource)
+	if status, ok := errors.AsType[statusError](err); ok && status.status == http.StatusNotFound && !explicitLocation {
+		root, parseErr := httpsURL(m.cfg.RemoteURL())
+		if parseErr != nil {
+			return md, parseErr
+		}
+		root.Path, root.RawPath = "", ""
+		fallback, locationErr := wellKnown(root.String(), "oauth-protected-resource")
+		if locationErr != nil {
+			return md, locationErr
+		}
+		if fallback != location {
+			err = m.getJSONStatus(ctx, fallback, &resource)
+		}
+	}
+	if _, ok := errors.AsType[statusError](err); ok {
+		err = contract.ErrProtocol
+	}
+	if err != nil {
 		return md, err
 	}
 	actual, e1 := normalizedURL(resource.Resource, false)

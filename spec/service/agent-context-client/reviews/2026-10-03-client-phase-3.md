@@ -18,17 +18,21 @@
 
 ## 미해결 결함
 
-초기 단위·모의 계약·race 시험에서는 발견하지 못했으나, 추가 진단에서 아래 두 구현 결함을 재현했다. 수정하지 않았으며 후속 단계의 구현으로 대신해 완료 판정하지 않는다.
+추가 진단에서 확인한 두 구현 결함은 아래 수정과 회귀 검증으로 해결했다. 실제 MCP HTTP 연결·시스템 브라우저·WSL2 검증은 별도 미완료 경계로 유지한다.
 
-- `DEF-20261003-001` — 중간, `client/internal/client/authorize/browser.go:160`, `opener_linux.go:18`: callback의 결과를 기다리기 전에 opener를 동기 호출한다. 정상 callback을 200으로 처리한 뒤 opener가 context 종료까지 기다리면 인가 전체가 약 2초 뒤 `context.DeadlineExceeded`로 끝나고 토큰 교환은 0회다. listener는 정리되지만 정상 인가 결과를 사용하지 못한다. opener 반환·오류와 callback·취소를 함께 처리해야 하며, 수정 시 opener goroutine·자식 프로세스의 수명과 결과 경합도 검증해야 한다. 실제 `xdg-open`·시스템 브라우저의 종료 대기 동작은 이번 시험에서 실행하지 않았다.
-- `DEF-20261003-002` — 낮음, `client/internal/client/authorize/metadata.go:149`, `browser.go:46`, `browser.go:75`, `authorize.go:288`: 구성 URL `https://RESOURCE.TEST:443/mcp`는 Load와 정규화된 resource 발견을 통과하지만, 인가·토큰 교환의 resource와 JWT audience 검증에는 구성 원문을 사용한다. 검증한 보호 리소스 문서의 resource는 후속 상태에 보관하지 않는다. 서버는 resource를 정확한 문자열로 비교하므로 정상 인가를 완료할 수 없다. 엄격한 토큰 교환 대역은 `ErrAuthorization`, 정규 audience 토큰을 반환하는 대역은 `ErrProtocol`로 실패했고 토큰은 저장되지 않았다. 실제 서버의 `internal/authz/authz.go:251`, `:291`에서도 정확한 비교를 확인했다. 검증된 resource를 인가·교환·JWT·갱신 검증에 일관되게 사용하거나 기동 구성에서 비정규 표기를 거부하는 방식 중 하나를 확정해야 한다.
+## 해결된 결함
 
-## 추가 설계 위험과 확인 필요 항목
+위치의 기존 줄 번호는 추가 검토 기준 커밋 `ae1b988`의 재현 지점을 가리킨다.
 
-- 중간, `client/internal/client/authorize/authorize.go:304`: `exp=현재+7200` 토큰을 저장한 뒤 `exp=현재+3600` 토큰 갱신이 도착하면 이전 토큰으로 교체되고 만료가 3600초 역행한다. 재현했으나 현행 `FR-AGENT_CONTEXT_CLIENT-012`의 「동시 응답에서는 마지막으로 정상 수신한 토큰을 사용」과 일치하므로 구현의 명세 위반과 구분한다. 더 짧은 exp를 무시하려면 SRS의 수신 순서 정책을 먼저 변경하고 SDD·동일 만료 시각의 교체 정책·시험을 정합화해야 한다. refresh token은 없으므로 짧아진 만료가 불필요한 재인가로 이어질 가능성이 있다.
-- `Identity()`는 Credentials를 호출해 브라우저 인가를 시작할 수 있다. 토큰 만료 시점의 Identity 호출에서 실제 로컬 callback 대역의 opener 실행이 증가하는 것을 확인했다. `remote.Client`는 gate를 보유한 채 조회 시작과 응답 수신 뒤 Identity를 대조하므로 단순 연결하면 해당 잠금 동안 인가를 기다릴 수 있다. 실제 HTTP Source는 아직 없으므로 현재 운영 경로의 교착 결함으로 단정하지 않는다. 4단계에서 비대화형 주체·자격 증명 상태 조회와 명시적 인가 경로를 나누고, 잠금 밖 준비 뒤 응답 반영 시 재검증하는 설계를 검토해야 한다.
-- 만료 판정에는 여유 시간이 없다. 만료 1ns 전에는 현재 토큰을 재사용하고 만료 시점에는 Identity가 인가를 시작하는 것을 시험했다. 현행 SDD의 「현재 시각이 만료 시각 이상」과 일치하며, 전송 지연 중 만료에 대비한 여유를 둘지는 4단계 연결 전에 별도로 결정해야 한다.
-- WSL2 감지 시 opener는 `wslview`만 실행하며 대체 경로·사전 가용성 검사는 없다. 코드의 단일 의존은 확인했지만 실제 WSL2와 최신 Ubuntu 배포판의 기본 설치·패키지 제공 상태는 확인하지 않았다. 6단계에서 지원 배포판별 설치 가능성·필수 의존 안내·Windows 브라우저와 loopback 경로를 검증해야 한다.
+- `DEF-20261003-001` — 중간, `client/internal/client/authorize/browser.go:160`, `opener_linux.go:18`: 정상 callback 뒤 opener가 반환하지 않으면 시간 초과·0회 교환으로 끝났다. opener를 별도 실행하고 callback·실행 오류·취소를 함께 기다리도록 수정했다. 이미 받은 callback은 실행기 종료 오류보다 우선하며, 모든 반환 경로에서 opener context 취소·실행 회수 후 listener를 정리한다. 기본 명령의 출력은 폐기하고 `WaitDelay`로 출력 복사 대기를 제한한다. `TestCallbackDoesNotWaitForOpenerExit`, `TestBlockedOpenerCancellationAndIdentity`, `TestBrowserCommandCancellation`에서 정상 callback의 1회 교환·미반환 실행 회수·취소·시간 초과·종료를 검증했다. 실제 `xdg-open`·시스템 브라우저는 실행하지 않았다.
+- `DEF-20261003-002` — 낮음, `client/internal/client/authorize/metadata.go:149`, `browser.go:46`, `browser.go:75`, `authorize.go:288`: 구성 URL `https://RESOURCE.TEST:443/mcp`의 발견은 통과하지만 구성 원문 resource·audience가 서버의 정확한 비교와 충돌했다. 발견에서 검증한 보호 리소스의 resource 원문을 보관해 인가·토큰 교환·초기/갱신 JWT audience에 사용하도록 수정했다. 구성 URL은 전송 대상으로 유지하고 다른 리소스 거부는 완화하지 않았다. `TestValidatedResourceUsedThroughoutAuthorization`에서 비정규 구성의 코드 교환·JWT·갱신·보호 요청 헤더 적용을 검증했다.
+
+## 추가 설계 위험의 처리와 남은 검증
+
+- 갱신 만료 역행은 당시 `FR-AGENT_CONTEXT_CLIENT-012`의 마지막 정상 수신 정책과 일치했다. 이번 수정에서 SRS를 먼저 만료 비역행·동일 만료 마지막 검증·저장 정책으로 변경하고 SDD·구현을 정합화했다. `TestRefreshNeverRegressesExpiration`에서 7200초 뒤 3600초의 늦은 갱신 무시, 동일 만료 교체, 오래된 응답의 검증·계정 검사와 100개 동시 갱신의 최대 만료 유지가 통과했다.
+- `Identity()`는 비대화형 조회로 변경했다. 토큰 부재·만료 여유·종료 시 `ErrAuthorization`을 반환하고 진행 중 인가도 기다리지 않는다. `Credentials`·`Authenticate`가 명시적 인가 경로를 유지한다. 초기·100개 만료 주체 조회·진행 중 opener 대기에서 브라우저 추가 실행이 없음을 시험했다. 4단계에서는 실제 HTTP Source가 gate 밖에서 자격 증명을 준비하고 gate 안에서 주체만 재검증하도록 연결해야 한다.
+- SRS·SDD에 5초 고정 만료 여유를 확정하고 자격 증명 사용·초기/갱신 저장에 적용했다. `TestIdentityIsNonInteractiveAndExpiryHasLeeway`, `TestTokensWithinExpiryLeewayAreRejected`에서 경계 직전 재사용, 경계의 재인가·비대화형 조회 거부와 임박한 초기/갱신 토큰의 `ErrProtocol` 분류·미저장을 검증했다. 서버의 10초 갱신 구간 안에서도 유효 시간이 5초보다 많이 남으면 기존 토큰을 사용할 수 있다.
+- WSL2는 실행 파일을 조회해 `wslview`를 우선하고 조회가 `exec.ErrNotFound`일 때만 `powershell.exe`를 선택하도록 보완했다. 고정 PowerShell 명령문에 URL을 표준 입력으로 전달하며 다른 조회 오류나 선택한 실행기의 실행 실패 뒤에는 재시도하지 않는다. `TestLinuxBrowserCommandSelection`의 Linux·WSL 우선/대체·부재·조회 권한 오류·URL 비보간 시험과 Linux 교차 빌드가 통과했다. 실제 WSL2·배포판의 기본 설치 상태는 검증하지 않았으며 6단계의 Windows 브라우저·loopback 검증은 미완료다.
 
 ## 검토 중 해결한 항목
 
@@ -57,4 +61,11 @@
 - 저장소 구현을 변경하지 않는 임시 Go overlay에서 `TestReviewBlockedOpener`, `TestReviewRefreshExpirationRegression`, `TestReviewNonCanonicalResource`, `TestReviewExpiryHasNoMarginAndIdentityStartsFlow`를 Go `1.27.1`의 `-race -count=1`로 실행했다. 외부 HTTP는 대역, callback은 실제 IPv4 로컬 listener였다.
 - 진단 시험은 현재 실패·만료 역행 동작을 관찰하도록 작성했다. 시험 명령의 성공을 결함 수정 또는 정상 동작의 통과로 해석하지 않는다. 정상 callback 뒤 시간 초과·0회 교환, 3600초 만료 역행, 비정규 resource의 두 실패 분류, 만료 직전 재사용과 Identity의 인가 시작을 확인했으며 race 보고는 없었다.
 - 최초 resource 재현은 기존 fixture의 정규 resource 선검증도 함께 실패했다. 해당 선검증과 분리한 opener 대역으로 재실행해 실제 인가·토큰·audience 경로의 오류 분류를 확인했다.
-- 이번 추가 검토는 코드·SRS·SDD·개발 계획의 계약과 체크박스를 변경하지 않았다. DOX 소유권·구조·child index도 바뀌지 않아 해당 `AGENTS.md`는 유지했다.
+- 이 진단 기록 당시에는 코드·SRS·SDD·개발 계획의 계약과 체크박스를 변경하지 않았다. 이후 수정 결과는 위 해결된 결함과 아래 보완 검증에 기록한다.
+
+### 수정 보완 검증
+
+- Go `1.27.1`에서 클라이언트 전체 `go test -race ./... -count=1`과 주요 신규 회귀·공유 인가·정리·상한 시험의 `-race -count=10`을 통과했다. 실제 브라우저 대신 주입 opener, HTTP transport 대역, 실제 로컬 listener와 시험 실행기 프로세스를 사용했다.
+- 양쪽 모듈 `go build ./...`·`go vet ./...`, 서버 `TestToolManifestMatchesClient`, Linux amd64 교차 빌드를 통과했다. 서버 전체·데이터베이스·실제 인증·MCP Source·WSL2·호스트 종단 간 시험을 통과한 것으로 보고하지 않는다.
+- 저장소 전체 `gofmt -l .`, `git diff --check`, 변경 문서 6개의 상대 링크와 요구사항 51건의 추적성을 확인했다. 한국어 표현·맞춤법을 검토했다.
+- 인증 패키지와 서비스 명세의 소유 `AGENTS.md`에 새 주체 조회·갱신·만료·opener 수명 계약을 반영했다. 패키지 소유권·지속 구조·Child DOX Index는 바뀌지 않아 루트·상위 문서는 유지한다. 개발 계획의 후속 연결·실제 환경 미충족 기준은 미완료로 유지한다.

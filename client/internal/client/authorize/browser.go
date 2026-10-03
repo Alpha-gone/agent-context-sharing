@@ -43,7 +43,7 @@ func (m *Manager) authorize(ctx context.Context, challenge Challenge) (metadata,
 	if err != nil {
 		return md, Credential{}, err
 	}
-	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {m.cfg.ClientID()}, "code": {code}, "redirect_uri": {redirect}, "code_verifier": {verifier}, "resource": {m.cfg.RemoteURL()}}
+	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {m.cfg.ClientID()}, "code": {code}, "redirect_uri": {redirect}, "code_verifier": {verifier}, "resource": {md.resource}}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, md.Token, strings.NewReader(form.Encode()))
 	if err != nil {
 		return md, Credential{}, ErrAuthorization
@@ -72,7 +72,7 @@ func (m *Manager) authorize(ctx context.Context, challenge Challenge) (metadata,
 	m.mu.Lock()
 	jkt := m.jkt
 	m.mu.Unlock()
-	claims, err := verifyToken(response.AccessToken, md.keys, md.Issuer, m.cfg.RemoteURL(), jkt, m.now())
+	claims, err := verifyToken(response.AccessToken, md.keys, md.Issuer, md.resource, jkt, m.now())
 	if err != nil {
 		return md, Credential{}, err
 	}
@@ -157,17 +157,36 @@ func (m *Manager) callback(ctx context.Context, md metadata) (string, string, st
 	if err := ctx.Err(); err != nil {
 		return "", "", "", err
 	}
-	if err := m.open(ctx, authorizationURL(md, m.cfg.ClientID(), m.cfg.RemoteURL(), redirect, state, verifier)); err != nil {
-		if ctx.Err() != nil {
+	openCtx, cancelOpen := context.WithCancel(ctx)
+	opened := make(chan error, 1)
+	openDone := make(chan struct{})
+	go func() {
+		defer close(openDone)
+		opened <- m.open(openCtx, authorizationURL(md, m.cfg.ClientID(), md.resource, redirect, state, verifier))
+	}()
+	defer func() { cancelOpen(); <-openDone }()
+	for {
+		select {
+		case <-ctx.Done():
 			return "", "", "", ctx.Err()
+		case result := <-completed:
+			return result.code, redirect, verifier, result.err
+		case err := <-opened:
+			if err == nil {
+				opened = nil
+				continue
+			}
+			// 이미 받은 callback은 실행기 종료 오류보다 우선한다.
+			select {
+			case result := <-completed:
+				return result.code, redirect, verifier, result.err
+			default:
+			}
+			if ctx.Err() != nil {
+				return "", "", "", ctx.Err()
+			}
+			return "", "", "", ErrAuthorization
 		}
-		return "", "", "", ErrAuthorization
-	}
-	select {
-	case <-ctx.Done():
-		return "", "", "", ctx.Err()
-	case result := <-completed:
-		return result.code, redirect, verifier, result.err
 	}
 }
 

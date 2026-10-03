@@ -154,9 +154,9 @@
 | `FR-AGENT_CONTEXT_CLIENT-009` | 클라이언트는 콜백을 `127.0.0.1` 또는 `[::1]` 루프백 IP 주소의 임의 포트와 등록된 경로에서만 받아야 한다. | 실제로 bind한 주소·포트·경로와 일치하지 않는 콜백, 외부 인터페이스, `localhost`, 불일치 `state`, 중복 콜백과 제한 시간을 넘긴 콜백을 거부한다. IPv4와 IPv6 중 사용 가능한 주소를 선택한다. | 확정 | RFC 8252, OAuth 2.1, 제품 기준선 |
 | `FR-AGENT_CONTEXT_CLIENT-010` | 클라이언트는 콜백의 인가 코드를 같은 `redirect_uri`, `resource`와 `code_verifier`로 한 번만 교환해야 한다. | 교환 성공 전 코드를 재사용하지 않고 발급자 식별 정보가 기대한 인가 서버와 일치하지 않으면 토큰을 받지 않는다. | 확정 | agent-context SDD 「인가 코드 흐름」, MCP `2026-07-28` 인증 |
 | `FR-AGENT_CONTEXT_CLIENT-011` | 클라이언트는 접근 토큰, 만료 시각과 DPoP 개인 키를 프로세스 메모리에만 보관하고 종료·재시작 시 폐기해야 한다. | 토큰, 인가 코드, PKCE 검증자와 DPoP 개인 키가 파일·환경 변수·표준 출력·로그·오류 메시지에 기록되지 않고 새 프로세스는 다른 키를 만든다. | 확정 | agent-context `NFR-AGENT_CONTEXT-013`, RFC 9449 |
-| `FR-AGENT_CONTEXT_CLIENT-012` | 클라이언트는 응답의 `Mcp-Access-Token`과 `Mcp-Access-Token-Expires-At`을 함께 검증해 현재 토큰을 원자적으로 교체해야 한다. | 둘 중 하나만 있거나 만료 시각이 유효하지 않거나 새 토큰의 `cnf.jkt`가 현재 DPoP 키와 일치하지 않으면 교체하지 않으며, 동시 응답에서는 마지막으로 정상 수신한 토큰을 사용한다. | 확정 | agent-context SRS 「토큰 갱신」, RFC 9449 |
+| `FR-AGENT_CONTEXT_CLIENT-012` | 클라이언트는 응답의 `Mcp-Access-Token`과 `Mcp-Access-Token-Expires-At`을 함께 검증해 현재 토큰을 원자적으로 교체해야 한다. | 둘 중 하나만 있거나 만료 시각이 유효하지 않거나 새 토큰의 `cnf.jkt`가 현재 DPoP 키와 일치하지 않으면 교체하지 않는다. 동시 응답에서는 검증된 토큰 중 만료 시각이 더 늦은 토큰을 유지하고, 만료 시각이 같으면 마지막으로 검증·저장한 토큰을 사용한다. | 확정 | agent-context SRS 「토큰 갱신」, 제품 기준선, RFC 9449 |
 | `FR-AGENT_CONTEXT_CLIENT-013` | 클라이언트는 인증이 필요한 동시 요청에서 브라우저 인가를 하나만 진행해야 한다. | 인가 성공 시 대기 요청이 같은 새 토큰을 사용하고 실패·취소 시 모두 일관된 재인증 필요 결과를 받는다. | 확정 | 제품 기준선 |
-| `FR-AGENT_CONTEXT_CLIENT-014` | 클라이언트는 접근 토큰이 없거나 만료·폐기 등 접근 토큰 사유의 HTTP `401`에 대해 재인증 성공 뒤 원래 요청을 최대 한 번 다시 보내야 한다. | 인증 정보 없는 초기 DPoP 도전 또는 `error="invalid_token"`인 `WWW-Authenticate: DPoP`가 알린 보호 리소스 메타데이터 위치와 scope로 인가를 시작한다. `invalid_dpop_proof`, `use_dpop_nonce`, HTTP `500`과 두 번째 인증 실패는 반복하지 않고 호스트에 반환한다. | 확정 | agent-context SDD 「요청 처리 순서」, RFC 9449 |
+| `FR-AGENT_CONTEXT_CLIENT-014` | 클라이언트는 접근 토큰이 없거나 만료·폐기 등 접근 토큰 사유의 HTTP `401`에 대해 재인증 성공 뒤 원래 요청을 최대 한 번 다시 보내야 한다. | 보호 요청 전 남은 유효 시간이 5초 이하인 토큰은 사용하지 않고 공유 인가를 시작한다. 인증 정보 없는 초기 DPoP 도전 또는 `error="invalid_token"`인 `WWW-Authenticate: DPoP`가 알린 보호 리소스 메타데이터 위치와 scope로 인가를 시작한다. `invalid_dpop_proof`, `use_dpop_nonce`, HTTP `500`과 두 번째 인증 실패는 반복하지 않고 호스트에 반환한다. | 확정 | agent-context SDD 「요청 처리 순서」, 제품 기준선, RFC 9449 |
 
 ### 원격 요청과 응답
 

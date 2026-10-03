@@ -25,7 +25,8 @@ var ErrBusy = errors.New("인증 대기 중인 요청이 많습니다. 이후 �
 
 // Options는 외부 접근과 비결정적 시험 경계를 교체한다. nil은 운영 기본값이다.
 type Options struct {
-	Transport   http.RoundTripper
+	Transport http.RoundTripper
+	// OpenBrowser는 context 취소 시 반환해야 한다. callback은 반환과 독립적으로 처리된다.
 	OpenBrowser func(context.Context, string) error
 	Listen      func(context.Context, string, string) (net.Listener, error)
 	Now         func() time.Time
@@ -36,6 +37,12 @@ type Credential struct {
 	raw      string
 	expires  time.Time
 	identity string
+}
+
+const expiryLeeway = 5 * time.Second
+
+func (c Credential) usable(now time.Time) bool {
+	return c.raw != "" && now.Add(expiryLeeway).Before(c.expires)
 }
 
 // String은 로그나 오류의 기본 표현에 자격 증명을 노출하지 않는다.
@@ -121,7 +128,7 @@ func (m *Manager) Credentials(ctx context.Context, challenge Challenge) (Credent
 			m.mu.Unlock()
 			return Credential{}, ErrAuthorization
 		}
-		if m.current.raw != "" && m.now().Before(m.current.expires) {
+		if m.current.usable(m.now()) {
 			result := m.current
 			m.mu.Unlock()
 			return result, nil
@@ -186,6 +193,9 @@ func (m *Manager) run(f *flight, challenge Challenge) {
 	if f.ctx.Err() != nil {
 		err = f.ctx.Err()
 	}
+	if err == nil && !credential.usable(m.now()) {
+		err = contract.ErrProtocol
+	}
 	if err == nil && !m.closed && f.waiters > 0 {
 		if m.boundIdentity != "" && m.boundIdentity != credential.identity {
 			err = contract.ErrIdentityChanged
@@ -209,13 +219,20 @@ func (m *Manager) run(f *flight, challenge Challenge) {
 	m.mu.Unlock()
 }
 
-// Identity는 remote.Source.Identity용의, 토큰 갱신에 독립적인 인증 주체 식별자다.
+// Identity는 인가를 시작하거나 기다리지 않고 사용 가능한 현재 주체만 조회한다.
 func (m *Manager) Identity(ctx context.Context) (string, error) {
-	credential, err := m.Credentials(ctx, Challenge{})
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	return credential.identity, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if m.closed || !m.current.usable(m.now()) {
+		return "", ErrAuthorization
+	}
+	return m.current.identity, nil
 }
 
 // Authenticate는 구성된 MCP POST에만 현재 토큰과 새 proof를 설정한다.
@@ -285,7 +302,7 @@ func (m *Manager) Refresh(ctx context.Context, header http.Header) error {
 	m.mu.Lock()
 	md, jkt := m.metadata, m.jkt
 	m.mu.Unlock()
-	claims, err := verifyToken(tokens[0], md.keys, md.Issuer, m.cfg.RemoteURL(), jkt, m.now())
+	claims, err := verifyToken(tokens[0], md.keys, md.Issuer, md.resource, jkt, m.now())
 	if err != nil || expires != claims.Expires {
 		return contract.ErrProtocol
 	}
@@ -300,6 +317,12 @@ func (m *Manager) Refresh(ctx context.Context, header http.Header) error {
 	}
 	if m.boundIdentity == "" || credential.identity != m.boundIdentity {
 		return contract.ErrIdentityChanged
+	}
+	if !credential.usable(m.now()) {
+		return contract.ErrProtocol
+	}
+	if credential.expires.Before(m.current.expires) {
+		return nil
 	}
 	m.current = credential
 	return nil

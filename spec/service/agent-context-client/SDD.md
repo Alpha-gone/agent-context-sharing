@@ -127,13 +127,14 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 | ES256 DPoP 키와 JWK thumbprint | `authorize` | 프로세스마다 한 번 생성하고 종료 때 참조 폐기 |
 | 현재 접근 토큰과 만료 시각 | `authorize` | mutex로 묶어 읽고 원자적으로 교체 |
 | 첫 계정의 issuer·subject 결합 | `authorize` | 첫 검증 뒤 고정, 토큰 무효화에도 유지하며 종료 때 폐기 |
+| 검증한 리소스 식별자·인가 서버·JWKS | `authorize` | 인가마다 발견·검증하며 토큰과 함께 게시, 갱신 검증에도 같은 리소스 사용 |
 | 진행 중 브라우저 인가 | `authorize` | 프로세스당 최대 하나, 대기자 수와 취소 함수를 함께 보관 |
 | 원격 lifecycle 결과 | `remote` | 서버가 준 `ttlMs`까지 메모리 캐시 |
 | 원격 도구 목록과 fingerprint | `remote` | `ttlMs`·`cacheScope` 범위 안에서만 메모리 캐시 |
 | 논리적 호출 상태 | `host` | 호스트 요청 반환·취소까지 유지 |
 | 쓰기 멱등성 키 | `host` | 논리적 쓰기 호출의 모든 전송 시도에서만 유지 |
 
-토큰 교체는 두 갱신 헤더와 JWT 검증이 모두 끝난 뒤 하나의 잠금 구간에서 수행한다. 동시에 정상 수신한 응답은 검증 완료 뒤 토큰 저장소 잠금을 얻은 순서대로 반영하고 마지막 반영값을 이후 요청이 읽는다. 오래된 토큰으로 보낸 요청이 `invalid_token`을 받았을 때는 실패한 토큰이 아직 현재 토큰인 경우에만 비운다. 이 비교로 늦게 도착한 `401`이 더 새 토큰을 지우지 못하게 한다.
+토큰 교체는 두 갱신 헤더와 JWT 검증이 모두 끝난 뒤 하나의 잠금 구간에서 수행한다. 동시에 정상 수신한 갱신은 현재 토큰보다 만료 시각이 이르지 않을 때만 반영한다. 같은 만료 시각에서는 검증 완료 뒤 토큰 저장소 잠금을 얻어 마지막으로 저장한 값을 이후 요청이 읽는다. 오래된 토큰으로 보낸 요청이 `invalid_token`을 받았을 때는 실패한 토큰이 아직 현재 토큰인 경우에만 비운다. 이 비교로 늦게 도착한 `401`이 더 새 토큰을 지우지 못하게 한다.
 
 ### 논리적 호출 상태
 
@@ -219,7 +220,7 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 
 ### 메타데이터 발견과 HTTP 정책
 
-토큰이 없는 첫 보호 요청의 `401`에서 `WWW-Authenticate: DPoP` 도전과 보호 리소스 메타데이터 위치를 읽는다. 위치가 없으면 구성 URL로 RFC 9728 well-known 위치를 계산한다. 보호 리소스 문서의 `resource`는 구성한 원격 URL과 정규화 뒤 같아야 하고, `authorization_servers`는 정확히 하나여야 한다.
+토큰이 없는 첫 보호 요청의 `401`에서 `WWW-Authenticate: DPoP` 도전과 보호 리소스 메타데이터 위치를 읽는다. 위치가 없으면 구성 URL로 RFC 9728 well-known 위치를 계산한다. 보호 리소스 문서의 `resource`는 구성한 원격 URL과 정규화 뒤 같아야 하고, `authorization_servers`는 정확히 하나여야 한다. 이 검증을 통과한 문서의 `resource` 원문을 보관해 인가·토큰 요청의 `resource`와 초기·갱신 JWT의 `aud` 비교에 일관되게 사용한다. 구성 URL은 원격 HTTP 전송 대상으로 유지한다.
 
 보호 리소스와 인가 서버 메타데이터는 인가 시도마다 다시 가져와 다음을 검증한다.
 
@@ -269,7 +270,9 @@ sequenceDiagram
 
 불일치 callback을 받은 것만으로 인가 전체를 실패시키지 않는다. 정상 callback을 계속 기다리되 전체 제한 시간이 끝나면 `client_timeout`, 호출자 취소가 먼저 오면 취소 결과로 끝낸다. 정상 `state`·`iss`의 거부 callback과 OAuth 토큰 교환의 redirect가 아닌 비성공 응답은 `client_authorization`이며, 발견·JWT·DPoP의 완전한 계약 위반과 토큰 교환 redirect는 `client_protocol`, DNS·TLS·본문 수신 실패는 `client_transport`로 구분한다.
 
-브라우저 실행 어댑터는 macOS의 시스템 URL 열기, Linux의 데스크톱 URL 열기, WSL2의 Windows 호스트 URL 열기를 별도 운영체제 파일로 구현한다. 인가 URL을 로그, 오류, 표준 출력이나 수동 복사용 안내로 내보내지 않는다. 브라우저 실행 자체가 실패하면 즉시 `client_authorization`으로 끝내고 다른 grant로 우회하지 않는다.
+브라우저 실행 어댑터는 macOS의 `open`, Linux의 `xdg-open`, WSL2의 Windows 호스트 URL 열기를 별도 운영체제 파일로 구현한다. WSL2에서는 PATH에서 실행 가능한 `wslview`를 우선하고 찾지 못했을 때만 `powershell.exe`의 `Start-Process`를 사용한다. 조회의 파일 미발견 결과 이외의 오류는 대체 실행하지 않는다. PowerShell 명령문은 고정하고 URL은 표준 입력으로 전달해 명령문에 보간하지 않는다. 선택한 실행 파일의 실행 실패 뒤에는 다른 실행기로 재시도하지 않는다. 실제 WSL2의 실행 파일 가용성과 브라우저 연결 검증은 배포 검증 단계에서 수행한다.
+
+opener는 별도 실행으로 시작하고 callback·opener 오류·인가 context 종료를 함께 기다린다. 정상 callback을 이미 받았다면 opener의 반환을 기다리지 않고 토큰 교환으로 진행한다. 성공·실패·취소 모두에서 opener context를 취소하고 해당 실행을 회수한 뒤 수신기를 정리한다. 주입한 opener도 context 취소 시 반환해야 한다. 기본 실행기의 자식 프로세스와 출력 복사 대기는 유한하게 제한한다. 인가 URL을 로그, 오류, 표준 출력이나 수동 복사용 안내로 내보내지 않는다. 유효한 callback 없이 브라우저 실행 자체가 실패하면 `client_authorization`으로 끝내고 다른 grant로 우회하지 않는다.
 
 ### DPoP 키와 proof
 
@@ -294,15 +297,15 @@ sequenceDiagram
 
 ### 토큰 갱신과 재인증
 
-원격 응답의 `Mcp-Access-Token`과 `Mcp-Access-Token-Expires-At`은 둘 다 있거나 둘 다 없어야 한다. 둘 다 있으면 새 JWT의 서명·issuer·audience·`exp`·`cnf.jkt`를 검증하고, 헤더의 Unix 초가 JWT `exp`와 같은지 확인한 뒤 저장한다. 한쪽만 있거나 검증이 실패하면 현재 토큰을 유지하고 해당 호출은 `client_protocol`로 실패시킨다.
+원격 응답의 `Mcp-Access-Token`과 `Mcp-Access-Token-Expires-At`은 둘 다 있거나 둘 다 없어야 한다. 둘 다 있으면 새 JWT의 서명·issuer·audience·`exp`·`cnf.jkt`를 검증하고, 헤더의 Unix 초가 JWT `exp`와 같은지 확인한다. 저장 잠금 안에서 현재 토큰보다 만료 시각이 이른 갱신은 정상 처리하되 저장하지 않는다. 만료 시각이 같으면 마지막으로 검증·저장한 토큰으로 교체한다. 한쪽만 있거나 검증이 실패하면 현재 토큰을 유지하고 해당 호출은 `client_protocol`로 실패시킨다. 더 오래된 응답도 검증이나 계정 결합 검사를 생략하지 않는다.
 
-보호 요청 전에 현재 시각이 저장한 만료 시각 이상이면 토큰을 사용하지 않고 공유 인가를 시작한다. 만료 전에는 서버의 응답 헤더 갱신만 따르며 별도 갱신 요청이나 갱신 토큰을 만들지 않는다.
+보호 요청 전에 남은 유효 시간이 5초 이하이면 토큰을 사용하지 않고 공유 인가를 시작한다. 초기·갱신 토큰도 검증·저장 시점에 유효 시간이 5초보다 많이 남아 있어야 하며 그렇지 않으면 `client_protocol`로 거부한다. 이는 네트워크 왕복 전 만료 위험을 줄이는 고정 여유이며 추가 배포 구성은 열지 않는다. 그 밖에는 서버의 응답 헤더 갱신만 따르며 별도 갱신 요청이나 갱신 토큰을 만들지 않는다.
 
 인증 정보 없는 최초 DPoP 도전과 `invalid_token`만 공유 인가를 시작한다. 성공하면 원래 논리적 호출을 최대 한 번 다시 전송한다. `invalid_dpop_proof`, `use_dpop_nonce`, HTTP `500`, 두 번째 `401`과 사용자의 거부는 반복하지 않는다. 재인증 재전송은 전송 재시도 횟수를 초기화하지 않는다.
 
 현재 토큰 하나가 계정 하나를 대표한다. `authorize`는 첫 검증 토큰의 `iss`·`sub` 조합을 프로세스에 고정하며, 토큰 만료·무효화 뒤에도 이 결합은 유지한다. 갱신·재인가에서 다른 주체의 토큰을 받으면 저장하지 않고 `ErrIdentityChanged`로 중단한다. 계정을 바꾸려면 프로세스를 종료해 토큰·키·주체 결합을 폐기한 뒤 새 프로세스를 시작한다. 이는 `FR-AGENT_CONTEXT_CLIENT-024`의 단일 계정 계약을 구현하며 계정 목록이나 전환 기능을 새로 제공하지 않는다.
 
-`remote.Source.Identity`에 제공할 인증 주체 식별자는 검증된 `iss`·`sub` 조합의 SHA-256 값이며 토큰 원문이나 토큰별 `jti`를 사용하지 않는다. 같은 계정의 갱신은 캐시 주체를 바꾸지 않는다. 발견·목록 조회 중 인증이 사라지거나 주체 변경을 시도하면 해당 조회를 중단하고, 현재 계정으로 다시 인가하거나 새 프로세스를 시작하도록 한다. 실제 MCP HTTP 전송 어댑터의 연결은 원격 전송 구현 단계에서 수행한다.
+`remote.Source.Identity`에 제공할 인증 주체 식별자는 검증된 `iss`·`sub` 조합의 SHA-256 값이며 토큰 원문이나 토큰별 `jti`를 사용하지 않는다. `Identity`는 사용 가능한 현재 토큰의 주체만 조회하며 발견·브라우저 인가를 시작하거나 진행 중 인가를 기다리지 않는다. 토큰이 없거나 만료 여유 안에 있으면 `client_authorization`을 반환한다. 원격 전송 어댑터는 `remote`의 gate 잠금 밖에서 자격 증명을 준비하고, 잠금 안에서는 이 조회로 주체 일치만 확인한다. 같은 계정의 갱신은 캐시 주체를 바꾸지 않는다. 발견·목록 조회 중 인증이 사라지거나 주체 변경을 시도하면 해당 조회를 중단하고, 현재 계정으로 다시 인가하거나 새 프로세스를 시작하도록 한다. 실제 MCP HTTP 전송 어댑터의 연결은 원격 전송 구현 단계에서 수행한다.
 
 인증 패키지는 구성과 교체 가능한 HTTP transport·브라우저 opener·loopback listener·시계를 입력으로 받는다. 표준 라이브러리의 P-256·SHA-256으로 서비스가 허용한 ES256 compact JWT와 공개 EC JWK만 처리하며, 중복 JSON 속성·미지원 JOSE critical 확장·개인 JWK·중복 키 선택을 거부한다. 자격 증명·조정자의 기본 문자열 표현은 비밀을 노출하지 않는다. discovery·토큰 응답은 제한 reader로 32 MiB까지 읽고 초과 또는 JSON이 아닌 응답은 거부한다. 종료는 진행 중 인가의 정리가 끝난 뒤 토큰·키 참조를 폐기한다.
 
@@ -436,6 +439,8 @@ sequenceDiagram
 
 모의 서버는 시스템 브라우저를 대체할 수 있는 opener와 loopback callback driver, 인가·리소스 서버 clock, 난수와 HTTP transport를 주입받는다. 실제 서버 통합 테스트는 모의 테스트와 별도 표식으로 실행하고 접속 정보가 없을 때 건너뛴 사실을 통과로 보고하지 않는다.
 
+인증 회귀 시험에는 정상 callback 뒤 opener 미반환·종료 오류와 취소·시간 초과·종료 시 실행 회수, 동시 갱신의 만료 비역행·동일 만료 교체·오래된 응답 검증, 비정규 구성 URL의 검증된 resource 재사용, 비대화형 `Identity`와 5초 만료 경계, WSL 실행기 선택·PowerShell URL 비보간을 포함한다. 실행기 선택 대역 시험과 Linux 교차 빌드는 실제 WSL2 브라우저·callback 검증을 대체하지 않는다.
+
 서버의 빌드·vet·단위 시험은 저장소 루트에서, 클라이언트의 빌드·vet·단위 시험은 `client/`에서 각각 `go build ./...`, `go vet ./...`, `go test ./...`로 실행한다. 루트 명령은 중첩 모듈을 검증하지 않으므로 두 결과를 별도로 확인한다. 실제 서버 종단 간 검증은 클라이언트 모듈의 별도 실행 경로에서 클라이언트 시험과 서버 통합 시험을 각각 실행한다.
 
 ### 필수 오류 주입
@@ -461,14 +466,14 @@ sequenceDiagram
 | `FR-AGENT_CONTEXT_CLIENT-004` | 「lifecycle과 도구 공개」 | 원격 목록·스키마 누락/추가/불일치 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-005` | 「호출 변환과 응답 보존」 | 타입·필수·열거·길이·개수 선검증과 `client_protocol` 분류 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-006` | 「호출 변환과 응답 보존」 | 여섯 도구의 스키마 제거·구성값 주입·우회 입력의 `client_protocol` 분류 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-007` | 「메타데이터 발견과 HTTP 정책」 | 도전·well-known discovery와 resource 전환 거부 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-008` | 「공유 브라우저 인가」 | 인가 요청 파라미터와 시스템 브라우저 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-007` | 「메타데이터 발견과 HTTP 정책」 | 도전·well-known discovery, resource 전환 거부와 검증된 resource 재사용 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-008` | 「공유 브라우저 인가」 | 인가 요청 파라미터, opener 미반환·회수와 시스템 브라우저 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-009` | 「공유 브라우저 인가」 | IPv4·IPv6 loopback, callback 변조·중복 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-010` | 「공유 브라우저 인가」 | 1회 코드 교환, verifier·redirect·resource·issuer 대조 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-011` | 「런타임 상태와 동시성」, 「DPoP 키와 proof」 | 파일·환경·로그 비노출과 재시작 키 변경 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-012` | 「프로세스 상태」, 「토큰 갱신과 재인증」 | 헤더 쌍·JWT·thumbprint·동시 갱신 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-012` | 「프로세스 상태」, 「토큰 갱신과 재인증」 | 헤더 쌍·JWT·thumbprint·동시 갱신·만료 비역행·동일 만료 교체 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-013` | 「공유 브라우저 인가」 | 동시 100요청 단일 브라우저 인가 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-014` | 「토큰 갱신과 재인증」 | 도전 유형별 0회/1회 재인증·재전송 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-014` | 「토큰 갱신과 재인증」 | 5초 만료 경계·비대화형 주체 조회, 도전 유형별 0회/1회 재인증·재전송 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-015` | 「HTTP 요청 구성」, 「DPoP 키와 proof」 | 필수 헤더 단일성·본문 일치·proof claim 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-016` | 「논리적 호출 상태」 | 100개 이상 동시 ID·응답·취소 상관 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-017` | 「호출 변환과 응답 보존」 | 13종 결과와 `context_flow_get` raw 구조 회귀 시험 |

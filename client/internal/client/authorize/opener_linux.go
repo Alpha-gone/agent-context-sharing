@@ -2,18 +2,15 @@ package authorize
 
 import (
 	"context"
-	"io"
 	"os"
 	"os/exec"
 )
 
 func openBrowser(ctx context.Context, target string) error {
-	program := "xdg-open"
-	if os.Getenv("WSL_INTEROP") != "" || os.Getenv("WSL_DISTRO_NAME") != "" {
-		program = "wslview"
+	wsl := os.Getenv("WSL_INTEROP") != "" || os.Getenv("WSL_DISTRO_NAME") != ""
+	command, err := linuxBrowserCommand(ctx, target, wsl, exec.LookPath)
+	if err != nil {
+		return err
 	}
-	command := exec.CommandContext(ctx, program, target)
-	command.Stdout = io.Discard
-	command.Stderr = io.Discard
-	return command.Run()
+	return runBrowserCommand(command)
 }

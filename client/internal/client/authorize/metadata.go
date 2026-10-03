@@ -34,6 +34,7 @@ type metadata struct {
 	Grants         []string `json:"grant_types_supported"`
 	IssuerResponse bool     `json:"authorization_response_iss_parameter_supported"`
 	keys           []jwk
+	resource       string
 }
 
 func wellKnown(raw, suffix string) (string, error) {
@@ -190,6 +191,7 @@ func (m *Manager) discover(ctx context.Context, challenge Challenge) (metadata, 
 		seen[key.Kid] = true
 	}
 	md.keys = slices.Clone(set.Keys)
+	md.resource = resource.Resource
 	return md, nil
 }
 

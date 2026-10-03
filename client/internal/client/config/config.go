@@ -48,7 +48,7 @@ func (c Config) AgentID() uuid.UUID { return c.agentID }
 // AuthTimeout은 브라우저 인가 전체의 제한 시간을 반환한다.
 func (c Config) AuthTimeout() time.Duration { return c.authTimeout }
 
-// RequestTimeout은 호출별 호스트 제한 시간이 없을 때의 제한 시간을 반환한다.
+// RequestTimeout은 인가 대기를 제외한 호출별 원격 처리의 누적 시간 예산이다.
 func (c Config) RequestTimeout() time.Duration { return c.requestTimeout }
 
 // ToolPolicy는 도구 공개 정책을 반환한다.

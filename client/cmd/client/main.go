@@ -12,7 +12,8 @@ import (
 	"syscall"
 
 	"agent_context_sharing/client/internal/client"
-	"agent_context_sharing/client/internal/client/config"
+	"agent_context_sharing/client/internal/client/doctor"
+	"agent_context_sharing/client/internal/client/remote"
 )
 
 // releaseVersion은 공식 배포본에서 링크 시점에 주입한다.
@@ -57,22 +58,15 @@ func run(ctx context.Context, args []string, getenv func(string) string, in io.R
 			usage(stderr)
 			return 2
 		}
-		if _, err := config.Load(getenv); err != nil {
-			logger.Error("", "event", "configuration_rejected", "outcome", err.Error())
-			if len(args) == 2 {
-				fmt.Fprintln(out, `{"status":"fail","checks":[{"name":"configuration","status":"fail"}]}`)
-			} else {
-				fmt.Fprintf(out, "configuration: fail; %s\n", err)
-			}
+		report := doctor.Run(ctx, getenv, doctor.Options{HTTP: remote.HTTPOptions{Version: buildVersion(), Logger: logger}})
+		if report.Checks[0].Status == "fail" {
+			logger.Error("", "event", "configuration_rejected", "outcome", report.Checks[0].Action)
+		}
+		if err := report.Write(out, len(args) == 2); err != nil {
+			logger.Error("", "event", "doctor_output_failed")
 			return 1
 		}
-		// 진단 절차는 5단계에서 구현한다. 현재 결과를 성공으로 보고하지 않는다.
-		if len(args) == 2 {
-			fmt.Fprintln(out, `{"status":"skipped","checks":[{"name":"configuration","status":"pass"}]}`)
-		} else {
-			fmt.Fprintln(out, "configuration: pass; 나머지 진단: 미구현")
-		}
-		return 2
+		return report.ExitCode()
 	default:
 		usage(stderr)
 		return 2

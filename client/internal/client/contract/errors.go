@@ -1,6 +1,39 @@
 package contract
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
+
+// ErrAuthorization은 사용자 인가 또는 브라우저·루프백 실패다.
+var ErrAuthorization = errors.New("사용할 계정과 브라우저 실행 환경을 확인하고 다시 인가하십시오.")
+
+// ClientError는 비밀과 내부 오류를 포함하지 않는 호스트 오류 계약이다.
+type ClientError struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
+}
+
+// ClassifyError는 내부 오류를 일곱 고정 코드와 안전한 조치 문구로 바꾼다.
+func ClassifyError(err error) ClientError {
+	switch {
+	case errors.Is(err, ErrConfiguration):
+		return ClientError{"client_configuration", ErrConfiguration.Error(), false}
+	case errors.Is(err, ErrIndeterminate):
+		return ClientError{"client_indeterminate", ErrIndeterminate.Error(), false}
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return ClientError{"client_timeout", "요청이 취소되었거나 제한 시간을 넘었습니다. 실행 환경을 확인한 뒤 다시 시도하십시오.", true}
+	case errors.Is(err, ErrIdentityChanged), errors.Is(err, ErrAuthorization):
+		return ClientError{"client_authorization", ErrAuthorization.Error(), true}
+	case errors.Is(err, ErrTransport):
+		return ClientError{"client_transport", ErrTransport.Error(), true}
+	case errors.Is(err, ErrBusy):
+		return ClientError{"client_busy", ErrBusy.Error(), true}
+	default:
+		return ClientError{"client_protocol", ErrProtocol.Error(), false}
+	}
+}
 
 // ErrProtocol은 입력값이나 원격 본문을 포함하지 않는 client_protocol 계약 오류다.
 var ErrProtocol = errors.New("원격 MCP 응답 또는 도구 입력 계약이 일치하지 않습니다.")

@@ -97,7 +97,7 @@ func TestDoctorReportsConfigurationFailure(t *testing.T) {
 			if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.Status != "fail" || len(result.Checks) != 1 ||
+			if result.Status != "fail" || len(result.Checks) != 8 ||
 				result.Checks[0].Name != "configuration" || result.Checks[0].Status != "fail" {
 				t.Fatalf("구성 실패 JSON 외피 = %+v", result)
 			}
@@ -129,13 +129,15 @@ func assertStructuredLogs(t *testing.T, logs []byte) {
 	}
 }
 
-func TestDoctorRemainsSeparateAndDoesNotClaimSuccess(t *testing.T) {
+func TestDoctorCancellationDoesNotReadHostInputOrClaimSuccess(t *testing.T) {
 	env := validEnvironment()
 	var stdout, stderr bytes.Buffer
-	code := run(t.Context(), []string{"doctor", "--json"}, func(key string) string { return env[key] },
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	code := run(ctx, []string{"doctor", "--json"}, func(key string) string { return env[key] },
 		forbiddenInput{}, &stdout, &stderr)
-	if code != 2 || !strings.Contains(stdout.String(), `"status":"skipped"`) || stderr.Len() != 0 {
-		t.Fatalf("미구현 진단이 성공으로 보였습니다: code=%d stdout=%q stderr=%q",
+	if code != 1 || !strings.Contains(stdout.String(), `"status":"fail"`) || !strings.Contains(stdout.String(), `"status":"skipped"`) {
+		t.Fatalf("취소된 진단이 성공으로 보였습니다: code=%d stdout=%q stderr=%q",
 			code, stdout.String(), stderr.String())
 	}
 }

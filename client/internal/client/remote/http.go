@@ -9,6 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -31,8 +32,11 @@ type Authentication interface {
 	Refresh(context.Context, http.Header) error
 }
 
-// HTTPOptions는 전송·시계·재시도 지연의 시험 경계다. nil은 운영 기본값이다.
+// HTTPOptions는 빌드 판·안전한 로그와 전송·시계·재시도 지연 경계를 지정한다.
+// nil인 경계는 운영 기본값을 사용한다.
 type HTTPOptions struct {
+	Version   string
+	Logger    *slog.Logger
 	Transport http.RoundTripper
 	Now       func() time.Time
 	Jitter    func(time.Duration) (time.Duration, error)
@@ -40,16 +44,17 @@ type HTTPOptions struct {
 }
 
 type callState struct {
-	owner     *Client
-	base      context.Context
-	work      context.Context
-	cancel    context.CancelFunc
-	remaining time.Duration
-	started   time.Time
-	retries   int
-	authUsed  bool
-	entered   bool
-	lease     *callQueue
+	correlation string
+	owner       *Client
+	base        context.Context
+	work        context.Context
+	cancel      context.CancelFunc
+	remaining   time.Duration
+	started     time.Time
+	retries     int
+	authUsed    bool
+	entered     bool
+	lease       *callQueue
 }
 
 func (s *callState) resume() {
@@ -94,6 +99,8 @@ type authorizationRequired struct {
 func (*authorizationRequired) Error() string { return authorize.ErrAuthorization.Error() }
 
 type httpSource struct {
+	logger     *slog.Logger
+	version    string
 	cfg        config.Config
 	auth       Authentication
 	http       *http.Client
@@ -120,7 +127,13 @@ func NewHTTP(cfg config.Config, authentication Authentication, options HTTPOptio
 	if options.Wait == nil {
 		options.Wait = waitDelay
 	}
-	s := &httpSource{cfg: cfg, auth: authentication, now: options.Now, jitter: options.Jitter, wait: options.Wait}
+	if options.Version == "" {
+		options.Version = "dev"
+	}
+	if options.Logger == nil {
+		options.Logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
+	s := &httpSource{cfg: cfg, auth: authentication, now: options.Now, jitter: options.Jitter, wait: options.Wait, version: options.Version, logger: options.Logger}
 	transport := options.Transport
 	if transport == nil {
 		transport = http.DefaultTransport
@@ -196,7 +209,14 @@ func (s *httpSource) reauthorize(ctx context.Context, required *authorizationReq
 	// 호스트 취소는 유지하고 구성의 원격 시간 예산에서 인가 대기만 제외한다.
 	authCtx, cancel := context.WithTimeout(state.base, s.cfg.AuthTimeout())
 	defer cancel()
+	started := time.Now()
+	s.log(ctx, "authorization_start", "", "started", 0)
 	_, err := s.auth.Reauthorize(authCtx, required.credential, required.challenge)
+	outcome := "pass"
+	if err != nil {
+		outcome = contract.ClassifyError(err).Code
+	}
+	s.log(ctx, "authorization_complete", "", outcome, time.Since(started))
 	cancel()
 	state.resume()
 	if err == nil {
@@ -266,6 +286,7 @@ func (s *httpSource) execute(ctx context.Context, method, name string, arguments
 			if retry && state.retries < 3 {
 				cap := []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}[state.retries]
 				state.retries++
+				s.log(ctx, "remote_retry", name, "retry", 0)
 				delay, delayErr := s.jitter(cap)
 				if delayErr != nil || delay < 0 || delay > cap {
 					return nil, completionError(contract.ErrTransport, write && possiblyDelivered)
@@ -281,7 +302,7 @@ func (s *httpSource) execute(ctx context.Context, method, name string, arguments
 }
 
 func completionError(err error, writeUncertain bool) error {
-	if writeUncertain && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, contract.ErrTransport)) {
+	if writeUncertain && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, contract.ErrTransport)) {
 		return contract.ErrIndeterminate
 	}
 	return err
@@ -300,9 +321,23 @@ func (b *requestBody) Read(p []byte) (int, error) {
 
 func (*requestBody) Close() error { return nil }
 
-func (s *httpSource) attempt(ctx context.Context, method, name string, arguments jsontext.Value, key string, authenticated bool) (jsontext.Value, *authorizationRequired, bool, bool, error) {
+func (s *httpSource) attempt(ctx context.Context, method, name string, arguments jsontext.Value, key string, authenticated bool) (result jsontext.Value, required *authorizationRequired, sent, retry bool, finalErr error) {
+	attemptStarted := time.Now()
+	defer func() {
+		outcome := "pass"
+		if required != nil {
+			outcome = "authorization_required"
+		} else if finalErr != nil {
+			outcome = contract.ClassifyError(finalErr).Code
+			if _, ok := errors.AsType[*ProtocolError](finalErr); ok {
+				outcome = "remote_protocol"
+			}
+		}
+		s.log(ctx, "remote_attempt", name, outcome, time.Since(attemptStarted))
+	}()
 	id := uuid.NewV7().String()
 	params := map[string]any{"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": protocolVersion, "io.modelcontextprotocol/clientCapabilities": map[string]any{"extensions": map[string]any{idempotencyExtension: map[string]any{}}}}}
+	params["_meta"].(map[string]any)["io.modelcontextprotocol/clientInfo"] = map[string]string{"name": "agent-context-client", "version": s.version}
 	if method == "tools/call" {
 		params["name"], params["arguments"] = name, arguments
 	}
@@ -378,7 +413,7 @@ func (s *httpSource) attempt(ctx context.Context, method, name string, arguments
 	if !authenticated {
 		return nil, nil, false, false, contract.ErrProtocol
 	}
-	result, err := parseEnvelope(response, raw, id)
+	result, err = parseEnvelope(response, raw, id)
 	if errors.Is(err, errWireProtocol) {
 		return nil, nil, true, false, contract.ErrProtocol
 	}
@@ -394,6 +429,18 @@ func (s *httpSource) attempt(ctx context.Context, method, name string, arguments
 		return nil, nil, true, false, refreshErr
 	}
 	return result, nil, true, false, err
+}
+
+func (s *httpSource) log(ctx context.Context, event, tool, outcome string, duration time.Duration) {
+	state, _ := ctx.Value(stateKey{}).(*callState)
+	attrs := []any{"event", event, "outcome", outcome, "duration_ms", duration.Milliseconds()}
+	if state != nil {
+		attrs = append(attrs, "correlation_id", state.correlation, "retry_index", state.retries)
+	}
+	if _, known := contract.Classify(tool); known {
+		attrs = append(attrs, "tool", tool)
+	}
+	s.logger.InfoContext(ctx, "", attrs...)
 }
 
 func transient(err error) bool {

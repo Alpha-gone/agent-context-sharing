@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"io"
@@ -223,5 +224,28 @@ func TestReadCancellationDoesNotWaitForStdinEOF(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("stdin EOF 없이 취소가 끝나지 않았습니다")
+	}
+}
+
+func TestHostAdmissionLimitReturnsBusyAndKeepsFraming(t *testing.T) {
+	var output bytes.Buffer
+	connection := newTestConnection(t, toolRequest(t, 137, "tools/call", "graph_list", []byte(`{}`))+discoverRequest+"\n", &output)
+	connection.toolPending = 136
+	if _, err := connection.Read(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		ID     int            `json:"id"`
+		Result jsontext.Value `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.ID != 137 {
+		t.Fatal("상한 오류 ID 혼선")
+	}
+	assertClientError(t, response.Result, "client_busy", true)
+	if connection.toolPending != 136 {
+		t.Fatal("초과 요청을 접수했습니다")
 	}
 }

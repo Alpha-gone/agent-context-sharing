@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"bufio"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -11,6 +12,8 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -27,6 +30,7 @@ import (
 	"agent_context_sharing/client/internal/client/authorize"
 	"agent_context_sharing/client/internal/client/config"
 	"agent_context_sharing/client/internal/client/contract"
+	"agent_context_sharing/client/internal/client/host"
 )
 
 var testEncoding = base64.RawURLEncoding
@@ -299,6 +303,7 @@ func TestHTTPWithRealTLSAuthorizationAndConcurrentCalls(t *testing.T) {
 		})
 	}
 	wg.Wait()
+	testTLSStdioRelay(t, c, cfg)
 	if peak.Load() > 8 {
 		t.Fatal("실제 TLS 동시 전송이 8개를 넘었습니다")
 	}
@@ -327,6 +332,68 @@ func TestHTTPWithRealTLSAuthorizationAndConcurrentCalls(t *testing.T) {
 	subject.Store("account-a")
 	if _, err := c.CallTool(t.Context(), "graph_list", jsontext.Value(`{}`)); err != nil || exchanges.Load() != 4 || c.rejected {
 		t.Fatalf("현재 계정의 새 요청이 복구되지 않았습니다: %v", err)
+	}
+}
+
+func testTLSStdioRelay(t *testing.T, upstream *Client, cfg config.Config) {
+	t.Helper()
+	in, input := io.Pipe()
+	output, out := io.Pipe()
+	defer input.Close()
+	defer output.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- host.Run(ctx, in, out, slog.New(slog.NewJSONHandler(io.Discard, nil)), "tls-host", host.NewTools(upstream, cfg.PublicationPolicy(), cfg.AgentID()))
+		out.Close()
+	}()
+	sent := make(chan error, 1)
+	go func() {
+		for index := 1; index <= 100; index++ {
+			frame := fmt.Sprintf(`{"jsonrpc":"2.0","id":"host-%d","method":"tools/call","params":{"name":"graph_list","arguments":{"page_size":%d},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`, index, index)
+			if _, err := io.WriteString(input, frame+"\n"); err != nil {
+				sent <- err
+				return
+			}
+		}
+		sent <- nil
+	}()
+	reader := bufio.NewReader(output)
+	seen := make(map[string]bool)
+	for range 100 {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct {
+			ID     string `json:"id"`
+			Result struct {
+				StructuredContent struct {
+					Index int `json:"index"`
+				} `json:"structuredContent"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(line, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Result.IsError || response.ID != fmt.Sprintf("host-%d", response.Result.StructuredContent.Index) || seen[response.ID] {
+			t.Fatalf("TLS → stdio 응답 혼선: %s", line)
+		}
+		seen[response.ID] = true
+	}
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	input.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("stdio EOF 종료 시간 초과")
 	}
 }
 

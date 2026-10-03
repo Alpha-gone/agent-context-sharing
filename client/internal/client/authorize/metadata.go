@@ -128,8 +128,29 @@ func (m *Manager) getJSON(ctx context.Context, target string, out any) error {
 }
 
 func (m *Manager) discover(ctx context.Context, challenge Challenge) (metadata, error) {
-	var md metadata
-	location := challenge.metadata
+	resource, err := m.protectedResource(ctx, challenge.metadata)
+	if err != nil {
+		return metadata{}, err
+	}
+	return m.authorizationServer(ctx, resource)
+}
+
+// ResourceMetadata는 검증된 발견 단계 사이에서만 전달하는 불투명 값이다.
+type ResourceMetadata struct{ resource, issuer string }
+
+// String은 발견 URL을 출력하지 않는다.
+func (ResourceMetadata) String() string { return "[발견 정보 비공개]" }
+
+// GoString은 상세 디버그 표현에서도 URL을 출력하지 않는다.
+func (r ResourceMetadata) GoString() string { return r.String() }
+
+// CheckProtectedResource는 보호 리소스의 DPoP·scope·리소스 결합을 진단한다.
+func (m *Manager) CheckProtectedResource(ctx context.Context) (ResourceMetadata, error) {
+	return m.protectedResource(ctx, "")
+}
+
+func (m *Manager) protectedResource(ctx context.Context, location string) (ResourceMetadata, error) {
+	var md ResourceMetadata
 	if location == "" {
 		var err error
 		location, err = wellKnown(m.cfg.RemoteURL(), "oauth-protected-resource")
@@ -156,14 +177,25 @@ func (m *Manager) discover(ctx context.Context, challenge Challenge) (metadata, 
 	if err != nil || issuer.RawQuery != "" || issuer.ForceQuery {
 		return md, contract.ErrProtocol
 	}
-	location, err = wellKnown(resource.Servers[0], "oauth-authorization-server")
+	return ResourceMetadata{resource.Resource, resource.Servers[0]}, nil
+}
+
+// CheckAuthorizationServer는 인가 서버의 PKCE·DPoP·공개 클라이언트와 서명 키를 진단한다.
+func (m *Manager) CheckAuthorizationServer(ctx context.Context, resource ResourceMetadata) error {
+	_, err := m.authorizationServer(ctx, resource)
+	return err
+}
+
+func (m *Manager) authorizationServer(ctx context.Context, resource ResourceMetadata) (metadata, error) {
+	var md metadata
+	location, err := wellKnown(resource.issuer, "oauth-authorization-server")
 	if err != nil {
 		return md, err
 	}
 	if err := m.getJSON(ctx, location, &md); err != nil {
 		return md, err
 	}
-	if md.Issuer != resource.Servers[0] || !md.IssuerResponse || !slices.Contains(md.Challenges, "S256") || !slices.Contains(md.Algorithms, "ES256") || !slices.Contains(md.Scopes, "agent-context") || !slices.Contains(md.AuthMethods, "none") || !slices.Contains(md.Responses, "code") || !slices.Contains(md.Grants, "authorization_code") {
+	if md.Issuer != resource.issuer || !md.IssuerResponse || !slices.Contains(md.Challenges, "S256") || !slices.Contains(md.Algorithms, "ES256") || !slices.Contains(md.Scopes, "agent-context") || !slices.Contains(md.AuthMethods, "none") || !slices.Contains(md.Responses, "code") || !slices.Contains(md.Grants, "authorization_code") {
 		return md, contract.ErrProtocol
 	}
 	for _, endpoint := range []string{md.Authorization, md.Token, md.JWKS} {
@@ -191,7 +223,7 @@ func (m *Manager) discover(ctx context.Context, challenge Challenge) (metadata, 
 		seen[key.Kid] = true
 	}
 	md.keys = slices.Clone(set.Keys)
-	md.resource = resource.Resource
+	md.resource = resource.resource
 	return md, nil
 }
 

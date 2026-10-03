@@ -16,7 +16,6 @@ type Remote interface {
 }
 
 // Tools는 도구 목록과 호출에 동일한 기동 정책과 행위 에이전트를 적용한다.
-// stdio 중계와 실제 인증·전송 조립은 후속 단계에서 이 경계를 연결한다.
 type Tools struct {
 	remote  Remote
 	policy  contract.Policy
@@ -45,6 +44,25 @@ func (t *Tools) ListTools(ctx context.Context) ([]contract.Tool, error) {
 
 // CallTool는 정책 밖 호출을 준비 요청 전에 거부하고 입력을 검증·주입한다.
 func (t *Tools) CallTool(ctx context.Context, name string, arguments jsontext.Value) (*contract.Result, error) {
+	var result *contract.Result
+	err := t.withinCall(ctx, func(ctx context.Context) error {
+		var err error
+		result, err = t.callTool(ctx, name, arguments)
+		return err
+	})
+	return result, err
+}
+
+func (t *Tools) withinCall(ctx context.Context, call func(context.Context) error) error {
+	if scoped, ok := t.remote.(interface {
+		WithinCall(context.Context, func(context.Context) error) error
+	}); ok {
+		return scoped.WithinCall(ctx, call)
+	}
+	return call(ctx)
+}
+
+func (t *Tools) callTool(ctx context.Context, name string, arguments jsontext.Value) (*contract.Result, error) {
 	if t.remote == nil || !t.policy.Allows(name) {
 		return nil, contract.ErrProtocol
 	}

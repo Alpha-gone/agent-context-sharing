@@ -9,6 +9,7 @@ import (
 	"agent_context_sharing/client/internal/client/authorize"
 	"agent_context_sharing/client/internal/client/config"
 	"agent_context_sharing/client/internal/client/host"
+	"agent_context_sharing/client/internal/client/remote"
 )
 
 // Serve는 구성 오류를 외부 접근과 호스트 입력 수락 전에 거부한다.
@@ -24,6 +25,10 @@ func Serve(ctx context.Context, getenv func(string) string, in io.ReadCloser, ou
 		return err
 	}
 	defer authentication.Close()
-	// 실제 보호 요청과의 연결은 remote HTTP 어댑터가 마련된 뒤 조립한다.
-	return host.Run(ctx, in, out, logger, version)
+	upstream, err := remote.NewHTTP(cfg, authentication, remote.HTTPOptions{Version: version, Logger: logger})
+	if err != nil {
+		return err
+	}
+	defer upstream.Close()
+	return host.Run(ctx, in, out, logger, version, host.NewTools(upstream, cfg.PublicationPolicy(), cfg.AgentID()))
 }

@@ -327,11 +327,22 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments jsontext.V
 	return contract.NewResult(raw)
 }
 
+// WithinCall은 호스트 입력 준비와 중첩 원격 호출에 하나의 호출 예산을 적용한다.
+// 함수는 동기적으로 실행하며 제공한 context를 다른 호출에 재사용하지 않는다.
+func (c *Client) WithinCall(ctx context.Context, call func(context.Context) error) error {
+	ctx, done := c.callContext(ctx)
+	defer done()
+	return call(ctx)
+}
+
 func (c *Client) callContext(ctx context.Context) (context.Context, func()) {
 	if state, ok := ctx.Value(stateKey{}).(*callState); ok && state.owner == c {
 		return state.base, func() {}
 	}
-	state := &callState{owner: c, remaining: c.timeout}
+	if contract.CorrelationID(ctx) == "" {
+		ctx = contract.WithCorrelation(ctx)
+	}
+	state := &callState{owner: c, remaining: c.timeout, correlation: contract.CorrelationID(ctx)}
 	ctx = context.WithValue(ctx, stateKey{}, state)
 	ctx, cancel := context.WithCancel(ctx)
 	state.base = ctx

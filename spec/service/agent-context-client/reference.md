@@ -2,6 +2,7 @@
 
 | 조회 날짜 | 조회 시각 | 제목 | URL | 요약 | 반영 위치 |
 |-----------|-----------|------|-----|------|-----------|
+| 2026-10-03 | 20:29 KST | MCP 2026-07-28 stdio의 취소 규칙 | https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio#cancellation | stdio의 명시적 취소는 `notifications/cancelled`로 알리며 서버는 취소된 요청에 추가 메시지를 보내지 않아야 한다(`MUST NOT`). 종료와 취소는 구분한다. | SDD 「호스트 stdio」, `host` 응답 생략·출력 대기 취소·EOF 회귀 |
 | 2026-10-03 | 15:09 KST | Microsoft Learn: Working across Windows and Linux file systems | https://learn.microsoft.com/en-us/windows/wsl/filesystems | WSL에서는 PATH의 Windows 실행 파일을 `.exe` 이름으로 호출하고 표준 입력을 연결할 수 있다. 이 기능을 사용한 대체 실행기 설계이며 지원 배포판에서의 실제 가용성은 별도 검증한다. | SDD 「공유 브라우저 인가」, WSL PowerShell 대체 실행기 |
 | 2026-10-03 | 15:09 KST | Microsoft Learn: Start-Process (Windows PowerShell 5.1) | https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/start-process?view=powershell-5.1 | `Start-Process`는 연결된 프로그램으로 대상을 열 수 있으며 기본적으로 종료까지 기다리지 않는다. 이를 WSL URL 열기에 적용하는 것은 설계 선택이며 실제 브라우저·callback 시험을 대체하지 않는다. | SDD 「공유 브라우저 인가」, 고정 PowerShell 명령문과 URL 표준 입력 전달 |
 | 2026-10-03 | 10:56 KST | RFC 9728: Protected Resource Metadata | https://www.rfc-editor.org/rfc/rfc9728.html | well-known 위치는 host와 리소스 경로 사이에 삽입한다. `/mcp` 리소스의 fallback은 `/.well-known/oauth-protected-resource/mcp`이며 서버가 도전에서 알린 루트 위치도 사용할 수 있다. | SDD 「메타데이터 발견과 HTTP 정책」, `authorize.wellKnown`, 3단계 검증 |

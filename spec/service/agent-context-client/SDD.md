@@ -184,6 +184,7 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 
 - 원격 JSON-RPC 식별자를 원래 호스트 식별자로 교체한다.
 - 원격 `serverInfo`는 호스트에 전달하지 않고 클라이언트의 `serverInfo`를 사용한다.
+- 도구 결과의 `_meta`에서 클라이언트 `serverInfo`만 교체하고 나머지 metadata는 보존한다. 단일 왕복 결과의 `resultType`은 `complete`이며 누락한 대역 결과에도 호스트 외피에서 이 값을 추가한다. 정책을 적용한 호스트 목록은 `ttlMs=0`·`cacheScope=private`로 제공해 다음 요청의 원격 계약 재검증을 막지 않는다.
 - 토큰 갱신 HTTP 헤더와 인증 도전은 호스트 결과에 포함하지 않는다.
 - 클라이언트에서 생긴 오류만 별도의 클라이언트 오류 구조로 직렬화한다.
 
@@ -203,7 +204,9 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 }
 ```
 
-`code`는 SRS가 정의한 일곱 클라이언트 오류 중 하나다. `message`는 사용자가 조치할 수 있는 고정 문구이고 내부 오류, URL, 자격 증명과 본문을 넣지 않는다. JSON-RPC 자체가 깨진 호스트 입력만 protocol-level JSON-RPC 오류로 답한다. 원격 서버가 정상 `tools` 결과로 반환한 도메인 오류 8종은 이 구조로 감싸지 않는다.
+`tools/list`의 로컬 실패는 `CallToolResult`로 반환하지 않는다. JSON-RPC 오류 `code=-32603`으로 답하고 `message`에는 같은 고정 문구, `data.client_error`에는 위의 코드·문구·재시도 힌트를 담는다. 목록 결과에 부분 `tools`나 `isError`를 넣지 않으며 SDK의 목록 API에서도 오류로 관찰되어야 한다. 목록의 잘못된 metadata·cursor와 접수 상한 초과에도 이 규칙을 적용한다. 검증된 원격 JSON-RPC 오류는 목록·호출 모두 원격 오류 객체를 유지한다.
+
+`code`는 SRS가 정의한 일곱 클라이언트 오류 중 하나다. `message`는 사용자가 조치할 수 있는 고정 문구이고 내부 오류, URL, 자격 증명과 본문을 넣지 않는다. JSON-RPC 자체가 깨진 호스트 입력도 protocol-level JSON-RPC 오류로 답한다. 원격 서버가 정상 `tools` 결과로 반환한 도메인 오류 8종은 이 구조로 감싸지 않는다.
 
 | 코드 | 생성 조건 | `retryable` |
 |------|-----------|-------------|
@@ -376,20 +379,26 @@ opener는 별도 실행으로 시작하고 callback·opener 오류·인가 conte
 
 표준 입력 reader와 표준 출력 writer는 각각 하나만 둔다. reader가 유효한 요청을 dispatcher에 넘기고, 동시 처리된 결과는 하나의 writer goroutine이 줄 단위로 직렬화한다. stdin EOF는 입력 방향의 종료로 처리한다. 새 요청 수락을 멈추고 진행 중인 원격 호출은 취소하되, 이미 접수한 요청의 로컬 결과와 취소 결과를 기록한 뒤 SDK에 EOF를 전달한다. 종료 신호는 모든 호출 context를 취소한다.
 
+호스트 발견은 SDK에 맡기고 도구 요청은 `host.Tools`에 전달하는 전송 어댑터가 처리한다. 어댑터는 요청별 취소를 관리하고 결과와 검증된 원격 오류 객체를 호스트 ID의 JSON-RPC 외피에 넣는다. 줄 프레이밍에 필요한 공백 제거 외에는 필드·숫자·문자열 표현을 다시 직렬화하지 않는다. 도구 요청의 잘못된 metadata·인자도 `client_protocol`로 분류하되 목록·호출의 직렬화 규칙을 구분한다. `notifications/cancelled`를 받은 요청은 원격으로 취소를 전파하고 아직 기록하지 않은 응답을 생략한다. 뒤늦은 성공·실패에도 추가 메시지를 쓰지 않으며, 출력 대기 중 취소도 writer의 기록 직전에 확인한다. 이미 기록을 시작한 응답과 뒤늦은 취소의 경쟁은 완료된 요청으로 처리한다. 명시적 취소와 달리 EOF의 응답 기록 및 내부 제한 시간 오류는 유지하며, 취소된 읽기와 전달 전 호출은 내부적으로 `client_timeout`, 전달됐을 수 있는 쓰기는 `client_indeterminate`로 구분한다. 목록 준비와 도구 전송은 하나의 원격 호출 범위에서 같은 시간·재시도·인가 예산을 공유한다. 원격 호출 slot은 호스트 응답 기록 또는 생략까지 유지하고 호스트의 미기록 도구 요청도 실행·대기를 합쳐 136개까지 접수한다. 초과 요청은 `client_busy`로 답하고 reader에 출력 backpressure를 적용해 대기 결과가 무제한 쌓이지 않게 한다.
+
 ## `doctor` 진단 설계
 
 `doctor`는 도메인 데이터를 읽거나 쓰는 도구 호출을 하지 않는다. 다음 검사를 순서대로 수행하고 앞 단계 실패가 뒤 단계의 전제라면 뒤 단계를 `skipped`로 표시한다.
 
+전체 검사 성공은 종료 코드 `0`, 검사 실패는 `1`, 사용법 오류는 `2`, 실패 없이 미구현·건너뛴 검사가 있는 경우는 `3`으로 구분한다. 검사 결과에는 고정된 이름·상태·`duration_ms`와 실패 또는 건너뜀의 안전한 조치 문구 `action`만 포함한다. 구성 실패도 전체 검사 목록을 유지하며 이후 검사는 건너뛴다. 네트워크·메타데이터·원격 검사는 요청 제한 시간, 브라우저·인가 검사는 인증 제한 시간으로 제한하고 상위 context의 취소를 우선한다.
+
 | 검사 | 성공 조건 |
 |------|-----------|
 | `configuration` | 모든 환경 변수와 도구 정책이 유효함 |
-| `dns_tls` | 원격 host 해석과 인증서·호스트 이름 검증이 성공함 |
+| `dns_tls` | 원격 HTTP transport와 같은 프록시 경로에서 TLS 인증서·호스트 이름 검증이 성공함 |
 | `protected_resource_metadata` | 구성 resource, DPoP 필수와 ES256 선언이 일치함 |
 | `authorization_server_metadata` | issuer, PKCE S256, ES256, scope와 공개 클라이언트 계약이 일치함 |
 | `browser_loopback` | 임시 루프백 진단 URL을 시스템 브라우저가 열고 callback이 제한 시간 안에 도착함 |
 | `authorization` | 사용자가 인가를 완료하고 DPoP 결합 토큰 검증이 성공함 |
 | `server_discover` | 원격 revision, `tools` capability와 확장 선언을 해석할 수 있음 |
 | `tools_list` | 도구 13종과 스키마가 기대 manifest와 일치함 |
+
+`dns_tls`는 원격 HTTP transport를 복제해 자격 증명 없는 `HEAD` 요청을 구성 MCP URL로 보낸다. 기본 transport의 `HTTPS_PROXY`·`NO_PROXY`를 그대로 따르고 리디렉션은 따라가지 않는다. HTTP 상태 자체는 이 단계의 성공 조건이 아니므로 `401`·`405`도 TLS 연결 성공으로 본다. 이 요청은 JSON-RPC나 도메인 도구 호출을 하지 않는다.
 
 사람 읽기 출력은 검사명, `pass`·`fail`·`skipped`, 안전한 조치 문구와 걸린 시간만 표시한다. JSON 출력은 다음 안정된 외피를 사용한다.
 

@@ -12,8 +12,12 @@ import (
 
 const protocolVersion = "2026-07-28"
 
-// Run은 단일 호스트 MCP 세션을 실행하고 EOF·취소를 같은 종료 경로로 처리한다.
-func Run(ctx context.Context, in io.ReadCloser, out io.Writer, logger *slog.Logger, version string) error {
+// Run은 단일 호스트 MCP 세션을 실행하고 EOF의 응답 기록과 요청별 취소를 처리한다.
+func Run(ctx context.Context, in io.ReadCloser, out io.Writer, logger *slog.Logger, version string, tools ...*Tools) error {
+	var relay *Tools
+	if len(tools) != 0 {
+		relay = tools[0]
+	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "agent-context-client", Version: version}, &mcp.ServerOptions{
 		SupportedProtocolVersions: []string{protocolVersion},
 		Capabilities: &mcp.ServerCapabilities{
@@ -23,7 +27,7 @@ func Run(ctx context.Context, in io.ReadCloser, out io.Writer, logger *slog.Logg
 		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	})
 	logger.Info("", "event", "host_start")
-	err := server.Run(ctx, &stdioTransport{in: in, out: out})
+	err := server.Run(ctx, &stdioTransport{in: in, out: out, tools: relay, logger: logger, version: version})
 	logger.Info("", "event", "host_stop")
 	if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
 		return nil

@@ -21,7 +21,7 @@ type runningHost struct {
 	cancel context.CancelFunc
 }
 
-func startHost(t *testing.T) *runningHost {
+func startHost(t *testing.T, tools ...*Tools) *runningHost {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	inReader, inWriter := io.Pipe()
@@ -33,7 +33,7 @@ func startHost(t *testing.T) *runningHost {
 		cancel: cancel,
 	}
 	go func() {
-		running.err = Run(ctx, inReader, outWriter, slog.New(slog.NewJSONHandler(io.Discard, nil)), "test-version")
+		running.err = Run(ctx, inReader, outWriter, slog.New(slog.NewJSONHandler(io.Discard, nil)), "test-version", tools...)
 		_ = outWriter.Close()
 		close(running.done)
 	}()

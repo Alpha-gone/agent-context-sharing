@@ -6,7 +6,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"errors"
 	"net"
 	"net/http"
 	"strconv"
@@ -18,10 +17,10 @@ import (
 )
 
 // ErrAuthorization은 비밀을 포함하지 않는 client_authorization 오류다.
-var ErrAuthorization = errors.New("사용할 계정과 브라우저 실행 환경을 확인하고 다시 인가하십시오.")
+var ErrAuthorization = contract.ErrAuthorization
 
 // ErrBusy는 공유 인가 대기자 상한의 client_busy 오류다.
-var ErrBusy = errors.New("인증 대기 중인 요청이 많습니다. 이후 다시 시도하십시오.")
+var ErrBusy = contract.ErrBusy
 
 // Options는 외부 접근과 비결정적 시험 경계를 교체한다. nil은 운영 기본값이다.
 type Options struct {

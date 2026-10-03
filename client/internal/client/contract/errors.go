@@ -14,3 +14,9 @@ var ErrIdentityChanged = errors.New("사용할 계정을 확인하고 다시 인
 
 // ErrTransport는 본문이나 주소를 노출하지 않는 client_transport 통신 오류다.
 var ErrTransport = errors.New("원격 연결 상태를 확인한 뒤 다시 시도하십시오.")
+
+// ErrIndeterminate는 전달됐을 수 있는 쓰기의 client_indeterminate 오류다.
+var ErrIndeterminate = errors.New("쓰기 처리 결과를 확인할 수 없습니다. 대상 상태를 조회한 뒤 다음 조치를 결정하십시오.")
+
+// ErrBusy는 입력 크기나 대기열 상한을 넘은 client_busy 오류다.
+var ErrBusy = errors.New("진행 중인 요청이 많거나 입력이 너무 큽니다. 이후 다시 시도하십시오.")

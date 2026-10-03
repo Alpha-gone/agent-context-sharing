@@ -245,18 +245,31 @@ func (m *Manager) Authenticate(ctx context.Context, request *http.Request) (Cred
 	if e1 != nil || e2 != nil || actual != expected {
 		return Credential{}, contract.ErrProtocol
 	}
-	credential, err := m.Credentials(ctx, Challenge{})
-	if err != nil {
+	if _, err := m.Credentials(ctx, Challenge{}); err != nil {
 		return Credential{}, err
+	}
+	return m.Apply(ctx, request)
+}
+
+// Apply는 인가를 시작하지 않고 사용 가능한 현재 토큰과 새 proof만 적용한다.
+func (m *Manager) Apply(ctx context.Context, request *http.Request) (Credential, error) {
+	if request == nil || request.URL == nil || request.Method != http.MethodPost {
+		return Credential{}, contract.ErrProtocol
+	}
+	actual, e1 := normalizedURL(request.URL.String(), false)
+	expected, e2 := normalizedURL(m.cfg.RemoteURL(), false)
+	if e1 != nil || e2 != nil || actual != expected {
+		return Credential{}, contract.ErrProtocol
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return Credential{}, err
 	}
-	if m.closed {
+	if m.closed || !m.current.usable(m.now()) {
 		return Credential{}, ErrAuthorization
 	}
+	credential := m.current
 	proof, err := makeProof(m.key, m.now(), request.URL.String(), credential.raw)
 	if err != nil {
 		return Credential{}, err

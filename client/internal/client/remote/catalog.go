@@ -7,11 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"math"
 	"slices"
 	"strings"
 	"time"
 
+	"agent_context_sharing/client/internal/client/authorize"
 	"agent_context_sharing/client/internal/client/contract"
 )
 
@@ -57,6 +59,13 @@ type Client struct {
 	fingerprint    [sha256.Size]byte
 	hasFingerprint bool
 	rejected       bool
+	timeout        time.Duration
+	closed         context.Context
+	close          func()
+	prepare        func(context.Context) error
+	reauthorize    func(context.Context, *authorizationRequired) error
+	negotiation    func(bool)
+	admission      *callQueue
 }
 
 // New는 인증된 전송 경계와 시험용 시계를 연결한다. nil 시계는 실제 시각을 사용한다.
@@ -85,6 +94,9 @@ func (c *Client) identity(ctx context.Context) (string, error) {
 	}
 	identity, err := c.source.Identity(ctx)
 	if err != nil {
+		if c.reauthorize != nil && errors.Is(err, authorize.ErrAuthorization) {
+			return "", &authorizationRequired{}
+		}
 		return "", err
 	}
 	if identity == "" {
@@ -95,6 +107,20 @@ func (c *Client) identity(ctx context.Context) (string, error) {
 
 // Discover는 revision·tools·서버 식별자와 캐시 힌트를 검증해 반환한다.
 func (c *Client) Discover(ctx context.Context) (Discovery, error) {
+	ctx, done := c.callContext(ctx)
+	defer done()
+	if err := c.enter(ctx); err != nil {
+		return Discovery{}, err
+	}
+	for {
+		result, err := c.discoverPrepared(requestContext(ctx))
+		if recovered, nextErr := c.recoverAuthorization(ctx, err); !recovered {
+			return result, nextErr
+		}
+	}
+}
+
+func (c *Client) discoverPrepared(ctx context.Context) (Discovery, error) {
 	if err := c.lock(ctx); err != nil {
 		return Discovery{}, err
 	}
@@ -115,7 +141,7 @@ func (c *Client) discover(ctx context.Context, identity string) error {
 	if c.discoveryEntry.fresh(c.now(), identity) {
 		return nil
 	}
-	raw, err := c.source.Discover(ctx)
+	raw, err := c.source.Discover(context.WithValue(ctx, cacheKey{}, true))
 	if err != nil {
 		return err
 	}
@@ -153,6 +179,9 @@ func (c *Client) discover(ctx context.Context, identity string) error {
 	}
 	c.discovery = Discovery{Result: bytes.Clone(raw), WriteIdempotency: negotiated}
 	c.discoveryEntry = entry
+	if c.negotiation != nil {
+		c.negotiation(negotiated)
+	}
 	return nil
 }
 
@@ -199,6 +228,20 @@ func (c *Client) cacheHints(raw jsontext.Value, identity string) (cacheEntry, er
 // ListTools는 발견과 도구 캐시를 각각 갱신한 뒤 검증한 목록만 반환한다.
 // 최초 정상 지문이 바뀌면 프로세스를 재시작할 때까지 공개를 거부한다.
 func (c *Client) ListTools(ctx context.Context) (*contract.Catalog, error) {
+	ctx, done := c.callContext(ctx)
+	defer done()
+	if err := c.enter(ctx); err != nil {
+		return nil, err
+	}
+	for {
+		result, err := c.listToolsPrepared(requestContext(ctx))
+		if recovered, nextErr := c.recoverAuthorization(ctx, err); !recovered {
+			return result, nextErr
+		}
+	}
+}
+
+func (c *Client) listToolsPrepared(ctx context.Context) (*contract.Catalog, error) {
 	if err := c.lock(ctx); err != nil {
 		return nil, err
 	}
@@ -213,7 +256,7 @@ func (c *Client) ListTools(ctx context.Context) (*contract.Catalog, error) {
 	if c.catalog != nil && c.catalogEntry.fresh(c.now(), identity) {
 		return c.catalog, nil
 	}
-	raw, err := c.source.ListTools(ctx)
+	raw, err := c.source.ListTools(context.WithValue(ctx, cacheKey{}, true))
 	if err != nil {
 		return nil, err
 	}
@@ -254,8 +297,16 @@ func (c *Client) ListTools(ctx context.Context) (*contract.Catalog, error) {
 }
 
 // CallTool는 캐시 만료를 다시 확인하고 원격 스키마를 통과한 인자만 전달한다.
-// 재시도·DPoP·JSON-RPC 오류 사상은 Source의 후속 전송 구현이 담당한다.
+// 재시도·DPoP·JSON-RPC 외피 검증은 Source의 전송 구현이 담당한다.
 func (c *Client) CallTool(ctx context.Context, name string, arguments jsontext.Value) (*contract.Result, error) {
+	ctx, done := c.callContext(ctx)
+	defer done()
+	if len(arguments) > maxRequestBytes {
+		return nil, contract.ErrBusy
+	}
+	if err := c.enter(ctx); err != nil {
+		return nil, err
+	}
 	catalog, err := c.ListTools(ctx)
 	if err != nil {
 		return nil, err
@@ -263,15 +314,84 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments jsontext.V
 	if err := catalog.ValidateRemoteArguments(name, arguments); err != nil {
 		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
+	if err := requestContext(ctx).Err(); err != nil {
 		return nil, err
 	}
-	raw, err := c.source.CallTool(ctx, name, arguments)
+	raw, err := c.source.CallTool(requestContext(ctx), name, arguments)
 	if err != nil {
 		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
+	if err := requestContext(ctx).Err(); err != nil {
 		return nil, err
 	}
 	return contract.NewResult(raw)
+}
+
+func (c *Client) callContext(ctx context.Context) (context.Context, func()) {
+	if state, ok := ctx.Value(stateKey{}).(*callState); ok && state.owner == c {
+		return state.base, func() {}
+	}
+	state := &callState{owner: c, remaining: c.timeout}
+	ctx = context.WithValue(ctx, stateKey{}, state)
+	ctx, cancel := context.WithCancel(ctx)
+	state.base = ctx
+	state.resume()
+	cleanup := func() {
+		if state.lease != nil {
+			state.lease.release()
+			state.lease = nil
+		}
+		if state.cancel != nil {
+			state.cancel()
+		}
+	}
+	if c.closed == nil {
+		return ctx, func() { cleanup(); cancel() }
+	}
+	stop := context.AfterFunc(c.closed, cancel)
+	if c.closed.Err() != nil {
+		cancel()
+	}
+	return ctx, func() { cleanup(); stop(); cancel() }
+}
+
+func (c *Client) enter(ctx context.Context) error {
+	state := ctx.Value(stateKey{}).(*callState)
+	if state.entered {
+		return requestContext(ctx).Err()
+	}
+	if c.prepare != nil {
+		if err := c.prepare(ctx); err != nil {
+			return err
+		}
+	}
+	if c.admission != nil {
+		if err := c.admission.acquire(requestContext(ctx)); err != nil {
+			return err
+		}
+		state.lease = c.admission
+	}
+	state.entered = true
+	return requestContext(ctx).Err()
+}
+
+func (c *Client) recoverAuthorization(ctx context.Context, err error) (bool, error) {
+	if ctxErr := requestContext(ctx).Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if required, ok := errors.AsType[*authorizationRequired](err); ok && c.reauthorize != nil {
+		if err := c.reauthorize(ctx, required); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, err
+}
+
+// Close는 HTTP 클라이언트의 호출을 취소하고 소유한 transport를 정리한다.
+// 주입된 Source·인증 조정자의 종료는 주입자가 소유한다.
+func (c *Client) Close() {
+	if c.close != nil {
+		c.close()
+	}
 }

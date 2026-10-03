@@ -165,7 +165,7 @@
 | `FR-AGENT_CONTEXT_CLIENT-015` | 클라이언트는 원격 MCP URL에 POST하고 `Authorization: DPoP` 접근 토큰, `DPoP` proof, `MCP-Protocol-Version`, `Mcp-Method`와 `tools/call`의 `Mcp-Name`을 정확히 한 개씩 보내야 한다. | proof의 `htm`·`htu`·`iat`·`jti`·`ath`와 공개 JWK가 현재 요청·접근 토큰·프로세스 키에 맞고, MCP 헤더 값은 JSON-RPC 본문과 일치한다. 협상된 쓰기 호출에는 `Idempotency-Key`를 정확히 하나 더 보낸다. | 확정 | agent-context SDD 「요청 처리 순서」, RFC 9449 |
 | `FR-AGENT_CONTEXT_CLIENT-016` | 클라이언트는 호스트 요청과 원격 요청에 서로 충돌하지 않는 식별자를 사용하고 응답을 원래 호스트 요청에 연결해야 한다. | 100개 이상의 동시 호출에서도 응답, 오류와 취소가 다른 호출에 전달되지 않는다. | 확정 | agent-context SDD 「요청 처리 순서」, 제품 기준선 |
 | `FR-AGENT_CONTEXT_CLIENT-017` | 클라이언트는 원격 성공 결과와 `tools` 결과 안의 도메인 오류를 구조를 잃지 않고 호스트에 전달해야 한다. | `structuredContent`, `content`, `isError`, 현재 `version`, 커서와 부분 상태가 보존된다. `context_flow_get`의 평면 응답과 컨텍스트별 검색 메타데이터도 필드 누락·목록 재정렬·의미 변환 없이 전달된다. | 확정 | agent-context SRS 「응답 구성」, agent-context SDD 「MCP 표면」, 「응답 직렬화」 |
-| `FR-AGENT_CONTEXT_CLIENT-018` | 클라이언트는 호스트 취소와 요청 제한 시간을 원격 HTTP 요청의 취소로 전파해야 한다. | 취소된 응답을 다른 요청에 사용하지 않고 제한 시간은 인증 대기와 도구 호출에 각각 적용한다. | 확정 | MCP `2026-07-28` transport |
+| `FR-AGENT_CONTEXT_CLIENT-018` | 클라이언트는 호스트 취소와 요청 제한 시간을 원격 HTTP 요청의 취소로 전파해야 한다. | 취소된 응답을 다른 요청에 사용하지 않고 인가 대기에는 인증 제한 시간, 인가 대기를 제외한 원격 처리 누적 시간에는 요청 제한 시간을 적용한다. 호스트가 명시한 deadline·취소는 두 단계 모두에 우선한다. | 확정 | MCP `2026-07-28` transport, 제품 기준선 |
 | `FR-AGENT_CONTEXT_CLIENT-019` | 클라이언트는 쓰기 전송 실패의 발생 시점과 멱등성 협상 여부를 기준으로 자동 재시도 가능 여부와 공통 재시도 횟수를 판정해야 한다. | 쓰기 요청은 원격에 전달되지 않았음이 확실하거나 서버와 쓰기 멱등성 확장을 협상하고 보관 기간 안에 같은 키를 재사용할 수 있을 때만 최초 시도 뒤 최대 3회 자동 재시도한다. 재시도 HTTP 시도마다 새 DPoP proof를 만들되 같은 논리적 쓰기의 `Idempotency-Key`는 유지하고, 그 밖의 쓰기 요청을 보낸 뒤 응답을 잃으면 `client_indeterminate`로 반환한다. 읽기 재시도 조건은 `FR-AGENT_CONTEXT_CLIENT-020`이 소유한다. | 확정 | agent-context SDD 「연산 계약」, `TBD-AGENT_CONTEXT_CLIENT-003`, `-006`, `-007` |
 | `FR-AGENT_CONTEXT_CLIENT-020` | 클라이언트는 읽기 연산의 일시적 연결 실패만 공통 재시도 횟수와 지수형 지연 상한 안에서 재시도할 수 있어야 한다. | `graph_list`, `graph_get`, `node_get`, `context_flow_get`, `relation_list`만 대상이며 각 재시도 전 실제 대기는 0부터 차례로 250ms·500ms·1초인 상한 사이에서 무작위로 정한다. 도메인 오류, 프로토콜 오류와 완전한 HTTP 응답은 자동 재시도하지 않는다. | 확정 | agent-context SDD 「연산 계약」, `TBD-AGENT_CONTEXT_CLIENT-003` |
 | `FR-AGENT_CONTEXT_CLIENT-021` | 클라이언트는 `version_conflict`를 자동 병합하거나 자동 재시도하지 않고 현재 `version`을 포함해 호스트에 반환해야 한다. | 에이전트가 재조회·재판단하지 않은 수정 요청이 자동 실행되지 않는다. | 확정 | agent-context SRS 「오류 코드」 |
@@ -322,7 +322,7 @@ mcp_2026_07_28 = true
 | 행위 에이전트 식별자 | UUIDv7, 프로세스 수명 동안 불변 | 아니요 |
 | 클라이언트 이름과 판 | 요청별 `clientInfo`에 사용 | 아니요 |
 | 인증 대기 시간 | 양수이며 무한 대기를 허용하지 않음 | 아니요 |
-| 도구 호출 제한 시간 | 양수이며 호출별 취소로 덮어쓸 수 있음 | 아니요 |
+| 도구 호출 제한 시간 | 양수이며 인가 대기를 제외한 원격 처리 누적 시간을 제한함. 호스트의 명시적 deadline·취소가 우선함 | 아니요 |
 
 접근 토큰, 인가 코드, PKCE 검증자, 비밀번호와 세션 쿠키는 구성 값으로 받지 않는다. 구성 파일이나 환경 변수로 토큰을 주입하는 우회 경로도 제공하지 않는다.
 

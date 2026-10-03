@@ -445,6 +445,10 @@ func (s *Service) Revoke(ctx context.Context, token Token) error {
 
 // JWKS는 검증자에게 비공개 키 없이 공개 키 목록을 제공한다.
 func (s *Service) JWKS(ctx context.Context) (jose.JSONWebKeySet, error) {
+	// 최초 로그인 전의 발견도 발급과 같은 원자적 키 초기화 경로를 사용한다.
+	if _, err := s.activeKey(ctx); err != nil {
+		return jose.JSONWebKeySet{}, err
+	}
 	items, err := s.store.SigningKeys(ctx)
 	if err != nil {
 		return jose.JSONWebKeySet{}, err

@@ -271,8 +271,76 @@ func TestRemoteValidationAndResultPreservation(t *testing.T) {
 	source.listHook = func() { source.identity = "account-b" }
 	source.tools = changeField(t, source.tools, "ttlMs", 0)
 	fresh := New(source, nil)
-	if catalog, err := fresh.ListTools(t.Context()); catalog != nil || !errors.Is(err, contract.ErrProtocol) {
+	if catalog, err := fresh.ListTools(t.Context()); catalog != nil || !errors.Is(err, contract.ErrIdentityChanged) || errors.Is(err, contract.ErrProtocol) {
 		t.Fatalf("조회 도중 인증 주체 변경을 허용했습니다: %v", err)
+	}
+}
+
+func TestIdentityChangeDiscardsResponseAndAllowsNewRequest(t *testing.T) {
+	for _, target := range []string{"discover", "list"} {
+		t.Run(target, func(t *testing.T) {
+			source := newCatalogSource(t)
+			source.discovery = changeField(t, source.discovery, "cacheScope", "private")
+			source.tools = changeField(t, source.tools, "cacheScope", "private")
+			now := time.Now()
+			client := New(source, func() time.Time { return now })
+			if _, err := client.ListTools(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(time.Second)
+			if target == "discover" {
+				source.discoverHook = func(context.Context) error { source.identity = "account-b"; return nil }
+				// 다른 주체의 계약 불일치는 프로토콜 오류나 지문 변경으로 확정하지 않는다.
+				source.discovery = changeField(t, source.discovery, "supportedVersions", []string{"old"})
+			} else {
+				source.listHook = func() { source.identity = "account-b" }
+				var tools []contract.Tool
+				if err := json.Unmarshal(contract.Manifest(), &tools); err != nil {
+					t.Fatal(err)
+				}
+				tools[0].Description = "다른 주체의 설명"
+				source.tools = changeField(t, source.tools, "tools", tools)
+			}
+			before := source.calls.Load()
+			result, err := client.CallTool(t.Context(), "graph_list", jsontext.Value(`{}`))
+			if result != nil || !errors.Is(err, contract.ErrIdentityChanged) || errors.Is(err, contract.ErrProtocol) || source.calls.Load() != before {
+				t.Fatalf("주체 변경 응답이 처리되거나 전송됐습니다: %v", err)
+			}
+			if client.discoveryEntry.identity == "account-b" || client.catalogEntry.identity == "account-b" {
+				t.Fatal("폐기할 응답이 새 주체의 캐시에 들어갔습니다")
+			}
+			if client.rejected {
+				t.Fatal("정상 계정 전환이 영구 프로토콜 거부로 바뀌었습니다")
+			}
+			source.discoverHook, source.listHook = nil, nil
+			source.discovery, source.tools = newCatalogSource(t).discovery, newCatalogSource(t).tools
+			source.discovery = changeField(t, source.discovery, "cacheScope", "private")
+			source.tools = changeField(t, source.tools, "cacheScope", "private")
+			if _, err := client.CallTool(t.Context(), "graph_list", jsontext.Value(`{}`)); err != nil {
+				t.Fatalf("새 주체의 명시적인 재요청이 실패했습니다: %v", err)
+			}
+			if client.catalogEntry.identity != "account-b" || source.calls.Load() != before+1 {
+				t.Fatal("새 주체의 요청이 재검증되지 않았습니다")
+			}
+		})
+	}
+}
+
+func TestCancellationPrecedesIdentityChange(t *testing.T) {
+	source := newCatalogSource(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	source.listHook = func() { source.identity = "account-b"; cancel() }
+	if _, err := New(source, nil).ListTools(ctx); !errors.Is(err, context.Canceled) || errors.Is(err, contract.ErrIdentityChanged) {
+		t.Fatalf("취소보다 주체 변경을 먼저 분류했습니다: %v", err)
+	}
+}
+
+func TestEmptyNextCursorIsAccepted(t *testing.T) {
+	source := newCatalogSource(t)
+	source.tools = changeField(t, source.tools, "nextCursor", "")
+	if _, err := New(source, nil).ListTools(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 

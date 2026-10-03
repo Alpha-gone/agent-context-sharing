@@ -41,6 +41,9 @@ func testPolicy(t *testing.T, mode string, names ...string) Policy {
 }
 
 func TestClassificationAndPolicies(t *testing.T) {
+	if len(toolTraits) != len(manifestTools(t)) {
+		t.Fatal("분류표와 manifest의 도구 수가 다릅니다")
+	}
 	reads, writes, injections := 0, 0, 0
 	for _, tool := range manifestTools(t) {
 		kind, ok := Classify(tool.Name)
@@ -100,7 +103,7 @@ func TestClassificationAndPolicies(t *testing.T) {
 		{"allowlist", nil}, {"allowlist", []string{""}}, {"allowlist", []string{"audit"}},
 		{"allowlist", []string{"node_get", "node_get"}},
 	} {
-		if _, err := NewPolicy(tc.mode, tc.list); !errors.Is(err, ErrProtocol) {
+		if _, err := NewPolicy(tc.mode, tc.list); !errors.Is(err, ErrConfiguration) || errors.Is(err, ErrProtocol) {
 			t.Fatalf("잘못된 정책을 허용했습니다: %+v", tc)
 		}
 	}

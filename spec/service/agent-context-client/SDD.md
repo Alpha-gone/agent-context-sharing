@@ -94,6 +94,8 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 
 도구 정책은 원격 13종 계약을 검증한 뒤 적용한다. `read_only`는 `graph_list`, `graph_get`, `node_get`, `context_flow_get`, `relation_list`만 노출한다. allowlist는 원격 목록과의 교집합이 아니라, 기동 시 검증된 13종 중 명시된 도구만 노출한다. 따라서 오타나 알 수 없는 이름이 조용히 사라지지 않는다.
 
+`config.Load`는 환경 변수 문자열을 해석한 뒤 `contract.NewPolicy`로 정책을 한 번 검증해 보관한다. 도구 이름·읽기/쓰기 분류·행위 에이전트 주입 여부는 `contract`의 단일 분류표가 소유하며, 공유 manifest와의 이름 일치는 계약 시험으로 확인한다. `config`는 별도 도구 이름 목록을 두지 않고 이 검증을 재사용한다. 잘못된 모드·allowlist는 `contract.ErrConfiguration`으로 분류하고 호스트 오류 코드는 `client_configuration`, `retryable=false`다. 오류와 기동 진단에는 환경 변수 이름과 고정 조치 문구만 넣는다.
+
 ## 패키지 경계
 
 서버는 저장소 루트의 `agent_context_sharing` Go 모듈과 기존 `cmd/`, `internal/`, `migrations/`를 유지한다. 클라이언트는 `client/go.mod`의 `agent_context_sharing/client` Go 모듈로 분리하고 실행 명령과 내부 패키지를 모두 `client/` 아래에 둔다. 각 모듈의 의존성은 자체 `go.mod`와 `go.sum`이 소유하며, 클라이언트는 서버 모듈의 `internal/` 패키지를 import하거나 `replace`로 참조하지 않는다. 서버 공개 계약은 MCP 전송과 도구 스냅샷으로 검증한다.
@@ -104,7 +106,7 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 |------|------|----------------|
 | `client/cmd/client` | 명령 해석, 빌드 정보, 신호 처리와 조립 | 아래 모든 클라이언트 패키지 |
 | `client/internal/client` | `serve` 수명주기와 구성 요소 조립 | `config`, `host`, `remote`, `authorize`, `contract` |
-| `client/internal/client/config` | 환경 변수 읽기와 기동 전 검증 | 표준 라이브러리 |
+| `client/internal/client/config` | 환경 변수 읽기와 기동 전 검증 | `contract`, 표준 라이브러리 |
 | `client/internal/client/contract` | 도구 13종 manifest, 읽기·쓰기 분류, 정책, 스키마 비교·변환·입력 선검증 | 표준 라이브러리, MCP SDK 타입 |
 | `client/internal/client/host` | MCP `stdio` 서버, 요청 상관관계, 로컬 오류 직렬화와 단일 stdout writer | `contract`, 원격 호출 인터페이스 |
 | `client/internal/client/authorize` | 메타데이터 발견, 브라우저 PKCE, 루프백 콜백, DPoP 키·proof와 토큰 상태 | `config`, 표준 HTTP·암호 패키지 |
@@ -165,9 +167,13 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 
 원격 도구의 설명은 첫 정상 조회값을 그대로 노출한다. 재검증 때 이름, 설명 또는 정규화한 `inputSchema` fingerprint가 처음 값과 다르면 부분 갱신하지 않고 `client_protocol`로 실패한다. `ttlMs`가 없거나 `0`이면 다음 요청마다 다시 조회한다. `private` 캐시는 현재 프로세스와 현재 인증 주체 안에서만 사용하고, `public`이어도 파일이나 다른 프로세스와 공유하지 않는다.
 
+발견·도구 목록 조회의 시작과 응답 수신·캐시 반영 직전에 인증 주체를 대조한다. 주체가 바뀌면 해당 응답을 캐시·공개하거나 지문 변경 판정에 사용하지 않고 `contract.ErrIdentityChanged`로 중단한다. 이 오류의 호스트 코드는 `client_authorization`, `retryable=true`이며 자동 재인가·도구 전송·재시도를 시작하지 않는다. 호출자는 사용할 계정을 확인하고 다시 인가한 뒤 새 요청을 보내며, 새 조회는 현재 인증 주체의 캐시 범위를 다시 검사한다. 취소·제한 시간은 주체 변경보다 우선한다.
+
+첫 출시는 도구 13종을 한 목록으로 검증한다. `nextCursor`는 생략하거나 빈 문자열이어야 하며, 다음 페이지를 가리키는 값·`null`·문자열 이외의 값은 `client_protocol`로 거부한다. 현재 서버가 이 필드를 생략하는 계약과 호환되며, 페이지 조회 지원을 추가하려면 이 검증 경계를 먼저 변경한다.
+
 ### 호출 변환과 응답 보존
 
-`tools/call`은 공개 정책과 캐시된 호스트 스키마로 먼저 검증한다. 정책에 없는 도구 호출은 원격에 보내지 않고 `client_protocol`로 반환한다. 여섯 변경 도구에는 검증된 기동 구성의 `created_by_agent`를 새 인자 객체에 주입하며, 호스트가 같은 이름의 필드를 우회해 보낸 경우 입력 오류로 거부한다.
+`tools/call`은 공개 정책과 캐시된 호스트 스키마로 먼저 검증한다. 정책에 없는 도구 호출은 원격에 보내지 않고 `client_protocol`로 반환한다. 여섯 변경 도구에는 검증된 기동 구성의 `created_by_agent`를 새 인자 객체에 주입하며, 호스트가 같은 이름의 필드를 우회해 보낸 경우 `contract.ErrProtocol`로 분류해 `client_protocol`·`retryable=false`로 거부한다. 타입·필수 값·열거형·길이·개수·형식 등 호스트 입력 스키마의 다른 위반도 같은 코드로 처리한다. 새 입력 오류 코드를 만들거나 서버 도메인 오류 `invalid_argument`로 바꾸지 않는다.
 
 원격 응답은 JSON-RPC 외피를 검증한 뒤 도구 결과의 `structuredContent`, `content`, `isError`, 배열 순서, 커서, `version`과 부분 상태를 `json.RawMessage` 기반으로 보존한다. 다음 값만 경계에 맞게 바꾼다.
 
@@ -197,7 +203,7 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 | 코드 | 생성 조건 | `retryable` |
 |------|-----------|-------------|
 | `client_configuration` | 기동 환경 변수나 도구 정책이 유효하지 않음 | `false` |
-| `client_authorization` | 사용자 거부, callback·issuer 검증 실패, 브라우저 실행 실패 또는 OAuth 교환 실패 | `true` |
+| `client_authorization` | 사용자 거부, callback·issuer 검증 실패, 브라우저 실행 실패, OAuth 교환 실패 또는 발견·목록 조회 중 인증 주체 변경 | `true` |
 | `client_transport` | 허용된 재시도 뒤에도 DNS·연결·TLS 또는 응답 수신에 실패함 | `true` |
 | `client_timeout` | 호출 deadline이나 인증 대기 제한 시간을 넘김 | `true` |
 | `client_protocol` | MCP·도구·DPoP 계약, 완전한 HTTP 응답 또는 크기 계약이 맞지 않음 | `false` |
@@ -433,6 +439,7 @@ sequenceDiagram
 - 요청 본문 쓰기 전·도중·후 연결 종료와 읽기·협상/비협상 쓰기의 재시도 차이
 - 두 갱신 헤더 중 하나 누락, 겹친 갱신과 오래된 요청의 늦은 `401`
 - 도구 누락·추가·스키마 변경, 정책 밖 호출과 `created_by_agent` 우회 입력
+- 정책 검증의 `client_configuration` 분류, 발견·목록 조회 중 인증 주체 변경의 `client_authorization` 분류와 응답 폐기·현재 주체의 재조회
 - 각 크기 상한의 경계값과 1바이트 초과, 고압축 응답, 대기열 129번째 요청
 - 취소된 단일 인가 대기자, 마지막 대기자 취소와 종료 뒤 늦은 callback
 - 로그·오류·doctor·파일 시스템의 비밀과 본문 비노출 검사
@@ -445,8 +452,8 @@ sequenceDiagram
 | `FR-AGENT_CONTEXT_CLIENT-002` | 「lifecycle과 도구 공개」, 「HTTP 요청 구성」 | 요청별 `_meta`, 구형 handshake 비사용 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-003` | 「lifecycle과 도구 공개」 | `server/discover`, 13종 목록과 primitive 회귀 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-004` | 「lifecycle과 도구 공개」 | 원격 목록·스키마 누락/추가/불일치 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-005` | 「호출 변환과 응답 보존」 | 타입·필수·열거·길이·개수 선검증 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-006` | 「호출 변환과 응답 보존」 | 여섯 도구의 스키마 제거·구성값 주입 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-005` | 「호출 변환과 응답 보존」 | 타입·필수·열거·길이·개수 선검증과 `client_protocol` 분류 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-006` | 「호출 변환과 응답 보존」 | 여섯 도구의 스키마 제거·구성값 주입·우회 입력의 `client_protocol` 분류 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-007` | 「메타데이터 발견과 HTTP 정책」 | 도전·well-known discovery와 resource 전환 거부 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-008` | 「공유 브라우저 인가」 | 인가 요청 파라미터와 시스템 브라우저 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-009` | 「공유 브라우저 인가」 | IPv4·IPv6 loopback, callback 변조·중복 시험 |
@@ -468,9 +475,9 @@ sequenceDiagram
 | `FR-AGENT_CONTEXT_CLIENT-025` | 「공유 브라우저 인가」 | opener 실패, listener 정리와 URL 비노출 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-026` | 「종료」 | EOF 직전 로컬·취소 결과 보존, 신호·비정상 입력 뒤 자원 정리 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-027` | 「lifecycle과 도구 공개」 | 양쪽 발견, revision·capability·확장 협상 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-028` | 「lifecycle과 도구 공개」 | TTL 0·만료·scope·fingerprint 변경 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-028` | 「lifecycle과 도구 공개」 | TTL 0·만료·scope·fingerprint 변경, 조회 중 주체 변경의 응답 폐기·`client_authorization` 분류 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-029` | 「공유 브라우저 인가」 | 대기자별 취소와 마지막 대기자 종료 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-030` | 「배포 구성」, 「lifecycle과 도구 공개」 | 세 정책의 list/call 일치와 권한 비확대 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-030` | 「배포 구성」, 「lifecycle과 도구 공개」 | 구성·계약 공통 검증, 정책 오류의 `client_configuration` 분류, 세 정책의 list/call 일치와 권한 비확대 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-031` | 「doctor 진단 설계」 | 사람/JSON 출력, 검사 단계와 비밀 비노출 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-032` | 「논리적 호출 상태」, 「전송 재시도 상태기계」 | 8종 UUIDv7 키 생성·재사용·폐기 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-033` | 「DPoP 키와 proof」 | 프로세스 단일 키·재시작 thumbprint 변경 시험 |

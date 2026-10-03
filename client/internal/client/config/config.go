@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"uuid"
+
+	"agent_context_sharing/client/internal/client/contract"
 )
 
 // Policy는 호스트에 공개할 도구 범위를 나타낸다.
@@ -31,6 +33,7 @@ type Config struct {
 	requestTimeout time.Duration
 	policy         Policy
 	allowlist      []string
+	publication    contract.Policy
 }
 
 // RemoteURL은 검증한 원격 MCP 주소를 반환한다.
@@ -54,12 +57,8 @@ func (c Config) ToolPolicy() Policy { return c.policy }
 // ToolAllowlist는 검증된 도구 이름을 복사해 반환한다.
 func (c Config) ToolAllowlist() []string { return slices.Clone(c.allowlist) }
 
-var knownTools = map[string]bool{
-	"graph_list": true, "graph_create": true, "graph_get": true, "graph_update": true,
-	"node_create": true, "node_get": true, "node_update": true,
-	"node_discard": true, "node_restore": true, "context_flow_get": true,
-	"relation_list": true, "relation_confirm": true, "relation_discard": true,
-}
+// PublicationPolicy는 기동 시 검증한 목록·호출 공통 공개 정책을 반환한다.
+func (c Config) PublicationPolicy() contract.Policy { return c.publication }
 
 // Load는 환경 변수를 읽고 외부 접근 전에 모든 기동 값을 검증한다.
 func Load(getenv func(string) string) (Config, error) {
@@ -101,27 +100,15 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.policy == "" {
 		cfg.policy = PolicyAll
 	}
-	if cfg.policy != PolicyAll && cfg.policy != PolicyReadOnly && cfg.policy != PolicyAllowlist {
-		return Config{}, fmt.Errorf("AGENT_CONTEXT_CLIENT_TOOL_POLICY: all, read_only 또는 allowlist가 필요합니다")
-	}
 	list := getenv("AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST")
-	if cfg.policy != PolicyAllowlist {
-		if list != "" {
-			return Config{}, fmt.Errorf("AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST: allowlist 정책에서만 지정할 수 있습니다")
+	if list != "" {
+		for name := range strings.SplitSeq(list, ",") {
+			cfg.allowlist = append(cfg.allowlist, strings.TrimSpace(name))
 		}
-		return cfg, nil
 	}
-	if list == "" {
-		return Config{}, fmt.Errorf("AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST: 도구 이름이 필요합니다")
-	}
-	seen := make(map[string]bool)
-	for name := range strings.SplitSeq(list, ",") {
-		name = strings.TrimSpace(name)
-		if name == "" || !knownTools[name] || seen[name] {
-			return Config{}, fmt.Errorf("AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST: 빈 값·중복·알 수 없는 도구는 허용하지 않습니다")
-		}
-		seen[name] = true
-		cfg.allowlist = append(cfg.allowlist, name)
+	cfg.publication, err = contract.NewPolicy(string(cfg.policy), cfg.allowlist)
+	if err != nil {
+		return Config{}, fmt.Errorf("AGENT_CONTEXT_CLIENT_TOOL_POLICY·AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST: %w", err)
 	}
 	return cfg, nil
 }

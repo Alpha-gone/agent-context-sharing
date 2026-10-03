@@ -119,6 +119,9 @@ func (c *Client) discover(ctx context.Context, identity string) error {
 	if err != nil {
 		return err
 	}
+	if err := c.sameIdentity(ctx, identity); err != nil {
+		return err
+	}
 	var result struct {
 		SupportedVersions []string `json:"supportedVersions"`
 		Capabilities      struct {
@@ -158,11 +161,14 @@ func (c *Client) sameIdentity(ctx context.Context, identity string) error {
 		return err
 	}
 	current, err := c.source.Identity(ctx)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	if err != nil {
 		return err
 	}
 	if current != identity {
-		return contract.ErrProtocol
+		return contract.ErrIdentityChanged
 	}
 	return nil
 }
@@ -211,6 +217,9 @@ func (c *Client) ListTools(ctx context.Context) (*contract.Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := c.sameIdentity(ctx, identity); err != nil {
+		return nil, err
+	}
 	var result struct {
 		Tools      []contract.Tool `json:"tools"`
 		NextCursor jsontext.Value  `json:"nextCursor"`
@@ -232,12 +241,12 @@ func (c *Client) ListTools(ctx context.Context) (*contract.Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := c.sameIdentity(ctx, identity); err != nil {
+		return nil, err
+	}
 	if c.hasFingerprint && c.fingerprint != catalog.Fingerprint() {
 		c.rejected = true
 		return nil, contract.ErrProtocol
-	}
-	if err := c.sameIdentity(ctx, identity); err != nil {
-		return nil, err
 	}
 	c.fingerprint, c.hasFingerprint = catalog.Fingerprint(), true
 	c.catalog, c.catalogEntry = catalog, entry

@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -103,12 +104,61 @@ func TestAllowedToolNamesMatchSharedContract(t *testing.T) {
 	if err := json.Unmarshal(contract.Manifest(), &tools); err != nil {
 		t.Fatal(err)
 	}
-	if len(tools) != len(knownTools) {
-		t.Fatalf("구성 허용 도구 수 %d, 공개 계약 도구 수 %d", len(knownTools), len(tools))
-	}
 	for _, tool := range tools {
-		if !knownTools[tool.Name] {
-			t.Fatalf("공개 계약 도구 %q가 구성 허용 목록에 없습니다", tool.Name)
+		env := validEnvironment()
+		env["AGENT_CONTEXT_CLIENT_TOOL_POLICY"] = "allowlist"
+		env["AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST"] = tool.Name
+		cfg, err := Load(func(key string) string { return env[key] })
+		if err != nil || !cfg.PublicationPolicy().Allows(tool.Name) {
+			t.Fatalf("공개 계약 도구 %q가 구성 정책에 없습니다: %v", tool.Name, err)
+		}
+	}
+}
+
+func TestLoadedPolicyMatchesContractClassification(t *testing.T) {
+	var tools []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(contract.Manifest(), &tools); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"all", "read_only", "allowlist"} {
+		env := validEnvironment()
+		env["AGENT_CONTEXT_CLIENT_TOOL_POLICY"] = mode
+		if mode == "allowlist" {
+			env["AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST"] = "graph_list, node_create"
+		}
+		cfg, err := Load(func(key string) string { return env[key] })
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range tools {
+			kind, ok := contract.Classify(tool.Name)
+			if !ok {
+				t.Fatalf("분류되지 않은 도구: %s", tool.Name)
+			}
+			want := mode == "all" || mode == "read_only" && kind == contract.Read || mode == "allowlist" && (tool.Name == "graph_list" || tool.Name == "node_create")
+			if cfg.PublicationPolicy().Allows(tool.Name) != want {
+				t.Fatalf("%s/%s의 정책이 다릅니다", mode, tool.Name)
+			}
+		}
+	}
+}
+
+func TestInvalidPolicyIsConfigurationError(t *testing.T) {
+	for _, tc := range []struct{ mode, list string }{
+		{"private", ""}, {"allowlist", ""}, {"all", "graph_list"},
+		{"allowlist", "unknown"}, {"allowlist", "graph_list, graph_list"},
+		{"allowlist", "graph_list,"}, {"allowlist", " "},
+	} {
+		env := validEnvironment()
+		env["AGENT_CONTEXT_CLIENT_TOOL_POLICY"], env["AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST"] = tc.mode, tc.list
+		_, err := Load(func(key string) string { return env[key] })
+		if !errors.Is(err, contract.ErrConfiguration) || errors.Is(err, contract.ErrProtocol) {
+			t.Fatalf("잘못된 정책의 오류 분류가 다릅니다: %v", err)
+		}
+		if strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "unknown") {
+			t.Fatal("오류에 입력값이 노출됐습니다")
 		}
 	}
 }

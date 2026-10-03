@@ -6,15 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"errors"
 	"slices"
 	"strings"
 	"sync"
 	"uuid"
 )
-
-// ErrProtocol은 입력값이나 원격 본문을 포함하지 않는 계약 오류다.
-var ErrProtocol = errors.New("원격 MCP 응답 또는 도구 입력 계약이 일치하지 않습니다.")
 
 // Tool은 이름·설명과 원문 JSON 입력 스키마를 보관한다.
 type Tool struct {
@@ -33,18 +29,34 @@ const (
 	Write Kind = "write"
 )
 
-var toolKinds = map[string]Kind{
-	"graph_list": Read, "graph_get": Read, "node_get": Read, "context_flow_get": Read, "relation_list": Read,
-	"graph_create": Write, "graph_update": Write, "node_create": Write, "node_update": Write,
-	"node_discard": Write, "node_restore": Write, "relation_confirm": Write, "relation_discard": Write,
+var toolTraits = map[string]struct {
+	kind  Kind
+	agent bool
+}{
+	"graph_list":       {Read, false},
+	"graph_get":        {Read, false},
+	"node_get":         {Read, false},
+	"context_flow_get": {Read, false},
+	"relation_list":    {Read, false},
+	"graph_create":     {Write, false},
+	"graph_update":     {Write, false},
+	"node_create":      {Write, true},
+	"node_update":      {Write, true},
+	"node_discard":     {Write, true},
+	"node_restore":     {Write, true},
+	"relation_confirm": {Write, true},
+	"relation_discard": {Write, true},
 }
 
 // Classify는 공개 13종만 읽기 또는 쓰기로 분류한다.
-func Classify(name string) (Kind, bool) { kind, ok := toolKinds[name]; return kind, ok }
+func Classify(name string) (Kind, bool) {
+	trait, ok := toolTraits[name]
+	return trait.kind, ok
+}
 
 // InjectsAgent는 구성의 행위 에이전트 식별자를 주입하는 여섯 도구를 구분한다.
 func InjectsAgent(name string) bool {
-	return slices.Contains([]string{"node_create", "node_update", "node_discard", "node_restore", "relation_confirm", "relation_discard"}, name)
+	return toolTraits[name].agent
 }
 
 // Policy는 목록과 호출에서 함께 사용하는 불변 공개 정책이다.
@@ -57,25 +69,25 @@ func NewPolicy(mode string, allowlist []string) (Policy, error) {
 		mode = "all"
 	}
 	if mode != "all" && mode != "read_only" && mode != "allowlist" {
-		return Policy{}, ErrProtocol
+		return Policy{}, ErrConfiguration
 	}
 	if mode != "allowlist" {
 		if len(allowlist) != 0 {
-			return Policy{}, ErrProtocol
+			return Policy{}, ErrConfiguration
 		}
-		for name, kind := range toolKinds {
-			if mode == "all" || kind == Read {
+		for name, trait := range toolTraits {
+			if mode == "all" || trait.kind == Read {
 				p.allowed[name] = true
 			}
 		}
 		return p, nil
 	}
 	if len(allowlist) == 0 {
-		return Policy{}, ErrProtocol
+		return Policy{}, ErrConfiguration
 	}
 	for _, name := range allowlist {
 		if _, ok := Classify(name); !ok || p.allowed[name] {
-			return Policy{}, ErrProtocol
+			return Policy{}, ErrConfiguration
 		}
 		p.allowed[name] = true
 	}

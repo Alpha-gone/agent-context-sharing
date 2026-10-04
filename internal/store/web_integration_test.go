@@ -1,6 +1,7 @@
 package store
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -97,6 +98,15 @@ func TestGraphVisualizationStartsFromGlobalSummaries(t *testing.T) {
 	if len(zero.Contexts) != 1 || zero.Contexts[0].ID != createdSummary.ID {
 		t.Fatalf("0홉 시작점 = %#v", zero.Contexts)
 	}
+	// 웹은 플랜의 홉 한도 0을 최대 정수 깊이로 바꿔 전달한다. 유한한 그래프의
+	// 탐색은 시작점 밖의 근거와 간선을 반환한 뒤 방문할 노드가 없어 끝나야 한다.
+	unlimited, err := store.GraphVisualization(t.Context(), graphID, math.MaxInt, 200)
+	if err != nil {
+		t.Fatalf("홉 한도 없는 시각화 조회: %v", err)
+	}
+	if len(unlimited.Contexts) != 2 || len(unlimited.Edges) != 1 || unlimited.Distances[createdSource.ID] != 1 || unlimited.Truncated {
+		t.Fatalf("홉 한도 없는 시각화 = %#v", unlimited)
+	}
 }
 
 // TestGraphVisualizationAppliesHopNodeLimit는 화면이 홉 조회의 결과 상한과 절단 경계를
@@ -124,7 +134,7 @@ func TestGraphVisualizationAppliesHopNodeLimit(t *testing.T) {
 		}
 	}
 
-	capped, err := store.GraphVisualization(t.Context(), graphID, 4, 2)
+	capped, err := store.GraphVisualization(t.Context(), graphID, math.MaxInt, 2)
 	if err != nil {
 		t.Fatalf("상한 적용 시각화 조회: %v", err)
 	}
@@ -134,7 +144,7 @@ func TestGraphVisualizationAppliesHopNodeLimit(t *testing.T) {
 	assertEdgesInsideResult(t, capped)
 
 	// 상한 0은 「계정 플랜」이 선언한 대로 한도 없음이므로 절단하지 않는다.
-	unlimited, err := store.GraphVisualization(t.Context(), graphID, 4, 0)
+	unlimited, err := store.GraphVisualization(t.Context(), graphID, math.MaxInt, 0)
 	if err != nil {
 		t.Fatalf("무제한 시각화 조회: %v", err)
 	}

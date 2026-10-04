@@ -648,31 +648,55 @@ func (s *Store) PendingRestoreRequests(ctx context.Context) ([]model.RestoreRequ
 	return requests, nil
 }
 
-// OperatorRestoreGraph은 대기 요청이 있는 자동 삭제 그래프만 내용 조회 없이 복구한다.
+// OperatorRestoreGraph은 자동 삭제 그래프를 복구하고 요청자의 직접 소유자 등급을 복원한다.
 func (s *Store) OperatorRestoreGraph(ctx context.Context, graphID, operatorID model.ID) error {
 	if !graphID.IsV7() || !operatorID.IsV7() {
 		return fmt.Errorf("운영자 그래프 복구 인자가 올바르지 않다")
 	}
-	requests, err := s.PendingRestoreRequests(ctx)
-	if err != nil {
-		return err
-	}
-	var request model.RestoreRequest
-	found := false
-	for _, candidate := range requests {
-		if candidate.GraphID == graphID {
-			request, found = candidate, true
-			break
-		}
-	}
-	if !found {
-		return ErrNotFound
-	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return fmt.Errorf("운영자 그래프 복구 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// 등급 변경과 같은 그래프 잠금을 쥔 뒤 요청을 읽어야 동시 복구와 회수가
+	// 서로의 미커밋 상태를 기준으로 처리되거나 이미 처리한 요청이 재사용되지 않는다.
+	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return err
+	}
+	var rawRequesterID string
+	err = tx.QueryRow(ctx, `
+		SELECT request.requester_account_id
+		FROM public.web_audit_log AS request
+		JOIN public.context_graph AS graph ON graph.graph_id = request.graph_id
+		WHERE request.graph_id = $1 AND request.target_kind = 'restore_request' AND request.action = 'request'
+		  AND graph.deleted_at IS NOT NULL AND graph.grace_started_at IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM public.web_audit_log AS restored
+			WHERE restored.target_kind = 'operator_restore' AND restored.graph_id = request.graph_id
+			  AND restored.occurred_at > request.occurred_at
+		  )
+		ORDER BY request.occurred_at ASC, request.audit_id ASC
+		LIMIT 1`, graphID.String()).Scan(&rawRequesterID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("복구할 요청 조회: %w", err)
+	}
+	requesterID, err := model.ParseID(rawRequesterID)
+	if err != nil {
+		return fmt.Errorf("복구 요청자 식별자: %w", err)
+	}
+	var before *string
+	if err := tx.QueryRow(ctx, `SELECT grade FROM public.graph_grant WHERE graph_id = $1 AND subject_type = 'account' AND subject_id = $2`, graphID.String(), requesterID.String()).Scan(&before); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("복구 전 직접 등급 조회: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO public.graph_grant (graph_id, subject_type, subject_id, grade)
+		VALUES ($1, 'account', $2, 'owner')
+		ON CONFLICT (graph_id, subject_type, subject_id) DO UPDATE SET grade = EXCLUDED.grade`, graphID.String(), requesterID.String()); err != nil {
+		return fmt.Errorf("복구 요청자 소유자 등급 복원: %w", err)
+	}
 	result, err := tx.Exec(ctx, `UPDATE public.context_graph SET deleted_at = NULL, grace_started_at = NULL, grace_expires_at = NULL WHERE graph_id = $1 AND deleted_at IS NOT NULL AND grace_started_at IS NOT NULL`, graphID.String())
 	if err != nil {
 		return fmt.Errorf("운영자 그래프 복구: %w", err)
@@ -680,7 +704,11 @@ func (s *Store) OperatorRestoreGraph(ctx context.Context, graphID, operatorID mo
 	if result.RowsAffected() == 0 {
 		return ErrInvalidState
 	}
-	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: "operator_restore", Action: "restore", ActorID: operatorID, GraphID: graphID, RequesterAccountID: request.RequestedBy})
+	return s.commitWebAudit(ctx, tx, webAuditRecord{
+		TargetKind: "operator_restore", Action: "restore", ActorID: operatorID, GraphID: graphID,
+		RequesterAccountID: requesterID, SubjectType: GrantSubjectAccount, SubjectID: requesterID,
+		BeforeGrade: nullableGrade(before), AfterGrade: model.GraphGradeOwner,
+	})
 }
 
 func containsGraph(graphs []model.Graph, graphID model.ID) bool {

@@ -34,6 +34,7 @@ const (
 var eventRelationKinds = []string{"precedes", "causes", "part_of", "relates_to"}
 
 type adversarialConditions struct {
+	IndexTargets      string  `json:"index_targets"`
 	Repeats           int     `json:"repeats"`
 	GraphStage        string  `json:"graph_stage"`
 	GlobalFallback    bool    `json:"global_fallback"`
@@ -463,7 +464,7 @@ func summarizeMetrics(runs []sampleRuns) adversarialMetrics {
 
 func summarizeMetric(before, after []float64) metricSummary {
 	if len(after) == 0 {
-		return metricSummary{Value: undefinedMetric}
+		return metricSummary{Value: undefinedMetric, Difference: undefinedMetric, HalfWidth: undefinedMetric}
 	}
 	difference, halfWidth := pairedInterval(before, after)
 	return metricSummary{Units: len(after), Value: mean(after), Difference: difference, HalfWidth: halfWidth}

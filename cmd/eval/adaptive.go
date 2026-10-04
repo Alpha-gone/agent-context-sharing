@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -103,11 +103,12 @@ func latencyDiffers(left, right queryOutcome) bool {
 	if len(left.latencies) < 2 || len(right.latencies) < 2 {
 		return false
 	}
-	half := func(values []float64) float64 {
-		return criticalValue(len(values)-1) * math.Sqrt(variance(values)/float64(len(values)))
+	leftHalf, rightHalf := estimateOf(left.latencies).Interval, estimateOf(right.latencies).Interval
+	if leftHalf < 0 || rightHalf < 0 {
+		return false
 	}
-	return left.latency+half(left.latencies) < right.latency-half(right.latencies) ||
-		right.latency+half(right.latencies) < left.latency-half(left.latencies)
+	return left.latency+leftHalf < right.latency-rightHalf ||
+		right.latency+rightHalf < left.latency-leftHalf
 }
 
 // parseFloats는 쉼표로 나눈 임계값 후보를 읽는다.
@@ -340,7 +341,8 @@ func thresholdGrid(directs, margins []float64, signals map[string]search.RouteSi
 			for useCase, values := range quality {
 				summary := thresholdUseCase{Quality: values, Routes: map[string]float64{}, Reasons: map[string]int{}}
 				count := 0.0
-				for id, outcome := range chosen {
+				for _, id := range slices.Sorted(maps.Keys(chosen)) {
+					outcome := chosen[id]
 					if outcome.useCase != useCase {
 						continue
 					}
@@ -388,7 +390,8 @@ func qualityNotWorse(values, baseline []float64) bool {
 func useCaseQuality(values map[string]queryOutcome) map[string][]float64 {
 	totals := map[string][]float64{}
 	counts := map[string][]float64{}
-	for _, outcome := range values {
+	for _, id := range slices.Sorted(maps.Keys(values)) {
+		outcome := values[id]
 		if totals[outcome.useCase] == nil {
 			totals[outcome.useCase] = make([]float64, len(outcome.quality))
 			counts[outcome.useCase] = make([]float64, len(outcome.quality))
@@ -427,7 +430,8 @@ func chooseThresholds(grid []thresholdResult) (thresholdPair, error) {
 			continue
 		}
 		current := score{pair: entry.thresholdPair}
-		for _, summary := range entry.UseCases {
+		for _, useCase := range slices.Sorted(maps.Keys(entry.UseCases)) {
+			summary := entry.UseCases[useCase]
 			current.misroute += summary.MisrouteRate / float64(len(entry.UseCases))
 			current.chars += summary.Chars / float64(len(entry.UseCases))
 			current.latency += summary.LatencyMS / float64(len(entry.UseCases))

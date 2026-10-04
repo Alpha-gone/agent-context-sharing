@@ -149,7 +149,7 @@ func judgeBusiness(samples []businessSample) ([]comparison, bool) {
 		if metric.lowerIsBetter {
 			improved = difference < 0
 		}
-		significant := math.Abs(difference) > interval
+		significant := interval >= 0 && math.Abs(difference) > interval
 		comparisons = append(comparisons, comparison{
 			Metric:      metric.name,
 			Samples:     len(samples),

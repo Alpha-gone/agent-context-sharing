@@ -5,7 +5,11 @@
 // 신뢰구간만 본다.
 package main
 
-import "math"
+import (
+	"maps"
+	"math"
+	"slices"
+)
 
 // 「검증」이 각 조건을 최소 세 번 반복하라고 정했다. 신뢰구간의 폭이 판정에 필요한
 // 수준보다 넓으면 반복을 늘린다.
@@ -160,7 +164,8 @@ func compareStages(baseline, current map[string]map[string]map[string]float64) m
 		}
 		for _, metric := range metricNames {
 			left, right := make([]float64, 0, len(queries)), make([]float64, 0, len(queries))
-			for id, values := range queries {
+			for _, id := range slices.Sorted(maps.Keys(queries)) {
+				values := queries[id]
 				currentValue, currentPresent := values[metric.name]
 				previousValues, previousPresent := previous[id]
 				previousValue, metricPresent := previousValues[metric.name]
@@ -187,7 +192,7 @@ func compareStages(baseline, current map[string]map[string]map[string]float64) m
 				Interval:   interval,
 				Improved:   improved,
 				// 차이의 신뢰구간이 0을 품지 않을 때만 유의한 것으로 본다.
-				Significant: math.Abs(difference) > interval,
+				Significant: interval >= 0 && math.Abs(difference) > interval,
 			})
 		}
 	}
@@ -195,12 +200,14 @@ func compareStages(baseline, current map[string]map[string]map[string]float64) m
 }
 
 func estimateOf(values []float64) estimate {
-	result := estimate{Repeats: len(values), Mean: mean(values)}
+	result := estimate{Repeats: len(values), Mean: mean(values), StdDev: undefinedMetric, Interval: undefinedMetric}
 	if len(values) < 2 {
 		return result
 	}
 	result.StdDev = math.Sqrt(variance(values))
-	result.Interval = criticalValue(len(values)-1) * result.StdDev / math.Sqrt(float64(len(values)))
+	if critical := criticalValue(len(values) - 1); critical >= 0 {
+		result.Interval = critical * result.StdDev / math.Sqrt(float64(len(values)))
+	}
 	return result
 }
 
@@ -211,8 +218,15 @@ func pairedInterval(baseline, current []float64) (float64, float64) {
 		differences[index] = current[index] - baseline[index]
 	}
 	difference := mean(differences)
+	if len(differences) < 2 {
+		return difference, undefinedMetric
+	}
 	standardError := math.Sqrt(variance(differences) / float64(len(differences)))
-	return difference, criticalValue(len(differences)-1) * standardError
+	critical := criticalValue(len(differences) - 1)
+	if critical < 0 {
+		return difference, undefinedMetric
+	}
+	return difference, critical * standardError
 }
 
 func mean(values []float64) float64 {
@@ -236,23 +250,6 @@ func variance(values []float64) float64 {
 		total += (value - average) * (value - average)
 	}
 	return total / float64(len(values)-1)
-}
-
-// tTable은 양측 95% 신뢰구간의 임계값이다. 자유도가 표를 넘으면 정규 근사를 쓴다.
-var tTable = []float64{
-	12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
-	2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
-	2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042,
-}
-
-func criticalValue(degrees int) float64 {
-	if degrees < 1 {
-		return tTable[0]
-	}
-	if degrees > len(tTable) {
-		return 1.96
-	}
-	return tTable[degrees-1]
 }
 
 // marginal은 한 단계가 바로 앞 단계에 더한 한계 기여다. 「검색 품질 평가」가 정답·필수
@@ -282,7 +279,8 @@ func marginals(stages []string, runs map[string][]runMetrics) []marginal {
 		for _, useCase := range useCases {
 			entry := marginal{Stage: stages[index], ComparedTo: stages[index-1], UseCase: useCase}
 			chars, latency := 0.0, 0.0
-			for id, cost := range after[useCase] {
+			for _, id := range slices.Sorted(maps.Keys(after[useCase])) {
+				cost := after[useCase][id]
 				base, present := before[useCase][id]
 				if !present {
 					continue

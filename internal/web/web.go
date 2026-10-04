@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -351,12 +352,23 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	limits := server.config.Plans.For(accountID)
-	hops, err := server.graphs.GraphVisualization(request.Context(), graphID, limits.MaxHops, limits.MaxHopNodes)
+	depth := limits.MaxHops
+	if depth == 0 {
+		// 플랜의 0은 한도 없음이지만 홉 조회의 0은 시작점만 반환한다.
+		depth = math.MaxInt
+	}
+	hops, err := server.graphs.GraphVisualization(request.Context(), graphID, depth, limits.MaxHopNodes)
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "그래프", Error: "시각화 데이터를 읽을 수 없습니다."})
 		return
 	}
-	value := pageData{Title: graph.Name, AccountID: accountID, Graph: graph, Contexts: hops.Contexts, Edges: hops.Edges, MaxHops: limits.MaxHops}
+	maxHops := limits.MaxHops
+	if maxHops == 0 {
+		// 표시 노드 n개의 최단 경로는 n-1홉 이내다. 여러 시작점의 조회 거리가
+		// 모두 0일 수 있으므로 거리의 최댓값 대신 노드 수를 쓴다.
+		maxHops = max(0, len(hops.Contexts)-1)
+	}
+	value := pageData{Title: graph.Name, AccountID: accountID, Graph: graph, Contexts: hops.Contexts, Edges: hops.Edges, MaxHops: maxHops}
 	// 상한이 자른 경계는 오류가 아니라 「정상 응답의 부분 상태」의 표시다.
 	if hops.Truncated {
 		value.HopBoundary = &hops.Boundary

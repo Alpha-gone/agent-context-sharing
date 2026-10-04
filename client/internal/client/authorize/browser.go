@@ -112,12 +112,14 @@ func (m *Manager) callback(ctx context.Context, md metadata) (string, string, st
 	completed := make(chan outcome, 1)
 	var mu sync.Mutex
 	consumed := false
+	closing := false
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		writer.Header().Set("Content-Length", "0")
 		mu.Lock()
 		defer mu.Unlock()
-		if consumed {
+		if closing || consumed {
 			writer.WriteHeader(http.StatusGone)
 			return
 		}
@@ -139,8 +141,14 @@ func (m *Manager) callback(ctx context.Context, md metadata) (string, string, st
 		if query.Get("error") != "" {
 			result.err = ErrAuthorization
 		}
-		completed <- result
 		writer.WriteHeader(http.StatusOK)
+		// 종료 시 연결을 즉시 닫아도 정상 callback의 응답 헤더는 전달한다.
+		// 전송 실패는 이미 검증·소비한 callback 자체를 무효화하지 않는다.
+		http.NewResponseController(writer).Flush()
+		select {
+		case completed <- result:
+		default:
+		}
 	})
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, MaxHeaderBytes: 256 << 10, ErrorLog: discardLog()}
 	done := make(chan struct{})
@@ -153,7 +161,15 @@ func (m *Manager) callback(ctx context.Context, md metadata) (string, string, st
 			}
 		}
 	}()
-	defer func() { server.Shutdown(context.Background()); server.Close(); <-done }()
+	defer func() {
+		server.Close()
+		<-done
+		// Close는 핸들러 종료를 기다리지 않는다. 기존 접근을 끝내고 늦은
+		// 핸들러의 접근을 막은 뒤 일회성 참조를 정리한다.
+		mu.Lock()
+		closing = true
+		mu.Unlock()
+	}()
 	if err := ctx.Err(); err != nil {
 		return "", "", "", err
 	}
@@ -177,6 +193,9 @@ func (m *Manager) callback(ctx context.Context, md metadata) (string, string, st
 				continue
 			}
 			// 이미 받은 callback은 실행기 종료 오류보다 우선한다.
+			// 응답 flush와 결과 게시 사이에 실행기가 끝난 경우도 보존한다.
+			mu.Lock()
+			mu.Unlock()
 			select {
 			case result := <-completed:
 				return result.code, redirect, verifier, result.err

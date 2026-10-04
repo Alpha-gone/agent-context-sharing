@@ -7,6 +7,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -40,6 +41,63 @@ func TestReadFrameExactLimitAndOneByteOver(t *testing.T) {
 		frame, oversized, err = readFrame(reader)
 		if err != nil || oversized || string(frame) != discoverRequest {
 			t.Fatalf("후속 프레임을 복구하지 못했습니다: oversized=%t err=%v", oversized, err)
+		}
+	}
+}
+
+func TestOversizedFrameDoesNotRecoverTruncatedID(t *testing.T) {
+	for _, id := range []string{"12345678", "-12345678", "123.5", "123e4", `"abcdef"`} {
+		t.Run(id, func(t *testing.T) {
+			prefix := "{" + strings.Repeat(" ", maxInputBytes+2-3-len(`{"id":`)) + `"id":`
+			frame := prefix + id + `,"pad":"` + strings.Repeat("x", maxInputBytes) + `"}`
+			var output bytes.Buffer
+			conn := newTestConnection(t, frame+"\n"+discoverRequest+"\n", &output)
+			message, err := conn.Read(t.Context())
+			if err != nil || message.(*jsonrpc.Request).ID.Raw() != int64(1) {
+				t.Fatalf("후속 프레임 복구 실패: %v", err)
+			}
+			if !bytes.Contains(output.Bytes(), []byte(`"id":null`)) || !bytes.Contains(output.Bytes(), []byte(`"code":"client_busy"`)) {
+				t.Fatalf("잘린 ID를 확정했다: %s", output.Bytes())
+			}
+		})
+	}
+}
+
+func TestIDFromPrefixRequiresCompleteNumericToken(t *testing.T) {
+	for _, test := range []struct {
+		prefix string
+		want   string
+	}{
+		{`{"id":123`, "<nil>"},
+		{`{"id":-12`, "<nil>"},
+		{`{"id":123,`, "123"},
+		{`{"id":-12}`, "-12"},
+		{`{"id":123 `, "123"},
+		{`{"id":"complete"`, "complete"},
+		{`{"id":"partial`, "<nil>"},
+	} {
+		t.Run(test.prefix, func(t *testing.T) {
+			if got := fmt.Sprint(idFromPrefix([]byte(test.prefix)).Raw()); got != test.want {
+				t.Fatalf("ID = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestIDFromPrefixStaysWithinInputLimit(t *testing.T) {
+	for _, test := range []struct {
+		tail string
+		end  int
+		want any
+	}{
+		{`123,`, maxInputBytes, int64(123)},
+		{`123,`, maxInputBytes + 1, nil},
+		{`"complete"`, maxInputBytes, "complete"},
+		{`"complete"`, maxInputBytes + 1, nil},
+	} {
+		prefix := "{" + strings.Repeat(" ", test.end-len(`{"id":`)-len(test.tail)) + `"id":` + test.tail
+		if got := idFromPrefix([]byte(prefix)).Raw(); got != test.want {
+			t.Fatalf("tail=%s, end=%d: ID=%v, want %v", test.tail, test.end, got, test.want)
 		}
 	}
 }

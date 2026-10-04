@@ -654,6 +654,7 @@ func readFrame(reader *bufio.Reader) ([]byte, bool, error) {
 
 // idFromPrefix는 초과 프레임의 완전히 읽힌 최상위 id만 회수한다.
 func idFromPrefix(frame []byte) jsonrpc.ID {
+	frame = frame[:min(len(frame), maxInputBytes)]
 	decoder := jsontext.NewDecoder(bytes.NewReader(frame))
 	start, err := decoder.ReadToken()
 	if err != nil || start.Kind() != '{' {
@@ -676,6 +677,13 @@ func idFromPrefix(frame []byte) jsonrpc.ID {
 		value, err := decoder.ReadValue()
 		if err != nil {
 			return jsonrpc.ID{}
+		}
+		if value.Kind() == '0' {
+			// 접두부 EOF만으로는 뒤쪽 숫자·소수·지수가 잘렸는지 확정할 수 없다.
+			offset := decoder.InputOffset()
+			if offset >= int64(len(frame)) || !bytes.ContainsRune([]byte(" \t\r\n,}"), rune(frame[offset])) {
+				return jsonrpc.ID{}
+			}
 		}
 		candidate := append([]byte(`{"jsonrpc":"2.0","id":`), value...)
 		candidate = append(candidate, []byte(`,"method":"ping"}`)...)

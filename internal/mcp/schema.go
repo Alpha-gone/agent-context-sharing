@@ -331,7 +331,9 @@ func integer(value any, minimum float64) bool {
 func stringArray(values ...string) func(any) bool {
 	return func(value any) bool {
 		items, ok := value.([]any)
-		if !ok {
+		// 공개 스키마는 열거 값의 개수와 같은 maxItems를 이미 선언한다.
+		// 중복도 원소 수에 포함해 스키마를 우회한 요청을 같은 경계에서 거부한다.
+		if !ok || len(items) > len(values) {
 			return false
 		}
 		for _, item := range items {

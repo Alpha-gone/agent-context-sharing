@@ -31,6 +31,9 @@ const (
 	discoverTTL               = time.Hour
 	writeIdempotencyExtension = "io.github.alpha-gone/write-idempotency"
 	writeIdempotencyRetention = 24 * time.Hour
+	// maxRequestBodyBytes는 인증 전 JSON 해석에 적용하는 고정 전송 상한이다.
+	// 도구별 문자·참조 상한과 달리 JSON 외피·공백·이스케이프도 포함한다.
+	maxRequestBodyBytes = 1 << 20
 )
 
 // IdempotencyRequest는 협상된 쓰기 요청을 재생할 때 필요한 전송 외피 값이다.
@@ -145,12 +148,24 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.writeRPCError(writer, http.StatusBadRequest, jsontext.Value("null"), -32020, "Header mismatch", nil)
 		return
 	}
+	// Content-Length만 믿으면 길이 미상·chunked 입력이 경계를 우회한다.
+	// JSON을 해석하기 전에 스트림을 제한하고 초과 본문을 끝까지 읽지 않는다.
+	request.Body = http.MaxBytesReader(writer, request.Body, maxRequestBodyBytes)
+	defer request.Body.Close()
+	if request.ContentLength > maxRequestBodyBytes {
+		s.writeBodyTooLarge(writer)
+		return
+	}
 
 	var message rpcRequest
 	// 본문을 해석하지 못한 것은 헤더와 본문이 어긋난 것과 다른 층이다. 「요청 처리 순서」의
 	// 1d가 이 경우를 JSON-RPC Parse Error로 분리했다. -32020으로 답하면 본문을 읽지도
 	// 못한 상태에서 클라이언트가 헤더를 고치려 든다.
 	if err := json.UnmarshalRead(request.Body, &message); err != nil {
+		if _, exceeded := errors.AsType[*http.MaxBytesError](err); exceeded {
+			s.writeBodyTooLarge(writer)
+			return
+		}
 		s.writeRPCError(writer, http.StatusBadRequest, jsontext.Value("null"), -32700, "Parse error", nil)
 		return
 	}
@@ -367,6 +382,10 @@ func dpopAuthentication(request *http.Request, target string) (Authentication, a
 		return Authentication{}, authenticationInvalid
 	}
 	return Authentication{AccessToken: accessToken, Proof: proof[0], Method: request.Method, Target: target}, authenticationReady
+}
+
+func (s *Server) writeBodyTooLarge(writer http.ResponseWriter) {
+	s.writeRPCError(writer, http.StatusRequestEntityTooLarge, jsontext.Value("null"), -32600, "Request body too large", map[string]any{"max_body_bytes": maxRequestBodyBytes})
 }
 
 func (s *Server) writeRPCError(writer http.ResponseWriter, status int, id jsontext.Value, code int, message string, data any) {

@@ -149,19 +149,22 @@ func (authentication fakeAuthentication) VerifyWebSession(_ context.Context, raw
 func (fakeAuthentication) Revoke(context.Context, Session) error { return nil }
 
 type fakeGraphStore struct {
-	accountID    model.ID
-	graphID      model.ID
-	grade        model.GraphGrade
-	active       []model.Context
-	deleted      []model.Context
-	ownedDeleted []model.Graph
-	boundary     *int
-	granted      bool
-	teamCreated  string
-	contextSet   *model.ID
-	contextState bool
-	truncated    bool
-	cursor       string
+	accountID          model.ID
+	graphID            model.ID
+	grade              model.GraphGrade
+	active             []model.Context
+	deleted            []model.Context
+	ownedDeleted       []model.Graph
+	boundary           *int
+	granted            bool
+	teamCreated        string
+	contextSet         *model.ID
+	contextState       bool
+	truncated          bool
+	cursor             string
+	revokeErr          error
+	requestRestoreErr  error
+	operatorRestoreErr error
 	// outside에는 목록에는 실리지 않지만 그래프에는 있는 컨텍스트를 둔다.
 	outside []model.Context
 }
@@ -224,8 +227,8 @@ func (fake *fakeGraphStore) GrantGraph(context.Context, model.ID, model.ID, mode
 	fake.granted = true
 	return nil
 }
-func (fakeGraphStore) RevokeGraphGrantWithAudit(context.Context, model.ID, model.ID, model.ID, store.GrantSubjectType) error {
-	return nil
+func (fake fakeGraphStore) RevokeGraphGrantWithAudit(context.Context, model.ID, model.ID, model.ID, store.GrantSubjectType) error {
+	return fake.revokeErr
 }
 func (fake *fakeGraphStore) CreateTeam(_ context.Context, _ model.ID, name string) (model.Team, error) {
 	fake.teamCreated = name
@@ -247,11 +250,15 @@ func (fake *fakeGraphStore) SetContextDeleted(_ context.Context, _, contextID, _
 func (fakeGraphStore) ListRestoreEligibleGraphs(context.Context, model.ID) ([]model.Graph, error) {
 	return nil, nil
 }
-func (fakeGraphStore) RequestGraphRestore(context.Context, model.ID, model.ID) error { return nil }
+func (fake fakeGraphStore) RequestGraphRestore(context.Context, model.ID, model.ID) error {
+	return fake.requestRestoreErr
+}
 func (fakeGraphStore) PendingRestoreRequests(context.Context) ([]model.RestoreRequest, error) {
 	return nil, nil
 }
-func (fakeGraphStore) OperatorRestoreGraph(context.Context, model.ID, model.ID) error { return nil }
+func (fake fakeGraphStore) OperatorRestoreGraph(context.Context, model.ID, model.ID) error {
+	return fake.operatorRestoreErr
+}
 func (fakeGraphStore) ListAuditEntries(context.Context, model.ID, int) ([]model.AuditEntry, error) {
 	return nil, nil
 }

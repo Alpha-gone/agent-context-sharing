@@ -302,7 +302,14 @@ func (server *Server) graphList(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		if err := server.graphs.RequestGraphRestore(request.Context(), graphID, accountID); err != nil {
-			server.render(writer, http.StatusForbidden, "message", pageData{Title: "복구 요청", Error: "복구 요청 권한이 없거나 자동 삭제된 그래프가 아닙니다."})
+			status, message := http.StatusInternalServerError, "복구 요청을 처리할 수 없습니다."
+			switch {
+			case errors.Is(err, store.ErrNotFound):
+				status, message = http.StatusNotFound, "복구 요청 대상을 찾을 수 없습니다."
+			case errors.Is(err, store.ErrInvalidState):
+				status, message = http.StatusConflict, "현재 상태에서는 복구를 요청할 수 없습니다."
+			}
+			server.render(writer, status, "message", pageData{Title: "복구 요청", Error: message})
 			return
 		}
 		http.Redirect(writer, request, "/graphs", http.StatusSeeOther)
@@ -478,7 +485,14 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 			return
 		}
 		if err := server.graphs.RevokeGraphGrantWithAudit(ctx, graphID, actorID, subjectID, subjectType); err != nil {
-			server.render(writer, http.StatusConflict, "message", pageData{Title: "권한과 팀 관리", Error: "마지막 소유자 등급은 회수할 수 없습니다."})
+			status, message := http.StatusInternalServerError, "등급을 회수할 수 없습니다."
+			switch {
+			case errors.Is(err, store.ErrLastOwner):
+				status, message = http.StatusConflict, "마지막 소유자 등급은 회수할 수 없습니다."
+			case errors.Is(err, store.ErrNotFound):
+				status, message = http.StatusNotFound, "회수할 등급을 찾을 수 없습니다."
+			}
+			server.render(writer, status, "message", pageData{Title: "권한과 팀 관리", Error: message})
 			return
 		}
 	case "create_team":
@@ -670,7 +684,14 @@ func (server *Server) operatorRestores(writer http.ResponseWriter, request *http
 			return
 		}
 		if err := server.graphs.OperatorRestoreGraph(request.Context(), graphID, accountID); err != nil {
-			server.render(writer, http.StatusConflict, "message", pageData{Title: "운영자 복구", Error: "처리 가능한 복구 요청이 아닙니다."})
+			status, message := http.StatusInternalServerError, "그래프를 복구할 수 없습니다."
+			switch {
+			case errors.Is(err, store.ErrNotFound):
+				status, message = http.StatusNotFound, "처리할 복구 요청을 찾을 수 없습니다."
+			case errors.Is(err, store.ErrInvalidState):
+				status, message = http.StatusConflict, "현재 상태에서는 그래프를 복구할 수 없습니다."
+			}
+			server.render(writer, status, "message", pageData{Title: "운영자 복구", Error: message})
 			return
 		}
 		http.Redirect(writer, request, "/operator/restores", http.StatusSeeOther)

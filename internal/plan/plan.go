@@ -53,6 +53,9 @@ func ParseAccountPlans(raw string) (AccountPlans, error) {
 		if err != nil {
 			return AccountPlans{}, fmt.Errorf("계정 식별자 %q가 UUIDv7이 아니다: %w", accountID, err)
 		}
+		if _, exists := plans.limits[parsed]; exists {
+			return AccountPlans{}, fmt.Errorf("계정 %s 플랜 키가 중복됐다", parsed)
+		}
 		limits, err := override.apply(Default())
 		if err != nil {
 			return AccountPlans{}, fmt.Errorf("계정 %s 플랜 값: %w", parsed, err)

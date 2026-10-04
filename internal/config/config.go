@@ -493,23 +493,6 @@ func parsePrefix(name, value string) (netip.Prefix, error) {
 	return prefix, nil
 }
 
-// parseURLs는 쉼표로 나눈 HTTP URL 목록을 해석한다.
-func parseURLs(name, raw string) ([]*url.URL, error) {
-	values, err := parseList(name, raw)
-	if err != nil {
-		return nil, err
-	}
-	urls := make([]*url.URL, 0, len(values))
-	for _, value := range values {
-		parsed, err := parseHTTPURL(name, value)
-		if err != nil {
-			return nil, err
-		}
-		urls = append(urls, parsed)
-	}
-	return urls, nil
-}
-
 // parseOAuthClients는 클라이언트를 키로 하는 JSON 객체를 클라이언트별 redirect_uri
 // 허용 목록으로 해석한다. 목록이 클라이언트별이어야 등록된 어떤 클라이언트도 다른
 // 클라이언트의 콜백으로 인가 코드를 받지 못한다.

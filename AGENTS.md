@@ -83,7 +83,8 @@
 - Go 1.27.1 검증 도구가 기본 셸의 `PATH`에 없으면 IntelliJ IDEA에 설치·등록된 프로젝트 Go SDK를 사용한다. IntelliJ IDEA의 Go SDK를 선택한 실행 구성 또는 해당 SDK를 사용하는 IDE 통합 터미널에서 `go version`, `go test`, `go build`, `go vet`, `gofmt`를 실행하며, 기본 셸에서 `go`를 찾지 못한 것만으로 Go 미설치나 검증 불가로 판단하지 않는다.
 - 패키지 배치는 해당 서비스 `SDD.md`의 「패키지 경계」를 따른다. 그 표에 없는 코드는 마이그레이션 실행기처럼 애플리케이션 밖의 도구뿐이며, 도구는 각 모듈의 `cmd/`와 `internal/`에 둔다.
 - 배포 구성 값은 환경 변수로 받고 목록을 `.env.example`에 유지한다. `SDD.md`의 「배포 구성」에 없는 값을 새로 열지 않는다.
-- `Dockerfile`과 `compose.yaml`은 개발 환경만 다룬다. 운영 배포 형상은 이 저장소가 아직 소유하지 않는다.
+- `Dockerfile`과 `compose.yaml`은 개발 환경만 다룬다. 운영 배포 형상은 이 저장소가 아직 소유하지 않는다. DB·Ollama의 호스트 포트는 `127.0.0.1`에만 공개하며 환경 변수는 포트 번호만 바꾼다. 이미지 태그·digest와 pgvector 패키지의 전체 버전을 고정하고 판을 올릴 때 검증 기대값도 함께 갱신한다.
+- `test-dev-compose.sh`는 기본·재정의 포트와 버전 고정을 검사하며 Docker Compose·`jq`가 필요하다. `--runtime`은 `curl`도 사용하여 별도 프로젝트·볼륨에서 캐시 없는 빌드와 실제 기동을 검증한다. 기존 `.env`·개발 컨테이너·볼륨은 사용하거나 변경하지 않는다.
 - 개발 DB 기동 래퍼 `docker-db-entrypoint.sh`는 볼륨 마운트 뒤 WAL 보관 디렉터리를 준비하며, `test-wal-archive.sh`와 `compose.wal-test.yaml`은 기존 환경·비밀 설정을 사용하지 않는 격리 회귀 시험을 소유한다.
 - 개발 환경을 처음부터 다시 만들 때는 `docker compose down -v`로 볼륨을 지운 뒤 다시 올린다.
 - 코드를 바꾸면 서버는 저장소 루트에서, 클라이언트는 `client/`에서 각각 `go build ./...`, `go vet ./...`를 실행하고 저장소 루트에서 `gofmt -l .`을 실행한다. 중첩 모듈은 루트의 `go build ./...`에 포함되지 않는다.

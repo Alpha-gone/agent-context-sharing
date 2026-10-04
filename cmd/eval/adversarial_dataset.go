@@ -177,8 +177,8 @@ func validateSample(sample attackSample, baseLayers map[string]string, queryIDs 
 		if len(item.MustReturn)+len(item.MustOmit) == 0 {
 			return fmt.Errorf("질의 %q의 성공 조건이 비었다", item.QueryID)
 		}
-		for _, ref := range append(slices.Clone(item.MustReturn), item.MustOmit...) {
-			if err := validateAttackRef(ref, layers); err != nil {
+		for _, refs := range [][]attackRef{item.MustReturn, item.MustOmit} {
+			if err := validateAttackRefs(refs, layers); err != nil {
 				return err
 			}
 		}
@@ -189,6 +189,9 @@ func validateSample(sample attackSample, baseLayers map[string]string, queryIDs 
 	}
 	if len(sample.ContaminatedRefs) == 0 {
 		return fmt.Errorf("오염 식별자가 없다")
+	}
+	if err := validateAttackRefs(sample.ContaminatedRefs, layers); err != nil {
+		return err
 	}
 	for _, ref := range sample.ContaminatedRefs {
 		if ref.Key != "" {
@@ -274,6 +277,28 @@ func validateAttackRef(ref attackRef, layers map[string]string) error {
 		return nil
 	}
 	return validateRelationRef(*ref.Relation, layers)
+}
+
+func validateAttackRefs(refs []attackRef, layers map[string]string) error {
+	type identity struct {
+		key      string
+		relation relationSpec
+	}
+	seen := map[identity]struct{}{}
+	for _, ref := range refs {
+		if err := validateAttackRef(ref, layers); err != nil {
+			return err
+		}
+		id := identity{key: ref.Key}
+		if ref.Relation != nil {
+			id.relation = ref.Relation.normalized()
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return fmt.Errorf("식별자 목록에 같은 정체성이 중복된다: %+v", id)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
 }
 
 // validateAttackType은 「관계·경로 오염 적대적 평가와 홉별 진단」의 유형별 성립 조건이다.
@@ -382,13 +407,13 @@ func validateAttackType(sample attackSample, added map[string]string, base map[r
 			}
 		}
 		for _, item := range criteria {
-			count := 0
+			matched := map[string]struct{}{}
 			for _, ref := range item.MustReturn {
 				if _, ok := contaminated[ref.Key]; ok && ref.Key != "" {
-					count++
+					matched[ref.Key] = struct{}{}
 				}
 			}
-			if count < 2 {
+			if len(matched) < 2 {
 				return fmt.Errorf("질의 %q의 성공 조건이 서로 다른 오염 식별자 둘 이상을 요구해야 한다", item.QueryID)
 			}
 		}

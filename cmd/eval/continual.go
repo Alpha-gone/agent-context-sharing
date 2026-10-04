@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -165,7 +166,9 @@ func measureContinualQuery(ctx context.Context, service *search.Service, graph l
 		return queryMetrics{}, search.Flow{}, err
 	}
 	hits, best := scoreFlow(flow, answerIDs(query, graph.Keys))
-	metrics := queryMetrics{ID: query.ID, UseCase: query.UseCase, Recall: float64(hits) / float64(len(query.Answers)), BudgetPerHit: -1}
+	metrics := queryMetrics{ID: query.ID, UseCase: query.UseCase, Recall: float64(hits) / float64(len(query.Answers)), BudgetPerHit: undefinedMetric,
+		EvidenceCompleteness: undefinedMetric, PathContinuity: undefinedMetric, DisconnectedRatio: undefinedMetric,
+		HubConcentration: undefinedMetric, DuplicateRatio: undefinedMetric, LatencyMS: undefinedMetric, Misrouted: undefinedMetric}
 	if best > 0 {
 		metrics.ReciprocalRank = 1 / float64(best)
 	}
@@ -192,11 +195,14 @@ func judgeContinual(runs []continualRun) []continualJudgement {
 			judgement.RecordsPassed = judgement.RecordsPassed && run.JudgmentVerified
 		}
 		for _, metric := range metricNames {
+			if !slices.Contains([]string{"recall", "reciprocal_rank", "budget_per_hit"}, metric.name) {
+				continue
+			}
 			baseline := make([]float64, 0, len(values))
 			current := make([]float64, 0, len(values))
 			for _, run := range values {
-				before := metric.value(useCaseMetrics{Recall: run.Baseline.Recall, ReciprocalRank: run.Baseline.ReciprocalRank, BudgetPerHit: run.Baseline.BudgetPerHit})
-				after := metric.value(useCaseMetrics{Recall: run.Current.Recall, ReciprocalRank: run.Current.ReciprocalRank, BudgetPerHit: run.Current.BudgetPerHit})
+				before := metric.sample(run.Baseline)
+				after := metric.sample(run.Current)
 				if before < 0 || after < 0 {
 					continue
 				}
@@ -213,8 +219,8 @@ func judgeContinual(runs []continualRun) []continualJudgement {
 				improved = difference < 0
 				degraded = difference > interval
 			}
-			judgement.Comparisons = append(judgement.Comparisons, comparison{Metric: metric.name, Samples: len(baseline), Baseline: mean(baseline), Current: mean(current), Difference: difference, Interval: interval, Improved: improved, Significant: math.Abs(difference) > interval})
-			judgement.Passed = judgement.Passed && !degraded
+			judgement.Comparisons = append(judgement.Comparisons, comparison{Metric: metric.name, Samples: len(baseline), Baseline: mean(baseline), Current: mean(current), Difference: difference, Interval: interval, Improved: improved, Significant: interval >= 0 && math.Abs(difference) > interval})
+			judgement.Passed = judgement.Passed && interval >= 0 && !degraded
 		}
 		judgement.Passed = judgement.Passed && judgement.StatePassed && judgement.RecordsPassed
 		judgements = append(judgements, judgement)

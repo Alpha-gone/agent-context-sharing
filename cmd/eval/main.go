@@ -175,7 +175,8 @@ func run() error {
 
 	if *adversarial {
 		return runAdversarialCommand(ctx, database, worker, settings, contexts, queries, attacks, adversarialConditions{
-			Repeats: *repeats, GraphStage: string(search.GraphStageRelations), GlobalFallback: true,
+			IndexTargets: *indexTargets,
+			Repeats:      *repeats, GraphStage: string(search.GraphStageRelations), GlobalFallback: true,
 			Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
 			Execution: string(settings.execution), CandidateLimit: settings.candidateLimit,
 			SemanticThreshold: settings.semanticThreshold, FoldThreshold: settings.foldThreshold, EmbeddingModel: worker.ModelID(),
@@ -220,6 +221,7 @@ func run() error {
 			return fmt.Errorf("-consistency-load-requests는 양수여야 한다")
 		}
 		result, err := runConsistency(ctx, database, worker, graph, contexts, queries, settings, consistencyConditions{
+			IndexTargets: *indexTargets, FoldThreshold: settings.foldThreshold,
 			Requests: *consistencyRequests, WritePausesMS: pauses, LoadConcurrency: concurrency, LoadRequests: *consistencyLoadRequests, ToggledContexts: consistencyToggled, GraphStage: *consistencyStage,
 			Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
 			CandidateLimit: settings.candidateLimit, SemanticThreshold: settings.semanticThreshold, EmbeddingModel: worker.ModelID(),
@@ -498,7 +500,7 @@ func envOr(name, fallback string) string {
 // writeReport는 결과를 JSON으로 남긴다. 질의문과 컨텍스트 본문은 어느 필드에도
 // 들어가지 않으며 식별자와 집계값만 싣는다.
 func writeReport(path string, value any) error {
-	raw, err := json.Marshal(value, json.FormatNilSliceAsNull(false))
+	raw, err := json.Marshal(value, json.FormatNilSliceAsNull(false), json.Deterministic(true))
 	if err != nil {
 		return fmt.Errorf("결과 직렬화: %w", err)
 	}

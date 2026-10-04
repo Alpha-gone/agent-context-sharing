@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -71,6 +72,8 @@ type consistencyConditions struct {
 	CandidateLimit    int     `json:"channel_candidate_limit"`
 	SemanticThreshold float64 `json:"semantic_similarity_threshold"`
 	EmbeddingModel    string  `json:"embedding_model"`
+	FoldThreshold     float64 `json:"fold_threshold"`
+	IndexTargets      string  `json:"index_targets"`
 }
 
 // loadResult는 동시 요청 부하에서 한 구성의 처리량과 연결 풀 대기다. 대기 획득과 대기
@@ -142,9 +145,9 @@ func consistencyService(database *store.Store, worker search.Embedder, loaded se
 }
 
 // runConsistency는 결과 동등성과 동시 쓰기 일관성을 차례로 잰다.
-func runConsistency(ctx context.Context, database *store.Store, worker *index.Worker, graph loadedGraph, contexts contextSet, queries querySet, loaded settings, conditions consistencyConditions) (consistencyReport, error) {
+func runConsistency(ctx context.Context, database *store.Store, worker *index.Worker, graph loadedGraph, contexts contextSet, queries querySet, loaded settings, conditions consistencyConditions) (result consistencyReport, err error) {
 	stage := search.GraphStage(conditions.GraphStage)
-	result := consistencyReport{StartedAt: time.Now().UTC(), ContextVersion: contexts.Version, QueryVersion: queries.Version, Conditions: conditions}
+	result = consistencyReport{StartedAt: time.Now().UTC(), ContextVersion: contexts.Version, QueryVersion: queries.Version, Conditions: conditions}
 	variants := consistencyVariants()
 	signatures := map[string]string{}
 	for index, variant := range variants {
@@ -195,9 +198,7 @@ func runConsistency(ctx context.Context, database *store.Store, worker *index.Wo
 		return consistencyReport{}, err
 	}
 	defer func() {
-		if err := database.SetGraphDeleted(context.WithoutCancel(ctx), scenario.graph.GraphID, scenario.graph.AccountID, true); err != nil {
-			slog.Error("동시 쓰기 그래프 정리 실패", "error", err)
-		}
+		err = errors.Join(err, deleteConsistencyGraph(ctx, database, scenario.graph))
 	}()
 	for _, pause := range conditions.WritePausesMS {
 		for _, variant := range variants {
@@ -308,7 +309,7 @@ type consistencyScenario struct {
 	hub      model.ID
 }
 
-func createConsistencyScenario(ctx context.Context, database *store.Store, worker *index.Worker) (*consistencyScenario, error) {
+func createConsistencyScenario(ctx context.Context, database *store.Store, worker *index.Worker) (scenario *consistencyScenario, err error) {
 	occurred := time.Now().UTC().Add(-time.Hour)
 	set := contextSet{Version: "consistency-scenario", Contexts: []contextSpec{{Key: "hub", Layer: "source", Body: "동시 쓰기 검증 허브 원천이다.",
 		Source: &sourceSpec{Channel: "conversation", Locator: "urn:consistency:hub:" + occurred.Format(time.RFC3339Nano), OccurredAt: occurred, OriginKind: "user_utterance"}}}}
@@ -326,14 +327,28 @@ func createConsistencyScenario(ctx context.Context, database *store.Store, worke
 	if err != nil {
 		return nil, fmt.Errorf("동시 쓰기 표본 적재: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, deleteConsistencyGraph(ctx, database, graph))
+		}
+	}()
 	if err := drainIndexQueue(ctx, worker, graph.GraphID, len(set.Contexts)*4); err != nil {
 		return nil, err
 	}
-	scenario := &consistencyScenario{database: database, worker: worker, graph: graph, hub: graph.Keys["hub"], events: [2]model.ID{graph.Keys["e0"], graph.Keys["e1"]}}
+	scenario = &consistencyScenario{database: database, worker: worker, graph: graph, hub: graph.Keys["hub"], events: [2]model.ID{graph.Keys["e0"], graph.Keys["e1"]}}
 	for index := range consistencyToggled {
 		scenario.toggled = append(scenario.toggled, graph.Keys[fmt.Sprintf("c%02d", index)])
 	}
 	return scenario, nil
+}
+
+func deleteConsistencyGraph(ctx context.Context, database *store.Store, graph loadedGraph) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := database.SetGraphDeleted(cleanupCtx, graph.GraphID, graph.AccountID, true); err != nil {
+		return fmt.Errorf("동시 쓰기 그래프 정리: %w", err)
+	}
+	return nil
 }
 
 // writerState는 쓰기 작업자가 돌아가며 바꾸는 상태다.
@@ -352,14 +367,20 @@ func (scenario *consistencyScenario) write(ctx context.Context, state *writerSta
 	switch step % 3 {
 	case 0:
 		target := (step / 3) % len(scenario.toggled)
-		state.discarded[target] = !state.discarded[target]
-		_, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, scenario.toggled[target], scenario.graph.AccountID, state.discarded[target])
-		return err
+		discarded := !state.discarded[target]
+		if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, scenario.toggled[target], scenario.graph.AccountID, discarded); err != nil {
+			return err
+		}
+		state.discarded[target] = discarded
+		return nil
 	case 1:
 		if state.relation != nil && state.relation.State == model.RelationStateConfirmed {
 			discarded, err := scenario.database.DiscardRelation(ctx, scenario.graph.GraphID, state.relation.ID, nil)
+			if err != nil {
+				return err
+			}
 			state.relation = &discarded
-			return err
+			return nil
 		}
 		relationID, err := model.NewID()
 		if err != nil {
@@ -369,13 +390,18 @@ func (scenario *consistencyScenario) write(ctx context.Context, state *writerSta
 		confirmed, err := scenario.database.ConfirmRelation(ctx, scenario.graph.GraphID, model.Relation{ID: relationID, GraphID: scenario.graph.GraphID, Type: model.RelationTypePrecedes,
 			FromContextID: scenario.events[0], ToContextID: scenario.events[1], State: model.RelationStateConfirmed, ProposedBy: model.ProposalSourceAgent, ProposedAt: now,
 			ConfirmedBy: scenario.graph.AccountID, ConfirmedByAgent: scenario.graph.AccountID, ConfirmedAt: &now}, nil)
+		if err != nil {
+			return err
+		}
 		state.relation = &confirmed
-		return err
+		return nil
 	default:
 		if state.temporary != nil {
-			_, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, *state.temporary, scenario.graph.AccountID, true)
+			if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, *state.temporary, scenario.graph.AccountID, true); err != nil {
+				return err
+			}
 			state.temporary = nil
-			return err
+			return nil
 		}
 		created, err := createContext(ctx, scenario.database, scenario.graph.GraphID, scenario.graph.AccountID, contextSpec{Layer: "derived", Body: fmt.Sprintf("동시 쓰기 검증 임시 파생 %d이다.", step),
 			Derived: &derivedSpec{Kind: "proposition", EvidenceState: "observation"}}, []model.ID{scenario.hub})
@@ -447,19 +473,37 @@ func (scenario *consistencyScenario) measure(ctx context.Context, service *searc
 	if answered := conditions.Requests - result.Errors; answered > 0 {
 		result.Connections = float64(connections) / float64(answered)
 	}
-	// 폐기한 채로 끝난 파생을 되살리고 남은 임시 파생을 폐기해 다음 구성이 같은 시작
-	// 상태에서 재게 한다.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := scenario.reset(cleanupCtx, state); err != nil {
+		return concurrentReadResult{}, err
+	}
+	return result, nil
+}
+
+// reset은 쓰기 작업자가 멈춘 뒤 활성 파생·관계·임시 파생을 원래 상태로 돌린다.
+// 실패를 호출자에게 전달해 상태가 다른 다음 구성의 측정을 막는다.
+func (scenario *consistencyScenario) reset(ctx context.Context, state *writerState) error {
 	if state.temporary != nil {
 		if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, *state.temporary, scenario.graph.AccountID, true); err != nil {
-			return concurrentReadResult{}, fmt.Errorf("임시 파생 폐기: %w", err)
+			return fmt.Errorf("임시 파생 폐기: %w", err)
 		}
+		state.temporary = nil
 	}
 	for target, discarded := range state.discarded {
 		if discarded {
 			if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, scenario.toggled[target], scenario.graph.AccountID, false); err != nil {
-				return concurrentReadResult{}, fmt.Errorf("표본 파생 복구: %w", err)
+				return fmt.Errorf("표본 파생 복구: %w", err)
 			}
+			state.discarded[target] = false
 		}
 	}
-	return result, nil
+	if state.relation != nil && state.relation.State == model.RelationStateConfirmed {
+		discarded, err := scenario.database.DiscardRelation(ctx, scenario.graph.GraphID, state.relation.ID, nil)
+		if err != nil {
+			return fmt.Errorf("표본 관계 폐기: %w", err)
+		}
+		state.relation = &discarded
+	}
+	return nil
 }

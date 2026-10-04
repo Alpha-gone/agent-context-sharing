@@ -94,14 +94,16 @@ func (s *Store) ListGraphGrants(ctx context.Context, graphID model.ID) ([]model.
 	if !graphID.IsV7() {
 		return nil, fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT permission.subject_type, permission.subject_id, COALESCE(account.login_id, team.name), permission.grade, false
+	rows, err := s.pool.Query(ctx, `WITH usable_owners AS (`+usableOwnersSQL+`)
+		SELECT permission.subject_type, permission.subject_id, COALESCE(account.login_id, team.name), permission.grade, false,
+			EXISTS (SELECT 1 FROM usable_owners AS owner
+				WHERE owner.subject_type <> permission.subject_type OR owner.subject_id <> permission.subject_id)
 		FROM public.graph_grant AS permission
 		LEFT JOIN public.account AS account ON permission.subject_type = 'account' AND account.account_id = permission.subject_id
 		LEFT JOIN public.team AS team ON permission.subject_type = 'team' AND team.team_id = permission.subject_id
 		WHERE permission.graph_id = $1
 		UNION ALL
-		SELECT 'account', member.account_id, account.login_id, team_grant.grade, true
+		SELECT 'account', member.account_id, account.login_id, team_grant.grade, true, false
 		FROM public.graph_grant AS team_grant
 		JOIN public.team AS team ON team.team_id = team_grant.subject_id AND team.deleted_at IS NULL
 		JOIN public.team_member AS member ON member.team_id = team.team_id
@@ -116,7 +118,7 @@ func (s *Store) ListGraphGrants(ctx context.Context, graphID model.ID) ([]model.
 	for rows.Next() {
 		var rawID, grade string
 		var grant model.GrantSubject
-		if err := rows.Scan(&grant.Type, &rawID, &grant.Name, &grade, &grant.Inherited); err != nil {
+		if err := rows.Scan(&grant.Type, &rawID, &grant.Name, &grade, &grant.Inherited, &grant.CanRevoke); err != nil {
 			return nil, fmt.Errorf("그래프 등급 목록 해석: %w", err)
 		}
 		var err error
@@ -132,13 +134,6 @@ func (s *Store) ListGraphGrants(ctx context.Context, graphID model.ID) ([]model.
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("그래프 등급 목록 행 읽기: %w", err)
-	}
-	var owners int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM public.graph_grant WHERE graph_id = $1 AND grade = 'owner'`, graphID.String()).Scan(&owners); err != nil {
-		return nil, fmt.Errorf("그래프 소유자 수 조회: %w", err)
-	}
-	for index := range grants {
-		grants[index].CanRevoke = !grants[index].Inherited && (grants[index].Grade != model.GraphGradeOwner || owners > 1)
 	}
 	return grants, nil
 }

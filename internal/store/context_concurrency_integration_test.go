@@ -1,9 +1,11 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"agent_context_sharing/internal/model"
@@ -51,6 +53,8 @@ func TestConcurrentDiscardAppliesOnceIntegration(t *testing.T) {
 		for err := range results {
 			if err == nil {
 				succeeded++
+			} else if !errors.Is(err, ErrInvalidState) {
+				t.Fatalf("%d회차 재폐기가 상태 오류가 아닌 오류로 끝났다: %v", round, err)
 			}
 		}
 		if succeeded != 1 {
@@ -70,6 +74,53 @@ func TestConcurrentDiscardAppliesOnceIntegration(t *testing.T) {
 		if operations > 1 {
 			t.Fatalf("%d회차 폐기 적용 기록 = %d줄, want 1줄 이하", round, operations)
 		}
+	}
+}
+
+// TestConcurrentRestoreReportsInvalidStateIntegration은 재복구도 재폐기와 같은 상태 오류로
+// 끝나며 저장량이 한 번만 복원되는지 확인한다.
+func TestConcurrentRestoreReportsInvalidStateIntegration(t *testing.T) {
+	database := newSmallPoolStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, database, actorID)
+	graphID := createTestGraph(t, database, actorID)
+	target, err := database.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "https://example.test/restore-"+graphID.String()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DiscardContext(t.Context(), graphID, target.ID, nil, WriteLimits{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	const requests = 8
+	results := make(chan error, requests)
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	for range requests {
+		group.Go(func() {
+			<-start
+			_, err := database.RestoreContext(ctx, graphID, target.ID, nil, WriteLimits{})
+			results <- err
+		})
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	succeeded := 0
+	for err := range results {
+		if err == nil {
+			succeeded++
+		} else if !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("재복구 상태 오류: %v", err)
+		}
+	}
+	var storedChars int64
+	if err := database.pool.QueryRow(ctx, `SELECT stored_chars FROM public.context_graph WHERE graph_id=$1`, graphID.String()).Scan(&storedChars); err != nil {
+		t.Fatal(err)
+	}
+	if succeeded != 1 || storedChars != int64(utf8.RuneCountInString(target.Body)) {
+		t.Fatalf("복구 성공 %d회, 저장량 %d", succeeded, storedChars)
 	}
 }
 

@@ -20,6 +20,7 @@
 - 관계형 테이블과 인덱스는 스키마를 `public`으로 명시한다. `search_path`의 첫 항목이 `ag_catalog`라 명시하지 않으면 카탈로그 스키마에 만들어진다.
 - 파일은 `text/template` 문법으로 `GraphName`, `VectorType`, `VectorDim`, `ColdTablespaceClause`, `IndexTargetLayers`를 받으며 실행기가 검증한 뒤에만 치환한다.
 - 실행기는 이력의 `render_config`로 당시 치환 구성을 보존한다. 구형 이력은 DB 열·tablespace에서 복원한 구성으로 기존 checksum이 맞을 때만 보충하고 checksum·적용 시각은 덮어쓰지 않는다. 이미 적용한 차원 전환을 되돌리거나 다시 바꿀 때에도 기존 파일이 아니라 새 번호를 추가한다.
+- checksum은 치환된 SQL의 SHA-256이며 적용한 파일은 현재 구성 대신 당시 `render_config`로 검증한다. 구성 값 변경만으로 파일 변조로 판단하지 않지만 원본 SQL·주석 변경은 계속 거부한다. 미적용 파일에만 현재 구성을 사용하며, 구성 값을 바꿨다고 기존 스키마를 자동 변경하지 않는다.
 - 실행기는 적용 전에 자문 잠금을 잡는다. 인스턴스가 여럿이라 동시에 기동하면 같은 파일을 함께 적용하려 들고, AGE 함수 호출은 되돌리기 어렵다. 근거는 `SDD.md`의 「기동과 종료」다.
 - 같은 파일을 다시 적용해도 안전하도록 `IF NOT EXISTS`와 존재 확인을 쓴다.
 

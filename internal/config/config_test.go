@@ -190,6 +190,9 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		"플랜 구성 키 오류": func(values map[string]string) {
 			values["ACCOUNT_PLAN_LIMITS"] = `{"0198e7c0-0000-7000-8000-000000000001":{"unknown":1}}`
 		},
+		"같은 계정의 중복 플랜": func(values map[string]string) {
+			values["ACCOUNT_PLAN_LIMITS"] = `{"019a0000-abcd-7000-8000-000000000001":{"max_hops":1},"019A0000-ABCD-7000-8000-000000000001":{"max_hops":2}}`
+		},
 		"보호 리소스 경로 오류":     func(values map[string]string) { values["RESOURCE_SERVER_URL"] = "https://service.test/other" },
 		"인가 서버 origin 오류":  func(values map[string]string) { values["AUTHORIZATION_SERVER_URL"] = "https://issuer.test/oauth" },
 		"허용 Origin 경로 오류":  func(values map[string]string) { values["MCP_ALLOWED_ORIGINS"] = "https://client.test/callback" },

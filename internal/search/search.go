@@ -235,7 +235,7 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	if input.AsOf.IsZero() {
 		input.AsOf = time.Now().UTC()
 	}
-	if !input.AsOf.UTC().Equal(input.AsOf) {
+	if input.AsOf.Location() != time.UTC {
 		return Flow{}, fmt.Errorf("검색 기준 시각은 UTC여야 한다")
 	}
 	if service.config.Consistency == "" {

@@ -1,10 +1,53 @@
 package plan
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"agent_context_sharing/internal/model"
 )
+
+func TestParseAccountPlansRejectsEquivalentAccountKeys(t *testing.T) {
+	const account = "019a0000-abcd-7000-8000-000000000001"
+	for name, alias := range map[string]string{
+		"대문자":    strings.ToUpper(account),
+		"하이픈 없음": strings.ReplaceAll(account, "-", ""),
+	} {
+		for _, reversed := range []bool{false, true} {
+			for _, value := range []string{`{"max_hops":1}`, `{"max_hops":2}`} {
+				t.Run(fmt.Sprintf("%s/역순=%t/값=%s", name, reversed, value), func(t *testing.T) {
+					first, second := account, alias
+					if reversed {
+						first, second = second, first
+					}
+					raw := `{"` + first + `":{"max_hops":1},"` + second + `":` + value + `}`
+					if _, err := ParseAccountPlans(raw); err == nil || !strings.Contains(err.Error(), "중복") {
+						t.Fatalf("중복 계정 키 오류 = %v", err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestParseAccountPlansAllowsDistinctMixedCaseAccounts(t *testing.T) {
+	const first = "019a0000-abcd-7000-8000-000000000001"
+	const second = "019A0000-ABCD-7000-8000-000000000002"
+	plans, err := ParseAccountPlans(`{"` + first + `":{"max_hops":1},"` + second + `":{"max_hops":2}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for raw, want := range map[string]int{first: 1, second: 2} {
+		id, err := model.ParseID(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := plans.For(id).MaxHops; got != want {
+			t.Fatalf("계정 %s의 홉 한도 = %d, 기대 %d", raw, got, want)
+		}
+	}
+}
 
 // newTestID는 계정별 플랜 구성에 쓸 UUIDv7 식별자를 만든다.
 func newTestID(t *testing.T) model.ID {

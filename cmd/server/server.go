@@ -236,18 +236,25 @@ type worker interface {
 //
 // 요청 대기가 실패해도 작업자 종료를 건너뛰지 않는다. 건너뛰면 풀 닫기가 작업자의 연결이
 // 돌아오기를 기다리며 막힌다. 요청 대기에서 예산을 다 썼을 수 있으므로 작업자에는
-// workerCtx로 새 기한을 준다. 돌려주는 오류는 요청 대기의 것을 우선한다.
+// workerCtx에 적용할 작업자 기한은 요청 대기 뒤 closeWorkers가 만든다. 돌려주는 오류는
+// 요청 대기의 것을 우선한다.
 func shutdownInOrder(ctx, workerCtx context.Context, app *application, server *http.Server, logger *slog.Logger, workers ...worker) error {
 	shutdownErr := app.shutdown(ctx, server)
 	if shutdownErr != nil {
 		logger.Error("진행 요청 종료 대기", "error", shutdownErr)
 	}
+	closeWorkers(workerCtx, logger, workers...)
+	return shutdownErr
+}
+
+func closeWorkers(ctx context.Context, logger *slog.Logger, workers ...worker) {
+	ctx, cancel := context.WithTimeout(ctx, workerShutdownTimeout)
+	defer cancel()
 	for _, closing := range workers {
-		if err := closing.Close(workerCtx); err != nil {
+		if err := closing.Close(ctx); err != nil {
 			logger.Error("작업자 종료", "error", err)
 		}
 	}
-	return shutdownErr
 }
 
 // logRequests는 본문·자격 증명·쿼리 문자열을 기록하지 않고 요청 결과만 남긴다.

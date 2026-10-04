@@ -169,8 +169,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.writeRPCError(writer, http.StatusBadRequest, jsontext.Value("null"), -32700, "Parse error", nil)
 		return
 	}
-	// JSON-RPC 2.0은 요청의 id를 문자열이나 숫자로 정하고, id가 없는 것은 알림이다.
-	// 이 서버는 알림을 쓰지 않으므로 id 없는 요청과 객체·배열 id를 함께 거부한다.
+	// 이 MCP 프로필은 문자열·숫자 id만 받고 알림을 쓰지 않는다. 일반 JSON-RPC는
+	// null도 허용하지만 여기서는 누락·null·불리언·객체·배열 id를 거부한다.
 	// 받아 주면 결과에 "id":null을 실어 클라이언트가 응답을 요청과 잇지 못한다.
 	if !validRPCID(message.ID) {
 		s.writeRPCError(writer, http.StatusBadRequest, jsontext.Value("null"), -32600, "Invalid request", nil)
@@ -484,15 +484,7 @@ func isWebOnlyTool(name string) bool {
 
 // validRPCID는 JSON-RPC 요청 식별자가 문자열 또는 숫자인지 본다.
 func validRPCID(id jsontext.Value) bool {
-	raw := strings.TrimSpace(string(id))
-	if raw == "" || raw == "null" {
-		return false
-	}
-	switch raw[0] {
-	case '{', '[':
-		return false
-	}
-	return true
+	return id.Kind() == '"' || id.Kind() == '0'
 }
 
 type rpcRequest struct {

@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -638,47 +639,68 @@ func TestRequestIDMustBeStringOrNumber(t *testing.T) {
 		called = true
 		return ToolResult{}, nil
 	})
-	for name, id := range map[string]any{
-		"id 없음": nil,
-		"객체 id": map[string]any{"value": 1},
-		"배열 id": []any{1},
-	} {
-		payload := map[string]any{
-			"jsonrpc": "2.0", "method": "tools/list",
-			"params": map[string]any{"_meta": requestMeta(ProtocolVersion)},
-		}
-		if id != nil {
-			payload["id"] = id
-		}
-		request := httptest.NewRequest(http.MethodPost, "/mcp", jsonBody(t, payload))
-		request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
-		request.Header.Set("Mcp-Method", "tools/list")
-		recorder := httptest.NewRecorder()
-		server.ServeHTTP(recorder, request)
-		if recorder.Code != http.StatusBadRequest {
-			t.Fatalf("%s 응답 상태 = %d, want %d", name, recorder.Code, http.StatusBadRequest)
-		}
-		if !strings.Contains(recorder.Body.String(), "-32600") {
-			t.Fatalf("%s 응답 본문 = %s", name, recorder.Body.String())
-		}
+	verified := false
+	verify := server.verify
+	server.verify = func(ctx context.Context, authentication Authentication) (model.ID, error) {
+		verified = true
+		return verify(ctx, authentication)
 	}
-	if called {
-		t.Fatal("식별자가 올바르지 않은 요청이 처리기까지 갔다")
+	for _, id := range []string{"missing", "null", "true", "false", `{}`, `[]`, `[1]`} {
+		t.Run(id, func(t *testing.T) {
+			payload := map[string]any{
+				"jsonrpc": "2.0", "method": "tools/call",
+				"params": map[string]any{"name": "graph_list", "arguments": map[string]any{}, "_meta": requestMeta(ProtocolVersion)},
+			}
+			if id != "missing" {
+				payload["id"] = jsontext.Value(id)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/mcp", jsonBody(t, payload))
+			request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
+			request.Header.Set("Mcp-Method", "tools/call")
+			request.Header.Set("Mcp-Name", "graph_list")
+			request.Header.Set("Authorization", "DPoP valid-token")
+			request.Header.Set("DPoP", "valid-proof")
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("%s 응답 상태 = %d, want %d", id, recorder.Code, http.StatusBadRequest)
+			}
+			if !strings.Contains(recorder.Body.String(), "-32600") {
+				t.Fatalf("%s 응답 본문 = %s", id, recorder.Body.String())
+			}
+			var result struct {
+				ID any `json:"id"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil || result.ID != nil {
+				t.Fatalf("%s 오류 식별자가 null이 아니다: %v", id, err)
+			}
+		})
+	}
+	if called || verified {
+		t.Fatal("식별자가 올바르지 않은 요청이 인증 또는 처리기까지 갔다")
 	}
 
 	// 문자열과 숫자 식별자는 통과한다.
-	for _, id := range []any{"call-1", float64(7)} {
+	for _, id := range []string{`"call-1"`, `""`, `7`, `-1`, `1.5`, `1e4`, `9007199254740993`} {
 		payload := map[string]any{
-			"jsonrpc": "2.0", "id": id, "method": "tools/list",
+			"jsonrpc": "2.0", "id": jsontext.Value(id), "method": "tools/list",
 			"params": map[string]any{"_meta": requestMeta(ProtocolVersion)},
 		}
 		request := httptest.NewRequest(http.MethodPost, "/mcp", jsonBody(t, payload))
 		request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
 		request.Header.Set("Mcp-Method", "tools/list")
+		request.Header.Set("Authorization", "DPoP valid-token")
+		request.Header.Set("DPoP", "valid-proof")
 		recorder := httptest.NewRecorder()
 		server.ServeHTTP(recorder, request)
-		if recorder.Code == http.StatusBadRequest {
+		if recorder.Code != http.StatusOK {
 			t.Fatalf("식별자 %v를 거부했다: %s", id, recorder.Body.String())
+		}
+		var result struct {
+			ID jsontext.Value `json:"id"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil || string(result.ID) != id {
+			t.Fatalf("식별자 원문 = %s, want %s; 오류 %v", result.ID, id, err)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -19,7 +20,18 @@ const (
 	// idempotencyConnections는 멱등성 예약 트랜잭션 하나와, 그 안의 도메인 연산이 한 번에
 	// 하나씩 쓰는 풀 읽기 하나다.
 	idempotencyConnections = 2
+	// contextWriteConnections는 컨텍스트 쓰기 트랜잭션과 충돌 판정용 풀 읽기 하나다.
+	contextWriteConnections = 2
 )
+
+// reserveContextWriteConnections는 멱등성 저장점의 바깥 예약을 재사용한다. 연결을 쥔
+// 뒤 다시 예약하면 다른 예약 요청과 서로 기다릴 수 있으므로 중첩 예약하지 않는다.
+func (s *Store) reserveContextWriteConnections(ctx context.Context) (func(), error) {
+	if _, ok := ctx.Value(writeTransactionContextKey{}).(pgx.Tx); ok {
+		return func() {}, nil
+	}
+	return s.reserveConnections(ctx, contextWriteConnections)
+}
 
 // connectionBudget은 예약 총량이다. 풀 상한에서 스냅숏 한 요청의 점유를 빼 예약하지 않는
 // 요청의 몫을 남기되, 스냅숏 한 요청은 들어갈 수 있게 그 점유보다 작게 두지 않는다.

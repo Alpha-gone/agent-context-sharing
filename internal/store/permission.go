@@ -269,29 +269,27 @@ func sortedUniqueGraphIDs(graphIDs []model.ID) []model.ID {
 	return unique
 }
 
+// usableOwnersSQL은 각 부여를 통해 소유자 등급을 쓸 수 있는 계정을 나열한다. 부여 식별자를
+// 함께 남겨 권한 화면이 부여 전체의 회수 결과를 같은 규칙으로 판정하게 한다.
+const usableOwnersSQL = `
+	SELECT subject_type, subject_id, subject_id AS account_id
+	FROM public.graph_grant
+	WHERE graph_id = $1 AND subject_type = 'account' AND grade = 'owner'
+	UNION ALL
+	SELECT team_grant.subject_type, team_grant.subject_id, member.account_id
+	FROM public.graph_grant AS team_grant
+	JOIN public.team_member AS member ON member.team_id = team_grant.subject_id
+	JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL
+	WHERE team_grant.graph_id = $1 AND team_grant.subject_type = 'team' AND team_grant.grade = 'owner'`
+
 // requireOwner는 그래프에 소유자 등급을 쓸 수 있는 계정이 남아 있는지 본다.
-//
-// 부여된 등급이 아니라 그 등급을 쓸 계정을 세는 이유는 `FR-AGENT_CONTEXT-042`가 판정을
-// "소유자 등급의 계정"으로 정했기 때문이다. 삭제된 팀이나 구성원이 없는 팀의 owner 부여는
-// 행이 남아 있어도 그 등급을 쓸 계정이 없으므로 세지 않는다. 세면 계정 소유자를 회수해도
-// 통과해 소유자 계정이 없는 그래프가 된다.
+// 삭제된 팀이나 구성원 없는 팀의 부여 행은 FR-AGENT_CONTEXT-042의 소유자가 아니다.
 func requireOwner(ctx context.Context, tx pgx.Tx, graphID model.ID) error {
-	var owners int
-	if err := tx.QueryRow(ctx, `
-		SELECT count(*) FROM (
-			SELECT subject_id AS account_id
-			FROM public.graph_grant
-			WHERE graph_id = $1 AND subject_type = 'account' AND grade = 'owner'
-			UNION
-			SELECT member.account_id
-			FROM public.graph_grant AS team_grant
-			JOIN public.team_member AS member ON member.team_id = team_grant.subject_id
-			JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL
-			WHERE team_grant.graph_id = $1 AND team_grant.subject_type = 'team' AND team_grant.grade = 'owner'
-		) AS owners`, graphID.String()).Scan(&owners); err != nil {
+	var hasOwner bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (`+usableOwnersSQL+`)`, graphID.String()).Scan(&hasOwner); err != nil {
 		return fmt.Errorf("그래프 소유자 수 조회: %w", err)
 	}
-	if owners == 0 {
+	if !hasOwner {
 		return ErrLastOwner
 	}
 	return nil

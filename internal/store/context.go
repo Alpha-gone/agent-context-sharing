@@ -83,6 +83,11 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if !graphID.IsV7() || value.GraphID != graphID || expectedVersion < 1 {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 인자가 올바르지 않다")
 	}
+	release, err := s.reserveContextWriteConnections(ctx)
+	if err != nil {
+		return model.Context{}, err
+	}
+	defer release()
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 트랜잭션 시작: %w", err)
@@ -222,6 +227,11 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
+	release, err := s.reserveContextWriteConnections(ctx)
+	if err != nil {
+		return model.Context{}, err
+	}
+	defer release()
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 트랜잭션 시작: %w", err)
@@ -247,10 +257,10 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 		}
 	}
 	if discard && previous.DeletedAt != nil {
-		return model.Context{}, fmt.Errorf("컨텍스트가 이미 폐기됐다")
+		return model.Context{}, fmt.Errorf("컨텍스트가 이미 폐기됐다: %w", ErrInvalidState)
 	}
 	if !discard && previous.DeletedAt == nil {
-		return model.Context{}, fmt.Errorf("컨텍스트가 활성 상태다")
+		return model.Context{}, fmt.Errorf("컨텍스트가 활성 상태다: %w", ErrInvalidState)
 	}
 	if discard {
 		if err := s.invalidateDerivedEvidence(ctx, tx, graphID, contextID); err != nil {
@@ -296,8 +306,8 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 		if errors.Is(err, ErrNotFound) {
 			return model.Context{}, s.deletionConflict(ctx, graphID, contextID, discard)
 		}
-		if conflict := s.asVersionConflict(ctx, graphID, contextID, err); conflict != err {
-			return model.Context{}, conflict
+		if isConcurrentAGEUpdate(err) {
+			return model.Context{}, s.deletionConflict(ctx, graphID, contextID, discard)
 		}
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이: %w", err)
 	}
@@ -335,10 +345,10 @@ func (s *Store) deletionConflict(ctx context.Context, graphID, contextID model.I
 		return err
 	}
 	if discard && current.DeletedAt != nil {
-		return fmt.Errorf("컨텍스트가 이미 폐기됐다")
+		return fmt.Errorf("컨텍스트가 이미 폐기됐다: %w", ErrInvalidState)
 	}
 	if !discard && current.DeletedAt == nil {
-		return fmt.Errorf("컨텍스트가 활성 상태다")
+		return fmt.Errorf("컨텍스트가 활성 상태다: %w", ErrInvalidState)
 	}
 	return VersionConflictError{Current: current.Version}
 }
@@ -404,6 +414,11 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 
 // createContext은 원천 중복 확인과 그래프 활동 갱신을 포함한 실제 쓰기 트랜잭션이다.
 func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits) (model.Context, error) {
+	release, err := s.reserveContextWriteConnections(ctx)
+	if err != nil {
+		return model.Context{}, err
+	}
+	defer release()
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 생성 트랜잭션 시작: %w", err)

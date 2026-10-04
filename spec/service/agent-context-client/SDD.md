@@ -76,7 +76,7 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 
 배포 빌드는 `CGO_ENABLED=0`, `-trimpath`와 고정된 Go 모듈 의존성으로 생성한다. 각 실행 파일과 함께 SHA-256 checksum, SPDX JSON SBOM, 빌드 출처 증명과 서명 검증 자료를 배포한다. 빌드 출처나 checksum 검증에 실패한 파일은 공식 산출물로 취급하지 않는다.
 
-배포 보조 도구 `client/cmd/release`는 실행 파일에 내장된 Go build information에서 실제 링크된 모듈 목록과 빌드 설정을 읽어 네 플랫폼의 후보 산출물·SPDX 2.3 JSON·출처 기록·checksum 목록을 생성한다. 라이선스를 확인하지 않은 모듈은 `NOASSERTION`으로 명시하며 라이선스 승인이나 취약점 검사 완료를 뜻하지 않는다. 출처 기록에는 소스 revision·dirty 상태, Go 판, target·CGO·trimpath 설정과 실행 파일 digest를 담는다. 이는 로컬 빌드 기록이며 신뢰된 CI의 SLSA 인증을 주장하지 않는다.
+배포 보조 도구 `client/cmd/release`는 실행 파일에 내장된 Go build information에서 실제 링크된 모듈 목록과 빌드 설정을 읽어 네 플랫폼의 후보 산출물·SPDX 2.3 JSON·출처 기록·checksum 목록을 생성한다. 라이선스를 확인하지 않은 모듈은 `NOASSERTION`으로 명시하며 라이선스 승인이나 취약점 검사 완료를 뜻하지 않는다. 출처 기록에는 소스 revision·dirty 상태, Go 판, target·CGO·trimpath 설정과 실행 파일 digest를 담는다. 각 target 빌드 직전에 Git 상태를 읽고 실행 파일의 `vcs.revision`·`vcs.modified`와 대조하며, 누락·불일치 시 출처 기록 생성을 거부한다. 저장소 내부 출력으로 뒤쪽 target만 dirty가 되는 경우에도 실행 파일별 실제 상태를 기록한다. 이는 로컬 빌드 기록이며 신뢰된 CI의 SLSA 인증을 주장하지 않는다.
 
 서명은 사용자가 제공한 Ed25519 PKCS#8 개인 키로 checksum 목록에 적용하며 개인 키는 산출물에 복사하지 않는다. 검증자는 별도 경로로 신뢰한 공개 키로 서명을 검증한 뒤 모든 실행 파일·SBOM·출처 기록의 digest를 대조한다. 동봉된 공개 키만으로 발행자를 신뢰하지 않는다. 서명 키가 없는 빌드는 명시적 후보이고, 서명이 없거나 신뢰 공개 키·checksum이 맞지 않으면 공식 무결성 검증은 실패한다. 새 출력 디렉터리만 만들며 기존 산출물을 덮어쓰지 않는다. dirty 빌드와 플랫폼별 실행 검증 미완료도 출시 판정에 별도로 남긴다.
 
@@ -280,7 +280,7 @@ sequenceDiagram
 5. 정상 callback 하나만 원자적으로 소비하고 이후 중복 callback은 `410`으로 거부한다.
 6. 같은 `redirect_uri`, `resource`, `code_verifier`와 토큰 엔드포인트용 새 DPoP proof로 코드를 한 번 교환한다.
 7. 토큰 응답의 `token_type=DPoP`, issuer, audience, 만료와 `cnf.jkt`를 검증한 뒤에만 저장한다.
-8. 성공·실패·취소·시간 초과 모두에서 수신기와 일회성 값을 정리한다.
+8. 성공·실패·취소·시간 초과 모두에서 수신기와 일회성 값을 정리한다. 정상 callback은 `Content-Length: 0`인 HTTP 응답을 결과 전달 전에 flush하고, 종료 시 HTTP 서버·접수 연결을 즉시 닫아 헤더 없는 브라우저 사전 연결의 대기 시간이 정리를 지연하지 않게 한다. Serve 실행을 회수하고 callback 잠금 아래에서 새 처리의 일회성 값 접근을 차단한 뒤 해당 참조를 폐기한다.
 
 불일치 callback을 받은 것만으로 인가 전체를 실패시키지 않는다. 정상 callback을 계속 기다리되 전체 제한 시간이 끝나면 `client_timeout`, 호출자 취소가 먼저 오면 취소 결과로 끝낸다. 정상 `state`·`iss`의 거부 callback과 OAuth 토큰 교환의 redirect가 아닌 비성공 응답은 `client_authorization`이며, 발견·JWT·DPoP의 완전한 계약 위반과 토큰 교환 redirect는 `client_protocol`, DNS·TLS·본문 수신 실패는 `client_transport`로 구분한다.
 
@@ -383,7 +383,7 @@ opener는 별도 실행으로 시작하고 callback·opener 오류·인가 conte
 
 압축되지 않은 응답도 전송 본문과 해제 뒤 본문 상한을 각각 통과해야 한다. 크기 초과는 연결을 닫고 해당 요청만 실패시킨다. 응답은 stdout에 일부를 쓰기 전에 32 MiB 상한을 확인하므로 중간에 잘린 MCP 메시지가 남지 않는다.
 
-상한을 넘은 `stdio` 입력은 다음 줄바꿈까지 버려 프레이밍을 복구한다. 상한 안에서 JSON-RPC 식별자를 안전하게 읽었으면 그 식별자로 `client_busy`를 반환하고, 식별자를 확정할 수 없으면 `id=null`인 JSON-RPC 오류의 data에 `client_busy`를 담는다.
+상한을 넘은 `stdio` 입력은 다음 줄바꿈까지 버려 프레이밍을 복구한다. 상한 안에서 JSON-RPC 식별자를 안전하게 읽었으면 그 식별자로 `client_busy`를 반환하고, 식별자를 확정할 수 없으면 `id=null`인 JSON-RPC 오류의 data에 `client_busy`를 담는다. 숫자 식별자는 상한 안에서 뒤따르는 JSON 공백·쉼표·닫는 중괄호까지 확인해야 하며 잘린 접두부의 EOF를 숫자의 끝으로 해석하지 않는다. 문자열 식별자는 닫는 따옴표까지 읽은 경우에만 회수한다.
 
 표준 입력 reader와 표준 출력 writer는 각각 하나만 둔다. reader가 유효한 요청을 dispatcher에 넘기고, 동시 처리된 결과는 하나의 writer goroutine이 줄 단위로 직렬화한다. stdin EOF는 입력 방향의 종료로 처리한다. 새 요청 수락을 멈추고 진행 중인 원격 호출은 취소하되, 이미 접수한 요청의 로컬 결과와 취소 결과를 기록한 뒤 SDK에 EOF를 전달한다. 종료 신호는 모든 호출 context를 취소한다.
 
@@ -512,7 +512,7 @@ opener는 별도 실행으로 시작하고 callback·opener 오류·인가 conte
 | `FR-AGENT_CONTEXT_CLIENT-006` | 「호출 변환과 응답 보존」 | 여섯 도구의 스키마 제거·구성값 주입·우회 입력의 `client_protocol` 분류 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-007` | 「메타데이터 발견과 HTTP 정책」 | 도전·well-known discovery, resource 전환 거부와 검증된 resource 재사용 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-008` | 「공유 브라우저 인가」 | 인가 요청 파라미터, opener 미반환·회수와 시스템 브라우저 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-009` | 「공유 브라우저 인가」 | IPv4·IPv6 loopback, callback 변조·중복 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-009` | 「공유 브라우저 인가」 | IPv4·IPv6 loopback, callback 변조·중복·완전한 HTTP 응답 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-010` | 「공유 브라우저 인가」 | 1회 코드 교환, verifier·redirect·resource·issuer 대조 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-011` | 「런타임 상태와 동시성」, 「DPoP 키와 proof」 | 파일·환경·로그 비노출과 재시작 키 변경 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-012` | 「프로세스 상태」, 「토큰 갱신과 재인증」 | 헤더 쌍·JWT·thumbprint·동시 갱신·만료 비역행·동일 만료 교체 시험 |
@@ -528,11 +528,11 @@ opener는 별도 실행으로 시작하고 callback·opener 오류·인가 conte
 | `FR-AGENT_CONTEXT_CLIENT-022` | 「호출 변환과 응답 보존」 | 불투명 커서와 `result_truncated` 성공 보존 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-023` | 「배포 구성」 | 필수 환경 변수, HTTPS·경로·UUIDv7 기동 전 검증 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-024` | 「토큰 갱신과 재인증」 | 첫 계정 고정·다른 계정 저장 거부·갱신 주체 유지와 재시작 전환 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-025` | 「공유 브라우저 인가」 | opener 실패, listener 정리와 URL 비노출 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-025` | 「공유 브라우저 인가」 | opener 실패, 사전 연결을 포함한 listener 정리와 URL 비노출 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-026` | 「종료」 | EOF 직전 로컬·취소 결과 보존, 신호·비정상 입력 뒤 자원 정리 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-027` | 「lifecycle과 도구 공개」 | 양쪽 발견, revision·capability·확장 협상 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-028` | 「lifecycle과 도구 공개」 | TTL 0·만료·scope·fingerprint 변경, 조회 중 주체 변경의 응답 폐기·`client_authorization` 분류 시험 |
-| `FR-AGENT_CONTEXT_CLIENT-029` | 「공유 브라우저 인가」 | 대기자별 취소와 마지막 대기자 종료 시험 |
+| `FR-AGENT_CONTEXT_CLIENT-029` | 「공유 브라우저 인가」 | 대기자별 취소와 사전 연결·시간 초과·Close에서 마지막 대기자 종료 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-030` | 「배포 구성」, 「lifecycle과 도구 공개」 | 구성·계약 공통 검증, 정책 오류의 `client_configuration` 분류, 세 정책의 list/call 일치와 권한 비확대 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-031` | 「doctor 진단 설계」 | 사람/JSON 출력, 검사 단계와 비밀 비노출 시험 |
 | `FR-AGENT_CONTEXT_CLIENT-032` | 「논리적 호출 상태」, 「전송 재시도 상태기계」 | 8종 UUIDv7 키 생성·재사용·폐기 시험 |
@@ -551,9 +551,9 @@ opener는 별도 실행으로 시작하고 callback·opener 오류·인가 conte
 | `NFR-AGENT_CONTEXT_CLIENT-010` | 「구조화 로그」 | 필수 로그 필드와 금지 필드 검사 |
 | `NFR-AGENT_CONTEXT_CLIENT-011` | 「종료」 | 강제 종료·재시작 뒤 새 인증과 상태 비복원 시험 |
 | `NFR-AGENT_CONTEXT_CLIENT-012` | 「테스트 전략」 | 모의/실서버 계약 suite 분리와 회귀 검출 |
-| `NFR-AGENT_CONTEXT_CLIENT-013` | 「자원 상한과 입출력」 | 각 경계값·1바이트 초과·동시성·대기열 시험 |
+| `NFR-AGENT_CONTEXT_CLIENT-013` | 「자원 상한과 입출력」 | 각 경계값·1바이트 초과·잘린 ID 회수 거부·동시성·대기열 시험 |
 | `NFR-AGENT_CONTEXT_CLIENT-014` | 「메타데이터 발견과 HTTP 정책」 | protected/token 무redirect와 discovery 3회·origin 변경 시험 |
-| `NFR-AGENT_CONTEXT_CLIENT-015` | 「CPU 아키텍처와 배포 산출물」 | checksum·SBOM·출처 증명·서명 검증 시험 |
+| `NFR-AGENT_CONTEXT_CLIENT-015` | 「CPU 아키텍처와 배포 산출물」 | checksum·SBOM·출처 dirty 누락·불일치·서명 검증 시험 |
 | `NFR-AGENT_CONTEXT_CLIENT-016` | 「DPoP 키와 proof」 | 토큰 단독·다른 키·proof 재생·Bearer 거부 종단 간 시험 |
 
 ## 변경 영향과 호환성

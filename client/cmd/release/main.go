@@ -107,15 +107,16 @@ func build(directory, goBin, version, keyPath string) error {
 	if err != nil {
 		return err
 	}
-	status, err := command("git", "status", "--porcelain")
-	if err != nil {
-		return err
-	}
 	if err := os.Mkdir(directory, 0o755); err != nil {
 		return errors.New("새 산출물 디렉터리만 사용할 수 있다")
 	}
 	var checksums strings.Builder
 	for _, target := range targets {
+		status, err := command("git", "status", "--porcelain")
+		if err != nil {
+			return err
+		}
+		dirty := status != ""
 		goos, goarch, _ := strings.Cut(target, "-")
 		name := "agent-context-client-" + target
 		path := filepath.Join(directory, name)
@@ -128,7 +129,7 @@ func build(directory, goBin, version, keyPath string) error {
 		if err != nil {
 			return err
 		}
-		if err := validateBuild(info, target, revision); err != nil {
+		if err := validateBuild(info, target, revision, dirty); err != nil {
 			return err
 		}
 		digest, err := fileDigest(path)
@@ -136,7 +137,7 @@ func build(directory, goBin, version, keyPath string) error {
 			return err
 		}
 		provenance := map[string]any{"format": "agent-context-client-local-build-v1", "candidate": true,
-			"version": version, "revision": revision, "dirty": status != "", "target": target, "sha256": digest,
+			"version": version, "revision": revision, "dirty": dirty, "target": target, "sha256": digest,
 			"goVersion": info.GoVersion, "settings": info.Settings, "modules": info.Deps, "created": time.Now().UTC().Format(time.RFC3339)}
 		if err := writeJSON(path+".provenance.json", provenance); err != nil {
 			return err
@@ -175,13 +176,13 @@ func build(directory, goBin, version, keyPath string) error {
 	return nil
 }
 
-func validateBuild(info *debug.BuildInfo, target, revision string) error {
+func validateBuild(info *debug.BuildInfo, target, revision string, dirty bool) error {
 	settings := make(map[string]string)
 	for _, setting := range info.Settings {
 		settings[setting.Key] = setting.Value
 	}
 	goos, goarch, _ := strings.Cut(target, "-")
-	if info.GoVersion != "go1.27.1" || settings["CGO_ENABLED"] != "0" || settings["-trimpath"] != "true" || settings["GOOS"] != goos || settings["GOARCH"] != goarch || settings["vcs.revision"] != revision {
+	if info.GoVersion != "go1.27.1" || settings["CGO_ENABLED"] != "0" || settings["-trimpath"] != "true" || settings["GOOS"] != goos || settings["GOARCH"] != goarch || settings["vcs.revision"] != revision || settings["vcs.modified"] != fmt.Sprint(dirty) {
 		return errors.New("실행 파일의 빌드 출처·target·CGO·trimpath가 맞지 않는다")
 	}
 	return nil
@@ -286,16 +287,17 @@ func verify(directory, publicPath string, allowUnsigned bool) error {
 			Revision string `json:"revision"`
 			SHA256   string `json:"sha256"`
 			Target   string `json:"target"`
+			Dirty    *bool  `json:"dirty"`
 		}
 		encoded, err := os.ReadFile(path + ".provenance.json")
-		if err != nil || json.Unmarshal(encoded, &provenance) != nil || provenance.Target != target {
+		if err != nil || json.Unmarshal(encoded, &provenance) != nil || provenance.Target != target || provenance.Dirty == nil {
 			return errors.New("빌드 출처 형식 오류")
 		}
 		info, err := buildinfo.ReadFile(path)
 		if err != nil {
 			return errors.New("실행 파일 빌드 정보를 읽지 못했다")
 		}
-		if err := validateBuild(info, target, provenance.Revision); err != nil {
+		if err := validateBuild(info, target, provenance.Revision, *provenance.Dirty); err != nil {
 			return err
 		}
 		digest, err := fileDigest(path)

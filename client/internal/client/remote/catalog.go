@@ -23,6 +23,7 @@ const idempotencyExtension = "io.github.alpha-gone/write-idempotency"
 // Source는 인증·HTTP 전송을 발견·도구 계약 검증에서 분리한다.
 // Identity는 토큰 원문이 아닌 인증 주체의 안정된 불투명 식별자를 반환한다.
 // 각 응답은 JSON-RPC 외피 검증을 마친 result 객체다.
+// CallTool의 완료 전 취소와 불확실 쓰기 분류는 전송 구현이 담당한다.
 type Source interface {
 	Identity(context.Context) (string, error)
 	Discover(context.Context) (jsontext.Value, error)
@@ -321,9 +322,8 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments jsontext.V
 	if err != nil {
 		return nil, err
 	}
-	if err := requestContext(ctx).Err(); err != nil {
-		return nil, err
-	}
+	// 전송이 완료한 결과를 늦은 취소로 버리면 쓰기가 retryable timeout으로
+	// 바뀌어 새 논리적 호출과 키로 중복 실행될 수 있다. 객체 검증은 유지한다.
 	return contract.NewResult(raw)
 }
 

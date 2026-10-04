@@ -35,13 +35,14 @@ func TestWorkerProposesSimilarEventRelationsAfterIndexIntegration(t *testing.T) 
 	defer database.Close()
 
 	actorID := integrationID(t)
-	server := embeddingServer(t)
+	dimension := embeddingDimension(t, databaseURL)
+	server := embeddingServer(t, dimension)
 	defer server.Close()
 	baseURL, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatalf("임베딩 제공자 주소 해석: %v", err)
 	}
-	worker, err := New(database, Config{BaseURL: baseURL, Model: "relation-test", VectorType: "vector", Dimension: 1024}, server.Client(), nil)
+	worker, err := New(database, Config{BaseURL: baseURL, Model: "relation-test", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
 	if err != nil {
 		t.Fatalf("색인 작업자 생성: %v", err)
 	}
@@ -109,10 +110,28 @@ func focusIndexQueue(t *testing.T, databaseURL string, graphID model.ID) {
 	}
 }
 
-func embeddingServer(t *testing.T) *httptest.Server {
+// embeddingDimension은 시험 DB의 벡터 열 차원을 읽어 대역 응답을 현재 마이그레이션 구성에 맞춘다.
+func embeddingDimension(t *testing.T, databaseURL string) int {
+	t.Helper()
+	connection, err := pgx.Connect(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatalf("임베딩 차원 조회 연결: %v", err)
+	}
+	defer connection.Close(context.WithoutCancel(t.Context()))
+	var dimension int
+	if err := connection.QueryRow(t.Context(), `
+		SELECT COALESCE(substring(format_type(atttypid, atttypmod) FROM '[0-9]+')::int, 0)
+		FROM pg_attribute
+		WHERE attrelid = 'public.context_embedding'::regclass AND attname = 'embedding'`).Scan(&dimension); err != nil || dimension <= 0 {
+		t.Fatalf("임베딩 차원 조회 = %d, %v", dimension, err)
+	}
+	return dimension
+}
+
+func embeddingServer(t *testing.T, dimension int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		embedding := make([]float64, 1024)
+		embedding := make([]float64, dimension)
 		embedding[0] = 1
 		body, err := json.Marshal(map[string]any{"embeddings": [][]float64{embedding}})
 		if err != nil {

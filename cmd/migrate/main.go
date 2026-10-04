@@ -45,11 +45,6 @@ func run(ctx context.Context, command string) error {
 		return err
 	}
 
-	migrations, err := migrate.Load(migrations.FS, ".", cfg)
-	if err != nil {
-		return err
-	}
-
 	pool, err := migrate.NewPool(ctx, databaseURL)
 	if err != nil {
 		return err
@@ -60,19 +55,16 @@ func run(ctx context.Context, command string) error {
 	// 이력을 함께 읽고 같은 파일을 함께 적용하려 들기 때문이다. 기다린 쪽은 잠금을 얻은
 	// 뒤에 이력을 읽으므로 앞선 실행기가 적용한 결과를 본다.
 	return migrate.WithLock(ctx, pool, func(ctx context.Context) error {
-		return runLocked(ctx, pool, command, migrations)
+		return runLocked(ctx, pool, command, cfg)
 	})
 }
 
-func runLocked(ctx context.Context, pool *pgxpool.Pool, command string, migrations []migrate.Migration) error {
-	if err := migrate.EnsureHistory(ctx, pool); err != nil {
-		return err
-	}
-	applied, err := migrate.AppliedVersions(ctx, pool)
+func runLocked(ctx context.Context, pool *pgxpool.Pool, command string, cfg migrate.Config) error {
+	loaded, applied, err := migrate.Prepare(ctx, pool, migrations.FS, ".", cfg)
 	if err != nil {
 		return err
 	}
-	pending, err := migrate.Pending(migrations, applied)
+	pending, err := migrate.Pending(loaded, applied)
 	if err != nil {
 		return err
 	}
@@ -107,10 +99,11 @@ func loadConfig() (migrate.Config, error) {
 		return migrate.Config{}, fmt.Errorf("EMBEDDING_DIMENSION %q 해석: %w", dimText, err)
 	}
 	cfg := migrate.Config{
-		GraphName:      os.Getenv("AGE_GRAPH_NAME"),
-		VectorType:     os.Getenv("EMBEDDING_VECTOR_TYPE"),
-		VectorDim:      dim,
-		ColdTablespace: os.Getenv("EMBEDDING_COLD_TABLESPACE"),
+		GraphName:         os.Getenv("AGE_GRAPH_NAME"),
+		VectorType:        os.Getenv("EMBEDDING_VECTOR_TYPE"),
+		VectorDim:         dim,
+		ColdTablespace:    os.Getenv("EMBEDDING_COLD_TABLESPACE"),
+		IndexTargetLayers: os.Getenv("INDEX_TARGET_LAYERS"),
 	}
 	if err := cfg.Validate(); err != nil {
 		return migrate.Config{}, err

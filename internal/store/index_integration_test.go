@@ -23,7 +23,8 @@ func TestIndexAndNonGraphSearchIntegration(t *testing.T) {
 	// 자기 작업만 앞으로 당기면 다른 테스트가 남긴 행이 더 앞선 시각일 때 그쪽이 먼저
 	// 잡힌다. readyIndexTasks가 나머지를 함께 미뤄 확보 순서를 고정한다.
 	readyIndexTasks(t, database, graphID, stored.ID)
-	vector := make([]float64, 1024)
+	dimension := embeddingDimension(t, database)
+	vector := make([]float64, dimension)
 	vector[0] = 1
 	processed, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(_ context.Context, task IndexTask) IndexTaskResult {
 		if task.ContextID != stored.ID || task.Body != stored.Body {
@@ -41,7 +42,7 @@ func TestIndexAndNonGraphSearchIntegration(t *testing.T) {
 	if err != nil || len(semantic) != 1 || semantic[0].Context.ID != stored.ID || semantic[0].Similarity != 1 {
 		t.Fatalf("의미 유사도 후보 = %#v, err=%v", semantic, err)
 	}
-	orthogonal := make([]float64, 1024)
+	orthogonal := make([]float64, dimension)
 	orthogonal[1] = 1
 	semantic, err = database.SemanticCandidates(t.Context(), graphID, "test:vector:1024", orthogonal, time.Now().UTC(), 10)
 	if err != nil || len(semantic) != 1 || semantic[0].Similarity != 0 {
@@ -221,7 +222,7 @@ func TestReindexExcludesAndReplacesOutdatedModel(t *testing.T) {
 		t.Fatalf("재색인 대상 생성: %v", err)
 	}
 	readyIndexTasks(t, database, graphID, stored.ID)
-	vector := make([]float64, 1024)
+	vector := make([]float64, embeddingDimension(t, database))
 	vector[0] = 1
 	const currentModel = "current:vector:1024"
 	if _, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(context.Context, IndexTask) IndexTaskResult {

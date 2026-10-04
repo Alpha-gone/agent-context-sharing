@@ -243,6 +243,20 @@ func indexRetryDelay(attempt int) time.Duration {
 	return time.Minute * time.Duration(1<<min(attempt-1, 3))
 }
 
+// CheckEmbeddingSchema는 기동 전에 벡터 열과 현재 배포 구성이 일치하는지 확인한다.
+func (s *Store) CheckEmbeddingSchema(ctx context.Context, vectorType string, dimension int) error {
+	var actual string
+	if err := s.pool.QueryRow(ctx, `SELECT format_type(atttypid, atttypmod)
+		FROM pg_attribute WHERE attrelid = 'public.context_embedding'::regclass
+		AND attname = 'embedding' AND NOT attisdropped`).Scan(&actual); err != nil {
+		return fmt.Errorf("임베딩 열 확인 실패: %w", err)
+	}
+	if actual != fmt.Sprintf("%s(%d)", vectorType, dimension) {
+		return fmt.Errorf("임베딩 DB 열 %s가 구성 %s(%d)와 다르다. 마이그레이션을 먼저 적용해야 한다", actual, vectorType, dimension)
+	}
+	return nil
+}
+
 // ReindexOutdatedEmbeddings는 현재 모델과 다른 벡터가 남은 그래프 전체를 다시 대기열에 넣는다.
 func (s *Store) ReindexOutdatedEmbeddings(ctx context.Context, modelID string) error {
 	rows, err := s.pool.Query(ctx, `SELECT DISTINCT graph_id::text FROM public.context_embedding WHERE model_id <> $1`, modelID)

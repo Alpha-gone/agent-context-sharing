@@ -165,6 +165,9 @@ func run() error {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
 	defer database.Close()
+	if err := database.CheckEmbeddingSchema(ctx, settings.index.VectorType, settings.index.Dimension); err != nil {
+		return err
+	}
 	worker, err := index.New(database, settings.index, nil, slog.Default())
 	if err != nil {
 		return fmt.Errorf("색인 작업자 준비: %w", err)
@@ -463,10 +466,15 @@ func loadSettings() (settings, error) {
 		return settings{}, fmt.Errorf("EMBEDDING_DIMENSION 해석: %w", err)
 	}
 	loaded.index = index.Config{
+		Provider:   strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")),
+		APIKey:     strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		BaseURL:    baseURL,
 		Model:      os.Getenv("EMBEDDING_MODEL"),
 		VectorType: os.Getenv("EMBEDDING_VECTOR_TYPE"),
 		Dimension:  dimension,
+	}
+	if err := loaded.index.Validate(); err != nil {
+		return settings{}, err
 	}
 	if loaded.candidateLimit, err = strconv.Atoi(strings.TrimSpace(envOr("SEARCH_CHANNEL_CANDIDATE_LIMIT", "50"))); err != nil {
 		return settings{}, fmt.Errorf("SEARCH_CHANNEL_CANDIDATE_LIMIT 해석: %w", err)

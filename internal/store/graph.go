@@ -45,9 +45,14 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 		return model.Graph{}, fmt.Errorf("그래프 생성 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	// 소유 그래프 수를 같은 트랜잭션에서 센다. 밖에서 읽은 값으로만 판정하면 한도 직전
-	// 계정의 동시 생성이 둘 다 통과한다.
 	if limits.GraphsPerAccount > 0 {
+		// 아직 없는 그래프 행은 잠글 수 없으므로 계정 행으로 동시 생성을 직렬화한다.
+		// 집계는 잠금 뒤 별도 명령으로 실행해 앞선 생성의 커밋을 본다. 저장점 해제 뒤에도
+		// 이 잠금은 바깥 멱등성 트랜잭션의 커밋까지 유지된다.
+		var accountID model.ID
+		if err := tx.QueryRow(ctx, `SELECT account_id FROM public.account WHERE account_id = $1 FOR UPDATE`, graph.CreatedBy.String()).Scan(&accountID); err != nil {
+			return model.Graph{}, fmt.Errorf("그래프 수 한도 계정 잠금: %w", err)
+		}
 		count, err := ownedGraphCount(ctx, tx, graph.CreatedBy)
 		if err != nil {
 			return model.Graph{}, err

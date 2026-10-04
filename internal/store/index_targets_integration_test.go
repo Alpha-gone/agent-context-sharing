@@ -91,8 +91,22 @@ func TestReindexGraphDropsExcludedEmbeddingsIntegration(t *testing.T) {
 	}
 
 	excluded := newIntegrationStoreWithTargets(t, IndexTargetsWithoutSource)
-	if err := excluded.ReindexGraph(t.Context(), graphID); err != nil {
-		t.Fatalf("재색인: %v", err)
+	if err := included.ReindexGraph(t.Context(), graphID); err != nil {
+		t.Fatalf("이전 구성의 재색인 등록: %v", err)
+	}
+	if _, err := included.pool.Exec(t.Context(), `UPDATE public.index_task SET next_attempt_at = now() WHERE context_id = $1`, source.ID.String()); err != nil {
+		t.Fatalf("재색인 작업 확보 준비: %v", err)
+	}
+	// 이전 구성의 작업자가 제공자를 호출하는 동안 제외 구성이 작업과 임베딩을
+	// 제거한다. 늦게 돌아온 이전 결과가 제외된 원천의 임베딩을 되살리면 안 된다.
+	result, err := included.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(ctx context.Context, task IndexTask) IndexTaskResult {
+		if err := excluded.ReindexGraph(ctx, graphID); err != nil {
+			t.Fatalf("색인 처리 중 원천 제외: %v", err)
+		}
+		return processor(ctx, task)
+	})
+	if err != nil || !result.Found || result.Succeeded {
+		t.Fatalf("제외된 작업의 이전 결과 = %+v, %v", result, err)
 	}
 	if count := embeddingCount(t, excluded, graphID); count != 0 {
 		t.Fatalf("대상에서 빠진 임베딩이 남았다: %d", count)

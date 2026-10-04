@@ -25,6 +25,11 @@ const maxIndexAttempts = 5
 // 겹쳐 처리되지 않고, 작업자가 죽어도 이 시간이 지나면 저절로 다시 대기가 된다.
 const indexTaskLease = 2 * time.Minute
 
+type indexTaskClaim struct {
+	enqueuedAt  time.Time
+	leasedUntil time.Time
+}
+
 // IndexTask는 외부 임베딩 제공자에 넘길 색인 대기 작업이다.
 type IndexTask struct {
 	ID            model.ID
@@ -101,7 +106,7 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 
 	var rawID, rawContextID, rawGraphID, correlationID string
 	var attempts int
-	var enqueuedAt time.Time
+	var claim indexTaskClaim
 	err = tx.QueryRow(ctx, `
 		SELECT task_id::text, context_id::text, graph_id::text, attempts, COALESCE(correlation_id, ''), enqueued_at
 		FROM public.index_task
@@ -109,7 +114,7 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 		  AND ($1::uuid IS NULL OR graph_id = $1::uuid)
 		ORDER BY enqueued_at, task_id
 		LIMIT 1
-		FOR UPDATE SKIP LOCKED`, scopeValue).Scan(&rawID, &rawContextID, &rawGraphID, &attempts, &correlationID, &enqueuedAt)
+		FOR UPDATE SKIP LOCKED`, scopeValue).Scan(&rawID, &rawContextID, &rawGraphID, &attempts, &correlationID, &claim.enqueuedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return IndexProcessResult{}, tx.Commit(ctx)
@@ -140,7 +145,9 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 	}
 	task := IndexTask{ID: taskID, ContextID: contextID, GraphID: graphID, Body: value.Body, Attempts: attempts, CorrelationID: correlationID}
 	// 확보를 커밋하면서 대기 시각을 미뤄 다른 작업자가 같은 작업을 집지 않게 한다.
-	if _, err := tx.Exec(ctx, `UPDATE public.index_task SET next_attempt_at = $2 WHERE task_id = $1`, rawID, time.Now().UTC().Add(indexTaskLease)); err != nil {
+	// 데이터베이스가 저장한 정밀도의 시각을 받아 결과 대조에 그대로 사용한다.
+	if err := tx.QueryRow(ctx, `UPDATE public.index_task SET next_attempt_at = $2 WHERE task_id = $1
+		RETURNING next_attempt_at`, rawID, time.Now().UTC().Add(indexTaskLease)).Scan(&claim.leasedUntil); err != nil {
 		return IndexProcessResult{}, fmt.Errorf("색인 작업 확보 표시: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -151,7 +158,7 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 	result := processor(ctx, task)
 
 	if result.Failure != "" {
-		if err := s.storeIndexFailure(ctx, task, result); err != nil {
+		if err := s.storeIndexFailure(ctx, task, claim, result); err != nil {
 			return IndexProcessResult{}, err
 		}
 		return IndexProcessResult{Found: true, Task: task}, nil
@@ -159,60 +166,66 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 	if len(result.Embedding) == 0 || result.ModelID == "" {
 		return IndexProcessResult{}, fmt.Errorf("색인 처리기가 빈 임베딩 또는 모델 식별자를 반환했다")
 	}
-	if err := s.storeIndexResult(ctx, task, enqueuedAt, result); err != nil {
+	stored, err := s.storeIndexResult(ctx, task, claim, result)
+	if err != nil {
 		return IndexProcessResult{}, err
 	}
-	return IndexProcessResult{Found: true, Succeeded: true, Task: task}, nil
+	return IndexProcessResult{Found: true, Succeeded: stored, Task: task}, nil
 }
 
 // storeIndexResult는 제공자 결과를 저장하고 처리한 작업을 지운다.
 //
-// 지울 때 등록 시각을 함께 대조하는 이유는 확보한 뒤 본문이 바뀌었을 수 있기 때문이다.
-// 그 경우 enqueueIndexTask의 upsert가 등록 시각을 새로 쓰므로 여기에서 지우지 않고 남겨
-// 다음 회차가 새 본문으로 다시 색인한다.
-func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, enqueuedAt time.Time, result IndexTaskResult) error {
+// 작업 삭제를 먼저 조건부로 수행해 재등록·재확보와 결과 공개를 직렬화한다.
+// 무효 확보분이면 임베딩을 건드리지 않고, 뒤의 저장이 실패하면 삭제도 롤백한다.
+func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, claim indexTaskClaim, result IndexTaskResult) (bool, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return fmt.Errorf("색인 결과 트랜잭션 시작: %w", err)
+		return false, fmt.Errorf("색인 결과 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	deleted, err := tx.Exec(ctx, `DELETE FROM public.index_task
+		WHERE task_id = $1 AND enqueued_at = $2 AND next_attempt_at = $3 AND state = 'pending'`,
+		task.ID.String(), claim.enqueuedAt, claim.leasedUntil)
+	if err != nil {
+		return false, fmt.Errorf("완료 색인 작업 제거: %w", err)
+	}
+	if deleted.RowsAffected() == 0 {
+		return false, nil
+	}
 	// 파티션 키를 포함하지 않는 전역 unique index는 PostgreSQL이 허용하지 않는다.
 	// 단일 색인 저장 경로에서 기존 계층의 행을 먼저 지운 뒤 hot 파티션에 넣어,
 	// context_id가 두 파티션에 동시에 남지 않게 한다.
 	if _, err := tx.Exec(ctx, `DELETE FROM public.context_embedding WHERE context_id = $1`, task.ContextID.String()); err != nil {
-		return fmt.Errorf("기존 임베딩 제거: %w", err)
+		return false, fmt.Errorf("기존 임베딩 제거: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO public.context_embedding
 			(context_id, graph_id, embedding, model_id, indexed_at, last_accessed_at, storage_tier)
 		VALUES ($1, $2, $3, $4, now(), now(), 'hot')`,
 		task.ContextID.String(), task.GraphID.String(), vectorText(result.Embedding), result.ModelID); err != nil {
-		return fmt.Errorf("임베딩 저장: %w", err)
+		return false, fmt.Errorf("임베딩 저장: %w", err)
 	}
 	// 임베딩 공개는 의미 유사도 채널의 후보를 바꾸므로 내용 판을 같은 트랜잭션에서 올린다.
 	if err := bumpContentRevision(ctx, tx, task.GraphID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1 AND enqueued_at = $2`, task.ID.String(), enqueuedAt); err != nil {
-		return fmt.Errorf("완료 색인 작업 제거: %w", err)
+		return false, err
 	}
 	if err := s.checkWriteInvariants(ctx, tx, task.GraphID, []model.ID{task.ContextID}, EmbeddingExpectation{ModelID: result.ModelID, Dimension: len(result.Embedding)}); err != nil {
-		return err
+		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("색인 작업 커밋: %w", err)
+		return false, fmt.Errorf("색인 작업 커밋: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // storeIndexFailure는 제공자 실패를 작업 행에 기록한다.
-func (s *Store) storeIndexFailure(ctx context.Context, task IndexTask, result IndexTaskResult) error {
+func (s *Store) storeIndexFailure(ctx context.Context, task IndexTask, claim indexTaskClaim, result IndexTaskResult) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("색인 실패 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	if err := s.recordIndexFailure(ctx, tx, task, result); err != nil {
+	if err := s.recordIndexFailure(ctx, tx, task, claim, result); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -221,7 +234,7 @@ func (s *Store) storeIndexFailure(ctx context.Context, task IndexTask, result In
 	return nil
 }
 
-func (s *Store) recordIndexFailure(ctx context.Context, tx pgx.Tx, task IndexTask, result IndexTaskResult) error {
+func (s *Store) recordIndexFailure(ctx context.Context, tx pgx.Tx, task IndexTask, claim indexTaskClaim, result IndexTaskResult) error {
 	attempts := task.Attempts + 1
 	state := "pending"
 	next := time.Now().UTC().Add(indexRetryDelay(attempts))
@@ -232,7 +245,8 @@ func (s *Store) recordIndexFailure(ctx context.Context, tx pgx.Tx, task IndexTas
 	if _, err := tx.Exec(ctx, `
 		UPDATE public.index_task
 		SET attempts = $2, state = $3, last_error = $4, next_attempt_at = $5
-		WHERE task_id = $1`, task.ID.String(), attempts, state, result.Failure, next); err != nil {
+		WHERE task_id = $1 AND enqueued_at = $6 AND next_attempt_at = $7 AND state = 'pending'`,
+		task.ID.String(), attempts, state, result.Failure, next, claim.enqueuedAt, claim.leasedUntil); err != nil {
 		return fmt.Errorf("색인 작업 실패 기록: %w", err)
 	}
 	return nil
@@ -354,11 +368,12 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 		}
 	}
 	if len(excluded) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM public.context_embedding WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded); err != nil {
-			return fmt.Errorf("색인 대상에서 빠진 임베딩 제거: %w", err)
-		}
+		// 결과 저장과 같은 작업→임베딩 잠금 순서를 지켜 교착을 피한다.
 		if _, err := tx.Exec(ctx, `DELETE FROM public.index_task WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded); err != nil {
 			return fmt.Errorf("색인 대상에서 빠진 대기 작업 제거: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM public.context_embedding WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded); err != nil {
+			return fmt.Errorf("색인 대상에서 빠진 임베딩 제거: %w", err)
 		}
 		// 임베딩을 지우면 의미 유사도 채널의 후보가 바뀌므로 공개와 같이 내용 판을 올린다.
 		if err := bumpContentRevision(ctx, tx, graphID); err != nil {

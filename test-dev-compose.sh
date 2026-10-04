@@ -16,7 +16,7 @@ runtime_started=0
 
 compose() {
     docker compose --env-file /dev/null --project-name "$test_project" \
-        -f "$repo_root/compose.yaml" "$@"
+        -f "$repo_root/compose.dev.yaml" "$@"
 }
 
 cleanup() {

@@ -102,7 +102,7 @@ perm · authz · index · search
 - [마이그레이션 실행기](../../../internal/migrate/migrate.go)
 - [마이그레이션 명령](../../../cmd/migrate/main.go)
 - [초기 스키마](../../../migrations/001_init.sql)
-- [개발 데이터베이스 구성](../../../compose.yaml)
+- [개발 데이터베이스 구성](../../../compose.dev.yaml)
 
 ## 0단계: 구현 계약 준비
 
@@ -1175,8 +1175,8 @@ go test ./...
 마이그레이션 검증은 빈 개발 볼륨에서 시작한다.
 
 ```shell
-docker compose down -v
-docker compose up -d --build
+docker compose -f compose.dev.yaml down -v
+docker compose -f compose.dev.yaml up -d --build
 go run ./cmd/migrate up
 go run ./cmd/migrate up
 go run ./cmd/audit

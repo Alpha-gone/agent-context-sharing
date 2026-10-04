@@ -11,7 +11,7 @@ export WAL_ARCHIVE_RETENTION_DAYS
 
 compose() {
     docker compose --env-file /dev/null --project-name "$test_project" \
-        -f "$repo_root/compose.yaml" -f "$repo_root/compose.wal-test.yaml" "$@"
+        -f "$repo_root/compose.dev.yaml" -f "$repo_root/compose.wal-test.yaml" "$@"
 }
 
 cleanup() {

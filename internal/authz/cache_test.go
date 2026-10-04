@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,92 @@ type countingStore struct {
 	*memoryStore
 	signingKeyReads atomic.Int64
 	revocationReads atomic.Int64
+}
+
+// blockedRevocationStore는 첫 조회의 DB 스냅숏을 확보한 뒤 반환만 지연한다.
+type blockedRevocationStore struct {
+	*memoryStore
+	reads            atomic.Int64
+	started, release chan struct{}
+}
+
+func (s *blockedRevocationStore) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, error) {
+	ids, err := s.memoryStore.RevokedTokenIDs(ctx, now)
+	if s.reads.Add(1) == 1 {
+		close(s.started)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return ids, err
+}
+
+func TestRevocationReloadCannotUndoLocalRevoke(t *testing.T) {
+	backend := &blockedRevocationStore{memoryStore: newMemoryStore(), started: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(backend.release) })
+	t.Cleanup(release)
+	service := testService(t, backend)
+	id, err := service.Register(t.Context(), "reload", "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := service.WebSession(t.Context(), id, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified := make(chan error, 1)
+	go func() { _, _, err := service.Verify(t.Context(), token.Raw, "web"); verified <- err }()
+	select {
+	case <-backend.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("캐시 조회가 시작되지 않았다")
+	}
+	if err := service.Revoke(t.Context(), token); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := <-verified; !errors.Is(err, ErrInvalidCredential) {
+		t.Errorf("이전 조회 결과가 로컬 폐기를 덮어썼다: %v", err)
+	}
+	if _, _, err := service.Verify(t.Context(), token.Raw, "web"); !errors.Is(err, ErrInvalidCredential) {
+		t.Fatalf("후속 요청도 폐기 토큰을 거부해야 한다: %v", err)
+	}
+	if backend.reads.Load() != 2 {
+		t.Fatal("경쟁한 조회가 적재 시각을 연장하여 최신 DB 재조회를 막았다")
+	}
+}
+
+func TestRevocationReloadCannotUndoNewerReload(t *testing.T) {
+	backend := &blockedRevocationStore{memoryStore: newMemoryStore(), started: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(backend.release) })
+	t.Cleanup(release)
+	cache := newVerificationCache()
+	now := time.Now().UTC()
+	result := make(chan bool, 1)
+	go func() { revoked, _ := cache.isRevoked(t.Context(), backend, "revoked", now); result <- revoked }()
+	select {
+	case <-backend.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("캐시 조회가 시작되지 않았다")
+	}
+	if err := backend.RevokeToken(t.Context(), "revoked", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err := cache.isRevoked(t.Context(), backend, "revoked", now.Add(time.Second)); err != nil || !revoked {
+		t.Fatalf("최신 조회가 폐기를 읽지 못했다: %v", err)
+	}
+	release()
+	if revoked := <-result; !revoked {
+		t.Error("늦게 끝난 이전 조회가 최신 폐기를 덮어썼다")
+	}
+	if revoked, err := cache.isRevoked(t.Context(), backend, "revoked", now.Add(2*time.Second)); err != nil || !revoked {
+		t.Fatalf("최신 캐시가 보존되지 않았다: %v", err)
+	}
+	if revoked, err := cache.isRevoked(t.Context(), backend, "revoked", now.Add(2*time.Hour)); err != nil || revoked {
+		t.Fatalf("만료된 폐기 항목이 정리되지 않았다: %v", err)
+	}
 }
 
 func (s *countingStore) SigningKey(ctx context.Context, keyID string) (store.SigningKey, error) {

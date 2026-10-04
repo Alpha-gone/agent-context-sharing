@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"testing"
+	"time"
 )
 
 // recordingWorker는 종료 순서를 관찰하려고 닫힌 시점의 준비 상태를 함께 기록한다.
@@ -18,6 +19,50 @@ type recordingWorker struct {
 	app     *application
 	events  *[]string
 	failure error
+}
+
+type deadlineWorker struct{ remaining time.Duration }
+
+func (closing *deadlineWorker) Close(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	if ok {
+		closing.remaining = time.Until(deadline)
+	}
+	return nil
+}
+
+func TestShutdownGivesWorkersFreshBudgetWhenRequestDrainFails(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(entered)
+		<-release
+	}))
+	defer server.Close()
+	finished := make(chan error, 1)
+	go func() {
+		response, err := http.Get(server.URL)
+		if err == nil {
+			response.Body.Close()
+		}
+		finished <- err
+	}()
+	<-entered
+	// 요청 대기의 취소를 작업자 종료에 전파하거나 시간 예산을 소진한 채 넘기지 않는다.
+	requestCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	worker := &deadlineWorker{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	app := newApplication(&fakeReadiness{}, logger, proxyTransport(), nil)
+	if err := shutdownInOrder(requestCtx, t.Context(), app, server.Config, logger, worker); err == nil {
+		t.Error("요청 종료 대기 실패가 보고되지 않았다")
+	}
+	close(release)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	if worker.remaining <= 0 || worker.remaining > workerShutdownTimeout {
+		t.Fatalf("작업자에게 새 종료 예산이 없다: %s", worker.remaining)
+	}
 }
 
 // Close는 작업자를 닫으면서 그 시점에 트래픽이 이미 끊겼는지 함께 남긴다.

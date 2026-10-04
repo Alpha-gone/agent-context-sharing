@@ -46,7 +46,7 @@ var verifierPattern = regexp.MustCompile(`^[A-Za-z0-9\-._~]{43,128}$`)
 var (
 	// ErrInvalidCredential은 제시한 자격 증명 자체가 유효하지 않다는 결과다.
 	ErrInvalidCredential = errors.New("invalid_credential")
-	// ErrUnavailable은 자격 증명의 문제가 아니라 검증을 끝내지 못했다는 결과다.
+	// ErrUnavailable은 자격 증명의 문제가 아니라 발급·폐기·검증을 끝내지 못했다는 결과다.
 	//
 	// 두 오류를 나누는 이유는 호출자가 할 일이 다르기 때문이다. 앞은 재인증이 답이지만
 	// 서명 키나 폐기 목록을 읽지 못한 것은 재인증해도 같은 자리에서 다시 막힌다.
@@ -299,7 +299,7 @@ func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, ver
 	hash := digest(code)
 	stored, err := s.store.AuthorizationCodeForExchange(ctx, hash, now)
 	if err != nil {
-		return Token{}, s.invalidGrant(ctx, err)
+		return Token{}, s.exchangeCodeError(ctx, err)
 	}
 	if stored.ClientID != clientID || stored.RedirectURI != redirectURI || stored.Resource != resource || digest(verifier) != stored.CodeChallenge {
 		return Token{}, fmt.Errorf("invalid_grant")
@@ -309,22 +309,26 @@ func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, ver
 	}
 	token, err := s.issue(ctx, stored.AccountID, s.config.Resource, now, stored.AuthenticatedAt, jkt)
 	if err != nil {
-		return Token{}, err
+		return Token{}, fmt.Errorf("%w: 토큰 발급: %w", ErrUnavailable, err)
 	}
 	if _, err := s.store.ConsumeAuthorizationCode(ctx, hash, token.ID, now, token.ExpiresAt); err != nil {
-		return Token{}, s.invalidGrant(ctx, err)
+		return Token{}, s.exchangeCodeError(ctx, err)
 	}
 	return token, nil
 }
 
-func (s *Service) invalidGrant(ctx context.Context, err error) error {
-	if used, ok := errors.AsType[store.CodeUsedError](err); ok && used.TokenID != "" {
+func (s *Service) exchangeCodeError(ctx context.Context, err error) error {
+	used, reused := errors.AsType[store.CodeUsedError](err)
+	if !reused && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("%w: 코드 교환: %w", ErrUnavailable, err)
+	}
+	if reused && used.TokenID != "" {
 		expiresAt := used.TokenExpiresAt
 		if expiresAt.IsZero() {
 			expiresAt = used.IssuedAt.Add(accessTokenLifetime + authorizationCodeLifetime)
 		}
-		if revokeErr := s.store.RevokeToken(ctx, used.TokenID, expiresAt); revokeErr != nil {
-			return fmt.Errorf("invalid_grant: %w", errors.Join(err, revokeErr))
+		if revokeErr := s.Revoke(ctx, Token{ID: used.TokenID, ExpiresAt: expiresAt}); revokeErr != nil {
+			return fmt.Errorf("%w: 재사용 토큰 폐기: %w", ErrUnavailable, errors.Join(err, revokeErr))
 		}
 	}
 	return fmt.Errorf("invalid_grant: %w", err)

@@ -75,7 +75,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("배포 구성 검증: %w", err)
 	}
+	return runConfigured(cfg)
+}
 
+func runConfigured(cfg config.Config) error {
 	database, err := store.New(context.Background(), cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
 		AdjacencyWindow:     cfg.RelationAdjacencyWindow,
 		SimilarityThreshold: cfg.RelationSimilarityThreshold,
@@ -103,17 +106,21 @@ func run() error {
 	if err := database.CheckEmbeddingSchema(context.Background(), cfg.EmbeddingVectorType, cfg.EmbeddingDimension); err != nil {
 		return fmt.Errorf("임베딩 DB 구성 확인: %w", err)
 	}
-	// 작업자 종료는 defer가 아니라 아래 종료 순서에서 처리한다. defer로 두면 요청 종료와
-	// 풀 종료 사이가 아니라 그 뒤에 실행되어, 작업자가 도는 중에 풀이 닫힌다.
-	//
 	// 색인 작업자는 「배치 조합」이 배치를 선택으로 열어 두었으므로 내장일 때만 시작한다.
 	// 분리 배치에서는 다른 배포 단위가 작업 큐를 소비한다. 시작하지 않아도 만들어 두는
 	// 이유는 질의 임베딩이 요청 경로에 있어 배치와 무관하게 필요하기 때문이다.
 	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
 	workers := []worker{periodic}
 	if cfg.IndexWorkerPlacement == config.PlacementEmbedded {
-		indexer.Start(context.Background())
 		workers = append(workers, indexer)
+	}
+	// 풀의 defer보다 나중에 등록하므로 모든 반환 경로에서 작업자를 먼저 닫는다.
+	// 정리 시점에 새 예산을 만들고, 정상 종료에서 이미 닫았으면 목록을 비워 중복을 막는다.
+	defer func() {
+		closeWorkers(context.Background(), slog.Default(), workers...)
+	}()
+	if cfg.IndexWorkerPlacement == config.PlacementEmbedded {
+		indexer.Start(context.Background())
 	}
 	periodic.Start(context.Background())
 	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, SemanticThreshold: cfg.SearchSemanticThreshold, FoldThreshold: cfg.SearchFoldThreshold, GraphStage: search.GraphStage(cfg.SearchGraphStage), GlobalFallback: cfg.SearchGlobalFallback, EvidencePathSelection: cfg.SearchEvidencePathSelection, AdaptiveRouting: cfg.SearchAdaptiveRouting, AdaptiveDirectThreshold: cfg.SearchAdaptiveDirectThreshold, AdaptiveMarginThreshold: cfg.SearchAdaptiveMarginThreshold, Consistency: search.ConsistencySnapshot}, slog.Default())
@@ -191,9 +198,9 @@ func run() error {
 	// 멈추고, 둘 다 풀을 쓰지 않게 된 다음에 defer가 풀을 닫는다.
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	workerContext, cancelWorkers := context.WithTimeout(context.Background(), workerShutdownTimeout)
-	defer cancelWorkers()
-	if shutdownErr := shutdownInOrder(shutdownContext, workerContext, app, server, slog.Default(), workers...); shutdownErr != nil {
+	shutdownErr := shutdownInOrder(shutdownContext, context.Background(), app, server, slog.Default(), workers...)
+	workers = nil
+	if shutdownErr != nil {
 		return shutdownErr
 	}
 	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {

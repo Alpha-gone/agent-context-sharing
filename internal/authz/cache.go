@@ -27,6 +27,8 @@ type verificationCache struct {
 	// revoked에는 폐기된 토큰 식별자를 둔다. loadedAt이 지나면 다시 읽는다.
 	revoked  map[string]struct{}
 	loadedAt time.Time
+	// generation은 로컬 폐기와 적재마다 증가하여 이전 DB 스냅숏의 덮어쓰기를 막는다.
+	generation uint64
 }
 
 func newVerificationCache() *verificationCache {
@@ -65,6 +67,7 @@ func (cache *verificationCache) isRevoked(ctx context.Context, source authStore,
 	cache.mu.RLock()
 	fresh := now.Sub(cache.loadedAt) < revocationTTL
 	_, revoked := cache.revoked[tokenID]
+	generation := cache.generation
 	cache.mu.RUnlock()
 	if fresh {
 		return revoked, nil
@@ -78,9 +81,17 @@ func (cache *verificationCache) isRevoked(ctx context.Context, source authStore,
 		loaded[id] = struct{}{}
 	}
 	cache.mu.Lock()
-	cache.revoked, cache.loadedAt = loaded, now
-	cache.mu.Unlock()
+	defer cache.mu.Unlock()
 	_, revoked = loaded[tokenID]
+	if cache.generation == generation {
+		cache.revoked, cache.loadedAt = loaded, now
+		cache.generation++
+	} else {
+		// 조회 중 갱신된 캐시는 보존한다. 로컬 폐기는 적재 시각을 연장하지 않으므로
+		// 다음 요청이 다시 읽으며, 이번 요청도 새 캐시와 DB 스냅숏의 폐기를 모두 본다.
+		_, latestRevoked := cache.revoked[tokenID]
+		revoked = revoked || latestRevoked
+	}
 	return revoked, nil
 }
 
@@ -89,5 +100,6 @@ func (cache *verificationCache) isRevoked(ctx context.Context, source authStore,
 func (cache *verificationCache) invalidateRevocations(tokenID string) {
 	cache.mu.Lock()
 	cache.revoked[tokenID] = struct{}{}
+	cache.generation++
 	cache.mu.Unlock()
 }

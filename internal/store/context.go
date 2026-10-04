@@ -92,6 +92,13 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if err := consumeWriteRate(ctx, tx, limits); err != nil {
 		return model.Context{}, err
 	}
+	// 사건 폐기와 같은 순서로 그래프를 먼저 잠근다. 정점부터 갱신하면 그래프를
+	// 쥔 폐기와 정점·그래프 잠금을 서로 기다리는 교착이 생길 수 있다.
+	if value.Layer == model.LayerEvent {
+		if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+			return model.Context{}, err
+		}
+	}
 	previous, err := s.context(ctx, tx, graphID, value.ID)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("갱신 전 컨텍스트 조회: %w", err)
@@ -227,6 +234,17 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	previous, err := s.context(ctx, tx, graphID, contextID)
 	if err != nil {
 		return model.Context{}, err
+	}
+	if previous.Layer == model.LayerEvent {
+		// 관계 확정·폐기와 같은 그래프 잠금으로 상태 확인부터 직렬화한다.
+		// 잠금 대기 중 사건이 바뀔 수 있으므로 현재 판을 다시 읽어야 한다.
+		if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+			return model.Context{}, err
+		}
+		previous, err = s.context(ctx, tx, graphID, contextID)
+		if err != nil {
+			return model.Context{}, err
+		}
 	}
 	if discard && previous.DeletedAt != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트가 이미 폐기됐다")

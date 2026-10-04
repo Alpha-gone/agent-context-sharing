@@ -97,9 +97,10 @@ type authStore interface {
 
 // Token은 응답 헤더 또는 세션 쿠키로 보낼 서명된 자격 증명이다.
 type Token struct {
-	Raw       string
-	ID        string
-	ExpiresAt time.Time
+	Raw             string
+	ID              string
+	ExpiresAt       time.Time
+	AuthenticatedAt time.Time
 }
 
 // AuthorizeRequest는 로그인 뒤 인가 코드를 만들 때 이미 검증된 OAuth 입력이다.
@@ -254,17 +255,20 @@ func (s *Service) ValidateAuthorizeRequest(request AuthorizeRequest) error {
 	return nil
 }
 
-// Authorize는 원문을 저장하지 않는 60초짜리 인가 코드를 발급한다.
-func (s *Service) Authorize(ctx context.Context, accountID model.ID, request AuthorizeRequest) (string, error) {
+// Authorize는 검증된 웹 세션의 최초 인증 시각을 보존하는 60초짜리 인가 코드를 발급한다.
+func (s *Service) Authorize(ctx context.Context, accountID model.ID, authenticatedAt time.Time, request AuthorizeRequest) (string, error) {
 	if err := s.ValidateAuthorizeRequest(request); err != nil {
 		return "", err
+	}
+	now := time.Now().UTC()
+	if !validAuthenticationTime(authenticatedAt, now) {
+		return "", ErrInvalidCredential
 	}
 	code, err := secret()
 	if err != nil {
 		return "", err
 	}
-	now := time.Now().UTC()
-	err = s.store.CreateAuthorizationCode(ctx, store.AuthorizationCode{Hash: digest(code), ClientID: request.ClientID, AccountID: accountID, RedirectURI: request.RedirectURI, CodeChallenge: request.CodeChallenge, Resource: request.Resource, IssuedAt: now, ExpiresAt: now.Add(authorizationCodeLifetime)})
+	err = s.store.CreateAuthorizationCode(ctx, store.AuthorizationCode{Hash: digest(code), ClientID: request.ClientID, AccountID: accountID, RedirectURI: request.RedirectURI, CodeChallenge: request.CodeChallenge, Resource: request.Resource, IssuedAt: now, AuthenticatedAt: authenticatedAt.UTC(), ExpiresAt: now.Add(authorizationCodeLifetime)})
 	if err != nil {
 		return "", err
 	}
@@ -300,7 +304,10 @@ func (s *Service) Exchange(ctx context.Context, code, clientID, redirectURI, ver
 	if stored.ClientID != clientID || stored.RedirectURI != redirectURI || stored.Resource != resource || digest(verifier) != stored.CodeChallenge {
 		return Token{}, fmt.Errorf("invalid_grant")
 	}
-	token, err := s.issue(ctx, stored.AccountID, s.config.Resource, now, now, jkt)
+	if !validAuthenticationTime(stored.AuthenticatedAt, now) || stored.AuthenticatedAt.After(stored.IssuedAt) {
+		return Token{}, fmt.Errorf("invalid_grant")
+	}
+	token, err := s.issue(ctx, stored.AccountID, s.config.Resource, now, stored.AuthenticatedAt, jkt)
 	if err != nil {
 		return Token{}, err
 	}
@@ -339,7 +346,7 @@ func (s *Service) Verify(ctx context.Context, raw, audience string) (model.ID, T
 	if err != nil {
 		return model.ID{}, Token{}, ErrInvalidCredential
 	}
-	return id, Token{Raw: raw, ID: claims.ID, ExpiresAt: claims.Expiry.Time()}, nil
+	return id, Token{Raw: raw, ID: claims.ID, ExpiresAt: claims.Expiry.Time(), AuthenticatedAt: time.Unix(claims.AuthenticatedAt, 0).UTC()}, nil
 }
 
 // VerifyAndRenew는 MCP 요청 하나에 필요한 검증과 「토큰 갱신」 판정을 함께 수행한다.
@@ -423,7 +430,7 @@ func (s *Service) renewFromClaims(ctx context.Context, accountID model.ID, claim
 		return Token{}, false, nil
 	}
 	authenticatedAt := time.Unix(claims.AuthenticatedAt, 0).UTC()
-	if claims.AuthenticatedAt == 0 || authenticatedAt.After(now) || now.Sub(authenticatedAt) > webSessionLifetime {
+	if !validAuthenticationTime(authenticatedAt, now) {
 		return Token{}, false, nil
 	}
 	if claims.Confirmation.JWKThumbprint == "" {
@@ -431,6 +438,10 @@ func (s *Service) renewFromClaims(ctx context.Context, accountID model.ID, claim
 	}
 	renewed, err := s.issue(ctx, accountID, s.config.Resource, now, authenticatedAt, claims.Confirmation.JWKThumbprint)
 	return renewed, err == nil, err
+}
+
+func validAuthenticationTime(authenticatedAt, now time.Time) bool {
+	return !authenticatedAt.IsZero() && authenticatedAt.Unix() > 0 && !authenticatedAt.After(now) && now.Before(authenticatedAt.Add(webSessionLifetime))
 }
 
 // Revoke는 로그아웃 또는 인가 코드 재사용 처리에서 jti를 만료 시각까지 막는다.
@@ -512,7 +523,7 @@ func (s *Service) issue(ctx context.Context, accountID model.ID, audience string
 	if err != nil {
 		return Token{}, fmt.Errorf("JWT 발급: %w", err)
 	}
-	return Token{Raw: raw, ID: jti, ExpiresAt: expires}, nil
+	return Token{Raw: raw, ID: jti, ExpiresAt: expires, AuthenticatedAt: time.Unix(authenticatedAt.Unix(), 0).UTC()}, nil
 }
 
 func (s *Service) activeKey(ctx context.Context) (store.SigningKey, error) {

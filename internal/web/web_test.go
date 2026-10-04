@@ -126,7 +126,10 @@ func testID(t *testing.T) model.ID {
 	return id
 }
 
-type fakeAuthentication struct{ accountID model.ID }
+type fakeAuthentication struct {
+	accountID       model.ID
+	authenticatedAt time.Time
+}
 
 func (fakeAuthentication) Authenticate(context.Context, string, string) (model.ID, error) {
 	return model.ID{}, nil
@@ -135,13 +138,13 @@ func (fakeAuthentication) Register(context.Context, string, string) (model.ID, e
 	return model.ID{}, nil
 }
 func (authentication fakeAuthentication) WebSession(_ context.Context, _ model.ID, _ string) (Session, error) {
-	return Session{Raw: "web-session", ID: "session", ExpiresAt: time.Now().Add(time.Hour)}, nil
+	return Session{Raw: "web-session", ID: "session", ExpiresAt: time.Now().Add(time.Hour), AuthenticatedAt: authentication.authenticatedAt}, nil
 }
 func (authentication fakeAuthentication) VerifyWebSession(_ context.Context, raw, _ string) (model.ID, Session, error) {
 	if raw != "web-session" || !authentication.accountID.IsV7() {
 		return model.ID{}, Session{}, http.ErrNoCookie
 	}
-	return authentication.accountID, Session{Raw: raw, ID: "session", ExpiresAt: time.Now().Add(time.Hour)}, nil
+	return authentication.accountID, Session{Raw: raw, ID: "session", ExpiresAt: time.Now().Add(time.Hour), AuthenticatedAt: authentication.authenticatedAt}, nil
 }
 func (fakeAuthentication) Revoke(context.Context, Session) error { return nil }
 

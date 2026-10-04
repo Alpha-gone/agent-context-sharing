@@ -94,8 +94,8 @@ func TestPeriodicCleanupExpiresGraceAndOldRowsIntegration(t *testing.T) {
 	if deleted, err := database.CleanupRequestRateWindows(t.Context(), now); err != nil || deleted < 1 {
 		t.Fatalf("요청 빈도 창 정리 = %d, %v", deleted, err)
 	}
-	oldCode := AuthorizationCode{Hash: "old-" + accountID.String(), ClientID: "test-client", AccountID: accountID, RedirectURI: "https://test.invalid/callback", CodeChallenge: "challenge", Resource: "https://test.invalid/mcp", IssuedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(-time.Minute)}
-	currentCode := AuthorizationCode{Hash: "current-" + accountID.String(), ClientID: "test-client", AccountID: accountID, RedirectURI: "https://test.invalid/callback", CodeChallenge: "challenge", Resource: "https://test.invalid/mcp", IssuedAt: now, ExpiresAt: now.Add(time.Minute)}
+	oldCode := AuthorizationCode{Hash: "old-" + accountID.String(), ClientID: "test-client", AccountID: accountID, RedirectURI: "https://test.invalid/callback", CodeChallenge: "challenge", Resource: "https://test.invalid/mcp", IssuedAt: now.Add(-2 * time.Minute), AuthenticatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(-time.Minute)}
+	currentCode := AuthorizationCode{Hash: "current-" + accountID.String(), ClientID: "test-client", AccountID: accountID, RedirectURI: "https://test.invalid/callback", CodeChallenge: "challenge", Resource: "https://test.invalid/mcp", IssuedAt: now, AuthenticatedAt: now, ExpiresAt: now.Add(time.Minute)}
 	if err := database.CreateAuthorizationCode(t.Context(), oldCode); err != nil {
 		t.Fatalf("만료 인가 코드 준비: %v", err)
 	}

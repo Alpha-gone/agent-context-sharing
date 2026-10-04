@@ -93,7 +93,8 @@ func runClientServiceLive(t *testing.T, renewal bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	authHandler, err := authz.NewHandler(service, func(*http.Request) (model.ID, bool) { return account, true }, "/login")
+	authenticatedAt := time.Now().UTC()
+	authHandler, err := authz.NewHandler(service, func(*http.Request) (model.ID, time.Time, bool) { return account, authenticatedAt, true }, "/login")
 	if err != nil {
 		t.Fatal(err)
 	}

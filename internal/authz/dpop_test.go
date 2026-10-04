@@ -25,7 +25,7 @@ func TestDPoPRequestBindsTokenAndRejectsReplay(t *testing.T) {
 		t.Fatalf("계정 등록: %v", err)
 	}
 	verifier := testVerifier("dpop-binding")
-	code, err := service.Authorize(t.Context(), accountID, AuthorizeRequest{
+	code, err := service.Authorize(t.Context(), accountID, time.Now().UTC(), AuthorizeRequest{
 		ResponseType: "code", ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback",
 		CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: service.config.Resource,
 	})

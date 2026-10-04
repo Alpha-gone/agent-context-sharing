@@ -102,7 +102,17 @@ func isolatedMigrationDatabase(t *testing.T) (*pgxpool.Pool, string) {
 func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	pool, databaseURL := isolatedMigrationDatabase(t)
 	original := migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: 1024}
-	loaded, err := migrate.Load(migrations.FS, ".", original)
+	// 이 시험은 001→007 전환만 다룬다. 후속 마이그레이션이 미적용 목록이나
+	// 아래 시험용 복귀 파일의 번호에 영향을 주지 않도록 입력 파일을 고정한다.
+	files := make(fstest.MapFS)
+	for _, name := range []string{"001_init.sql", "007_embedding_dimensions.sql"} {
+		data, err := migrations.FS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[name] = &fstest.MapFile{Data: data}
+	}
+	loaded, err := migrate.Load(files, ".", original)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +188,7 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	target := original
 	target.VectorDim = 768
 	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context) error {
-		prepared, applied, err := migrate.Prepare(ctx, pool, migrations.FS, ".", target)
+		prepared, applied, err := migrate.Prepare(ctx, pool, files, ".", target)
 		if err != nil {
 			return err
 		}
@@ -195,7 +205,7 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 		if err := migrate.Apply(ctx, pool, pending[0]); err != nil {
 			return err
 		}
-		prepared, applied, err = migrate.Prepare(ctx, pool, migrations.FS, ".", target)
+		prepared, applied, err = migrate.Prepare(ctx, pool, files, ".", target)
 		if err != nil {
 			return err
 		}

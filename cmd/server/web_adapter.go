@@ -21,12 +21,12 @@ func (adapter webAuthentication) Register(ctx context.Context, loginID, password
 
 func (adapter webAuthentication) WebSession(ctx context.Context, accountID model.ID, audience string) (web.Session, error) {
 	token, err := adapter.service.WebSession(ctx, accountID, audience)
-	return web.Session{Raw: token.Raw, ID: token.ID, ExpiresAt: token.ExpiresAt}, err
+	return web.Session{Raw: token.Raw, ID: token.ID, ExpiresAt: token.ExpiresAt, AuthenticatedAt: token.AuthenticatedAt}, err
 }
 
 func (adapter webAuthentication) VerifyWebSession(ctx context.Context, raw, audience string) (model.ID, web.Session, error) {
 	accountID, token, err := adapter.service.Verify(ctx, raw, audience)
-	return accountID, web.Session{Raw: token.Raw, ID: token.ID, ExpiresAt: token.ExpiresAt}, err
+	return accountID, web.Session{Raw: token.Raw, ID: token.ID, ExpiresAt: token.ExpiresAt, AuthenticatedAt: token.AuthenticatedAt}, err
 }
 
 func (adapter webAuthentication) Revoke(ctx context.Context, session web.Session) error {

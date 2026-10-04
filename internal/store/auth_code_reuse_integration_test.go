@@ -24,6 +24,7 @@ func TestExpiredCodeReuseReportsUseIntegration(t *testing.T) {
 		Hash: hash, ClientID: "test-client", AccountID: accountID,
 		RedirectURI: "http://127.0.0.1/callback", CodeChallenge: "challenge",
 		Resource: "https://service.test/mcp", IssuedAt: now.Add(-time.Hour), ExpiresAt: now.Add(-time.Minute),
+		AuthenticatedAt: now.Add(-2 * time.Hour),
 	}
 	if err := database.CreateAuthorizationCode(t.Context(), code); err != nil {
 		t.Fatalf("인가 코드 저장: %v", err)
@@ -32,7 +33,7 @@ func TestExpiredCodeReuseReportsUseIntegration(t *testing.T) {
 	tokenExpiresAt := now.Add(time.Hour)
 	if _, err := database.pool.Exec(t.Context(), `
 		UPDATE public.authorization_code
-		SET consumed_at = $2, issued_token_id = $3, issued_token_expires_at = $4
+		SET consumed_at = $2, issued_token_id = $3, issued_token_expires_at = $4, authenticated_at = NULL
 		WHERE code_hash = $1`, hash, consumedAt, tokenID, tokenExpiresAt); err != nil {
 		t.Fatalf("소비 표시: %v", err)
 	}

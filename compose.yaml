@@ -7,7 +7,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent_context}
       POSTGRES_DB: ${POSTGRES_DB:-agent_context}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # 로컬 개발용 자격 증명을 외부 인터페이스에 공개하지 않는다.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       # PostgreSQL 18부터 공식 이미지가 /var/lib/postgresql 아래 판별 하위 디렉터리에
       # 데이터를 두므로 /var/lib/postgresql/data가 아니라 상위를 마운트한다.
@@ -57,13 +58,12 @@ services:
         sleep 86400;
         done
 
-  # 임베딩 제공자. SRS의 「임베딩 모델」이 제공자를 배포 구성으로 두었고 개발 계획
-  # 0단계가 자체 호스팅을 골랐다. 색인의 본문 임베딩과 검색의 질의 임베딩이 모두
-  # 이 서비스를 거치며, 자체 호스팅이라 두 값이 격리 경계를 나가지 않는다.
+  # Gemini 개발 기본값과 비교하거나 Ollama 구성으로 복귀할 때 사용하는 제공자.
+  # Gemini 실패 시 자동 대체하지 않는다. 태그와 다중 아키텍처 digest를 함께 고정한다.
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.33.3@sha256:32931b46719f673c05fdbaa81ccb26da18ea4a1c57590a754874ab28ba269eb2
     ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:

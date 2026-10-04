@@ -15,9 +15,10 @@
 FROM apache/age:release_PG18_1.8.0@sha256:47a0b054c3663a3e64a25fc0c5a982f1b58348019274b326a691cdf77f78eb58
 
 # pgvector 0.8.6. SDD.md의 「버전 요구」가 요구하는 0.7.0 이상을 만족하며
-# halfvec과 이진 양자화를 포함한다.
+# halfvec과 이진 양자화를 포함한다. PGDG 패키지의 전체 버전을 고정하여 재빌드 때
+# 최신 판으로 바뀌지 않도록 하며, 이 버전이 없으면 빌드를 실패시킨다.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-18-pgvector \
+    && apt-get install -y --no-install-recommends postgresql-18-pgvector=0.8.6-1.pgdg13+1 \
     && rm -rf /var/lib/apt/lists/*
 
 # 이미지 빌드 시 만든 디렉터리는 볼륨 마운트로 가려지고 최초 초기화 스크립트는

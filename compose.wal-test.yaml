@@ -1,0 +1,10 @@
+# test-wal-archive.sh 전용. 공개 포트와 개발 .env를 사용하지 않는다.
+services:
+  db:
+    environment:
+      POSTGRES_USER: wal_test
+      POSTGRES_PASSWORD: wal_test
+      POSTGRES_DB: wal_test
+    ports: !reset []
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wal_test -d wal_test"]

@@ -1,12 +1,15 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/plan"
+	"github.com/jackc/pgx/v5"
 )
 
 // TestStoredCharacterLimitHoldsUnderConcurrencyIntegration은 저장량 한도가 저장
@@ -69,7 +72,11 @@ func TestGraphCountLimitHoldsUnderConcurrencyIntegration(t *testing.T) {
 	actorID := newTestID(t)
 	createTestAccount(t, database, actorID)
 
-	limits := WriteLimits{GraphsPerAccount: 1}
+	limits := WriteLimits{GraphsPerAccount: 2}
+	initial := model.Graph{ID: newTestID(t), Name: "기존 그래프", CreatedBy: actorID, CreatedAt: nowUTC(), LastActivityAt: nowUTC(), Version: 1}
+	if _, err := database.CreateGraphWithOwner(t.Context(), initial, limits); err != nil {
+		t.Fatalf("한도 직전 그래프 준비: %v", err)
+	}
 	const requests = 5
 	var waitGroup sync.WaitGroup
 	results := make(chan error, requests)
@@ -88,10 +95,11 @@ func TestGraphCountLimitHoldsUnderConcurrencyIntegration(t *testing.T) {
 
 	succeeded, exceeded := 0, 0
 	for err := range results {
+		_, limitExceeded := errors.AsType[plan.LimitError](err)
 		switch {
 		case err == nil:
 			succeeded++
-		case errors.As(err, new(plan.LimitError)):
+		case limitExceeded:
 			exceeded++
 		default:
 			t.Fatalf("동시 그래프 생성이 한도 초과가 아닌 오류로 끝났다: %v", err)
@@ -99,6 +107,104 @@ func TestGraphCountLimitHoldsUnderConcurrencyIntegration(t *testing.T) {
 	}
 	if succeeded != 1 || exceeded != requests-1 {
 		t.Fatalf("동시 그래프 생성 = 성공 %d, 한도 초과 %d; want 1과 %d", succeeded, exceeded, requests-1)
+	}
+	count, err := database.OwnedGraphCount(t.Context(), actorID)
+	if err != nil || int64(count) != limits.GraphsPerAccount {
+		t.Fatalf("동시 생성 후 그래프 수 = %d, 오류 %v; want %d", count, err, limits.GraphsPerAccount)
+	}
+}
+
+// TestGraphCountLimitWithDistinctIdempotencyKeysIntegration은 저장점 해제 뒤에도
+// 계정 잠금이 바깥 커밋까지 유지되어 다른 키의 생성이 미커밋 그래프를 놓치지 않는지 확인한다.
+func TestGraphCountLimitWithDistinctIdempotencyKeysIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, database, actorID)
+	limits := WriteLimits{GraphsPerAccount: 2}
+	graph := func() model.Graph {
+		return model.Graph{ID: newTestID(t), Name: "멱등성 한도 그래프", CreatedBy: actorID, CreatedAt: nowUTC(), LastActivityAt: nowUTC(), Version: 1}
+	}
+	if _, err := database.CreateGraphWithOwner(t.Context(), graph(), limits); err != nil {
+		t.Fatalf("한도 직전 그래프 준비: %v", err)
+	}
+	firstGraph, secondGraph := graph(), graph()
+	firstRequest := IdempotencyRequest{AccountID: actorID, Key: newTestID(t), ToolName: "graph_create"}
+	secondRequest := IdempotencyRequest{AccountID: actorID, Key: newTestID(t), ToolName: "graph_create"}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	var waitGroup sync.WaitGroup
+	defer waitGroup.Wait()
+	defer cancel()
+	commitFirst := make(chan struct{})
+	releaseFirst := sync.OnceFunc(func() { close(commitFirst) })
+	defer releaseFirst()
+	firstCreated, secondEntered := make(chan uint32, 1), make(chan uint32, 1)
+	firstResult, secondResult := make(chan error, 1), make(chan error, 1)
+	waitGroup.Go(func() {
+		_, err := database.ReplayIdempotent(ctx, firstRequest, func(ctx context.Context) ([]byte, error) {
+			if _, err := database.CreateGraphWithOwner(ctx, firstGraph, limits); err != nil {
+				return nil, err
+			}
+			firstCreated <- ctx.Value(writeTransactionContextKey{}).(pgx.Tx).Conn().PgConn().PID()
+			select {
+			case <-commitFirst:
+				return []byte(`{"created":true}`), nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		})
+		firstResult <- err
+	})
+	var firstPID uint32
+	select {
+	case firstPID = <-firstCreated:
+	case err := <-firstResult:
+		t.Fatalf("첫 생성의 커밋 전 준비 실패: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	waitGroup.Go(func() {
+		_, err := database.ReplayIdempotent(ctx, secondRequest, func(ctx context.Context) ([]byte, error) {
+			secondEntered <- ctx.Value(writeTransactionContextKey{}).(pgx.Tx).Conn().PgConn().PID()
+			_, err := database.CreateGraphWithOwner(ctx, secondGraph, limits)
+			return []byte(`{"created":true}`), err
+		})
+		secondResult <- err
+	})
+	var secondPID uint32
+	select {
+	case secondPID = <-secondEntered:
+	case err := <-secondResult:
+		t.Fatalf("다른 키의 생성 진입 실패: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	// 경과 시간으로 겹침을 추측하지 않고 실제 DB 잠금 대기를 확인한 뒤 커밋한다.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for blocked := false; !blocked; {
+		select {
+		case err := <-secondResult:
+			t.Fatalf("첫 커밋 전에 다른 생성이 끝났다: %v", err)
+		case <-ctx.Done():
+			t.Fatalf("계정 잠금 대기를 확인하지 못했다: %v", ctx.Err())
+		case <-ticker.C:
+			if err := database.pool.QueryRow(ctx, `SELECT $1::integer = ANY(pg_blocking_pids($2::integer))`, firstPID, secondPID).Scan(&blocked); err != nil {
+				t.Fatalf("생성 잠금 대기 조회: %v", err)
+			}
+		}
+	}
+	releaseFirst()
+	if err := <-firstResult; err != nil {
+		t.Fatalf("첫 생성 커밋: %v", err)
+	}
+	if err := <-secondResult; err == nil {
+		t.Fatal("다른 키의 생성이 그래프 수 한도를 넘겼다")
+	} else if limitError, ok := errors.AsType[plan.LimitError](err); !ok || limitError.Name != "graphs_per_account" {
+		t.Fatalf("다른 키의 생성 오류 = %v; want 그래프 수 한도 초과", err)
+	}
+	count, err := database.OwnedGraphCount(t.Context(), actorID)
+	if err != nil || int64(count) != limits.GraphsPerAccount {
+		t.Fatalf("멱등성 동시 생성 후 그래프 수 = %d, 오류 %v; want %d", count, err, limits.GraphsPerAccount)
 	}
 }
 

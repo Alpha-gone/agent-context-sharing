@@ -7,13 +7,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"agent_context_sharing/internal/model"
 )
 
-// SessionAccountFunc는 현재 요청의 웹 세션 계정을 돌려준다. 세션 쿠키의 이름과 수명은
-// `web`이 소유하므로 인가 서버는 판정 결과만 주입받는다.
-type SessionAccountFunc func(*http.Request) (model.ID, bool)
+// SessionAccountFunc는 검증된 웹 세션의 계정과 최초 인증 시각을 돌려준다.
+// 세션 쿠키 검증은 web이 소유하며 인가 서버는 최초 인증부터의 사용 한도를 확인한다.
+type SessionAccountFunc func(*http.Request) (model.ID, time.Time, bool)
 
 // Handler는 「HTTP 진입점」이 인가 서버에 배정한 `/authorize`, `/token`, `/jwks.json`을
 // 처리한다. 발급 규칙 자체는 Service가 소유하고 여기에서는 HTTP 표현만 다룬다.
@@ -59,15 +60,18 @@ func (h *Handler) Authorize(writer http.ResponseWriter, request *http.Request) {
 		h.redirectError(writer, request, redirect, query.Get("state"), authorizeErrorCode(h.service, authorize))
 		return
 	}
-	accountID, ok := h.session(request)
-	if !ok {
+	accountID, authenticatedAt, ok := h.session(request)
+	if !ok || !validAuthenticationTime(authenticatedAt, time.Now().UTC()) {
 		// 7단계다. 로그인 뒤 같은 인가 요청으로 돌아온다.
-		next := url.URL{Path: h.loginPath, RawQuery: url.Values{"next": {request.URL.RequestURI()}}.Encode()}
-		http.Redirect(writer, request, next.String(), http.StatusSeeOther)
+		h.redirectLogin(writer, request)
 		return
 	}
-	code, err := h.service.Authorize(request.Context(), accountID, authorize)
+	code, err := h.service.Authorize(request.Context(), accountID, authenticatedAt, authorize)
 	if err != nil {
+		if errors.Is(err, ErrInvalidCredential) {
+			h.redirectLogin(writer, request)
+			return
+		}
 		h.redirectError(writer, request, redirect, query.Get("state"), "server_error")
 		return
 	}
@@ -81,6 +85,11 @@ func (h *Handler) Authorize(writer http.ResponseWriter, request *http.Request) {
 	target := *redirect
 	target.RawQuery = values.Encode()
 	http.Redirect(writer, request, target.String(), http.StatusFound)
+}
+
+func (h *Handler) redirectLogin(writer http.ResponseWriter, request *http.Request) {
+	next := url.URL{Path: h.loginPath, RawQuery: url.Values{"next": {request.URL.RequestURI()}}.Encode()}
+	http.Redirect(writer, request, next.String(), http.StatusSeeOther)
 }
 
 // Token은 「인가 코드 흐름」의 9~10단계를 처리한다.

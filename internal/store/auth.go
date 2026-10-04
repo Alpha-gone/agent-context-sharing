@@ -28,6 +28,7 @@ type AuthorizationCode struct {
 	CodeChallenge        string
 	Resource             string
 	IssuedAt             time.Time
+	AuthenticatedAt      time.Time
 	ExpiresAt            time.Time
 	ConsumedAt           *time.Time
 	IssuedTokenID        string
@@ -122,7 +123,7 @@ func (s *Store) CreateAuthorizationCode(ctx context.Context, code AuthorizationC
 	if !validAuthorizationCode(code) {
 		return fmt.Errorf("인가 코드 생성 인자가 올바르지 않다")
 	}
-	_, err := s.pool.Exec(ctx, `INSERT INTO public.authorization_code (code_hash, client_id, account_id, redirect_uri, code_challenge, resource, issued_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, code.Hash, code.ClientID, code.AccountID.String(), code.RedirectURI, code.CodeChallenge, code.Resource, code.IssuedAt, code.ExpiresAt)
+	_, err := s.pool.Exec(ctx, `INSERT INTO public.authorization_code (code_hash, client_id, account_id, redirect_uri, code_challenge, resource, issued_at, expires_at, authenticated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, code.Hash, code.ClientID, code.AccountID.String(), code.RedirectURI, code.CodeChallenge, code.Resource, code.IssuedAt, code.ExpiresAt, code.AuthenticatedAt.UTC())
 	if err != nil {
 		return fmt.Errorf("인가 코드 저장: %w", err)
 	}
@@ -137,7 +138,7 @@ func (s *Store) AuthorizationCodeForExchange(ctx context.Context, hash string, n
 	}
 	code, err := s.authorizationCode(ctx, `
 		SELECT code_hash, client_id, account_id, redirect_uri, code_challenge, resource,
-		       issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at
+		       issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at, authenticated_at
 		FROM public.authorization_code
 		WHERE code_hash = $1`, hash)
 	if errors.Is(err, ErrNotFound) {
@@ -170,7 +171,7 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, hash, tokenID stri
 		SET consumed_at = $3, issued_token_id = $2, issued_token_expires_at = $4
 		WHERE code_hash = $1 AND consumed_at IS NULL AND expires_at > $3
 		RETURNING code_hash, client_id, account_id, redirect_uri, code_challenge, resource,
-		          issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at`, hash, tokenID, now, tokenExpiresAt)
+		          issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at, authenticated_at`, hash, tokenID, now, tokenExpiresAt)
 	if err == nil {
 		return code, nil
 	}
@@ -179,7 +180,7 @@ func (s *Store) ConsumeAuthorizationCode(ctx context.Context, hash, tokenID stri
 	}
 	code, err = s.authorizationCode(ctx, `
 		SELECT code_hash, client_id, account_id, redirect_uri, code_challenge, resource,
-		       issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at
+		       issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at, authenticated_at
 		FROM public.authorization_code
 		WHERE code_hash = $1`, hash)
 	if errors.Is(err, ErrNotFound) {
@@ -206,9 +207,10 @@ func (s *Store) authorizationCode(ctx context.Context, query string, args ...any
 	var accountID string
 	var issuedTokenID *string
 	var issuedTokenExpiresAt *time.Time
+	var authenticatedAt *time.Time
 	err := s.pool.QueryRow(ctx, query, args...).Scan(
 		&code.Hash, &code.ClientID, &accountID, &code.RedirectURI, &code.CodeChallenge, &code.Resource,
-		&code.IssuedAt, &code.ExpiresAt, &code.ConsumedAt, &issuedTokenID, &issuedTokenExpiresAt,
+		&code.IssuedAt, &code.ExpiresAt, &code.ConsumedAt, &issuedTokenID, &issuedTokenExpiresAt, &authenticatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AuthorizationCode{}, ErrNotFound
@@ -222,6 +224,9 @@ func (s *Store) authorizationCode(ctx context.Context, query string, args ...any
 	}
 	code.AccountID = parsed
 	code.IssuedAt, code.ExpiresAt = code.IssuedAt.UTC(), code.ExpiresAt.UTC()
+	if authenticatedAt != nil {
+		code.AuthenticatedAt = authenticatedAt.UTC()
+	}
 	if code.ConsumedAt != nil {
 		consumedAt := code.ConsumedAt.UTC()
 		code.ConsumedAt = &consumedAt
@@ -385,7 +390,7 @@ func (s *Store) signingKey(ctx context.Context, query string, args ...any) (Sign
 }
 
 func validAuthorizationCode(code AuthorizationCode) bool {
-	return code.Hash != "" && code.ClientID != "" && code.AccountID.IsV7() && code.RedirectURI != "" && code.CodeChallenge != "" && code.Resource != "" && !code.IssuedAt.IsZero() && !code.ExpiresAt.IsZero() && code.ExpiresAt.After(code.IssuedAt)
+	return code.Hash != "" && code.ClientID != "" && code.AccountID.IsV7() && code.RedirectURI != "" && code.CodeChallenge != "" && code.Resource != "" && !code.IssuedAt.IsZero() && !code.ExpiresAt.IsZero() && code.ExpiresAt.After(code.IssuedAt) && !code.AuthenticatedAt.IsZero() && code.AuthenticatedAt.Unix() > 0 && !code.AuthenticatedAt.After(code.IssuedAt)
 }
 
 func validSigningKey(key SigningKey) bool {

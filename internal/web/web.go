@@ -40,9 +40,10 @@ const visualizationAssetPath = "assets/cytoscape.min.js"
 
 // Session은 현재 요청 안에서만 쓰는 검증된 웹 세션의 최소 정보다.
 type Session struct {
-	Raw       string
-	ID        string
-	ExpiresAt time.Time
+	Raw             string
+	ID              string
+	ExpiresAt       time.Time
+	AuthenticatedAt time.Time
 }
 
 // Authentication은 로그인, 세션 발급·검증과 로그아웃에 필요한 인가 서버 경계다.
@@ -745,11 +746,11 @@ func localRedirect(value string) string {
 	return target.RequestURI()
 }
 
-// SessionAccount는 현재 요청의 검증된 웹 세션 계정을 돌려준다. 세션 쿠키의 이름과
-// 수명은 이 패키지가 소유하므로, 인가 서버의 `/authorize`는 판정 결과만 받아 쓴다.
-func (server *Server) SessionAccount(request *http.Request) (model.ID, bool) {
-	accountID, _, ok := server.session(request)
-	return accountID, ok
+// SessionAccount는 현재 요청의 검증된 웹 세션 계정과 최초 인증 시각을 돌려준다.
+// 쿠키 검증은 이 패키지가 소유하며 인가 서버의 /authorize에는 검증 결과만 전달한다.
+func (server *Server) SessionAccount(request *http.Request) (model.ID, time.Time, bool) {
+	accountID, session, ok := server.session(request)
+	return accountID, session.AuthenticatedAt, ok
 }
 
 func (server *Server) session(request *http.Request) (model.ID, Session, bool) {

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"agent_context_sharing/internal/model"
 )
@@ -14,8 +15,8 @@ import (
 // testHandler는 세션 계정 판정을 고정한 인가 서버 처리기를 만든다.
 func testHandler(t *testing.T, service *Service, accountID model.ID, authenticated bool) *Handler {
 	t.Helper()
-	handler, err := NewHandler(service, func(*http.Request) (model.ID, bool) {
-		return accountID, authenticated
+	handler, err := NewHandler(service, func(*http.Request) (model.ID, time.Time, bool) {
+		return accountID, time.Now().UTC(), authenticated
 	}, "/login")
 	if err != nil {
 		t.Fatalf("인가 서버 처리기 생성: %v", err)

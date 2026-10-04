@@ -333,17 +333,22 @@ func TestAuthorizationCodeIntegration(t *testing.T) {
 
 	now := time.Now().UTC()
 	code := AuthorizationCode{
-		Hash:          "hash-" + newTestID(t).String(),
-		ClientID:      "integration-client",
-		AccountID:     accountID,
-		RedirectURI:   "http://127.0.0.1:1234/callback",
-		CodeChallenge: "challenge",
-		Resource:      "https://example.test/mcp",
-		IssuedAt:      now,
-		ExpiresAt:     now.Add(time.Minute),
+		Hash:            "hash-" + newTestID(t).String(),
+		ClientID:        "integration-client",
+		AccountID:       accountID,
+		RedirectURI:     "http://127.0.0.1:1234/callback",
+		CodeChallenge:   "challenge",
+		Resource:        "https://example.test/mcp",
+		IssuedAt:        now,
+		AuthenticatedAt: now.Add(-11 * time.Hour).Truncate(time.Microsecond),
+		ExpiresAt:       now.Add(time.Minute),
 	}
 	if err := store.CreateAuthorizationCode(t.Context(), code); err != nil {
 		t.Fatalf("인가 코드 저장: %v", err)
+	}
+	read, err := store.AuthorizationCodeForExchange(t.Context(), code.Hash, now)
+	if err != nil || !read.AuthenticatedAt.Equal(code.AuthenticatedAt) {
+		t.Fatalf("조회한 인증 시각 = %s, %v; want %s", read.AuthenticatedAt, err, code.AuthenticatedAt)
 	}
 
 	tokenID := "token-" + newTestID(t).String()
@@ -355,7 +360,7 @@ func TestAuthorizationCodeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("첫 인가 코드 소비: %v", err)
 	}
-	if consumed.ClientID != code.ClientID || consumed.AccountID != accountID || consumed.CodeChallenge != code.CodeChallenge {
+	if consumed.ClientID != code.ClientID || consumed.AccountID != accountID || consumed.CodeChallenge != code.CodeChallenge || !consumed.AuthenticatedAt.Equal(code.AuthenticatedAt) {
 		t.Fatalf("소비한 인가 코드의 교환 정보가 다르다: %+v", consumed)
 	}
 	if consumed.IssuedTokenID != tokenID || consumed.IssuedTokenExpiresAt == nil || !consumed.IssuedTokenExpiresAt.Equal(tokenExpiresAt) {

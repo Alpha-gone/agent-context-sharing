@@ -1,0 +1,27 @@
+# 운영 애플리케이션 이미지. compose.prod.yaml의 migrate·server 서비스가 쓴다.
+#
+# 서버, 마이그레이션 실행기와 불변식 감사 도구를 함께 담는다. 「백업과 복구」가 복구와
+# 마이그레이션 뒤 cmd/audit 전체 감사를 요구하므로 운영 이미지 안에서 바로 실행할 수 있어야
+# 한다. 마이그레이션 SQL과 웹 자산은 go:embed로 바이너리에 들어가므로 따로 복사하지 않는다.
+#
+# 베이스 이미지는 태그와 다중 아키텍처 digest를 함께 고정한다. 판을 올릴 때 태그·digest와
+# test-prod-compose.sh의 기대값을 함께 바꾼다.
+FROM golang:1.27.1-trixie@sha256:3b77fc618ec235a1ab412de7737f120dd507c57e8d87de4cbb7994fb94275ed5 AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+COPY migrations ./migrations
+RUN CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/server ./cmd/migrate ./cmd/audit
+
+# 정적 바이너리라 런타임 의존이 없다. alpine을 쓰는 이유는 컨테이너 헬스체크가 wget으로
+# /healthz를 부르기 때문이다. Gemini 호출에 필요한 CA 인증서는 베이스에 들어 있다.
+FROM alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
+
+RUN adduser -D -H -u 10001 agentcontext
+COPY --from=build /out/ /usr/local/bin/
+USER 10001
+EXPOSE 8080
+CMD ["server"]

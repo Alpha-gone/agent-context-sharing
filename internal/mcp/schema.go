@@ -237,10 +237,6 @@ func graphIDRules() map[string]argumentRule {
 	return map[string]argumentRule{"graph_id": required(idString)}
 }
 
-func contextIDRules() map[string]argumentRule {
-	return map[string]argumentRule{"graph_id": required(idString), "context_id": required(idString)}
-}
-
 func textRange(minimum, maximum int) func(any) bool {
 	return func(value any) bool {
 		text, ok := value.(string)
@@ -269,8 +265,6 @@ func oneOf(values ...string) func(any) bool {
 		return false
 	}
 }
-
-func stringValue(value any) bool { _, ok := value.(string); return ok }
 
 // cursorString은 목록 커서가 저장소가 만든 불투명 문자열의 형식인지 본다.
 //
@@ -382,10 +376,6 @@ func arraySchema(items map[string]any, minimum, maximum int) map[string]any {
 
 func graphIDSchema() map[string]any {
 	return schema(map[string]any{"graph_id": idSchema()}, "graph_id")
-}
-
-func contextIDSchema() map[string]any {
-	return schema(map[string]any{"graph_id": idSchema(), "context_id": idSchema()}, "graph_id", "context_id")
 }
 
 func nodeLifecycleSchema() map[string]any {

@@ -1,0 +1,11 @@
+# 빌드 컨텍스트에서 비밀값과 이미지에 필요 없는 파일을 뺀다. .env가 컨텍스트에 들어가면
+# COPY 범위를 잘못 넓혔을 때 이미지 계층에 남는다.
+.env
+.env.*
+.git
+.idea
+.claude
+.personal
+spec
+client
+*.iml

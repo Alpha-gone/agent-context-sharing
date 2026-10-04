@@ -1,0 +1,104 @@
+# 운영 배포 구성. 개발 구성은 compose.dev.yaml이 다룬다.
+#
+# 실행: cp .env.prod.example .env 로 값을 채운 뒤
+#   docker compose -f compose.prod.yaml up -d --build
+#
+# TLS는 호스트의 cloudflared(Cloudflare Tunnel)가 끝내고 http://127.0.0.1:${HTTP_PORT}로
+# 전달한다. 애플리케이션 포트는 loopback에만 공개하고 DB는 호스트에 공개하지 않는다.
+# 프로젝트 이름을 고정해 같은 호스트의 개발 구성과 컨테이너·볼륨이 섞이지 않게 한다.
+name: agent_context_prod
+
+# migrate와 server가 함께 받는 애플리케이션 구성이다. 나머지 배포 구성 값은 .env에서
+# 읽고, 아래 값만 이 배치에 맞게 덮어쓴다.
+x-app-environment: &app-environment
+  # 비밀번호는 URL에 그대로 넣으므로 영문·숫자처럼 퍼센트 인코딩이 필요 없는 문자만 쓴다.
+  DATABASE_URL: postgres://${POSTGRES_USER:-agent_context}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD가 필요하다}@db:5432/${POSTGRES_DB:-agent_context}
+
+services:
+  db:
+    build: .
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agent_context}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD가 필요하다}
+      POSTGRES_DB: ${POSTGRES_DB:-agent_context}
+    volumes:
+      - db_data:/var/lib/postgresql
+      # 보관본은 데이터와 다른 볼륨에 둔다. 기본 백업과 함께 따로 옮기거나 정리하기 위해서다.
+      - wal_archive:/var/lib/postgresql/wal_archive
+    # 「백업과 복구」가 시점 복구를 백업 방식으로 확정했으므로 WAL 보관을 켠다. 개발 구성의
+    # 시간 기준 정리는 운영 보존 정책으로 쓰지 않는다. 보관본은 계속 쌓이므로 운영자가 기본
+    # 백업을 받은 뒤 그 백업보다 오래된 보관본을 정리하고 볼륨 사용량을 감시한다.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=age
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_context} -d ${POSTGRES_DB:-agent_context}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # 스키마 적용. 자문 잠금 안에서 미적용 파일만 적용하고 끝나므로 기동마다 실행해도 된다.
+  migrate:
+    build: &app-build
+      context: .
+      dockerfile: Dockerfile.server
+    image: agent_context_prod-app
+    command: ["migrate", "up"]
+    env_file:
+      - path: .env
+        required: false
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  server:
+    build: *app-build
+    image: agent_context_prod-app
+    command: ["server"]
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *app-environment
+      HTTP_ADDR: ":8080"
+      # 호스트 cloudflared가 loopback 공개 포트로 들어오면 컨테이너에는 아래 네트워크의
+      # 게이트웨이 주소가 상대로 보인다. 그 주소 하나만 전달 헤더를 믿는다. Docker의
+      # userland-proxy를 끈 호스트에서는 상대 주소가 달라져 https_required로 거부되며,
+      # 그때는 실제 상대 주소를 확인해 이 값을 좁게 바꾼다.
+      TLS_TERMINATION: proxy
+      TRUSTED_PROXY_CIDRS: 10.203.0.1/32
+      TLS_CERT_FILE: ""
+      TLS_KEY_FILE: ""
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    # 서버는 종료 신호 뒤 요청을 30초, 작업자를 10초까지 기다린다. 그보다 길게 멈추면
+    # 강제 종료한다.
+    stop_grace_period: 50s
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.203.0.0/24
+          gateway: 10.203.0.1
+
+volumes:
+  db_data:
+  wal_archive:

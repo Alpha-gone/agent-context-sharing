@@ -1,4 +1,4 @@
-# 개발용 PostgreSQL 이미지. Apache AGE와 pgvector를 함께 담는다.
+# PostgreSQL 이미지. Apache AGE와 pgvector를 함께 담으며 개발·운영 구성이 공용한다.
 #
 # 공식 이미지에는 둘이 함께 들어 있는 것이 없다. apache/age 이미지는 postgres:18 위에
 # AGE만 얹으므로 pgvector를 PGDG 패키지로 더한다. AGE는 베이스에 이미 컴파일되어 있어

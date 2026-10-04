@@ -20,4 +20,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-18-pgvector \
     && rm -rf /var/lib/apt/lists/*
 
-# 베이스 이미지가 shared_preload_libraries=age를 CMD로 설정하므로 그대로 상속한다.
+# 이미지 빌드 시 만든 디렉터리는 볼륨 마운트로 가려지고 최초 초기화 스크립트는
+# 기존 DB에서 실행되지 않는다. 매번 볼륨 마운트 뒤 준비한 다음 공식 entrypoint에
+# 위임한다. ENTRYPOINT를 바꾸면 부모 CMD가 초기화되므로 AGE의 CMD도 명시한다.
+COPY --chmod=0755 docker-db-entrypoint.sh /usr/local/bin/agent-context-db-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/agent-context-db-entrypoint.sh"]
+CMD ["postgres", "-c", "shared_preload_libraries=age"]

@@ -371,9 +371,14 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 		update := "MATCH (node:Context) WHERE node.context_id = " + cypherString(previous.ID.String()) +
 			" AND node.graph_id = " + cypherString(graphID.String()) +
 			" AND node.version = " + fmt.Sprint(previous.Version) +
-			" AND node.evidence_invalidated <> true SET node = " + properties
-		if _, err := tx.Exec(ctx, s.cypherSQL(update, "updated agtype"), pgx.QueryExecModeExec); err != nil {
-			return fmt.Errorf("근거 무효 표시 전파: %w", err)
+			" AND node.evidence_invalidated <> true SET node = " + properties + " RETURN node"
+		// AGE의 조건부 SET은 0행이어도 성공한다. 반환 행을 확인해야 읽은 뒤 갱신된
+		// 파생을 조용히 건너뛰지 않고 근거 폐기·대체 전체를 되돌릴 수 있다.
+		if _, err := s.contextFromCypher(ctx, tx, graphID, update); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return s.contextVersionConflict(ctx, tx, graphID, previous.ID)
+			}
+			return fmt.Errorf("근거 무효 표시 전파: %w", s.asVersionConflict(ctx, graphID, previous.ID, err))
 		}
 	}
 	return nil

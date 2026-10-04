@@ -46,8 +46,9 @@ func (t *stdioTransport) Connect(ctx context.Context) (mcp.Connection, error) {
 		closed:  make(chan struct{}),
 		drained: make(chan struct{}),
 		tools:   t.tools, life: life, cancel: cancel, calls: make(map[jsonrpc.ID]*activeCall),
-		logger:  t.logger,
-		version: t.version,
+		discoveries: make(map[jsonrpc.ID]bool),
+		logger:      t.logger,
+		version:     t.version,
 	}
 	go c.readLoop()
 	go c.writeLoop()
@@ -79,6 +80,7 @@ type stdioConn struct {
 	cancel      context.CancelFunc
 	callsMu     sync.Mutex
 	calls       map[jsonrpc.ID]*activeCall
+	discoveries map[jsonrpc.ID]bool // callsMu가 발견·도구의 ID 접수와 기록 시작을 직렬화한다.
 	toolPending int
 	stopped     bool
 	workers     sync.WaitGroup
@@ -129,6 +131,8 @@ func (c *stdioConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 					return nil, io.EOF
 				case <-ctx.Done():
 					return nil, ctx.Err()
+				case <-c.life.Done():
+					return nil, c.life.Err()
 				case <-c.closed:
 					return nil, mcp.ErrConnectionClosed
 				}
@@ -180,9 +184,20 @@ func (c *stdioConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 			}
 		case "server/discover":
 			if request.IsCall() {
+				c.callsMu.Lock()
+				if c.discoveries[request.ID] || c.calls[request.ID] != nil {
+					c.callsMu.Unlock()
+					if err := c.writeError(ctx, request.ID, jsonrpc.CodeInvalidRequest,
+						"진행 중인 요청 ID를 재사용할 수 없습니다.", ""); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				c.discoveries[request.ID] = true
 				c.pendingMu.Lock()
 				c.pending++
 				c.pendingMu.Unlock()
+				c.callsMu.Unlock()
 			}
 			return message, nil
 		case "tools/list", "tools/call":
@@ -232,9 +247,28 @@ func validRequestMeta(params []byte) bool {
 	return ok
 }
 
-func (c *stdioConn) Write(ctx context.Context, message jsonrpc.Message) error {
-	if _, ok := message.(*jsonrpc.Response); ok {
-		defer c.finishResponse()
+func (c *stdioConn) Write(ctx context.Context, message jsonrpc.Message) (err error) {
+	// SDK가 출력 실패 뒤 새 응답을 쓰지 않더라도 EOF의 대기가 남지 않게 한다.
+	defer func() {
+		if err != nil {
+			c.cancel()
+			_ = c.in.Close()
+		}
+	}()
+	var before []func() bool
+	if response, ok := message.(*jsonrpc.Response); ok {
+		c.callsMu.Lock()
+		tracked := c.discoveries[response.ID]
+		c.callsMu.Unlock()
+		if tracked {
+			defer c.finishResponse()
+			before = append(before, func() bool {
+				c.callsMu.Lock()
+				delete(c.discoveries, response.ID)
+				c.callsMu.Unlock()
+				return true
+			})
+		}
 	}
 	frame, err := jsonrpc.EncodeMessage(message)
 	if err != nil {
@@ -246,9 +280,9 @@ func (c *stdioConn) Write(ctx context.Context, message jsonrpc.Message) error {
 			return fmt.Errorf("호스트 출력 크기 제한을 초과했습니다")
 		}
 		return c.writeError(ctx, response.ID, jsonrpc.CodeInternalError,
-			"호스트 출력 크기 제한을 초과했습니다.", "client_protocol")
+			"호스트 출력 크기 제한을 초과했습니다.", "client_protocol", before...)
 	}
-	return c.writeFrame(ctx, append(frame, '\n'))
+	return c.writeFrame(ctx, append(frame, '\n'), before...)
 }
 
 func (c *stdioConn) finishResponse() {
@@ -317,7 +351,7 @@ func (c *stdioConn) dispatch(ctx context.Context, request *jsonrpc.Request) erro
 		c.callsMu.Unlock()
 		return mcp.ErrConnectionClosed
 	}
-	if _, exists := c.calls[request.ID]; exists {
+	if c.calls[request.ID] != nil || c.discoveries[request.ID] {
 		c.callsMu.Unlock()
 		return c.writeError(ctx, request.ID, jsonrpc.CodeInvalidRequest, "진행 중인 요청 ID를 재사용할 수 없습니다.", "")
 	}
@@ -526,7 +560,7 @@ func (c *stdioConn) writeRaw(ctx context.Context, id jsonrpc.ID, method, field s
 
 func (*stdioConn) SessionID() string { return "" }
 
-func (c *stdioConn) writeError(ctx context.Context, id jsonrpc.ID, code int64, message, clientCode string) error {
+func (c *stdioConn) writeError(ctx context.Context, id jsonrpc.ID, code int64, message, clientCode string, before ...func() bool) error {
 	response := struct {
 		JSONRPC string `json:"jsonrpc"`
 		ID      any    `json:"id"`
@@ -547,7 +581,7 @@ func (c *stdioConn) writeError(ctx context.Context, id jsonrpc.ID, code int64, m
 	if err != nil {
 		return err
 	}
-	return c.writeFrame(ctx, append(frame, '\n'))
+	return c.writeFrame(ctx, append(frame, '\n'), before...)
 }
 
 func (c *stdioConn) writeFrame(ctx context.Context, frame []byte, before ...func() bool) error {

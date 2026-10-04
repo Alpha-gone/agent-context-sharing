@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -99,6 +100,15 @@ func isolatedMigrationDatabase(t *testing.T) (*pgxpool.Pool, string) {
 	return pool, address.String()
 }
 
+// readMigration은 시험 입력 파일을 읽는다. 007은 migrations/에서 빠진 차원 전환 절차라
+// testdata의 고정 자료에서 읽는다.
+func readMigration(name string) ([]byte, error) {
+	if name == "007_embedding_dimensions.sql" {
+		return os.ReadFile(filepath.Join("testdata", name))
+	}
+	return migrations.FS.ReadFile(name)
+}
+
 func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	pool, databaseURL := isolatedMigrationDatabase(t)
 	original := migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: 1024}
@@ -106,7 +116,7 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	// 아래 시험용 복귀 파일의 번호에 영향을 주지 않도록 입력 파일을 고정한다.
 	files := make(fstest.MapFS)
 	for _, name := range []string{"001_init.sql", "007_embedding_dimensions.sql"} {
-		data, err := migrations.FS.ReadFile(name)
+		data, err := readMigration(name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -296,7 +306,7 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	// 시험용 파일로 적용해 과거 치환 구성과 checksum이 계속 보존되는지 확인한다.
 	rollbackFiles := make(fstest.MapFS)
 	for _, name := range []string{"001_init.sql", "007_embedding_dimensions.sql"} {
-		data, err := migrations.FS.ReadFile(name)
+		data, err := readMigration(name)
 		if err != nil {
 			t.Fatal(err)
 		}

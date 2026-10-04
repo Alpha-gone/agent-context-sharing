@@ -90,6 +90,8 @@ func run() error {
 		return fmt.Errorf("주기 작업 준비: %w", err)
 	}
 	indexer, err := index.New(database, index.Config{
+		Provider:   cfg.EmbeddingProvider,
+		APIKey:     cfg.GeminiAPIKey,
 		BaseURL:    cfg.EmbeddingBaseURL,
 		Model:      cfg.EmbeddingModel,
 		VectorType: cfg.EmbeddingVectorType,
@@ -97,6 +99,9 @@ func run() error {
 	}, nil, slog.Default())
 	if err != nil {
 		return fmt.Errorf("색인 작업자 준비: %w", err)
+	}
+	if err := database.CheckEmbeddingSchema(context.Background(), cfg.EmbeddingVectorType, cfg.EmbeddingDimension); err != nil {
+		return fmt.Errorf("임베딩 DB 구성 확인: %w", err)
 	}
 	// 작업자 종료는 defer가 아니라 아래 종료 순서에서 처리한다. defer로 두면 요청 종료와
 	// 풀 종료 사이가 아니라 그 뒤에 실행되어, 작업자가 도는 중에 풀이 닫힌다.

@@ -55,7 +55,11 @@ func run() (bool, error) {
 	if modelName == "" || vectorType == "" {
 		return false, fmt.Errorf("EMBEDDING_MODEL과 EMBEDDING_VECTOR_TYPE이 필요하다")
 	}
-	expect := store.EmbeddingExpectation{ModelID: index.ModelID(modelName, vectorType, dimension), Dimension: dimension}
+	provider := strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER"))
+	if provider != "" && provider != "ollama" && provider != "gemini" {
+		return false, fmt.Errorf("EMBEDDING_PROVIDER는 ollama 또는 gemini여야 한다")
+	}
+	expect := store.EmbeddingExpectation{ModelID: (index.Config{Provider: provider, Model: modelName, VectorType: vectorType, Dimension: dimension}).ModelID(), Dimension: dimension}
 
 	ctx := context.Background()
 	database, err := store.New(ctx, databaseURL, graphName, nil, nil, "")

@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -24,13 +25,13 @@ import (
 )
 
 // Config는 마이그레이션 파일에 치환할 배포 구성 값이다.
-// 네 값 모두 식별자나 타입 자리에 들어가 매개변수로 묶을 수 없으므로 Validate가
-// 통과한 값만 사용한다.
+// SQL 식별자·타입·색인 대상 자리에 들어가는 값은 Validate가 통과한 뒤에만 사용한다.
 type Config struct {
-	GraphName      string
-	VectorType     string
-	VectorDim      int
-	ColdTablespace string
+	GraphName         string
+	VectorType        string
+	VectorDim         int
+	ColdTablespace    string
+	IndexTargetLayers string
 }
 
 var (
@@ -55,8 +56,14 @@ func (c Config) Validate() error {
 	if c.VectorDim <= 0 {
 		return fmt.Errorf("벡터 차원 %d는 양의 정수여야 한다", c.VectorDim)
 	}
+	if (c.VectorType == "vector" && c.VectorDim > 2000) || (c.VectorType == "halfvec" && c.VectorDim > 4000) {
+		return fmt.Errorf("벡터 차원이 HNSW 저장 타입별 상한을 넘었다")
+	}
 	if c.ColdTablespace != "" && !tablespacePattern.MatchString(c.ColdTablespace) {
 		return fmt.Errorf("콜드 tablespace 이름 %q가 형식 %s에 맞지 않는다", c.ColdTablespace, tablespacePattern)
+	}
+	if c.IndexTargetLayers != "" && c.IndexTargetLayers != "all_layers" && c.IndexTargetLayers != "without_source" {
+		return fmt.Errorf("색인 대상 계층은 all_layers 또는 without_source여야 한다")
 	}
 	return nil
 }
@@ -76,6 +83,7 @@ type Migration struct {
 	Name     string
 	Rendered string
 	Checksum string
+	Config   Config
 }
 
 // Applied는 이미 적용된 마이그레이션의 기록이다.
@@ -83,6 +91,7 @@ type Applied struct {
 	Version  int
 	Name     string
 	Checksum string
+	Config   *Config
 }
 
 // AfterConnectSQL은 AGE를 쓰는 모든 연결이 거쳐야 하는 준비 문장이다.
@@ -197,6 +206,7 @@ func Load(fsys fs.FS, dir string, cfg Config) ([]Migration, error) {
 			Name:     match[2],
 			Rendered: rendered.String(),
 			Checksum: hex.EncodeToString(sum[:]),
+			Config:   cfg,
 		})
 	}
 
@@ -211,7 +221,8 @@ CREATE TABLE IF NOT EXISTS public.schema_migration (
     version    integer     PRIMARY KEY,
     name       text        NOT NULL,
     checksum   text        NOT NULL,
-    applied_at timestamptz NOT NULL DEFAULT now()
+    applied_at timestamptz NOT NULL DEFAULT now(),
+    render_config jsonb
 )`
 
 // EnsureHistory는 적용 이력 테이블을 없으면 만든다.
@@ -219,12 +230,15 @@ func EnsureHistory(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, createHistoryTable); err != nil {
 		return fmt.Errorf("이력 테이블 생성: %w", err)
 	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE public.schema_migration ADD COLUMN IF NOT EXISTS render_config jsonb`); err != nil {
+		return fmt.Errorf("이력 구성 열 준비: %w", err)
+	}
 	return nil
 }
 
 // AppliedVersions는 이미 적용된 기록을 버전으로 색인해 돌려준다.
 func AppliedVersions(ctx context.Context, pool *pgxpool.Pool) (map[int]Applied, error) {
-	rows, err := pool.Query(ctx, `SELECT version, name, checksum FROM public.schema_migration`)
+	rows, err := pool.Query(ctx, `SELECT version, name, checksum, render_config FROM public.schema_migration`)
 	if err != nil {
 		return nil, fmt.Errorf("이력 조회: %w", err)
 	}
@@ -233,7 +247,7 @@ func AppliedVersions(ctx context.Context, pool *pgxpool.Pool) (map[int]Applied, 
 	applied := make(map[int]Applied)
 	for rows.Next() {
 		var a Applied
-		if err := rows.Scan(&a.Version, &a.Name, &a.Checksum); err != nil {
+		if err := rows.Scan(&a.Version, &a.Name, &a.Checksum, &a.Config); err != nil {
 			return nil, fmt.Errorf("이력 행 읽기: %w", err)
 		}
 		applied[a.Version] = a
@@ -272,8 +286,12 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, m Migration) error {
 	if _, err := tx.Exec(ctx, m.Rendered); err != nil {
 		return fmt.Errorf("버전 %d(%s) 적용: %w", m.Version, m.Name, err)
 	}
-	const insert = `INSERT INTO public.schema_migration (version, name, checksum) VALUES ($1, $2, $3)`
-	if _, err := tx.Exec(ctx, insert, m.Version, m.Name, m.Checksum); err != nil {
+	renderConfig, err := json.Marshal(m.Config)
+	if err != nil {
+		return fmt.Errorf("마이그레이션 치환 구성 직렬화: %w", err)
+	}
+	const insert = `INSERT INTO public.schema_migration (version, name, checksum, render_config) VALUES ($1, $2, $3, $4::jsonb)`
+	if _, err := tx.Exec(ctx, insert, m.Version, m.Name, m.Checksum, string(renderConfig)); err != nil {
 		return fmt.Errorf("버전 %d(%s) 이력 기록: %w", m.Version, m.Name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {

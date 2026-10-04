@@ -73,6 +73,9 @@ func runContinual(outPath string, repeats, maxHops, maxHopNodes int) error {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
 	defer database.Close()
+	if err := database.CheckEmbeddingSchema(ctx, settings.index.VectorType, settings.index.Dimension); err != nil {
+		return err
+	}
 	worker, err := index.New(database, settings.index, nil, slog.Default())
 	if err != nil {
 		return fmt.Errorf("색인 작업자 준비: %w", err)

@@ -83,6 +83,10 @@ type Config struct {
 	GraphName string
 	// EmbeddingBaseURL 필드에는 임베딩 제공자 HTTP 주소를 둔다.
 	EmbeddingBaseURL *url.URL
+	// EmbeddingProvider는 ollama 또는 gemini다. 생략한 기존 구성은 ollama다.
+	EmbeddingProvider string
+	// GeminiAPIKey는 Gemini 호출 헤더에만 쓰며 로그로 전달하지 않는다.
+	GeminiAPIKey string
 	// EmbeddingModel 필드에는 본문과 질의에 공통으로 쓸 모델 이름을 둔다.
 	EmbeddingModel string
 	// EmbeddingVectorType 필드에는 pgvector 저장 타입을 둔다.
@@ -160,6 +164,8 @@ func Load(env Environment) (Config, error) {
 		DatabaseURL:                  strings.TrimSpace(env("DATABASE_URL")),
 		GraphName:                    strings.TrimSpace(env("AGE_GRAPH_NAME")),
 		EmbeddingModel:               strings.TrimSpace(env("EMBEDDING_MODEL")),
+		EmbeddingProvider:            strings.TrimSpace(env("EMBEDDING_PROVIDER")),
+		GeminiAPIKey:                 strings.TrimSpace(env("GEMINI_API_KEY")),
 		EmbeddingVectorType:          strings.TrimSpace(env("EMBEDDING_VECTOR_TYPE")),
 		SearchExecution:              SearchExecution(strings.TrimSpace(env("SEARCH_CHANNEL_EXECUTION"))),
 		SearchGraphStage:             SearchGraphStage(strings.TrimSpace(env("SEARCH_GRAPH_STAGE"))),
@@ -183,7 +189,7 @@ func Load(env Environment) (Config, error) {
 
 	baseURL, err := parseHTTPURL("EMBEDDING_BASE_URL", env("EMBEDDING_BASE_URL"))
 	if err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("EMBEDDING_BASE_URL이 올바른 HTTP 주소가 아니다")
 	}
 	cfg.EmbeddingBaseURL = baseURL
 	if cfg.EmbeddingModel == "" {
@@ -203,6 +209,21 @@ func Load(env Environment) (Config, error) {
 		return Config{}, fmt.Errorf("EMBEDDING_DIMENSION이 양의 정수가 아니다")
 	}
 	cfg.EmbeddingDimension = dimension
+	if cfg.EmbeddingProvider == "" {
+		cfg.EmbeddingProvider = "ollama"
+	}
+	if cfg.EmbeddingProvider != "ollama" && cfg.EmbeddingProvider != "gemini" {
+		return Config{}, fmt.Errorf("EMBEDDING_PROVIDER는 ollama 또는 gemini여야 한다")
+	}
+	if baseURL.User != nil || baseURL.RawQuery != "" || baseURL.ForceQuery || baseURL.Fragment != "" {
+		return Config{}, fmt.Errorf("EMBEDDING_BASE_URL에 사용자 정보·질의·fragment를 넣을 수 없다")
+	}
+	if (cfg.EmbeddingVectorType == "vector" && dimension > 2000) || (cfg.EmbeddingVectorType == "halfvec" && dimension > 4000) {
+		return Config{}, fmt.Errorf("EMBEDDING_DIMENSION이 HNSW의 저장 타입별 상한을 넘었다")
+	}
+	if cfg.EmbeddingProvider == "gemini" && (baseURL.Scheme != "https" || cfg.EmbeddingModel != "gemini-embedding-2" || dimension < 128 || dimension > 3072 || cfg.GeminiAPIKey == "" || strings.ContainsAny(cfg.GeminiAPIKey, "\r\n")) {
+		return Config{}, fmt.Errorf("Gemini의 HTTPS·모델·차원·GEMINI_API_KEY 구성이 올바르지 않다")
+	}
 	if !slices.Contains([]SearchExecution{SearchExecutionParallel, SearchExecutionSequential}, cfg.SearchExecution) {
 		return Config{}, fmt.Errorf("SEARCH_CHANNEL_EXECUTION %q가 parallel 또는 sequential이 아니다", cfg.SearchExecution)
 	}

@@ -2,16 +2,12 @@
 package index
 
 import (
-	"bytes"
 	"context"
-	json "encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +29,8 @@ const (
 
 // Config는 하나의 배포가 쓰는 임베딩 제공자와 벡터 계약이다.
 type Config struct {
+	Provider   string
+	APIKey     string
 	BaseURL    *url.URL
 	Model      string
 	VectorType string
@@ -50,10 +48,10 @@ func (error DimensionError) Error() string {
 // maxEmbeddingResponseBytes는 제공자 응답 본문에서 읽을 최대 크기다.
 //
 // 상한이 없으면 잘못 설정된 제공자가 보낸 큰 응답이 작업자와 검색 경로의 메모리를 그대로
-// 늘린다. 차원 상한인 4096개의 float를 넉넉히 담을 수 있는 크기로 둔다.
+// 늘린다. HNSW가 허용하는 벡터를 넉넉히 담을 수 있는 크기로 둔다.
 const maxEmbeddingResponseBytes = 8 << 20
 
-// Worker는 작업 행 잠금 안에서 임베딩 제공자를 호출하는 비동기 소비자다.
+// Worker는 짧은 확보·저장 트랜잭션 사이에서 제공자를 호출하는 비동기 소비자다.
 type Worker struct {
 	store      *store.Store
 	config     Config
@@ -70,24 +68,29 @@ func New(database *store.Store, config Config, client *http.Client, logger *slog
 	if database == nil {
 		return nil, fmt.Errorf("색인 저장소가 없다")
 	}
-	if config.BaseURL == nil || config.BaseURL.Scheme == "" || config.BaseURL.Host == "" {
-		return nil, fmt.Errorf("임베딩 제공자 주소가 올바르지 않다")
-	}
-	if strings.TrimSpace(config.Model) == "" || strings.TrimSpace(config.VectorType) == "" || config.Dimension < 1 {
-		return nil, fmt.Errorf("임베딩 모델, 저장 타입과 차원이 필요하다")
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
+	// 호출자가 공유하는 client와 URL은 변경하지 않는다. 인증 헤더의 재전송을 막고
+	// 주입한 client에도 유한 상한을 적용한다.
+	copy := *client
+	if copy.Timeout <= 0 || copy.Timeout > 30*time.Second {
+		copy.Timeout = 30 * time.Second
+	}
+	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	config.BaseURL = config.BaseURL.Clone()
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Worker{store: database, config: config, httpClient: client, logger: logger, done: make(chan struct{})}, nil
+	return &Worker{store: database, config: config, httpClient: &copy, logger: logger, done: make(chan struct{})}, nil
 }
 
 // ModelID는 모델과 벡터 표현이 같은지 비교할 수 있는 현재 색인 식별자다.
 func (worker *Worker) ModelID() string {
-	return ModelID(worker.config.Model, worker.config.VectorType, worker.config.Dimension)
+	return worker.config.ModelID()
 }
 
 // ModelID는 임베딩 행의 model_id 형식을 만든다. 그래프 불변식 감사가 현재 모델과 대조할 때도
@@ -193,7 +196,7 @@ func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error)
 		}
 	}
 	result, err := acquire(ctx, func(ctx context.Context, task store.IndexTask) store.IndexTaskResult {
-		embedding, err := worker.Embed(ctx, task.Body)
+		embedding, err := worker.EmbedDocument(ctx, task.Body)
 		if err != nil {
 			// 사유를 그대로 남긴다. 고정 문구만 남기면 「색인 재시도」가 운영자 개입이
 			// 필요하다고 한 차원 불일치를 실패한 행에서 구분할 수 없다.
@@ -206,7 +209,7 @@ func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error)
 				"context_id", task.ContextID.String(), "graph_id", task.GraphID.String(),
 				"correlation_id", task.CorrelationID, "attempts", task.Attempts,
 				"dimension_mismatch", dimensionMismatch, "error", err.Error())
-			return store.IndexTaskResult{Failure: failure, Retryable: !dimensionMismatch}
+			return store.IndexTaskResult{Failure: failure, Retryable: retryableEmbeddingError(err)}
 		}
 		return store.IndexTaskResult{Embedding: embedding, ModelID: worker.ModelID()}
 	})
@@ -219,52 +222,4 @@ func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error)
 		}
 	}
 	return result.Found, nil
-}
-
-// Embed는 본문 색인과 질의 임베딩이 같은 제공자·모델을 쓰게 하는 유일한 호출 경계다.
-func (worker *Worker) Embed(ctx context.Context, input string) ([]float64, error) {
-	body, err := json.Marshal(struct {
-		Model string `json:"model"`
-		Input string `json:"input"`
-	}{Model: worker.config.Model, Input: input})
-	if err != nil {
-		return nil, fmt.Errorf("임베딩 요청 직렬화: %w", err)
-	}
-	endpoint := worker.config.BaseURL.Clone()
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/api/embed"
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("임베딩 요청 생성: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := worker.httpClient.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("임베딩 제공자 요청: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("임베딩 제공자 상태: %d", response.StatusCode)
-	}
-	var decoded struct {
-		Embeddings [][]float64 `json:"embeddings"`
-	}
-	// 본문을 상한까지만 읽는다. 상한에 정확히 닿으면 잘린 것이므로 해석 결과를 믿지 않는다.
-	limited := &io.LimitedReader{R: response.Body, N: maxEmbeddingResponseBytes + 1}
-	if err := json.UnmarshalRead(limited, &decoded); err != nil {
-		if limited.N <= 0 {
-			return nil, fmt.Errorf("임베딩 응답이 %d바이트 상한을 넘었다", maxEmbeddingResponseBytes)
-		}
-		return nil, fmt.Errorf("임베딩 응답 해석: %w", err)
-	}
-	if limited.N <= 0 {
-		return nil, fmt.Errorf("임베딩 응답이 %d바이트 상한을 넘었다", maxEmbeddingResponseBytes)
-	}
-	if len(decoded.Embeddings) != 1 {
-		return nil, fmt.Errorf("임베딩 응답 벡터 개수가 올바르지 않다")
-	}
-	embedding := decoded.Embeddings[0]
-	if len(embedding) != worker.config.Dimension {
-		return nil, DimensionError{Got: len(embedding), Want: worker.config.Dimension}
-	}
-	return embedding, nil
 }

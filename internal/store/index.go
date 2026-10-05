@@ -133,17 +133,7 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 	if err != nil {
 		return IndexProcessResult{}, fmt.Errorf("색인 그래프 식별자 해석: %w", err)
 	}
-	value, err := s.context(ctx, tx, graphID, contextID)
-	if err != nil {
-		if err == ErrNotFound {
-			if _, deleteErr := tx.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1`, rawID); deleteErr != nil {
-				return IndexProcessResult{}, fmt.Errorf("사라진 색인 작업 제거: %w", deleteErr)
-			}
-			return IndexProcessResult{Found: true}, tx.Commit(ctx)
-		}
-		return IndexProcessResult{}, fmt.Errorf("색인 대상 조회: %w", err)
-	}
-	task := IndexTask{ID: taskID, ContextID: contextID, GraphID: graphID, Body: value.Body, Attempts: attempts, CorrelationID: correlationID}
+	task := IndexTask{ID: taskID, ContextID: contextID, GraphID: graphID, Attempts: attempts, CorrelationID: correlationID}
 	// 확보를 커밋하면서 대기 시각을 미뤄 다른 작업자가 같은 작업을 집지 않게 한다.
 	// 데이터베이스가 저장한 정밀도의 시각을 받아 결과 대조에 그대로 사용한다.
 	if err := tx.QueryRow(ctx, `UPDATE public.index_task SET next_attempt_at = $2 WHERE task_id = $1
@@ -153,6 +143,16 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 	if err := tx.Commit(ctx); err != nil {
 		return IndexProcessResult{}, fmt.Errorf("색인 작업 확보 커밋: %w", err)
 	}
+	value, err := s.context(ctx, s.pool, graphID, contextID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			_, deleteErr := s.pool.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1
+				AND enqueued_at = $2 AND next_attempt_at = $3 AND state = 'pending'`, rawID, claim.enqueuedAt, claim.leasedUntil)
+			return IndexProcessResult{Found: true, Task: task}, deleteErr
+		}
+		return s.failIndexTask(ctx, task, claim, "색인 대상 조회 실패", true, err)
+	}
+	task.Body = value.Body
 
 	// 트랜잭션 밖에서 제공자를 부른다. 이 구간에는 어떤 행 잠금도 쥐고 있지 않다.
 	result := processor(ctx, task)
@@ -164,13 +164,20 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 		return IndexProcessResult{Found: true, Task: task}, nil
 	}
 	if len(result.Embedding) == 0 || result.ModelID == "" {
-		return IndexProcessResult{}, fmt.Errorf("색인 처리기가 빈 임베딩 또는 모델 식별자를 반환했다")
+		return s.failIndexTask(ctx, task, claim, "빈 임베딩 또는 모델 식별자", false,
+			fmt.Errorf("색인 처리기가 빈 임베딩 또는 모델 식별자를 반환했다"))
 	}
 	stored, err := s.storeIndexResult(ctx, task, claim, result)
 	if err != nil {
-		return IndexProcessResult{}, err
+		return s.failIndexTask(ctx, task, claim, "색인 결과 저장 실패", true, err)
 	}
 	return IndexProcessResult{Found: true, Succeeded: stored, Task: task}, nil
+}
+
+// failIndexTask는 제공자 호출 전후의 실패도 같은 확보 세대의 재시도 예산에 반영한다.
+func (s *Store) failIndexTask(ctx context.Context, task IndexTask, claim indexTaskClaim, failure string, retryable bool, cause error) (IndexProcessResult, error) {
+	err := s.storeIndexFailure(ctx, task, claim, IndexTaskResult{Failure: failure, Retryable: retryable})
+	return IndexProcessResult{Found: true, Task: task}, errors.Join(cause, err)
 }
 
 // storeIndexResult는 제공자 결과를 저장하고 처리한 작업을 지운다.

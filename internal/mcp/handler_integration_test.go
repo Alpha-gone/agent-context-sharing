@@ -298,6 +298,11 @@ func TestHandlerIntegration(t *testing.T) {
 	if structured(t, duplicated)["context_id"].(string) != sourceID {
 		t.Fatal("같은 source_ref가 기존 원천을 반환하지 않았다")
 	}
+	invalidText := sourceArguments()
+	invalidText["body"] = "본문\x00끝"
+	if _, err := call(t.Context(), ownerID, "node_create", invalidText); !hasCode(err, "invalid_argument") {
+		t.Fatalf("U+0000 본문 오류 = %v, want invalid_argument", err)
+	}
 	// 거부된 생성의 기록은 대상을 비운다. 요청이 배정한 식별자는 저장되지 않으므로 남기면
 	// 기록이 존재하지 않는 컨텍스트를 가리킨다. 근거는 「기록 항목」이다.
 	// 없는 근거를 가리켜 저장 계층에서 거부시킨다. 처리기 검증에서 막히면 기록 자체가 없다.

@@ -36,7 +36,7 @@ func TestGraphVisualizationKeepsEdgesInsideResult(t *testing.T) {
 	}
 	assertEdgesInsideResult(t, hops)
 
-	if _, err := store.SetContextDeleted(t.Context(), graphID, createdSource.ID, actorID, true); err != nil {
+	if _, err := store.SetContextDeleted(t.Context(), graphID, createdSource.ID, actorID, true, 0); err != nil {
 		t.Fatalf("원천 소프트 삭제: %v", err)
 	}
 	hops, err = store.GraphVisualization(t.Context(), graphID, 4, 200)
@@ -179,7 +179,7 @@ func TestContextDeletionAndRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("컨텍스트 삭제 영향 = %#v, want 파생 1개", impact)
 	}
 
-	if _, err := store.SetContextDeleted(t.Context(), graphID, createdSource.ID, actorID, true); err != nil {
+	if _, err := store.SetContextDeleted(t.Context(), graphID, createdSource.ID, actorID, true, 0); err != nil {
 		t.Fatalf("컨텍스트 소프트 삭제: %v", err)
 	}
 	active, _, err := store.ListActiveContexts(t.Context(), graphID, 50)
@@ -197,7 +197,7 @@ func TestContextDeletionAndRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("삭제된 컨텍스트가 복구 목록에 없다")
 	}
 
-	if _, err := store.SetContextDeleted(t.Context(), graphID, createdSource.ID, actorID, false); err != nil {
+	if _, err := store.SetContextDeleted(t.Context(), graphID, createdSource.ID, actorID, false, 0); err != nil {
 		t.Fatalf("컨텍스트 복구: %v", err)
 	}
 	active, _, err = store.ListActiveContexts(t.Context(), graphID, 50)

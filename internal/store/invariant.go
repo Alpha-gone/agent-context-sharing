@@ -270,7 +270,7 @@ func checkRelationTime(snapshot auditSnapshot) ([]InvariantViolation, error) {
 	var violations []InvariantViolation
 	for _, edge := range snapshot.edges {
 		kind, ok := relationLabels[edge.label]
-		if !ok || edge.state == string(model.RelationStateDiscarded) {
+		if !ok || edge.state != string(model.RelationStateConfirmed) {
 			continue
 		}
 		from, to := snapshot.contexts[edge.from], snapshot.contexts[edge.to]

@@ -20,6 +20,11 @@ func (s *Store) WithTryAdvisoryLock(ctx context.Context, key int64, run func(con
 	if run == nil {
 		return 0, false, fmt.Errorf("주기 작업 실행 함수가 없다")
 	}
+	release, err := s.reserveConnections(ctx, 2)
+	if err != nil {
+		return 0, false, err
+	}
+	defer release()
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return 0, false, fmt.Errorf("주기 작업 잠금 연결 획득: %w", err)
@@ -172,7 +177,13 @@ func (s *Store) CleanupAuditRecords(ctx context.Context, now time.Time, auditDay
 				return deleted, fmt.Errorf("적용 관리 기록 정리: %w", err)
 			}
 			deleted += int(result.RowsAffected())
-			result, err = s.pool.Exec(ctx, `DELETE FROM public.web_audit_log WHERE graph_id = $1 AND occurred_at <= $2`, graph.id.String(), cutoff)
+			result, err = s.pool.Exec(ctx, `DELETE FROM public.web_audit_log AS audit
+				WHERE graph_id = $1 AND occurred_at <= $2
+				  AND after_grade IS DISTINCT FROM 'owner'
+				  AND NOT (target_kind = 'restore_request' AND action = 'request'
+				    AND NOT EXISTS (SELECT 1 FROM public.web_audit_log AS restored
+				      WHERE restored.graph_id = audit.graph_id AND restored.target_kind = 'operator_restore'
+				        AND restored.occurred_at > audit.occurred_at))`, graph.id.String(), cutoff)
 			if err != nil {
 				return deleted, fmt.Errorf("웹 감사 기록 정리: %w", err)
 			}

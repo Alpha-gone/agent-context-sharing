@@ -166,7 +166,7 @@ func TestIndexReclaimedTaskIgnoresStaleResultIntegration(t *testing.T) {
 }
 
 // TestIndexResultStorageFailureRollsBackTaskIntegration은 조건부 작업 삭제 뒤
-// 임베딩 저장이 실패하면 작업과 기존 임베딩이 함께 보존되는지 확인한다.
+// 임베딩 저장이 실패하면 기존 임베딩은 보존하고 작업은 재시도 예산에 반영하는지 확인한다.
 func TestIndexResultStorageFailureRollsBackTaskIntegration(t *testing.T) {
 	database := newIntegrationStore(t)
 	actorID := newTestID(t)
@@ -208,8 +208,8 @@ func TestIndexResultStorageFailureRollsBackTaskIntegration(t *testing.T) {
 	if err == nil {
 		t.Fatal("잘못된 차원의 임베딩 저장이 성공했다")
 	}
-	if after := indexTaskState(t, database, initial.Task.ContextID); after != claimed {
-		t.Fatalf("저장 실패가 작업을 바꿨다: %+v, want %+v", after, claimed)
+	if after := indexTaskState(t, database, initial.Task.ContextID); after.attempts != claimed.attempts+1 || after.state != "pending" || after.lastError == "" || !after.nextAttempt.After(time.Now().UTC()) {
+		t.Fatalf("저장 실패가 재시도 예산에 반영되지 않았다: %+v", after)
 	}
 	var embedding, modelID string
 	if err := database.pool.QueryRow(t.Context(), `SELECT embedding::text, model_id FROM public.context_embedding WHERE context_id = $1`, initial.Task.ContextID.String()).Scan(&embedding, &modelID); err != nil || embedding != vectorText(vector) || modelID != "rollback-test" {

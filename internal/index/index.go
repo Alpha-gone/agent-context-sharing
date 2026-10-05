@@ -214,7 +214,7 @@ func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error)
 		return store.IndexTaskResult{Embedding: embedding, ModelID: worker.ModelID()}
 	})
 	if err != nil {
-		return false, err
+		return result.Found, err
 	}
 	if result.Succeeded {
 		if err := worker.store.ProposeSimilarEventRelations(ctx, result.Task.GraphID, result.Task.ContextID, worker.ModelID()); err != nil {

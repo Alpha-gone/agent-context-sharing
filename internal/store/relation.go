@@ -23,6 +23,9 @@ func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation m
 		return model.Relation{}, fmt.Errorf("관계 생성 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
+		return model.Relation{}, err
+	}
 
 	from, err := s.context(ctx, tx, graphID, relation.FromContextID)
 	if err != nil {
@@ -79,7 +82,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	// 검사도 서로의 미커밋 간선을 보지 못해 A→B와 B→A가 함께 통과한다. 「판정의
 	// 직렬화」가 같은 행을 이미 쓰기 경로의 직렬화 지점으로 두었으므로 새 경합 지점은
 	// 아니며, 이 트랜잭션도 외부 호출 없이 끝난다.
-	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
 		return model.Relation{}, err
 	}
 
@@ -169,7 +172,7 @@ func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.I
 	// 없으므로, 같은 관계에 폐기가 동시에 오면 읽은 상태가 둘 다 통과해 AGE가 동시 갱신
 	// 오류를 낸다. 잠금이 조회와 갱신 사이를 직렬화해 뒤에 온 요청이 이미 폐기된 상태를
 	// 보고 정상적으로 거부된다.
-	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
 		return model.Relation{}, err
 	}
 	stored, err := s.relationByID(ctx, tx, graphID, relationID)
@@ -291,6 +294,35 @@ func (s *Store) proposeEventRelations(ctx context.Context, graphID model.ID, eve
 	if err := s.ProposeEventRelations(ctx, graphID, event.ID); err != nil {
 		slog.ErrorContext(ctx, "사건 관계 후보 제안 실패", "graph_id", graphID.String(), "context_id", event.ID.String(), "error", err)
 	}
+}
+
+// validateEventRelationTimes은 사건 갱신이 이미 확정된 관계를 깨뜨리지 않는지 확인한다.
+func (s *Store) validateEventRelationTimes(ctx context.Context, tx pgx.Tx, graphID model.ID, event model.Context) error {
+	relations, err := s.allRelations(ctx, tx, graphID, event.ID, []model.RelationState{model.RelationStateConfirmed}, nil)
+	if err != nil {
+		return err
+	}
+	for _, relation := range relations {
+		otherID := relation.FromContextID
+		if otherID == event.ID {
+			otherID = relation.ToContextID
+		}
+		other, err := s.context(ctx, tx, graphID, otherID)
+		if err != nil {
+			return err
+		}
+		if other.Event == nil {
+			return ErrInvariantViolation
+		}
+		from, to := *other.Event, *event.Event
+		if relation.FromContextID == event.ID {
+			from, to = to, from
+		}
+		if err := model.ValidateRelationTime(relation.Type, from, to); err != nil {
+			return fmt.Errorf("확정 관계 시간 제약: %w", errors.Join(ErrInvalidRelation, err))
+		}
+	}
+	return nil
 }
 
 func (s *Store) activeEventContexts(ctx context.Context, graphID model.ID) ([]model.Context, error) {
@@ -493,7 +525,7 @@ func (s *Store) createProposedRelation(ctx context.Context, graphID model.ID, re
 	defer tx.Rollback(ctx)
 	// 확정 경로와 같은 이유로 정체성 조회와 생성 사이를 직렬화한다. 후보 제안이 확정과
 	// 겹쳐도 같은 정체성의 간선이 둘 생기지 않아야 한다.
-	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
 		return false, err
 	}
 	if _, err := s.relationByIdentity(ctx, tx, graphID, relation.Type, relation.FromContextID, relation.ToContextID); err == nil {

@@ -118,6 +118,9 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 		if err := s.validateEventMembers(ctx, tx, graphID, value); err != nil {
 			return model.Context{}, err
 		}
+		if err := s.validateEventRelationTimes(ctx, tx, graphID, value); err != nil {
+			return model.Context{}, err
+		}
 	}
 	properties, err := encodeProperties(contextProperties(value))
 	if err != nil {
@@ -199,6 +202,9 @@ func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, ex
 		return model.Context{}, fmt.Errorf("컨텍스트 유지 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
+		return model.Context{}, err
+	}
 
 	stored, err := s.context(ctx, tx, graphID, contextID)
 	if err != nil {
@@ -315,9 +321,13 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if !discard {
 		delta = -delta
 	}
-	// 폐기와 복구는 저장량을 늘리지 않거나 이전 값으로 되돌릴 뿐이므로 한도를 걸지 않는다.
-	if err := s.updateGraphActivity(ctx, tx, graphID, delta, 0); err != nil {
+	if err := s.updateGraphActivity(ctx, tx, graphID, delta, limits.StoredCharsPerGraph); err != nil {
 		return model.Context{}, err
+	}
+	if !discard {
+		if err := s.enqueueIndexTask(ctx, tx, graphID, stored.ID, stored.Layer); err != nil {
+			return model.Context{}, err
+		}
 	}
 	if err := s.recordAppliedOperation(ctx, tx, operation, stored.Version); err != nil {
 		return model.Context{}, err
@@ -776,7 +786,7 @@ func (s *Store) updateGraphActivity(ctx context.Context, tx pgx.Tx, graphID mode
 	command, err := tx.Exec(ctx, `
 		UPDATE public.context_graph
 		SET last_activity_at = $1, stored_chars = stored_chars + $2, content_revision = content_revision + 1
-		WHERE graph_id = $3 AND stored_chars + $2 >= 0
+		WHERE graph_id = $3 AND deleted_at IS NULL AND stored_chars + $2 >= 0
 		  AND ($4 = 0 OR $2 <= 0 OR stored_chars + $2 <= $4)`, nowUTC(), characterDelta, graphID.String(), maxStoredChars)
 	if err != nil {
 		return fmt.Errorf("그래프 활동 갱신: %w", err)
@@ -791,7 +801,7 @@ func (s *Store) updateGraphActivity(ctx context.Context, tx pgx.Tx, graphID mode
 // 구분한다. 구분하지 않으면 한도 초과가 not_found로 나간다.
 func (s *Store) graphActivityRejection(ctx context.Context, tx pgx.Tx, graphID model.ID, characterDelta int, maxStoredChars int64) error {
 	var stored int64
-	if err := tx.QueryRow(ctx, `SELECT stored_chars FROM public.context_graph WHERE graph_id = $1`, graphID.String()).Scan(&stored); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT stored_chars FROM public.context_graph WHERE graph_id = $1 AND deleted_at IS NULL`, graphID.String()).Scan(&stored); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -850,10 +860,12 @@ func dollarString(value string) string {
 
 // cypherString은 openCypher 문자열 리터럴을 JSON 방식으로 이스케이프한다.
 //
-// 변환이 실패하는 경우는 값이 올바른 UTF-8이 아닐 때뿐이다. 빈 문자열을 돌려주면 문법이
-// 깨진 질의가 만들어져 invalid_argument가 아니라 internal로 끝나므로, 대신 어떤 질의에도
-// 넣을 수 있는 안전한 리터럴을 돌려주고 그 값과 일치하는 행이 없게 둔다.
+// U+0000이나 올바르지 않은 UTF-8은 AGE 문자열로 넣지 않는다. 빈 문자열을 반환해
+// 질의 문법을 깨뜨리지 않고 안전한 null 리터럴로 바꾸어 비교가 일치하지 않게 한다.
 func cypherString(value string) string {
+	if strings.ContainsRune(value, '\x00') {
+		return invalidUTF8Literal
+	}
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return invalidUTF8Literal
@@ -861,9 +873,8 @@ func cypherString(value string) string {
 	return string(encoded)
 }
 
-// invalidUTF8Literal은 올바른 UTF-8이 아닌 값을 대신하는 리터럴이다. 저장되는 값은 모두
-// JSON을 지나 들어오므로 어떤 행과도 일치하지 않는다.
-const invalidUTF8Literal = `"\u0000invalid-utf8"`
+// invalidUTF8Literal은 비교가 참이 될 수 없는 안전한 Cypher null 리터럴이다.
+const invalidUTF8Literal = `null`
 
 // encodeProperties는 값은 JSON으로 이스케이프하고 고정 property 이름은 Cypher map key로 조립한다.
 func encodeProperties(properties map[string]any) (string, error) {

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Layer는 컨텍스트의 논리 계층을 나타낸다.
@@ -387,6 +389,14 @@ func (g Graph) Validate() error {
 
 // validateCommon은 모든 계층이 공유하는 필수 속성과 불변 원천의 초기 판 번호를 확인한다.
 func validateCommon(context Context) error {
+	if err := validateText("body", context.Body); err != nil {
+		return err
+	}
+	if context.Source != nil {
+		if err := validateText("locator", context.Source.Reference.Locator); err != nil {
+			return err
+		}
+	}
 	if !context.ID.IsV7() || !context.GraphID.IsV7() || !context.CreatedBy.IsV7() || !context.CreatedByAgent.IsV7() {
 		return fieldErrorf("context_id", "컨텍스트, 그래프, 계정과 에이전트 식별자는 UUIDv7이어야 한다")
 	}
@@ -401,6 +411,14 @@ func validateCommon(context Context) error {
 	}
 	if !optionalUTC(context.DeletedAt) {
 		return fieldErrorf("deleted_at", "컨텍스트 폐기 시각은 UTC여야 한다")
+	}
+	return nil
+}
+
+// validateText은 저장 가능한 UTF-8 문자열인지 확인한다.
+func validateText(field, value string) error {
+	if !utf8.ValidString(value) || strings.ContainsRune(value, '\x00') {
+		return fieldErrorf(field, "문자열은 유효한 UTF-8이어야 하며 U+0000을 포함할 수 없다")
 	}
 	return nil
 }

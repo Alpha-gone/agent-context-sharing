@@ -127,7 +127,7 @@ func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []mod
 		frontier = append(frontier, start.ID)
 	}
 	edges := make(map[string]HopEdge)
-	for depth := 1; depth <= hops && len(frontier) > 0; depth++ {
+	for depth := 0; depth <= hops && len(frontier) > 0; depth++ {
 		next := make([]model.ID, 0)
 		for _, label := range labels {
 			neighbors, err := source(frontier, label)
@@ -143,6 +143,9 @@ func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []mod
 				if _, found := distances[neighbor.context.ID]; found {
 					continue
 				}
+				if depth == hops {
+					continue
+				}
 				if limit > 0 && len(result.Contexts) == limit {
 					// 경계는 처음 자른 깊이다. 덮어쓰면 마지막 깊이가 남아 어디에서
 					// 잘렸는지 알 수 없다. 상한에 닿아도 남은 label의 질의를 계속 내는
@@ -150,11 +153,11 @@ func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []mod
 					// 반환하라고 확정했기 때문이다. 여기에서 빠져나가면 이미 담은 노드를
 					// 잇는 간선이 빠져 부분 그래프를 복원할 수 없다.
 					if !result.Truncated {
-						result.Truncated, result.Boundary = true, depth
+						result.Truncated, result.Boundary = true, depth+1
 					}
 					continue
 				}
-				distances[neighbor.context.ID] = depth
+				distances[neighbor.context.ID] = depth + 1
 				result.Contexts = append(result.Contexts, neighbor.context)
 				next = append(next, neighbor.context.ID)
 			}
@@ -330,9 +333,9 @@ type hopIncident struct {
 // hopSubgraph는 기준 정점별 인접 간선이다.
 type hopSubgraph map[model.ID][]hopIncident
 
-// fetchHopSubgraph는 시작 노드에서 hops-1홉 안의 정점을 가변 길이 간선으로 모으고 그
-// 정점들의 인접 간선을 같은 질의에서 가져온다. 기준선이 확장하는 frontier는 깊이 hops-1까지
-// 이므로 이 범위의 인접 간선이면 기준선이 묻는 행을 모두 담는다.
+// fetchHopSubgraph는 시작 노드에서 hops홉 안의 정점을 가변 길이 간선으로 모으고 그
+// 정점들의 인접 간선을 같은 질의에서 가져온다. 마지막 깊이의 정점 사이 간선도 필요하므로
+// 이 범위의 인접 간선이면 기준선이 묻는 행을 모두 담는다.
 //
 // 가변 길이 간선에는 graph_id 조건만 건다. AGE 1.8.0의 가변 길이 간선은 label을 하나만 받고
 // 경로 노드 조건을 지원하지 않아, label·관계 상태·삭제 노드 조건을 걸면 여러 label을 거치는
@@ -344,7 +347,7 @@ func (s *Store) fetchHopSubgraph(ctx context.Context, graphID model.ID, startIDs
 		identifiers = append(identifiers, cypherString(startID.String()))
 	}
 	// 상한 없는 탐색은 가변 길이 간선의 상한을 비워 연결 요소 전체를 모은다.
-	span := fmt.Sprintf("*0..%d", hops-1)
+	span := fmt.Sprintf("*0..%d", hops)
 	if hops == math.MaxInt {
 		span = "*0.."
 	}

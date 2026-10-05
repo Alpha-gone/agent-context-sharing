@@ -88,7 +88,7 @@ func TestContentRevisionIncrementsOnSearchVisibleWritesIntegration(t *testing.T)
 	})
 	expect("컨텍스트 폐기와 복구", 2, func() {
 		for _, deleted := range []bool{true, false} {
-			if _, err := database.SetContextDeleted(t.Context(), graphID, second.ID, actorID, deleted); err != nil {
+			if _, err := database.SetContextDeleted(t.Context(), graphID, second.ID, actorID, deleted, 0); err != nil {
 				t.Fatalf("폐기 %v: %v", deleted, err)
 			}
 		}

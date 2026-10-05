@@ -255,7 +255,8 @@ CREATE TABLE IF NOT EXISTS public.request_rate (
 -- 않고 해시를 기본 키로 둔다. consumed_at을 두고 행을 지우지 않는 이유는 재사용과 없는
 -- 코드를 구분하고 폐기할 토큰을 찾기 위해서다. code_challenge_method는 S256만 받으므로
 -- 열로 두지 않는다. issued_token_expires_at은 재사용을 만났을 때 원 토큰을 그 만료
--- 시각까지 정확히 폐기하려고 둔다.
+-- 시각까지 정확히 폐기하려고 둔다. authenticated_at은 검증된 웹 세션의 최초 인증 시각이며
+-- 토큰의 auth_time으로 승계한다. 값이 없는 코드는 교환을 거부한다.
 CREATE TABLE IF NOT EXISTS public.authorization_code (
     code_hash                text        PRIMARY KEY,
     client_id                text        NOT NULL,
@@ -267,7 +268,8 @@ CREATE TABLE IF NOT EXISTS public.authorization_code (
     expires_at               timestamptz NOT NULL,
     consumed_at              timestamptz,
     issued_token_id          text,
-    issued_token_expires_at  timestamptz
+    issued_token_expires_at  timestamptz,
+    authenticated_at         timestamptz
 );
 
 -- 5. 인덱스. 「인덱스」가 정한 인덱스를 만든다.

@@ -42,7 +42,7 @@ func TestWorkerProposesSimilarEventRelationsAfterIndexIntegration(t *testing.T) 
 	if err != nil {
 		t.Fatalf("임베딩 제공자 주소 해석: %v", err)
 	}
-	worker, err := New(database, Config{BaseURL: baseURL, Model: "relation-test", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
+	worker, err := New(database, Config{Provider: "ollama", BaseURL: baseURL, Model: "relation-test", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
 	if err != nil {
 		t.Fatalf("색인 작업자 생성: %v", err)
 	}

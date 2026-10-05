@@ -29,4 +29,4 @@
 
 ## Child DOX Index
 
-- `service/AGENTS.md`: 서비스 색인과 서비스별 요구사항 명세·상세 설계의 공통 작업 계약을 정의한다.
+- `service/AGENTS.md`: 서비스 색인, 서비스별 요구사항 명세·상세 설계와 하위 DOX의 공통 작업 계약을 정의한다.

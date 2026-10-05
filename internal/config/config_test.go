@@ -269,6 +269,7 @@ func validValues() map[string]string {
 		"HTTP_ADDR":                            ":8080",
 		"DATABASE_URL":                         "postgres://user:pass@localhost:5432/app",
 		"AGE_GRAPH_NAME":                       "agent_context",
+		"EMBEDDING_PROVIDER":                   "ollama",
 		"EMBEDDING_BASE_URL":                   "http://localhost:11434",
 		"EMBEDDING_MODEL":                      "bge-m3",
 		"EMBEDDING_VECTOR_TYPE":                "vector",

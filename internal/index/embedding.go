@@ -16,6 +16,18 @@ import (
 
 // Validate는 제공자 호출 전에 주소·인증과 벡터 계약을 검증한다.
 func (cfg Config) Validate() error {
+	if err := cfg.ValidateMetadata(); err != nil {
+		return err
+	}
+	if cfg.Provider == "gemini" && (strings.TrimSpace(cfg.APIKey) == "" || strings.ContainsAny(cfg.APIKey, "\r\n")) {
+		return fmt.Errorf("Gemini 임베딩의 API 키 구성이 올바르지 않다")
+	}
+	return nil
+}
+
+// ValidateMetadata는 읽기 전용 감사에서도 제공자·주소·모델·벡터 계약을 검증한다.
+// 외부 호출을 하지 않는 감사에 API 키를 요구하지 않도록 호출용 인증과 구분한다.
+func (cfg Config) ValidateMetadata() error {
 	if cfg.BaseURL == nil || (cfg.BaseURL.Scheme != "http" && cfg.BaseURL.Scheme != "https") || cfg.BaseURL.Host == "" || cfg.BaseURL.User != nil || cfg.BaseURL.RawQuery != "" || cfg.BaseURL.ForceQuery || cfg.BaseURL.Fragment != "" || cfg.BaseURL.Opaque != "" {
 		return fmt.Errorf("임베딩 제공자 주소가 올바르지 않다")
 	}
@@ -23,13 +35,16 @@ func (cfg Config) Validate() error {
 		return fmt.Errorf("임베딩 모델·저장 타입·차원이 올바르지 않다")
 	}
 	switch cfg.Provider {
-	case "", "ollama":
+	case "ollama":
+		if strings.HasPrefix(cfg.Model, "gemini-embedding-") || strings.EqualFold(strings.TrimSuffix(cfg.BaseURL.Hostname(), "."), "generativelanguage.googleapis.com") {
+			return fmt.Errorf("Ollama에 Gemini 모델 또는 공식 주소를 지정할 수 없다")
+		}
 	case "gemini":
-		if cfg.BaseURL.Scheme != "https" || cfg.Model != "gemini-embedding-2" || cfg.Dimension < 128 || cfg.Dimension > 3072 || strings.TrimSpace(cfg.APIKey) == "" || strings.ContainsAny(cfg.APIKey, "\r\n") {
-			return fmt.Errorf("Gemini 임베딩의 HTTPS·모델·차원·API 키 구성이 올바르지 않다")
+		if cfg.BaseURL.Scheme != "https" || cfg.Model != "gemini-embedding-2" || cfg.Dimension < 128 || cfg.Dimension > 3072 {
+			return fmt.Errorf("Gemini 임베딩의 HTTPS·모델·차원 구성이 올바르지 않다")
 		}
 	default:
-		return fmt.Errorf("임베딩 제공자는 ollama 또는 gemini여야 한다")
+		return fmt.Errorf("임베딩 제공자는 ollama 또는 gemini로 명시해야 한다")
 	}
 	return nil
 }

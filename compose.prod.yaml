@@ -3,8 +3,9 @@
 # 실행: cp .env.prod.example .env 로 값을 채운 뒤
 #   docker compose -f compose.prod.yaml up -d --build
 #
-# TLS는 호스트의 cloudflared(Cloudflare Tunnel)가 끝내고 http://127.0.0.1:${HTTP_PORT}로
-# 전달한다. 애플리케이션 포트는 loopback에만 공개하고 DB는 호스트에 공개하지 않는다.
+# Cloudflare DNS 프록시가 TLS를 종단하고 호스트에는 HTTP로 접속한다(Flexible).
+# 원본 구간은 암호화되지 않는 시험 운영 예외다. OCI·호스트 방화벽의 원본 접근 제한과
+# 보안 제약은 OPERATIONS.md를 따른다. DB는 호스트에 공개하지 않는다.
 # 프로젝트 이름을 고정해 같은 호스트의 개발 구성과 컨테이너·볼륨이 섞이지 않게 한다.
 name: agent_context_prod
 
@@ -70,20 +71,20 @@ services:
     environment:
       <<: *app-environment
       HTTP_ADDR: ":8080"
-      # 호스트 cloudflared가 loopback 공개 포트로 들어오면 컨테이너에는 아래 네트워크의
-      # 게이트웨이 주소가 상대로 보인다. 그 주소 하나만 전달 헤더를 믿는다. Docker의
-      # userland-proxy를 끈 호스트에서는 상대 주소가 달라져 https_required로 거부되며,
-      # 그때는 실제 상대 주소를 확인해 이 값을 좁게 바꾼다.
       TLS_TERMINATION: proxy
-      TRUSTED_PROXY_CIDRS: 10.203.0.1/32
+      # 2026-10-05 공식 https://www.cloudflare.com/ips-v4/ · ips-v6/ 대역.
+      # 실제 접속자가 이 대역이고 X-Forwarded-Proto가 https일 때만 처리한다.
+      # 전체 네트워크나 Docker 게이트웨이를 신뢰하지 않는다. 갱신 시 정적 검사도 맞춘다.
+      TRUSTED_PROXY_CIDRS: "173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,2a06:98c0::/29,2c0f:f248::/32"
       TLS_CERT_FILE: ""
       TLS_KEY_FILE: ""
     ports:
-      - "127.0.0.1:${HTTP_PORT:-8080}:8080"
+      - "0.0.0.0:${HTTP_PORT:-80}:8080"
     depends_on:
       migrate:
         condition: service_completed_successfully
     healthcheck:
+      # 상태 확인 경로만 전달 헤더 없이 내부 HTTP 프로브를 허용한다.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 5s

@@ -7,44 +7,54 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/prod-compose-test.XXXXXX")
 trap 'rm -rf "$test_dir"' EXIT
 
-# 호출자의 변수 치환 값을 쓰지 않는다. 애플리케이션 env_file은 검사 대상 키를 compose가
-# 덮어쓰므로 결과에 영향을 주지 않는다.
+# 호출자의 변수 치환 값과 실제 애플리케이션 env_file을 읽지 않는다.
 compose() {
     docker compose --env-file /dev/null -f "$repo_root/compose.prod.yaml" "$@"
 }
-unset POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB HTTP_PORT
+unset POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB HTTP_PORT TLS_CERT_FILE TLS_KEY_FILE
 
-if compose config --format json > /dev/null 2>&1; then
+if compose config --no-env-resolution --format json > /dev/null 2>&1; then
     echo "운영 구성 검사 실패: POSTGRES_PASSWORD 없이 구성이 만들어졌습니다." >&2
     exit 1
 fi
 
 check_config() {
-    if ! jq -e --arg http_port "$2" '
+    # 공식 대역의 오프라인 스냅샷. 추가·삭제 시 공식 목록과 함께 검토한다.
+    cloudflare_cidrs='173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,2a06:98c0::/29,2c0f:f248::/32'
+    if ! jq -e --arg http_port "$2" --arg cloudflare_cidrs "$cloudflare_cidrs" '
         (.services | keys == ["db", "migrate", "server"]) and
         (.services.db.ports // [] | length == 0) and
         (.services.migrate.ports // [] | length == 0) and
         (.services.server.ports | length == 1) and
-        (.services.server.ports[0] | .host_ip == "127.0.0.1" and .target == 8080 and .published == $http_port) and
+        (.services.server.ports[0] | .host_ip == "0.0.0.0" and .target == 8080 and .published == $http_port) and
         (.services.db.command | index("archive_mode=on") != null) and
+        (.services.db.volumes | length == 2) and
         (.services.db.volumes | map(.target) | index("/var/lib/postgresql/wal_archive") != null) and
         (.services.server.environment.TLS_TERMINATION == "proxy") and
-        (.services.server.environment.TRUSTED_PROXY_CIDRS == "10.203.0.1/32") and
+        (.services.server.environment.TRUSTED_PROXY_CIDRS | split(",") | sort == ($cloudflare_cidrs | split(",") | sort)) and
+        (.services.server.environment.TLS_CERT_FILE == "") and
+        (.services.server.environment.TLS_KEY_FILE == "") and
+        (.services.server.volumes // [] | length == 0) and
+        (.services.migrate.volumes // [] | length == 0) and
+        (.services.server.healthcheck.test == ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]) and
         (.services.server.environment.DATABASE_URL | startswith("postgres://prod_compose_test:prod_compose_test@db:5432/")) and
         (.networks.default.ipam.config[0] | .subnet == "10.203.0.0/24" and .gateway == "10.203.0.1")
     ' "$1" > /dev/null; then
-        echo "운영 구성 검사 실패: 공개 포트, 신뢰 프록시 또는 WAL 보관을 확인하십시오." >&2
+        echo "운영 구성 검사 실패: 공개 포트, Cloudflare 신뢰 프록시 또는 WAL 보관을 확인하십시오." >&2
         return 1
     fi
 }
 
 export POSTGRES_USER=prod_compose_test POSTGRES_PASSWORD=prod_compose_test
-compose config --format json > "$test_dir/default.json"
-check_config "$test_dir/default.json" 8080
+# 원본 인증서·키가 없어도 프록시 종단 구성은 유효해야 한다.
+compose config --no-env-resolution --format json > "$test_dir/default.json"
+check_config "$test_dir/default.json" 80
 export HTTP_PORT=18080
-compose config --format json > "$test_dir/port.json"
+export TLS_TERMINATION=direct TRUSTED_PROXY_CIDRS='0.0.0.0/0,::/0'
+export TLS_CERT_FILE="$test_dir/unused-cert.pem" TLS_KEY_FILE="$test_dir/unused-key.pem"
+compose config --no-env-resolution --format json > "$test_dir/port.json"
 check_config "$test_dir/port.json" 18080
 
 grep -Eq '^FROM golang:1[.]27[.]1-trixie@sha256:3b77fc618ec235a1ab412de7737f120dd507c57e8d87de4cbb7994fb94275ed5 AS build$' "$repo_root/Dockerfile.server"
 grep -Eq '^FROM alpine:3[.]23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0$' "$repo_root/Dockerfile.server"
-echo "운영 구성 검사 통과: 공개 범위, 신뢰 프록시, WAL 보관과 버전 고정"
+echo "운영 구성 검사 통과: 공개 범위, Cloudflare 신뢰 프록시·HTTP 상태 확인, WAL 보관과 버전 고정"

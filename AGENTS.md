@@ -34,6 +34,7 @@
 ## Hierarchy
 
 - 루트 `AGENTS.md`는 저장소 전체 규칙, 사용자 선호, 루트 설정 파일, top-level Child DOX Index를 소유한다.
+- 루트 `README.md`는 프로젝트 개요와 개발 시작 방법을, `OPERATIONS.md`는 운영 구성 기반 서버 시험 운영 절차를 소유한다. 서비스 동작의 정본은 각 서비스의 요구사항·설계이며, 두 안내 문서는 실행 구성과 정본을 대조하여 유지한다.
 
 ## Child Doc Shape
 
@@ -84,12 +85,13 @@
 - 패키지 배치는 해당 서비스 `SDD.md`의 「패키지 경계」를 따른다. 그 표에 없는 코드는 마이그레이션 실행기처럼 애플리케이션 밖의 도구뿐이며, 도구는 각 모듈의 `cmd/`와 `internal/`에 둔다.
 - 배포 구성 값은 환경 변수로 받고 목록을 개발 기본값은 `.env.example`, 운영 예시는 `.env.prod.example`에 함께 유지한다. `SDD.md`의 「배포 구성」에 없는 값을 새로 열지 않는다.
 - 개발 환경은 `compose.dev.yaml`, 운영 배포는 `compose.prod.yaml`이 소유하며 Compose는 항상 `-f`로 파일을 지정해 실행한다. DB 이미지 `Dockerfile`과 기동 래퍼는 둘이 공용하고, 애플리케이션 이미지 `Dockerfile.server`는 운영 구성이 쓴다. 세부 계약은 서버 `SDD.md`의 「개발·운영 환경 경계」를 따른다.
-- 개발 구성의 DB·Ollama 호스트 포트는 `127.0.0.1`에만 공개하며 환경 변수는 포트 번호만 바꾼다. 운영 구성은 DB를 호스트에 공개하지 않고 애플리케이션만 `127.0.0.1`에 공개하며 Ollama와 WAL 자동 정리를 두지 않는다.
+- 개발 구성의 DB·Ollama 호스트 포트는 `127.0.0.1`에만 공개하며 환경 변수는 포트 번호만 바꾼다. 운영 구성은 Cloudflare DNS 프록시가 TLS를 종단하는 시험 배치로 애플리케이션만 IPv4 `0.0.0.0`의 HTTP 포트에 공개하고 DB는 호스트에 공개하지 않으며 Ollama와 WAL 자동 정리를 두지 않는다. 서버는 공식 Cloudflare 접속 대역의 HTTPS 전달 헤더만 신뢰하며 인증서·키를 마운트하지 않는다. 평문 원본 구간은 SRS의 시험 운영 예외이며 토큰 전송 보호를 충족하지 않는다. 원본 방화벽과 Cloudflare `Flexible` 설정은 운영자가 별도로 적용한다.
 - 개발 기본 기동은 DB·WAL 정리만 시작하며 비교·복귀용 Ollama는 `docker compose -f compose.dev.yaml --profile ollama up -d ollama`로 명시적으로 기동한다. 임베딩 제공자는 `EMBEDDING_PROVIDER=ollama|gemini`로 반드시 명시하고 서버·평가·감사에서 기동 전에 검증한다.
 - 이미지 태그·digest와 pgvector 패키지의 전체 버전을 고정하고 판을 올릴 때 검증 기대값도 함께 갱신한다.
 - `test-dev-compose.sh`는 기본 기동의 Ollama 제외, 명시적 profile, 기본·재정의 포트와 버전 고정을 검사하며 Docker Compose·`jq`가 필요하다. `--runtime`은 `curl`도 사용하여 별도 프로젝트·볼륨에서 캐시 없는 빌드와 기본·profile 기동을 검증한다. 기존 `.env`·개발 컨테이너·볼륨은 사용하거나 변경하지 않는다.
-- `test-prod-compose.sh`는 운영 구성의 공개 범위, 신뢰 프록시, WAL 보관과 베이스 이미지 고정을 정적으로 검사하며 Docker Compose·`jq`가 필요하다. 이미지를 빌드하거나 컨테이너를 띄우지 않는다.
+- `test-prod-compose.sh`는 운영 구성의 공개 범위, Cloudflare 신뢰 프록시·인증서 미사용·HTTP 상태 확인, WAL 보관과 베이스 이미지 고정을 정적으로 검사하며 Docker Compose·`jq`가 필요하다. 실제 `.env`를 해석하거나 이미지를 빌드하거나 컨테이너를 띄우지 않는다.
 - DB 기동 래퍼 `docker-db-entrypoint.sh`는 볼륨 마운트 뒤 WAL 보관 디렉터리를 준비하며, `test-wal-archive.sh`와 `compose.wal-test.yaml`은 기존 환경·비밀 설정을 사용하지 않는 격리 회귀 시험을 소유한다.
+- `client-setup.sh`는 참여자용 클라이언트 빌드, 토큰·키가 없는 `out/client.env` 생성, `doctor` 실행과 호스트 등록 정보 출력만 묶으며 `jq`가 필요하다. 구성 값 검증은 클라이언트 `config.Load`에 맡기고 별도 규칙을 두지 않는다.
 - 개발 환경을 처음부터 다시 만들 때는 `docker compose -f compose.dev.yaml down -v`로 볼륨을 지운 뒤 다시 올린다.
 - 코드를 바꾸면 서버는 저장소 루트에서, 클라이언트는 `client/`에서 각각 `go build ./...`, `go vet ./...`를 실행하고 저장소 루트에서 `gofmt -l .`을 실행한다. 중첩 모듈은 루트의 `go build ./...`에 포함되지 않는다.
 - 테스트는 `SDD.md`의 「테스트 전략」을 따른다. 데이터베이스가 필요한 테스트는 `TEST_DATABASE_URL`로 접속 정보를 받고 없으면 건너뛴다.

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"agent_context_sharing/internal/migrate"
-	"agent_context_sharing/migrations"
 )
 
 // TestAllRecordedRenderValuesPreserveChecksums은 치환 값 변경과 파일 변조를 구분한다.
@@ -56,7 +55,7 @@ func TestPrepareConfigurationChangeKeepsAppliedHistoryIntegration(t *testing.T) 
 	pool, _ := isolatedMigrationDatabase(t)
 	files := make(fstest.MapFS)
 	for _, name := range []string{"001_init.sql", "007_embedding_dimensions.sql"} {
-		data, err := migrations.FS.ReadFile(name)
+		data, err := readMigration(name)
 		if err != nil {
 			t.Fatal(err)
 		}

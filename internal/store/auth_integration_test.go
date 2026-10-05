@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"os"
@@ -9,7 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"agent_context_sharing/internal/migrate"
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/migrations"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestReserveDPoPProofIntegration은 같은 키·proof 식별자를 동시에 한 번만 예약하고,
@@ -128,7 +133,10 @@ func TestUpdatePasswordHashIfMatchesIntegration(t *testing.T) {
 
 // TestSigningKeyIntegration은 JWT 헤더의 kid로 검증 키 하나만 읽는 경로를 확인한다.
 func TestSigningKeyIntegration(t *testing.T) {
-	store := newIntegrationStore(t)
+	store := newSigningKeyIntegrationStore(t)
+	if _, err := store.ActiveSigningKey(t.Context()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("초기 활성 서명 키 조회 = %v, want ErrNotFound", err)
+	}
 	key := SigningKey{
 		ID:         "key-" + newTestID(t).String(),
 		Algorithm:  "ES256",
@@ -150,13 +158,14 @@ func TestSigningKeyIntegration(t *testing.T) {
 	if _, err := store.SigningKey(t.Context(), "missing-"+key.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("없는 서명 키 조회 = %v, want ErrNotFound", err)
 	}
-	if _, err := store.ActiveSigningKey(t.Context()); errors.Is(err, ErrNotFound) {
-		active := key
-		active.ID = "active-" + newTestID(t).String()
-		active.State = "active"
-		if err := store.CreateSigningKey(t.Context(), active); err != nil {
-			t.Fatalf("초기 활성 서명 키 생성: %v", err)
-		}
+	active := key
+	active.ID = "active-" + newTestID(t).String()
+	active.State = "active"
+	if err := store.CreateSigningKey(t.Context(), active); err != nil {
+		t.Fatalf("초기 활성 서명 키 생성: %v", err)
+	}
+	if stored, err := store.ActiveSigningKey(t.Context()); err != nil || stored.ID != active.ID {
+		t.Fatalf("활성 서명 키 조회 = %q, %v, want %q", stored.ID, err, active.ID)
 	}
 	duplicate := key
 	duplicate.ID = "duplicate-active-" + newTestID(t).String()
@@ -169,21 +178,17 @@ func TestSigningKeyIntegration(t *testing.T) {
 // TestRotateSigningKeyIntegration은 동시에 시작한 회전 중 하나만 활성 키를 만들고,
 // 충돌한 요청은 저장 실패가 아닌 활성 키 경합으로 구분하는지 확인한다.
 func TestRotateSigningKeyIntegration(t *testing.T) {
-	store := newIntegrationStore(t)
-	if _, err := store.ActiveSigningKey(t.Context()); errors.Is(err, ErrNotFound) {
-		key := SigningKey{
-			ID:         "active-" + newTestID(t).String(),
-			Algorithm:  "ES256",
-			PublicKey:  "test-public-key",
-			PrivateKey: "test-private-key",
-			State:      "active",
-			CreatedAt:  time.Now().UTC(),
-		}
-		if err := store.CreateSigningKey(t.Context(), key); err != nil {
-			t.Fatalf("초기 활성 서명 키 생성: %v", err)
-		}
-	} else if err != nil {
-		t.Fatalf("활성 서명 키 조회: %v", err)
+	store := newSigningKeyIntegrationStore(t)
+	initial := SigningKey{
+		ID:         "active-" + newTestID(t).String(),
+		Algorithm:  "ES256",
+		PublicKey:  "test-public-key",
+		PrivateKey: "test-private-key",
+		State:      "active",
+		CreatedAt:  time.Now().UTC(),
+	}
+	if err := store.CreateSigningKey(t.Context(), initial); err != nil {
+		t.Fatalf("초기 활성 서명 키 생성: %v", err)
 	}
 
 	connection, err := store.pool.Acquire(t.Context())
@@ -254,6 +259,54 @@ func TestRotateSigningKeyIntegration(t *testing.T) {
 	if succeeded != 1 || conflicted != 1 {
 		t.Fatalf("동시 서명 키 회전 성공=%d, 경합=%d, want 각각 1", succeeded, conflicted)
 	}
+	if stored, err := store.SigningKey(t.Context(), initial.ID); err != nil || stored.State != "retired" {
+		t.Fatalf("기존 서명 키 은퇴 = %q, %v, want retired", stored.State, err)
+	}
+	if active, err := store.ActiveSigningKey(t.Context()); err != nil || !strings.HasPrefix(active.ID, "rotate-") {
+		t.Fatalf("회전한 활성 서명 키 = %q, %v, want rotate-*", active.ID, err)
+	}
+}
+
+// newSigningKeyIntegrationStore는 공유 DB의 활성 키를 건드리지 않고 정식 마이그레이션을
+// 적용한 시험별 DB를 사용한다. 실패한 시험도 자신이 만든 DB만 정리한다.
+func newSigningKeyIntegrationStore(t *testing.T) *Store {
+	t.Helper()
+	admin := newIntegrationStore(t)
+	name := "signing_key_test_" + strings.ReplaceAll(newTestID(t).String(), "-", "")
+	identifier := pgx.Identifier{name}.Sanitize()
+	if _, err := admin.pool.Exec(t.Context(), "CREATE DATABASE "+identifier); err != nil {
+		t.Fatalf("서명 키 시험 DB 생성(DB 생성 권한 필요): %v", err)
+	}
+	// 연결 설정이나 마이그레이션 준비가 실패해도 DB를 정리하도록 생성 직후 등록한다.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := admin.pool.Exec(ctx, "DROP DATABASE "+identifier); err != nil {
+			t.Errorf("서명 키 시험 DB 정리: %v", err)
+		}
+	})
+	config := admin.pool.Config().Copy()
+	config.ConnConfig.Database = name
+	pool, err := pgxpool.NewWithConfig(t.Context(), config)
+	if err != nil {
+		t.Fatalf("서명 키 시험 연결 풀 준비: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	loaded, err := migrate.Load(migrations.FS, ".", migrate.Config{
+		GraphName: admin.graphName, VectorType: "vector", VectorDim: 768,
+	})
+	if err != nil {
+		t.Fatalf("서명 키 시험 마이그레이션 읽기: %v", err)
+	}
+	if err := migrate.EnsureHistory(t.Context(), pool); err != nil {
+		t.Fatalf("서명 키 시험 마이그레이션 이력 준비: %v", err)
+	}
+	for _, migration := range loaded {
+		if err := migrate.Apply(t.Context(), pool, migration); err != nil {
+			t.Fatalf("서명 키 시험 마이그레이션 적용: %v", err)
+		}
+	}
+	return &Store{pool: pool, graphName: admin.graphName}
 }
 
 // TestPermissionIntegration은 유효 등급과 소유 그래프 수 질의를 실제 데이터베이스에서

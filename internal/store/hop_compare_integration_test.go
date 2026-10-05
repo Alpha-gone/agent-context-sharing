@@ -76,7 +76,7 @@ func createHopSample(t *testing.T, database *Store, label string) hopSample {
 			t.Fatalf("%s→%s 제안: %v", relation.from, relation.to, err)
 		}
 	}
-	if _, err := database.SetContextDeleted(t.Context(), graphID, dx.ID, actorID, true); err != nil {
+	if _, err := database.SetContextDeleted(t.Context(), graphID, dx.ID, actorID, true, 0); err != nil {
 		t.Fatalf("중간 노드 삭제: %v", err)
 	}
 	sample.deleted = dx.ID

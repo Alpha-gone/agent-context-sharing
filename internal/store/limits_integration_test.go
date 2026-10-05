@@ -221,7 +221,7 @@ func TestWebContextDeletionAuditSharesTransactionIntegration(t *testing.T) {
 		t.Fatalf("원천 생성: %v", err)
 	}
 
-	if _, err := database.SetContextDeleted(t.Context(), graphID, source.ID, actorID, true); err != nil {
+	if _, err := database.SetContextDeleted(t.Context(), graphID, source.ID, actorID, true, 0); err != nil {
 		t.Fatalf("웹 컨텍스트 삭제: %v", err)
 	}
 	var audits int
@@ -233,7 +233,7 @@ func TestWebContextDeletionAuditSharesTransactionIntegration(t *testing.T) {
 	}
 
 	// 상태 전이가 거부되면 감사 기록도 남지 않아야 한다.
-	if _, err := database.SetContextDeleted(t.Context(), graphID, source.ID, actorID, true); err == nil {
+	if _, err := database.SetContextDeleted(t.Context(), graphID, source.ID, actorID, true, 0); err == nil {
 		t.Fatal("이미 삭제된 컨텍스트의 재삭제가 허용됐다")
 	}
 	if err := database.pool.QueryRow(t.Context(), `SELECT count(*) FROM public.web_audit_log WHERE target_context_id = $1 AND action = 'delete'`, source.ID.String()).Scan(&audits); err != nil {

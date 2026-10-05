@@ -511,7 +511,8 @@ func (s *Store) SetGraphDeleted(ctx context.Context, graphID, actorID model.ID, 
 }
 
 // SetContextDeleted는 웹에서 요청한 컨텍스트 상태 변경과 웹 감사 기록을 같은 트랜잭션에 남긴다.
-func (s *Store) SetContextDeleted(ctx context.Context, graphID, contextID, actorID model.ID, deleted bool) (model.Context, error) {
+// maxStoredChars는 요청 계정 플랜의 저장량 한도이며 0이면 제한하지 않는다.
+func (s *Store) SetContextDeleted(ctx context.Context, graphID, contextID, actorID model.ID, deleted bool, maxStoredChars int64) (model.Context, error) {
 	if !graphID.IsV7() || !contextID.IsV7() || !actorID.IsV7() {
 		return model.Context{}, fmt.Errorf("컨텍스트 웹 상태 변경 인자가 올바르지 않다")
 	}
@@ -521,7 +522,7 @@ func (s *Store) SetContextDeleted(ctx context.Context, graphID, contextID, actor
 	}
 	audit := webAuditRecord{TargetKind: "web_delete", Action: action, ActorID: actorID, GraphID: graphID, TargetContextID: contextID}
 	// 웹 화면의 삭제·복구는 MCP 연산이 아니므로 요청 빈도 한도의 대상이 아니다.
-	return s.changeContextDeletion(ctx, graphID, contextID, nil, &audit, WriteLimits{}, deleted)
+	return s.changeContextDeletion(ctx, graphID, contextID, nil, &audit, WriteLimits{StoredCharsPerGraph: maxStoredChars}, deleted)
 }
 
 // ListRestoreEligibleGraphs는 요청 계정이 소유자였던 자동 삭제 그래프만 반환한다.

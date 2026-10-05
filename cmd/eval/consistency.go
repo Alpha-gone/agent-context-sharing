@@ -368,7 +368,7 @@ func (scenario *consistencyScenario) write(ctx context.Context, state *writerSta
 	case 0:
 		target := (step / 3) % len(scenario.toggled)
 		discarded := !state.discarded[target]
-		if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, scenario.toggled[target], scenario.graph.AccountID, discarded); err != nil {
+		if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, scenario.toggled[target], scenario.graph.AccountID, discarded, 0); err != nil {
 			return err
 		}
 		state.discarded[target] = discarded
@@ -397,7 +397,7 @@ func (scenario *consistencyScenario) write(ctx context.Context, state *writerSta
 		return nil
 	default:
 		if state.temporary != nil {
-			if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, *state.temporary, scenario.graph.AccountID, true); err != nil {
+			if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, *state.temporary, scenario.graph.AccountID, true, 0); err != nil {
 				return err
 			}
 			state.temporary = nil
@@ -485,14 +485,14 @@ func (scenario *consistencyScenario) measure(ctx context.Context, service *searc
 // 실패를 호출자에게 전달해 상태가 다른 다음 구성의 측정을 막는다.
 func (scenario *consistencyScenario) reset(ctx context.Context, state *writerState) error {
 	if state.temporary != nil {
-		if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, *state.temporary, scenario.graph.AccountID, true); err != nil {
+		if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, *state.temporary, scenario.graph.AccountID, true, 0); err != nil {
 			return fmt.Errorf("임시 파생 폐기: %w", err)
 		}
 		state.temporary = nil
 	}
 	for target, discarded := range state.discarded {
 		if discarded {
-			if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, scenario.toggled[target], scenario.graph.AccountID, false); err != nil {
+			if _, err := scenario.database.SetContextDeleted(ctx, scenario.graph.GraphID, scenario.toggled[target], scenario.graph.AccountID, false, 0); err != nil {
 				return fmt.Errorf("표본 파생 복구: %w", err)
 			}
 			state.discarded[target] = false

@@ -230,7 +230,7 @@ func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersi
 	row := tx.QueryRow(ctx, `
 		UPDATE public.context_graph
 		SET name = $1, description = $2, version = version + 1
-		WHERE graph_id = $3 AND version = $4
+		WHERE graph_id = $3 AND version = $4 AND deleted_at IS NULL
 		RETURNING graph_id, name, description, created_by, created_at, last_activity_at,
 		          grace_started_at, stored_chars, version, deleted_at`,
 		name, nullableString(description), graphID.String(), expectedVersion,
@@ -322,7 +322,7 @@ func nullableString(value string) any {
 // versionConflict은 같은 트랜잭션에서 현재 판 번호를 읽어 충돌 또는 부재를 구분한다.
 func (s *Store) versionConflict(ctx context.Context, tx pgx.Tx, graphID model.ID, expectedVersion int64) error {
 	var current int64
-	err := tx.QueryRow(ctx, `SELECT version FROM public.context_graph WHERE graph_id = $1`, graphID.String()).Scan(&current)
+	err := tx.QueryRow(ctx, `SELECT version FROM public.context_graph WHERE graph_id = $1 AND deleted_at IS NULL`, graphID.String()).Scan(&current)
 	if err == nil {
 		return VersionConflictError{Current: current}
 	}
@@ -332,7 +332,20 @@ func (s *Store) versionConflict(ctx context.Context, tx pgx.Tx, graphID model.ID
 	return fmt.Errorf("현재 그래프 판 번호 조회: %w", err)
 }
 
-// nowUTC는 그래프 활동 시각을 한곳에서 UTC로 만든다.
+// requireActiveGraph는 사용자 쓰기의 활성 상태 판정과 삭제 경합을 직렬화한다.
+func requireActiveGraph(ctx context.Context, tx pgx.Tx, graphID model.ID) error {
+	var found int
+	err := tx.QueryRow(ctx, `SELECT 1 FROM public.context_graph WHERE graph_id = $1 AND deleted_at IS NULL FOR UPDATE`, graphID.String()).Scan(&found)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("활성 그래프 확인: %w", err)
+	}
+	return nil
+}
+
+// nowUTC는 그래프 활동 시각을 한곳에 모은다.
 func nowUTC() time.Time {
 	return time.Now().UTC()
 }

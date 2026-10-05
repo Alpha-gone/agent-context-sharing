@@ -75,7 +75,7 @@ type GraphStore interface {
 	SetTeamDeleted(context.Context, model.ID, model.ID, bool) error
 	DeletionImpact(context.Context, model.ID, model.ID) (model.DeletionImpact, error)
 	SetGraphDeleted(context.Context, model.ID, model.ID, bool) error
-	SetContextDeleted(context.Context, model.ID, model.ID, model.ID, bool) (model.Context, error)
+	SetContextDeleted(context.Context, model.ID, model.ID, model.ID, bool, int64) (model.Context, error)
 	ListOwnedDeletedGraphs(context.Context, model.ID) ([]model.Graph, error)
 	ListRestoreEligibleGraphs(context.Context, model.ID) ([]model.Graph, error)
 	RequestGraphRestore(context.Context, model.ID, model.ID) error
@@ -597,7 +597,7 @@ func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Re
 				server.render(writer, http.StatusBadRequest, "message", pageData{Title: "삭제와 복구", Error: "컨텍스트 식별자가 올바르지 않습니다."})
 				return
 			}
-			if _, err := server.graphs.SetContextDeleted(request.Context(), graphID, contextID, accountID, action == "delete_context"); err != nil {
+			if _, err := server.graphs.SetContextDeleted(request.Context(), graphID, contextID, accountID, action == "delete_context", server.config.Plans.For(accountID).StoredCharactersPerGraph); err != nil {
 				server.render(writer, http.StatusConflict, "message", pageData{Title: "삭제와 복구", Error: "현재 상태에서는 처리할 수 없습니다."})
 				return
 			}

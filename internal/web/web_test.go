@@ -244,7 +244,7 @@ func (fakeGraphStore) DeletionImpact(context.Context, model.ID, model.ID) (model
 	return model.DeletionImpact{}, nil
 }
 func (fakeGraphStore) SetGraphDeleted(context.Context, model.ID, model.ID, bool) error { return nil }
-func (fake *fakeGraphStore) SetContextDeleted(_ context.Context, _, contextID, _ model.ID, deleted bool) (model.Context, error) {
+func (fake *fakeGraphStore) SetContextDeleted(_ context.Context, _, contextID, _ model.ID, deleted bool, _ int64) (model.Context, error) {
 	fake.contextSet, fake.contextState = &contextID, deleted
 	return model.Context{}, nil
 }

@@ -75,8 +75,12 @@ func TestGrantRevokeAvailabilityMatchesMutationIntegration(t *testing.T) {
 			if test.want && err != nil {
 				t.Fatalf("허용한 회수 실패: %v", err)
 			}
-			if !test.want && !errors.Is(err, ErrLastOwner) {
-				t.Fatalf("차단한 회수=%v, 기대 ErrLastOwner", err)
+			wantErr := ErrLastOwner
+			if !test.directOwner && !test.teamOwner {
+				wantErr = ErrNotFound
+			}
+			if !test.want && !errors.Is(err, wantErr) {
+				t.Fatalf("차단한 회수=%v, 기대 %v", err, wantErr)
 			}
 		})
 	}

@@ -38,6 +38,9 @@ func TestExpiredCodeReuseReportsUseIntegration(t *testing.T) {
 		t.Fatalf("소비 표시: %v", err)
 	}
 
+	if _, err := database.CleanupExpiredAuthorizationCodes(t.Context(), now); err != nil {
+		t.Fatalf("인가 코드 정리: %v", err)
+	}
 	for name, call := range map[string]func() error{
 		"교환 조회": func() error {
 			_, err := database.AuthorizationCodeForExchange(t.Context(), hash, now)

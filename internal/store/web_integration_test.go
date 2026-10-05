@@ -220,9 +220,7 @@ func TestListOwnedDeletedGraphsSeparatesDeletePaths(t *testing.T) {
 	autoDeleted := createTestGraph(t, store, actorID)
 	// 소유자 복구 목록은 소유자 등급으로 판정하므로 등급을 먼저 부여한다.
 	for _, graphID := range []model.ID{ownDeleted, autoDeleted} {
-		if err := store.GrantGraph(t.Context(), graphID, actorID, actorID, GrantSubjectAccount, model.GraphGradeOwner); err != nil {
-			t.Fatalf("소유자 등급 부여: %v", err)
-		}
+		grantAccount(t, store, graphID, actorID, model.GraphGradeOwner)
 	}
 
 	if err := store.SetGraphDeleted(t.Context(), ownDeleted, actorID, true); err != nil {
@@ -288,9 +286,7 @@ func TestGraphGrantsAndDeletionImpactExecute(t *testing.T) {
 	createTestAccount(t, store, memberID)
 	graphID := createTestGraph(t, store, ownerID)
 
-	if err := store.GrantGraph(t.Context(), graphID, ownerID, ownerID, GrantSubjectAccount, model.GraphGradeOwner); err != nil {
-		t.Fatalf("소유자 등급 부여: %v", err)
-	}
+	grantAccount(t, store, graphID, ownerID, model.GraphGradeOwner)
 	team, err := store.CreateTeam(t.Context(), ownerID, "검사 팀 "+newTestID(t).String())
 	if err != nil {
 		t.Fatalf("팀 생성: %v", err)

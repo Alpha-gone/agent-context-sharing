@@ -227,6 +227,9 @@ func (s *Service) ValidateRedirectTarget(request AuthorizeRequest) (*url.URL, er
 	if err != nil {
 		return nil, fmt.Errorf("redirect_uri 해석: %w", err)
 	}
+	if redirect.String() != request.RedirectURI {
+		return nil, fmt.Errorf("허용되지 않은 redirect_uri")
+	}
 	if !slices.ContainsFunc(allowed, func(candidate *url.URL) bool { return redirectMatches(candidate, redirect) }) {
 		return nil, fmt.Errorf("허용되지 않은 redirect_uri")
 	}
@@ -359,6 +362,9 @@ func (s *Service) Verify(ctx context.Context, raw, audience string) (model.ID, T
 // 폐기 목록을 읽으므로 이어 부르면 요청마다 그 조회가 두 배가 된다. 갱신 조건에 들지
 // 않거나 발급이 실패하면 renewed가 비고, 「토큰 갱신」대로 요청 자체는 정상 처리한다.
 func (s *Service) VerifyAndRenew(ctx context.Context, request DPoPRequest) (model.ID, Token, error) {
+	if request.Target != s.config.Resource {
+		return model.ID{}, Token{}, ErrInvalidCredential
+	}
 	claims, err := s.verifiedClaims(ctx, request.AccessToken, request.Target)
 	if err != nil {
 		return model.ID{}, Token{}, err
@@ -366,9 +372,6 @@ func (s *Service) VerifyAndRenew(ctx context.Context, request DPoPRequest) (mode
 	id, err := model.ParseID(claims.Subject)
 	if err != nil {
 		return model.ID{}, Token{}, ErrInvalidCredential
-	}
-	if request.Target != s.config.Resource {
-		return id, Token{}, nil
 	}
 	if _, err := s.verifyDPoPProof(ctx, request, claims.Confirmation.JWKThumbprint, true); err != nil {
 		return model.ID{}, Token{}, err
@@ -485,9 +488,12 @@ func (s *Service) RotateSigningKey(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// 새 키는 그 키로 서명된 토큰이 처음 도착할 때 캐시에 들어오고, 은퇴한 키는 검증에
-	// 계속 쓰이므로 캐시에서 지우지 않는다.
-	return s.store.RotateSigningKey(ctx, key)
+	if err := s.store.RotateSigningKey(ctx, key); err != nil {
+		return err
+	}
+	// 이 인스턴스의 새 키는 부재 판정의 유효기간을 기다리지 않고 다시 읽는다.
+	s.cache.invalidateKeys()
+	return nil
 }
 
 type tokenClaims struct {
@@ -569,13 +575,18 @@ func newSigningKey() (store.SigningKey, error) {
 }
 
 func redirectMatches(allowed, actual *url.URL) bool {
-	if allowed == nil || actual == nil || allowed.Scheme != actual.Scheme || allowed.Path != actual.Path || allowed.RawQuery != actual.RawQuery || allowed.Fragment != actual.Fragment || !strings.EqualFold(allowed.Hostname(), actual.Hostname()) {
+	if allowed == nil || actual == nil || allowed.User != nil || actual.User != nil {
 		return false
 	}
 	if ip := net.ParseIP(allowed.Hostname()); ip != nil && ip.IsLoopback() {
-		return true
+		if allowed.Hostname() != actual.Hostname() {
+			return false
+		}
+		withoutPort := actual.Clone()
+		withoutPort.Host = allowed.Host
+		return allowed.String() == withoutPort.String()
 	}
-	return allowed.Port() == actual.Port()
+	return allowed.String() == actual.String()
 }
 
 func secret() (string, error) {

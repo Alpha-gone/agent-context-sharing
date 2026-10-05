@@ -54,11 +54,32 @@ func TestRenewedTokenTravelsInResponseHeader(t *testing.T) {
 	if got := recorder.Header().Get(renewedTokenHeader); got != "renewed.jwt.value" {
 		t.Fatalf("%s = %q, want renewed.jwt.value", renewedTokenHeader, got)
 	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("갱신 응답 Cache-Control = %q, 기대 no-store", got)
+	}
 	if got := recorder.Header().Get(renewedExpiresHeader); got != strconv.FormatInt(expires.Unix(), 10) {
 		t.Fatalf("%s = %q, want %d", renewedExpiresHeader, got, expires.Unix())
 	}
 	if body := recorder.Body.String(); body != `{"result":{}}` {
 		t.Fatalf("응답 본문 = %s, 갱신 토큰이 본문에 섞였다", body)
+	}
+}
+
+func TestRenewalHeadersPreventCachingDownstreamErrors(t *testing.T) {
+	verify := verifyWithRenewal(fakeRenewer{accountID: model.ID{1}, renewed: authz.Token{Raw: "renewed.jwt.value", ExpiresAt: time.Now().Add(time.Hour)}})
+	inner := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if _, err := verify(request.Context(), mcp.Authentication{AccessToken: "token", Target: "https://service.test/mcp"}); err != nil {
+			t.Fatal(err)
+		}
+		// 인증·갱신 뒤 전송 또는 도메인 처리가 실패해도 토큰 헤더는 보관할 수 없다.
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		writer.Write([]byte(`{"error":"invalid request"}`))
+	})
+	response := httptest.NewRecorder()
+	withRenewalHeader(inner).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if response.Code != http.StatusBadRequest || response.Header().Get(renewedTokenHeader) == "" || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("갱신 후 실패 응답 = %d, 헤더 %v", response.Code, response.Header())
 	}
 }
 

@@ -163,6 +163,7 @@ type fakeGraphStore struct {
 	truncated          bool
 	cursor             string
 	revokeErr          error
+	grantErr           error
 	requestRestoreErr  error
 	operatorRestoreErr error
 	// outside에는 목록에는 실리지 않지만 그래프에는 있는 컨텍스트를 둔다.
@@ -225,7 +226,7 @@ func (fakeGraphStore) AccountByLoginID(context.Context, string) (store.Account, 
 }
 func (fake *fakeGraphStore) GrantGraph(context.Context, model.ID, model.ID, model.ID, store.GrantSubjectType, model.GraphGrade) error {
 	fake.granted = true
-	return nil
+	return fake.grantErr
 }
 func (fake fakeGraphStore) RevokeGraphGrantWithAudit(context.Context, model.ID, model.ID, model.ID, store.GrantSubjectType) error {
 	return fake.revokeErr

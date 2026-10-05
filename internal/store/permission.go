@@ -26,8 +26,17 @@ const (
 // 화면과 연산의 가용성은 이 계산과 별도로 각 조회·처리 경로가 판정한다. 부여가 하나도
 // 없으면 집계가 NULL을 돌려주므로 등급을 nullable로 받아 부재와 구분한다.
 func (s *Store) EffectiveGrade(ctx context.Context, graphID, accountID model.ID) (model.GraphGrade, bool, error) {
+	return effectiveGrade(ctx, s.pool, graphID, accountID)
+}
+
+type gradeQueryer interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+// effectiveGrade는 조회와 그래프 잠금 뒤의 인가 재확인에 같은 등급 계산을 적용한다.
+func effectiveGrade(ctx context.Context, queryer gradeQueryer, graphID, accountID model.ID) (model.GraphGrade, bool, error) {
 	var grade *string
-	err := s.pool.QueryRow(ctx, `
+	err := queryer.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT grade FROM public.graph_grant WHERE graph_id = $1 AND subject_type = 'account' AND subject_id = $2
 			UNION ALL

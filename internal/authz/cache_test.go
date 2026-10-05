@@ -73,40 +73,55 @@ func TestRevocationReloadCannotUndoLocalRevoke(t *testing.T) {
 	}
 }
 
-func TestRevocationReloadCannotUndoNewerReload(t *testing.T) {
+func TestConcurrentRevocationReloadsAreCoalesced(t *testing.T) {
 	backend := &blockedRevocationStore{memoryStore: newMemoryStore(), started: make(chan struct{}), release: make(chan struct{})}
 	release := sync.OnceFunc(func() { close(backend.release) })
 	t.Cleanup(release)
 	cache := newVerificationCache()
 	now := time.Now().UTC()
-	result := make(chan bool, 1)
-	go func() { revoked, _ := cache.isRevoked(t.Context(), backend, "revoked", now); result <- revoked }()
+	cache.loadedAt = now.Add(-revocationTTL)
+	cache.revoked["expired"] = struct{}{}
+	if err := backend.RevokeToken(t.Context(), "revoked", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 20)
+	var workers sync.WaitGroup
+	for range 20 {
+		workers.Go(func() {
+			revoked, err := cache.isRevoked(t.Context(), backend, "revoked", now)
+			if err == nil && !revoked {
+				err = errors.New("최신 폐기 목록의 토큰을 거부하지 않았다")
+			}
+			result <- err
+		})
+	}
 	select {
 	case <-backend.started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("캐시 조회가 시작되지 않았다")
 	}
-	if err := backend.RevokeToken(t.Context(), "revoked", now.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if revoked, err := cache.isRevoked(t.Context(), backend, "revoked", now.Add(time.Second)); err != nil || !revoked {
-		t.Fatalf("최신 조회가 폐기를 읽지 못했다: %v", err)
-	}
 	release()
-	if revoked := <-result; !revoked {
-		t.Error("늦게 끝난 이전 조회가 최신 폐기를 덮어썼다")
+	workers.Wait()
+	close(result)
+	for err := range result {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	if revoked, err := cache.isRevoked(t.Context(), backend, "revoked", now.Add(2*time.Second)); err != nil || !revoked {
-		t.Fatalf("최신 캐시가 보존되지 않았다: %v", err)
+	if reads := backend.reads.Load(); reads != 1 {
+		t.Fatalf("동시 폐기 목록 조회 = %d, 기대 1", reads)
+	}
+	if _, found := cache.revoked["expired"]; found {
+		t.Fatal("새 목록 적재 뒤 만료된 캐시 항목이 남았다")
 	}
 	if revoked, err := cache.isRevoked(t.Context(), backend, "revoked", now.Add(2*time.Hour)); err != nil || revoked {
 		t.Fatalf("만료된 폐기 항목이 정리되지 않았다: %v", err)
 	}
 }
 
-func (s *countingStore) SigningKey(ctx context.Context, keyID string) (store.SigningKey, error) {
+func (s *countingStore) SigningKeys(ctx context.Context) ([]store.SigningKey, error) {
 	s.signingKeyReads.Add(1)
-	return s.memoryStore.SigningKey(ctx, keyID)
+	return s.memoryStore.SigningKeys(ctx)
 }
 
 func (s *countingStore) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, error) {
@@ -134,7 +149,7 @@ func TestVerificationReadsKeysAndRevocationsFromCache(t *testing.T) {
 			t.Fatalf("토큰 검증: %v", err)
 		}
 	}
-	// 서명 키는 kid마다 한 번만 읽는다.
+	// 서명 키 목록은 한 번만 읽는다.
 	if reads := backend.signingKeyReads.Load(); reads != 1 {
 		t.Fatalf("서명 키 조회 = %d회, want 1회", reads)
 	}
@@ -214,11 +229,11 @@ type failingStore struct {
 
 var errStoreUnavailable = errors.New("데이터베이스에 닿을 수 없다")
 
-func (s *failingStore) SigningKey(ctx context.Context, keyID string) (store.SigningKey, error) {
+func (s *failingStore) SigningKeys(ctx context.Context) ([]store.SigningKey, error) {
 	if s.signingKeyFails {
-		return store.SigningKey{}, errStoreUnavailable
+		return nil, errStoreUnavailable
 	}
-	return s.memoryStore.SigningKey(ctx, keyID)
+	return s.memoryStore.SigningKeys(ctx)
 }
 
 func (s *failingStore) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, error) {

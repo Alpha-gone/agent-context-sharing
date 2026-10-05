@@ -198,9 +198,11 @@ func (s *Store) CleanupExpiredRevocations(ctx context.Context, now time.Time) (i
 	return s.deleteBefore(ctx, "폐기 목록 정리", `DELETE FROM public.revoked_token WHERE expires_at <= $1`, now)
 }
 
-// CleanupExpiredAuthorizationCodes는 만료된 인가 코드 행을 지운다.
+// CleanupExpiredAuthorizationCodes는 미소비 코드와 재사용 감지의 보존 기간이 끝난 행을 지운다.
 func (s *Store) CleanupExpiredAuthorizationCodes(ctx context.Context, now time.Time) (int, error) {
-	return s.deleteBefore(ctx, "인가 코드 정리", `DELETE FROM public.authorization_code WHERE expires_at <= $1`, now)
+	return s.deleteBefore(ctx, "인가 코드 정리", `DELETE FROM public.authorization_code
+		WHERE (consumed_at IS NULL AND expires_at <= $1)
+		   OR (consumed_at IS NOT NULL AND COALESCE(issued_token_expires_at, issued_at + interval '61 minutes') <= $1)`, now)
 }
 
 // dpopProofCleanupGrace는 인스턴스 사이 시계 차이를 덮는 정리 여유다. iat 허용 창은 요청을

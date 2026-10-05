@@ -43,5 +43,5 @@
 
 ## Child DOX Index
 
-- `agent-context/AGENTS.md`: MCP 기반 에이전트 컨텍스트 관리 서비스와 임베딩 제공자·개발 환경 설계의 로컬 작업 계약을 정의한다.
+- `agent-context/AGENTS.md`: MCP 기반 에이전트 컨텍스트 관리 서비스와 인가 경계·임베딩 제공자·개발 환경 설계의 로컬 작업 계약을 정의한다.
 - `agent-context-client/AGENTS.md`: 에이전트 컨텍스트 MCP 클라이언트 서비스의 로컬 작업 계약을 정의한다.

@@ -31,10 +31,10 @@ func operatorRestoreFixture(t *testing.T, database *Store, formerOwner bool) (mo
 	addTestTeamMember(t, database, teamID, requesterID)
 	grantTeam(t, database, graphID, teamID, model.GraphGradeOwner)
 	if formerOwner {
-		if err := database.GrantGraph(t.Context(), graphID, creatorID, requesterID, GrantSubjectAccount, model.GraphGradeOwner); err != nil {
+		if err := database.GrantGraph(t.Context(), graphID, requesterID, requesterID, GrantSubjectAccount, model.GraphGradeOwner); err != nil {
 			t.Fatalf("소유자 이력 준비: %v", err)
 		}
-		if err := database.RevokeGraphGrantWithAudit(t.Context(), graphID, creatorID, requesterID, GrantSubjectAccount); err != nil {
+		if err := database.RevokeGraphGrantWithAudit(t.Context(), graphID, requesterID, requesterID, GrantSubjectAccount); err != nil {
 			t.Fatalf("직접 소유자 회수: %v", err)
 		}
 	}
@@ -187,9 +187,7 @@ func TestOperatorRestoreKeepsOtherGrantsIntegration(t *testing.T) {
 	createTestAccount(t, database, otherID)
 	// 삭제 후 등급이 다시 연결된 표본에서도 요청자의 직접 등급만 복원한다.
 	for accountID, grade := range map[model.ID]model.GraphGrade{requesterID: model.GraphGradeViewer, otherID: model.GraphGradeEditor} {
-		if err := database.GrantGraph(t.Context(), graphID, operatorID, accountID, GrantSubjectAccount, grade); err != nil {
-			t.Fatalf("복구 전 등급 준비: %v", err)
-		}
+		grantAccount(t, database, graphID, accountID, grade)
 	}
 	if err := database.OperatorRestoreGraph(t.Context(), graphID, operatorID); err != nil {
 		t.Fatalf("기존 등급이 있는 복구: %v", err)

@@ -85,8 +85,9 @@
 - 배포 구성 값은 환경 변수로 받고 목록을 개발 기본값은 `.env.example`, 운영 예시는 `.env.prod.example`에 함께 유지한다. `SDD.md`의 「배포 구성」에 없는 값을 새로 열지 않는다.
 - 개발 환경은 `compose.dev.yaml`, 운영 배포는 `compose.prod.yaml`이 소유하며 Compose는 항상 `-f`로 파일을 지정해 실행한다. DB 이미지 `Dockerfile`과 기동 래퍼는 둘이 공용하고, 애플리케이션 이미지 `Dockerfile.server`는 운영 구성이 쓴다. 세부 계약은 서버 `SDD.md`의 「개발·운영 환경 경계」를 따른다.
 - 개발 구성의 DB·Ollama 호스트 포트는 `127.0.0.1`에만 공개하며 환경 변수는 포트 번호만 바꾼다. 운영 구성은 DB를 호스트에 공개하지 않고 애플리케이션만 `127.0.0.1`에 공개하며 Ollama와 WAL 자동 정리를 두지 않는다.
+- 개발 기본 기동은 DB·WAL 정리만 시작하며 비교·복귀용 Ollama는 `docker compose -f compose.dev.yaml --profile ollama up -d ollama`로 명시적으로 기동한다. 임베딩 제공자는 `EMBEDDING_PROVIDER=ollama|gemini`로 반드시 명시하고 서버·평가·감사에서 기동 전에 검증한다.
 - 이미지 태그·digest와 pgvector 패키지의 전체 버전을 고정하고 판을 올릴 때 검증 기대값도 함께 갱신한다.
-- `test-dev-compose.sh`는 기본·재정의 포트와 버전 고정을 검사하며 Docker Compose·`jq`가 필요하다. `--runtime`은 `curl`도 사용하여 별도 프로젝트·볼륨에서 캐시 없는 빌드와 실제 기동을 검증한다. 기존 `.env`·개발 컨테이너·볼륨은 사용하거나 변경하지 않는다.
+- `test-dev-compose.sh`는 기본 기동의 Ollama 제외, 명시적 profile, 기본·재정의 포트와 버전 고정을 검사하며 Docker Compose·`jq`가 필요하다. `--runtime`은 `curl`도 사용하여 별도 프로젝트·볼륨에서 캐시 없는 빌드와 기본·profile 기동을 검증한다. 기존 `.env`·개발 컨테이너·볼륨은 사용하거나 변경하지 않는다.
 - `test-prod-compose.sh`는 운영 구성의 공개 범위, 신뢰 프록시, WAL 보관과 베이스 이미지 고정을 정적으로 검사하며 Docker Compose·`jq`가 필요하다. 이미지를 빌드하거나 컨테이너를 띄우지 않는다.
 - DB 기동 래퍼 `docker-db-entrypoint.sh`는 볼륨 마운트 뒤 WAL 보관 디렉터리를 준비하며, `test-wal-archive.sh`와 `compose.wal-test.yaml`은 기존 환경·비밀 설정을 사용하지 않는 격리 회귀 시험을 소유한다.
 - 개발 환경을 처음부터 다시 만들 때는 `docker compose -f compose.dev.yaml down -v`로 볼륨을 지운 뒤 다시 올린다.
@@ -119,5 +120,5 @@
 - `client/AGENTS.md`: 에이전트 측 MCP 클라이언트 독립 모듈과 공유 도구 계약의 로컬 작업 계약을 정의한다.
 - `internal/mcp/AGENTS.md`: MCP 전송 계층과 도구 입력·오류 응답의 로컬 작업 계약을 정의한다.
 - `internal/web/AGENTS.md`: 웹 관리 화면과 시각화 자산의 로컬 작업 계약을 정의한다.
-- `spec/AGENTS.md`: 명세 문서와 용어 정리집의 로컬 작업 계약을 정의한다.
+- `spec/AGENTS.md`: 명세 문서, 용어 정리집과 서비스별 DOX 경계의 로컬 작업 계약을 정의한다.
 - `migrations/AGENTS.md`: 마이그레이션 파일·치환 구성 이력과 임베딩 차원 전환의 작성·적용 계약을 정의한다.

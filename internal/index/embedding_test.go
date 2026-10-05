@@ -187,6 +187,8 @@ func TestProviderConfigAndModelID(t *testing.T) {
 		t.Fatalf("Gemini 구성·식별자: %v", err)
 	}
 	for _, change := range []func(*Config){
+		func(c *Config) { c.Provider = "" },
+		func(c *Config) { c.Provider = "ollama" },
 		func(c *Config) { c.Provider = "unknown" },
 		func(c *Config) { c.APIKey = "" },
 		func(c *Config) { c.APIKey += "\n" },
@@ -207,14 +209,36 @@ func TestProviderConfigAndModelID(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, provider := range []string{"", "ollama"} {
-		cfg := Config{Provider: provider, Model: "bge-m3", VectorType: "vector", Dimension: 1024}
-		if cfg.ModelID() != "bge-m3:vector:1024" {
-			t.Fatal("기존 Ollama 식별자가 달라졌다")
+	ollamaURL, _ := url.Parse("http://localhost:11434")
+	ollama := Config{Provider: "ollama", BaseURL: ollamaURL, Model: "bge-m3", VectorType: "vector", Dimension: 1024}
+	if err := ollama.Validate(); err != nil || ollama.ModelID() != "bge-m3:vector:1024" {
+		t.Fatalf("명시적 Ollama 복귀 구성·식별자: %v", err)
+	}
+	for _, change := range []func(*Config){
+		func(c *Config) { c.Provider = "" },
+		func(c *Config) { c.Model = "gemini-embedding-2" },
+		func(c *Config) { c.BaseURL = address },
+		func(c *Config) { c.BaseURL, _ = url.Parse("https://GENERATIVELANGUAGE.GOOGLEAPIS.COM.:443") },
+	} {
+		cfg := ollama
+		change(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("Ollama의 제공자 생략·Gemini 혼합 구성이 허용됐다")
 		}
 	}
 	err := safeTransportError(t.Context(), fmt.Errorf("%s original-body", testGeminiKey))
 	if strings.Contains(err.Error(), testGeminiKey) || strings.Contains(err.Error(), "original-body") || !retryableEmbeddingError(err) {
 		t.Fatal("전송 오류 비밀·재시도 계약이 다르다")
+	}
+}
+
+func TestProviderMetadataDoesNotRequireCredentials(t *testing.T) {
+	address, _ := url.Parse("https://generativelanguage.googleapis.com")
+	cfg := Config{Provider: "gemini", BaseURL: address, Model: "gemini-embedding-2", VectorType: "vector", Dimension: 768}
+	if err := cfg.ValidateMetadata(); err != nil {
+		t.Fatalf("API 키 없는 읽기 전용 감사 구성: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("API 키 없는 외부 호출 구성이 허용됐다")
 	}
 }

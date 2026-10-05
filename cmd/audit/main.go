@@ -18,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -47,19 +48,11 @@ func run() (bool, error) {
 	if databaseURL == "" || graphName == "" {
 		return false, fmt.Errorf("DATABASE_URL과 AGE_GRAPH_NAME이 필요하다")
 	}
-	dimension, err := strconv.Atoi(strings.TrimSpace(os.Getenv("EMBEDDING_DIMENSION")))
-	if err != nil || dimension < 1 {
-		return false, fmt.Errorf("EMBEDDING_DIMENSION이 양의 정수가 아니다")
+	embedding, err := loadEmbeddingConfig()
+	if err != nil {
+		return false, err
 	}
-	modelName, vectorType := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")), strings.TrimSpace(os.Getenv("EMBEDDING_VECTOR_TYPE"))
-	if modelName == "" || vectorType == "" {
-		return false, fmt.Errorf("EMBEDDING_MODEL과 EMBEDDING_VECTOR_TYPE이 필요하다")
-	}
-	provider := strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER"))
-	if provider != "" && provider != "ollama" && provider != "gemini" {
-		return false, fmt.Errorf("EMBEDDING_PROVIDER는 ollama 또는 gemini여야 한다")
-	}
-	expect := store.EmbeddingExpectation{ModelID: (index.Config{Provider: provider, Model: modelName, VectorType: vectorType, Dimension: dimension}).ModelID(), Dimension: dimension}
+	expect := store.EmbeddingExpectation{ModelID: embedding.ModelID(), Dimension: embedding.Dimension}
 
 	ctx := context.Background()
 	database, err := store.New(ctx, databaseURL, graphName, nil, nil, "")
@@ -89,6 +82,26 @@ func run() (bool, error) {
 	}
 	slog.Info("감사 완료", "graphs", len(graphIDs), "violations", found, "duration", time.Since(started).String())
 	return found > 0, nil
+}
+
+func loadEmbeddingConfig() (index.Config, error) {
+	address, err := url.Parse(strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL")))
+	if err != nil {
+		return index.Config{}, fmt.Errorf("EMBEDDING_BASE_URL이 올바른 HTTP 주소가 아니다")
+	}
+	dimension, err := strconv.Atoi(strings.TrimSpace(os.Getenv("EMBEDDING_DIMENSION")))
+	if err != nil || dimension < 1 {
+		return index.Config{}, fmt.Errorf("EMBEDDING_DIMENSION이 양의 정수가 아니다")
+	}
+	cfg := index.Config{
+		Provider: strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")), BaseURL: address,
+		Model:      strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")),
+		VectorType: strings.TrimSpace(os.Getenv("EMBEDDING_VECTOR_TYPE")), Dimension: dimension,
+	}
+	if err := cfg.ValidateMetadata(); err != nil {
+		return index.Config{}, err
+	}
+	return cfg, nil
 }
 
 func graphScope(ctx context.Context, database *store.Store, raw string) ([]model.ID, error) {

@@ -83,7 +83,7 @@ type Config struct {
 	GraphName string
 	// EmbeddingBaseURL 필드에는 임베딩 제공자 HTTP 주소를 둔다.
 	EmbeddingBaseURL *url.URL
-	// EmbeddingProvider는 ollama 또는 gemini다. 생략한 기존 구성은 ollama다.
+	// EmbeddingProvider는 명시적으로 선택한 ollama 또는 gemini다.
 	EmbeddingProvider string
 	// GeminiAPIKey는 Gemini 호출 헤더에만 쓰며 로그로 전달하지 않는다.
 	GeminiAPIKey string
@@ -209,14 +209,14 @@ func Load(env Environment) (Config, error) {
 		return Config{}, fmt.Errorf("EMBEDDING_DIMENSION이 양의 정수가 아니다")
 	}
 	cfg.EmbeddingDimension = dimension
-	if cfg.EmbeddingProvider == "" {
-		cfg.EmbeddingProvider = "ollama"
-	}
 	if cfg.EmbeddingProvider != "ollama" && cfg.EmbeddingProvider != "gemini" {
-		return Config{}, fmt.Errorf("EMBEDDING_PROVIDER는 ollama 또는 gemini여야 한다")
+		return Config{}, fmt.Errorf("EMBEDDING_PROVIDER는 ollama 또는 gemini로 명시해야 한다")
 	}
 	if baseURL.User != nil || baseURL.RawQuery != "" || baseURL.ForceQuery || baseURL.Fragment != "" {
 		return Config{}, fmt.Errorf("EMBEDDING_BASE_URL에 사용자 정보·질의·fragment를 넣을 수 없다")
+	}
+	if cfg.EmbeddingProvider == "ollama" && (strings.HasPrefix(cfg.EmbeddingModel, "gemini-embedding-") || strings.EqualFold(strings.TrimSuffix(baseURL.Hostname(), "."), "generativelanguage.googleapis.com")) {
+		return Config{}, fmt.Errorf("Ollama에 Gemini 모델 또는 공식 주소를 지정할 수 없다")
 	}
 	if (cfg.EmbeddingVectorType == "vector" && dimension > 2000) || (cfg.EmbeddingVectorType == "halfvec" && dimension > 4000) {
 		return Config{}, fmt.Errorf("EMBEDDING_DIMENSION이 HNSW의 저장 타입별 상한을 넘었다")

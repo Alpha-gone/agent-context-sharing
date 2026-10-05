@@ -2399,9 +2399,11 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 
 `.env.example`의 DB 기본 자격 증명은 로컬 개발 편의용이며 운영 또는 외부 공개 환경의 인증 기준이 아니다. 이미지와 패키지는 「버전 요구」의 개발 고정값을 사용하고, 새 빌드에서 임의의 최신 판을 선택하지 않는다.
 
-파일 변경만으로 이미 실행 중인 컨테이너의 포트와 이미지가 바뀌지는 않는다. 기존 데이터를 유지하여 적용할 때는 `docker compose -f compose.dev.yaml up -d --build --force-recreate db wal_cleanup ollama`로 해당 서비스를 재생성한다. 이 변경의 적용에는 볼륨 삭제가 필요하지 않다.
+개발 기본 기동은 `docker compose -f compose.dev.yaml up -d --build`이며 DB와 WAL 정리만 기동한다. [GitHub #76](https://github.com/Alpha-gone/agent-context-sharing/issues/76)에 따라 비교·복귀용 Ollama는 `ollama` profile에 두며, 기본 기동에서는 컨테이너와 `ollama_data` 볼륨을 만들지 않는다. 비교·복귀가 필요할 때만 `docker compose -f compose.dev.yaml --profile ollama up -d ollama`로 기동하고 `docker compose -f compose.dev.yaml --profile ollama exec ollama ollama pull bge-m3`로 모델을 명시적으로 준비한다.
 
-`test-dev-compose.sh`는 Docker Compose와 `jq`를 사용하여 기본 포트와 포트 번호 재정의 모두에서 loopback 바인딩 및 버전 고정을 검사한다. `--runtime`을 주면 `curl`도 사용하고, 캐시 없는 DB 이미지 빌드와 실제 공개 주소·설치 버전·서비스 응답을 검증한다. 별도 Compose 프로젝트와 테스트 자격 증명·볼륨을 사용하며 `.env`를 읽지 않고 모델을 내려받지 않는다. 종료 시 이 테스트가 만든 자원만 정리한다. 기존 개발 컨테이너의 재생성이나 기존 볼륨 삭제는 수행하지 않는다.
+파일 변경만으로 이미 실행 중인 컨테이너의 포트와 이미지가 바뀌지는 않는다. 기존 데이터를 유지하여 적용할 때는 `docker compose -f compose.dev.yaml up -d --build --force-recreate db wal_cleanup`로 기본 서비스를 재생성한다. 이미 실행 중인 Ollama가 불필요하면 `docker compose -f compose.dev.yaml --profile ollama stop ollama`로 중지한다. profile 전환으로 기존 컨테이너·볼륨을 자동 삭제하지 않으며 이 변경의 적용에는 볼륨 삭제가 필요하지 않다.
+
+`test-dev-compose.sh`는 Docker Compose와 `jq`를 사용하여 기본 기동의 Ollama 제외, 명시적 profile 기동, 기본 포트와 포트 번호 재정의의 loopback 바인딩 및 버전 고정을 검사한다. `--runtime`을 주면 `curl`도 사용하고, 캐시 없는 DB 이미지 빌드 뒤 기본 기동에서 Ollama 컨테이너·볼륨이 없는지 확인한 다음 profile로 Ollama를 기동하여 실제 공개 주소·설치 버전·서비스 응답을 검증한다. 별도 Compose 프로젝트와 테스트 자격 증명·볼륨을 사용하며 `.env`를 읽지 않고 모델을 내려받지 않는다. 종료 시 이 테스트가 만든 자원만 정리한다. 기존 개발 컨테이너의 재생성이나 기존 볼륨 삭제는 수행하지 않는다.
 
 운영 구성은 소수 사용자 시험을 위한 단일 호스트 배치다. TLS는 호스트의 역방향 프록시(Cloudflare Tunnel의 `cloudflared`)가 끝내고 애플리케이션에는 평문으로 전달하므로 「배포 구성」의 `TLS_TERMINATION=proxy` 배치를 쓴다.
 
@@ -2433,7 +2435,7 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 | 전환 기본값 | Gemini Developer API의 `gemini-embedding-2`, 텍스트 입력만 사용 |
 | 출력·저장 | 권장 차원 중 저장·검색 부담이 작은 768차원과 `vector`를 개발 기본값으로 쓴다. 품질 최적값의 확정은 아니며 실제 검색·관계 제안 임계값은 별도 평가한다 |
 | 기존 경로 | Ollama 연결은 비교·복귀용으로 유지하되 Gemini 실패 시 자동 하향하거나 서로 다른 모델 벡터를 섞지 않는다 |
-| 구성 | `EMBEDDING_PROVIDER=ollama\|gemini`, `GEMINI_API_KEY`를 둔다. 제공자 선택을 생략한 기존 구성은 Ollama로 읽는다. 기존 URL·모델·차원·저장 타입 값은 재사용한다. Gemini는 HTTPS·사용자 정보/질의/fragment 없는 URL, 해당 모델, 128~3072차원을 요구한다. HNSW 상한은 vector 2000·halfvec 4000이다 |
+| 구성 | `EMBEDDING_PROVIDER=ollama\|gemini`를 반드시 명시한다. 생략·빈 값·알 수 없는 제공자는 기동 전에 거부하며 모델이나 주소로 제공자를 추측하지 않는다. 기존 URL·모델·차원·저장 타입 값은 재사용한다. Gemini는 HTTPS·사용자 정보/질의/fragment 없는 URL, 해당 모델, 128~3072차원과 호출용 `GEMINI_API_KEY`를 요구한다. Ollama에 `gemini-embedding-*` 모델이나 Gemini 공식 호스트 `generativelanguage.googleapis.com`을 지정한 구성은 거부한다. HNSW 상한은 vector 2000·halfvec 4000이다 |
 | 제공자 호출 | `internal/index`의 `EmbedDocument`는 본문, `Embed`는 질의를 처리한다. Gemini 문서는 `title: none \| text: {body}`, 질의는 `task: search result \| query: {work_context}` 형식이며 Ollama는 기존 입력을 유지한다 |
 | 요청·응답 | HTTPS `v1beta/models/{model}:embedContent`에 단일 content를 보내고 `embedContentConfig.outputDimensionality`와 `autoTruncate=false`를 명시한다. 벡터 하나의 구성 차원·유한 수치·0이 아닌 크기·응답 크기를 검증한다. 여러 본문을 하나로 합쳐 보내지 않는다 |
 | 인증·비밀 | API 키는 `x-goog-api-key` 헤더로만 보내며 URL·로그·오류·공개 응답에 넣지 않는다. 제공자 응답 본문과 원문 요청도 로그에 남기지 않는다 |
@@ -2441,6 +2443,8 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 | 장애 | 네트워크·408·429·5xx는 기존 색인 재시도 예산을 사용한다. 다른 HTTP 상태, 잘못된 응답·입력·차원은 즉시 failed로 두며 질의 실패는 의미 유사도 채널만 제외한다. URL·제공자 본문을 담는 오류는 고정 사유로 대체하되 취소·timeout 식별은 유지한다 |
 | 입력 한도 | 공급자의 8192토큰 상한과 SRS의 8000자 상한은 다르다. 8000자·UTF-8을 호출 전에 검사하고 토큰 초과는 제공자가 `autoTruncate=false`로 거부하도록 한다. 실패를 조용히 잘린 성공으로 취급하지 않는다. 청크 저장·컨텍스트 변경은 이번 범위 밖이다 |
 | 색인 식별 | Gemini는 `gemini:{model}:retrieval-v1:{type}:{dimension}`으로 제공자·입력 형식 판을 구분한다. Ollama는 기존 `{model}:{type}:{dimension}` 형식을 보존한다 |
+
+제공자 생략의 Ollama 호환 규칙은 #76에 따라 종료한다. 기존 Ollama 구성은 `EMBEDDING_PROVIDER=ollama`를 추가하면 같은 호출 형식과 색인 식별자를 유지한다. 서버 구성과 평가 실행기는 제공자·주소·모델·벡터 계약 및 호출용 키를 DB 연결·외부 호출 전에 검증한다. 읽기 전용 감사도 `EMBEDDING_BASE_URL`을 포함한 같은 제공자 메타데이터를 DB 연결 전에 검증하되 외부 호출을 하지 않으므로 API 키를 요구하지 않는다. 구성 오류는 원문 URL·비밀값을 포함하지 않는 사유로 보고한다. 차원이 같은 잘못된 제공자 구성도 DB 열 검사와 별개로 거부한다.
 
 #### 전환·복귀 경계
 

@@ -23,7 +23,7 @@ func TestEmbed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("테스트 제공자 URL 해석: %v", err)
 	}
-	worker, err := New(testStore(t), Config{BaseURL: baseURL, Model: "test", VectorType: "vector", Dimension: 2}, server.Client(), nil)
+	worker, err := New(testStore(t), Config{Provider: "ollama", BaseURL: baseURL, Model: "test", VectorType: "vector", Dimension: 2}, server.Client(), nil)
 	if err != nil {
 		t.Fatalf("색인 작업자 생성: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestEmbedRejectsDimensionMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("테스트 제공자 URL 해석: %v", err)
 	}
-	worker, err := New(testStore(t), Config{BaseURL: baseURL, Model: "test", VectorType: "vector", Dimension: 2}, server.Client(), nil)
+	worker, err := New(testStore(t), Config{Provider: "ollama", BaseURL: baseURL, Model: "test", VectorType: "vector", Dimension: 2}, server.Client(), nil)
 	if err != nil {
 		t.Fatalf("색인 작업자 생성: %v", err)
 	}
@@ -116,7 +116,7 @@ func testWorker(t *testing.T, server *httptest.Server) *Worker {
 	if err != nil {
 		t.Fatalf("테스트 제공자 URL 해석: %v", err)
 	}
-	worker, err := New(testStore(t), Config{BaseURL: baseURL, Model: "test", VectorType: "vector", Dimension: 2}, client, nil)
+	worker, err := New(testStore(t), Config{Provider: "ollama", BaseURL: baseURL, Model: "test", VectorType: "vector", Dimension: 2}, client, nil)
 	if err != nil {
 		t.Fatalf("색인 작업자 생성: %v", err)
 	}

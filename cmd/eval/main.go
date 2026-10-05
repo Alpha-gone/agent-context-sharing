@@ -461,7 +461,7 @@ func loadSettings() (settings, error) {
 	}
 	baseURL, err := url.Parse(os.Getenv("EMBEDDING_BASE_URL"))
 	if err != nil {
-		return settings{}, fmt.Errorf("EMBEDDING_BASE_URL 해석: %w", err)
+		return settings{}, fmt.Errorf("EMBEDDING_BASE_URL이 올바른 HTTP 주소가 아니다")
 	}
 	dimension, err := strconv.Atoi(strings.TrimSpace(os.Getenv("EMBEDDING_DIMENSION")))
 	if err != nil {
@@ -471,8 +471,8 @@ func loadSettings() (settings, error) {
 		Provider:   strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")),
 		APIKey:     strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		BaseURL:    baseURL,
-		Model:      os.Getenv("EMBEDDING_MODEL"),
-		VectorType: os.Getenv("EMBEDDING_VECTOR_TYPE"),
+		Model:      strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")),
+		VectorType: strings.TrimSpace(os.Getenv("EMBEDDING_VECTOR_TYPE")),
 		Dimension:  dimension,
 	}
 	if err := loaded.index.Validate(); err != nil {

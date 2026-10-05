@@ -68,7 +68,7 @@ func evalDatabase(t *testing.T, onEmbed func()) (*store.Store, *index.Worker, *p
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := index.New(database, index.Config{BaseURL: baseURL, Model: "eval-regression", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
+	worker, err := index.New(database, index.Config{Provider: "ollama", BaseURL: baseURL, Model: "eval-regression", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

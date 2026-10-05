@@ -236,8 +236,8 @@ func TestGraceExpiryIsFixedAtGraceStartIntegration(t *testing.T) {
 	}
 }
 
-// TestGraceCancelRequiresAccessibleAccountIntegration은 구성원이 없는 팀에 등급을 부여해도
-// 유예가 남고, 그 팀에 구성원이 생겨 접근 가능한 계정이 실제로 생길 때 취소되는지 확인한다.
+// TestGraceCancelRequiresAccessibleAccountIntegration은 구성원이 없는 팀의 부여만 남으면
+// 유예가 시작되고, 그 팀에 접근 가능한 계정이 실제로 생길 때 취소되는지 확인한다.
 func TestGraceCancelRequiresAccessibleAccountIntegration(t *testing.T) {
 	database := newIntegrationStore(t)
 	database.graceDays = func(model.ID) int { return 30 }
@@ -248,14 +248,13 @@ func TestGraceCancelRequiresAccessibleAccountIntegration(t *testing.T) {
 	addTestTeamMember(t, database, teamID, accountID)
 	graphID := createTestGraph(t, database, accountID)
 	grantTeam(t, database, graphID, teamID, model.GraphGradeOwner)
-	if err := database.RemoveTeamMember(t.Context(), teamID, accountID); err != nil {
-		t.Fatalf("팀 구성원 제거: %v", err)
-	}
-
 	emptyTeamID := newTestID(t)
 	createTestTeam(t, database, emptyTeamID, accountID, false)
 	if err := database.GrantGraph(t.Context(), graphID, accountID, emptyTeamID, GrantSubjectTeam, model.GraphGradeViewer); err != nil {
 		t.Fatalf("빈 팀 등급 부여: %v", err)
+	}
+	if err := database.RemoveTeamMember(t.Context(), teamID, accountID); err != nil {
+		t.Fatalf("팀 구성원 제거: %v", err)
 	}
 	if started, expires := graceTimes(t, database, graphID); started == nil || expires == nil {
 		t.Fatalf("빈 팀 등급 부여가 유예를 취소했다: started:%v expires:%v", started, expires)

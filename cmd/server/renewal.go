@@ -66,6 +66,7 @@ func verifyWithRenewal(service tokenRenewer) mcp.VerifyFunc {
 		}
 		header.Set(renewedTokenHeader, renewed.Raw)
 		header.Set(renewedExpiresHeader, strconv.FormatInt(renewed.ExpiresAt.Unix(), 10))
+		header.Set("Cache-Control", "no-store")
 		return accountID, nil
 	}
 }

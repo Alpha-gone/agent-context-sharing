@@ -94,11 +94,12 @@ type Config struct {
 
 // Server는 로그인·등록·로그아웃과 웹 관리 화면 여섯 종을 처리한다.
 type Server struct {
-	auth      Authentication
-	graphs    GraphStore
-	config    Config
-	templates *template.Template
-	asset     staticAsset
+	auth        Authentication
+	graphs      GraphStore
+	config      Config
+	templates   *template.Template
+	asset       staticAsset
+	crossOrigin http.CrossOriginProtection
 }
 
 // staticAsset은 빌드에 고정된 시각화 자산과 조건부 요청에 쓸 내용 해시다.
@@ -156,6 +157,10 @@ func (server *Server) serveAsset(writer http.ResponseWriter, request *http.Reque
 
 // ServeHTTP는 계약에 있는 로그인·등록·로그아웃과 웹 관리 경로를 처리한다.
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if err := server.crossOrigin.Check(request); err != nil {
+		server.render(writer, http.StatusForbidden, "message", pageData{Title: "접근 제한", Error: "다른 출처에서 보낸 요청은 처리할 수 없습니다."})
+		return
+	}
 	switch request.URL.Path {
 	case "/" + visualizationAssetPath:
 		server.serveAsset(writer, request, visualizationAssetPath)
@@ -470,7 +475,14 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 			return
 		}
 		if err := server.graphs.GrantGraph(ctx, graphID, actorID, account.ID, store.GrantSubjectAccount, grade); err != nil {
-			server.render(writer, http.StatusConflict, "message", pageData{Title: "권한과 팀 관리", Error: "등급을 부여할 수 없습니다."})
+			status, message := http.StatusInternalServerError, "등급을 부여할 수 없습니다."
+			switch {
+			case errors.Is(err, store.ErrLastOwner):
+				status, message = http.StatusConflict, "마지막 소유자 등급은 낮출 수 없습니다."
+			case errors.Is(err, store.ErrNotFound):
+				status, message = http.StatusNotFound, "등급을 바꿀 대상을 찾을 수 없습니다."
+			}
+			server.render(writer, status, "message", pageData{Title: "권한과 팀 관리", Error: message})
 			return
 		}
 	case "revoke":

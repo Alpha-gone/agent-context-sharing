@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// GrantGraph은 계정 또는 팀의 그래프 등급을 만들거나 바꾸고 웹 감사 기록을 남긴다.
+// GrantGraph은 그래프 잠금 뒤 행위자의 소유자 등급을 확인하고 계정·팀 등급과 감사를 기록한다.
 func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID model.ID, subjectType GrantSubjectType, grade model.GraphGrade) error {
 	if !graphID.IsV7() || !actorID.IsV7() || !subjectID.IsV7() || !subjectType.valid() || !grade.Valid() {
 		return fmt.Errorf("그래프 등급 부여 인자가 올바르지 않다")
@@ -23,6 +23,9 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 	}
 	defer tx.Rollback(ctx)
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return err
+	}
+	if err := requireGraphOwner(ctx, tx, graphID, actorID); err != nil {
 		return err
 	}
 	var before *string
@@ -39,9 +42,7 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 	// upsert가 기존 등급을 덮어쓰므로 부여도 소유자를 없앨 수 있다. 유일한 소유자가 자기
 	// 계정에 editor를 부여하면 소유자 0명이 되므로 회수와 같은 판정을 여기에도 둔다.
 	//
-	// 판정을 소유자를 낮추는 부여로 한정하는 이유는 「판정의 직렬화」가 방아쇠를 등급
-	// 회수와 소유권 이전으로 정했기 때문이다. 소유자를 건드리지 않는 부여까지 막으면
-	// 이미 소유자가 없어 유예 중인 그래프에 등급을 다시 붙여 되살릴 수 없다.
+	// 모든 부여는 앞선 행위자 인가를 지나며, 마지막 소유자 보존은 등급을 낮출 때 확인한다.
 	demotesOwner := before != nil && *before == "owner" && grade != model.GraphGradeOwner
 	if demotesOwner {
 		if err := requireOwner(ctx, tx, graphID); err != nil {
@@ -60,7 +61,8 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: targetKind, Action: action, ActorID: actorID, GraphID: graphID, SubjectType: subjectType, SubjectID: subjectID, BeforeGrade: nullableGrade(before), AfterGrade: grade})
 }
 
-// RevokeGraphGrantWithAudit은 마지막 소유자를 보호하면서 등급을 회수하고 감사 기록을 남긴다.
+// RevokeGraphGrantWithAudit은 잠금 뒤 행위자를 인가하고 마지막 소유자를 보호하며 등급을 회수한다.
+// 회수와 웹 감사 기록은 같은 트랜잭션으로 저장한다.
 func (s *Store) RevokeGraphGrantWithAudit(ctx context.Context, graphID, actorID, subjectID model.ID, subjectType GrantSubjectType) error {
 	if !graphID.IsV7() || !actorID.IsV7() || !subjectID.IsV7() || !subjectType.valid() {
 		return fmt.Errorf("그래프 등급 회수 인자가 올바르지 않다")
@@ -72,6 +74,9 @@ func (s *Store) RevokeGraphGrantWithAudit(ctx context.Context, graphID, actorID,
 	defer tx.Rollback(ctx)
 	graphIDs, err := lockGraphs(ctx, tx, []model.ID{graphID})
 	if err != nil {
+		return err
+	}
+	if err := requireGraphOwner(ctx, tx, graphID, actorID); err != nil {
 		return err
 	}
 	var before string
@@ -87,6 +92,17 @@ func (s *Store) RevokeGraphGrantWithAudit(ctx context.Context, graphID, actorID,
 		return err
 	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: "grant", Action: "revoke", ActorID: actorID, GraphID: graphID, SubjectType: subjectType, SubjectID: subjectID, BeforeGrade: model.GraphGrade(before)})
+}
+
+func requireGraphOwner(ctx context.Context, tx pgx.Tx, graphID, actorID model.ID) error {
+	grade, found, err := effectiveGrade(ctx, tx, graphID, actorID)
+	if err != nil {
+		return err
+	}
+	if !found || grade != model.GraphGradeOwner {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ListGraphGrants는 직접 부여와 팀 상속 등급을 구분해 웹에 돌려준다.

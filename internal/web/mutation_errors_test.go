@@ -21,6 +21,9 @@ func TestManagementMutationErrorResponses(t *testing.T) {
 		status  int
 		message string
 	}{
+		{"부여/마지막 소유자", store.ErrLastOwner, http.StatusConflict, "마지막 소유자 등급은 낮출 수 없습니다."},
+		{"부여/없는 대상", store.ErrNotFound, http.StatusNotFound, "등급을 바꿀 대상을 찾을 수 없습니다."},
+		{"부여/장애", internal, http.StatusInternalServerError, "등급을 부여할 수 없습니다."},
 		{"회수/마지막 소유자", store.ErrLastOwner, http.StatusConflict, "마지막 소유자 등급은 회수할 수 없습니다."},
 		{"회수/없는 등급", store.ErrNotFound, http.StatusNotFound, "회수할 등급을 찾을 수 없습니다."},
 		{"회수/장애", internal, http.StatusInternalServerError, "등급을 회수할 수 없습니다."},
@@ -41,6 +44,8 @@ func TestManagementMutationErrorResponses(t *testing.T) {
 				}
 				target, form := mutationRequest(graphID, test.name)
 				switch {
+				case strings.HasPrefix(test.name, "부여/"):
+					graphs.grantErr = err
 				case strings.HasPrefix(test.name, "회수/"):
 					graphs.revokeErr = err
 				case strings.HasPrefix(test.name, "복구 요청/"):
@@ -62,7 +67,7 @@ func TestManagementMutationErrorResponses(t *testing.T) {
 }
 
 func TestManagementMutationsKeepSuccessRedirects(t *testing.T) {
-	for _, action := range []string{"회수/성공", "복구 요청/성공", "운영자 복구/성공"} {
+	for _, action := range []string{"부여/성공", "회수/성공", "복구 요청/성공", "운영자 복구/성공"} {
 		t.Run(action, func(t *testing.T) {
 			accountID, graphID := testID(t), testID(t)
 			graphs := &fakeGraphStore{accountID: accountID, graphID: graphID, grade: model.GraphGradeOwner}
@@ -78,6 +83,8 @@ func TestManagementMutationsKeepSuccessRedirects(t *testing.T) {
 
 func mutationRequest(graphID model.ID, action string) (string, url.Values) {
 	switch {
+	case strings.HasPrefix(action, "부여/"):
+		return "/graphs/" + graphID.String() + "/access", url.Values{"action": {"grant_account"}, "login_id": {"someone"}, "grade": {"owner"}}
 	case strings.HasPrefix(action, "회수/"):
 		return "/graphs/" + graphID.String() + "/access", url.Values{"action": {"revoke"}, "subject_id": {graphID.String()}, "subject_type": {"account"}}
 	case strings.HasPrefix(action, "복구 요청/"):

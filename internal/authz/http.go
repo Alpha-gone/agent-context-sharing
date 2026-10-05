@@ -16,6 +16,9 @@ import (
 // 세션 쿠키 검증은 web이 소유하며 인가 서버는 최초 인증부터의 사용 한도를 확인한다.
 type SessionAccountFunc func(*http.Request) (model.ID, time.Time, bool)
 
+// maxTokenBodyBytes는 비인증 토큰 교환 요청의 고정 본문 상한이다.
+const maxTokenBodyBytes = 64 << 10
+
 // Handler는 「HTTP 진입점」이 인가 서버에 배정한 `/authorize`, `/token`, `/jwks.json`을
 // 처리한다. 발급 규칙 자체는 Service가 소유하고 여기에서는 HTTP 표현만 다룬다.
 type Handler struct {
@@ -94,8 +97,18 @@ func (h *Handler) redirectLogin(writer http.ResponseWriter, request *http.Reques
 
 // Token은 「인가 코드 흐름」의 9~10단계를 처리한다.
 func (h *Handler) Token(writer http.ResponseWriter, request *http.Request) {
+	if request.ContentLength > maxTokenBodyBytes {
+		writeTokenError(writer, http.StatusRequestEntityTooLarge, "invalid_request")
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, maxTokenBodyBytes)
+	defer request.Body.Close()
 	if err := request.ParseForm(); err != nil {
-		writeTokenError(writer, http.StatusBadRequest, "invalid_request")
+		status := http.StatusBadRequest
+		if _, oversized := errors.AsType[*http.MaxBytesError](err); oversized {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeTokenError(writer, status, "invalid_request")
 		return
 	}
 	if request.PostForm.Get("grant_type") != "authorization_code" {

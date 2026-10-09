@@ -757,6 +757,37 @@ func TestParseAndMetadataFailuresUseDistinctCodes(t *testing.T) {
 	}
 }
 
+func TestInvalidRequestShapesAreNotParseErrors(t *testing.T) {
+	server := testServer(t, nil)
+	server.verify = func(context.Context, Authentication) (model.ID, error) {
+		t.Fatal("잘못된 요청 형식이 인증으로 진행되었다")
+		return model.ID{}, nil
+	}
+	for name, body := range map[string]string{
+		"배치":          `[{"jsonrpc":"2.0","id":1,"method":"tools/list"}]`,
+		"null":        `null`,
+		"빈 객체":        `{}`,
+		"잘못된 판":       `{"jsonrpc":"1.0","id":1,"method":"tools/list"}`,
+		"null method": `{"jsonrpc":"2.0","id":1,"method":null}`,
+		"배열 params":   `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":[]}`,
+		"숫자 method":   `{"jsonrpc":"2.0","id":1,"method":42}`,
+		"문자열 params":  `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":"잘못된 입력"}`,
+		"중복 필드":       `{"jsonrpc":"2.0","id":1,"id":2,"method":"tools/list"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+			request.Header.Set("MCP-Protocol-Version", ProtocolVersion)
+			request.Header.Set("Mcp-Method", "tools/list")
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			assertRPCError(t, response, http.StatusBadRequest, -32600)
+			if !strings.Contains(response.Body.String(), `"id":null`) {
+				t.Fatalf("잘못된 요청의 ID가 노출되었다: %s", response.Body.String())
+			}
+		})
+	}
+}
+
 // TestUnsupportedVersionUsesReservedCode는 미지원 버전이 규약이 확정한 코드로 나가는지
 // 확인한다. -32000~-32019는 legacy 구간이라 표준 클라이언트가 재협상하지 않는다.
 func TestUnsupportedVersionUsesReservedCode(t *testing.T) {

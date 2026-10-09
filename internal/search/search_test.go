@@ -438,11 +438,15 @@ func TestFlowDisablesAutoGlobalFallback(t *testing.T) {
 }
 
 // TestFlowKeepsExplicitGlobalScopeAtBaseline은 명시한 `scope=global`이 비교 단계와
-// 무관하게 속성 필터로 전역 요약을 찾는지 확인한다. 진입점 선택은 클라이언트 계약이다.
+// 무관하게 전역 요약을 찾고 derived_from으로 근거를 확장하는지 확인한다.
 func TestFlowKeepsExplicitGlobalScopeAtBaseline(t *testing.T) {
 	graphID := testID(t, "019a0000-0000-7000-8000-000000000071")
 	summary := testContext(t, graphID, "019a0000-0000-7000-8000-000000000072", "전역 요약", 1)
-	database := &fakeStore{global: []store.SearchCandidate{{Context: summary}}}
+	evidence := testContext(t, graphID, "019a0000-0000-7000-8000-000000000076", "근거", 0)
+	database := &fakeStore{
+		global: []store.SearchCandidate{{Context: summary}},
+		hops:   store.HopResult{Contexts: []model.Context{summary, evidence}, Distances: map[model.ID]int{summary.ID: 0, evidence.ID: 1}},
+	}
 	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, FoldThreshold: 0.9, GraphStage: GraphStageBaseline}, nil)
 	if err != nil {
 		t.Fatalf("검색기 생성: %v", err)
@@ -451,15 +455,69 @@ func TestFlowKeepsExplicitGlobalScopeAtBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("전역 범위 흐름 = %v", err)
 	}
-	if len(flow.Contexts) != 1 || flow.Contexts[0].Value.ID != summary.ID {
+	if len(flow.Contexts) != 2 || flow.Contexts[0].Value.ID != summary.ID || flow.Contexts[1].Value.ID != evidence.ID {
 		t.Fatalf("전역 범위 결과 = %v", flowIDs(flow))
 	}
 	if flow.Channels["global_summary"].Failure != "" {
 		t.Fatalf("전역 요약 채널 상태 = %#v", flow.Channels["global_summary"])
 	}
-	// 기준선은 그래프 경로를 끈 구성이므로 근거를 따라 내려가지 않는다.
-	if flow.Channels["graph"].Failure != "disabled" || database.hopCalls != 0 {
+	if flow.Channels["graph"].Failure != "" || database.hopCalls != 1 ||
+		!slices.Equal(database.hopStarts, []model.ID{summary.ID}) || !slices.Equal(database.hopFilters, []string{"derived_from"}) {
 		t.Fatalf("기준선의 그래프 확장 = %#v, 호출 %d회", flow.Channels["graph"], database.hopCalls)
+	}
+}
+
+func TestCombineMathematicalTiesUseRecordedAtAndID(t *testing.T) {
+	graphID := testID(t, "019a0000-0000-7000-8000-000000000081")
+	older := testContext(t, graphID, "019a0000-0000-7000-8000-000000000082", "과거", 1)
+	newer := testContext(t, graphID, "019a0000-0000-7000-8000-000000000083", "최근", 2)
+	newer.Layer = model.LayerEvent
+	filler := testContext(t, graphID, "019a0000-0000-7000-8000-000000000084", "중간", 0)
+	other := testContext(t, graphID, "019a0000-0000-7000-8000-000000000085", "별도", 0)
+	fourth := testContext(t, graphID, "019a0000-0000-7000-8000-000000000086", "네 번째", 0)
+	fifth := testContext(t, graphID, "019a0000-0000-7000-8000-000000000087", "다섯 번째", 0)
+	// 1+1/2+1/6과 1/2+1/6+1은 모두 5/3이지만 float64 누적값은 다를 수 있다.
+	results := []channelResult{
+		{name: "semantic", candidates: []store.SearchCandidate{{Context: older}, {Context: newer}}},
+		{name: "keyword", candidates: []store.SearchCandidate{{Context: filler}, {Context: older}, {Context: other}, {Context: fourth}, {Context: fifth}, {Context: newer}}},
+		{name: "time", candidates: []store.SearchCandidate{{Context: newer}, {Context: filler}, {Context: other}, {Context: fourth}, {Context: fifth}, {Context: older}}},
+	}
+	for _, sameTime := range []bool{false, true} {
+		if sameTime {
+			newer.RecordedAt = older.RecordedAt
+			for i := range results {
+				for j := range results[i].candidates {
+					if results[i].candidates[j].Context.ID == newer.ID {
+						results[i].candidates[j].Context = newer
+					}
+				}
+			}
+		}
+		want := newer.ID
+		if sameTime {
+			want = older.ID
+		}
+		for range len(results) {
+			combined := combine(results)
+			var tied []combinedCandidate
+			for _, value := range combined {
+				if value.value.ID == older.ID || value.value.ID == newer.ID {
+					tied = append(tied, value)
+				}
+			}
+			if tied[0].value.ID != want {
+				t.Fatalf("동점 순서 = %v, want %v", tied[0].value.ID, want)
+			}
+			signals := routeSignals(results, combined, 0)
+			if signals.TopIsEvent == sameTime {
+				t.Fatalf("동점의 사건 진입점 판정 = %v, want %v", signals.TopIsEvent, !sameTime)
+			}
+			selected, _, _ := applyBudget(tied, 2)
+			if len(selected) != 1 || selected[0].value.ID != want {
+				t.Fatalf("동점 예산 절단 = %v", selected)
+			}
+			results = append(results[1:], results[0])
+		}
 	}
 }
 

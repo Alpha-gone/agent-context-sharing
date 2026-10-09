@@ -157,16 +157,20 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	var message rpcRequest
-	// 본문을 해석하지 못한 것은 헤더와 본문이 어긋난 것과 다른 층이다. 「요청 처리 순서」의
-	// 1d가 이 경우를 JSON-RPC Parse Error로 분리했다. -32020으로 답하면 본문을 읽지도
-	// 못한 상태에서 클라이언트가 헤더를 고치려 든다.
-	if err := json.UnmarshalRead(request.Body, &message); err != nil {
+	var body jsontext.Value
+	// JSON 문법을 요청 필드의 자료형과 분리한다. 중복 이름은 문법상 허용하지만
+	// 아래 요청 해석에서는 거부하므로 Parse error가 아니라 Invalid request다.
+	if err := json.UnmarshalRead(request.Body, &body, jsontext.AllowDuplicateNames(true)); err != nil {
 		if _, exceeded := errors.AsType[*http.MaxBytesError](err); exceeded {
 			s.writeBodyTooLarge(writer)
 			return
 		}
 		s.writeRPCError(writer, http.StatusBadRequest, jsontext.Value("null"), -32700, "Parse error", nil)
+		return
+	}
+	var message rpcRequest
+	if err := json.Unmarshal(body, &message); err != nil || body.Kind() != '{' || message.JSONRPC != "2.0" || message.Method == "" {
+		s.writeRPCError(writer, http.StatusBadRequest, jsontext.Value("null"), -32600, "Invalid request", nil)
 		return
 	}
 	// 이 MCP 프로필은 문자열·숫자 id만 받고 알림을 쓰지 않는다. 일반 JSON-RPC는
@@ -176,7 +180,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.writeRPCError(writer, http.StatusBadRequest, jsontext.Value("null"), -32600, "Invalid request", nil)
 		return
 	}
-	if message.JSONRPC != "2.0" || message.Params.Meta.ProtocolVersion != protocolVersion || message.Method != method {
+	if message.Params.Meta.ProtocolVersion != protocolVersion || message.Method != method {
 		s.writeRPCError(writer, http.StatusBadRequest, message.ID, -32020, "Header mismatch", nil)
 		return
 	}

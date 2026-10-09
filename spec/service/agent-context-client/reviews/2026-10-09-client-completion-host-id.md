@@ -25,10 +25,21 @@ IntelliJ IDEA에 설치된 Go 1.27.1 SDK로 검증했다.
 
 서버 추가 회귀의 최초 실행은 샌드박스의 로컬 포트 bind 제한으로 실패했다. 같은 명령을 허용된 환경에서 다시 실행해 통과했으며 환경 차단 실행을 검증 성공으로 기록하지 않았다.
 
+## 실제 DB 추가 검증
+
+2026-10-09 23:47 KST에 PR [#100](https://github.com/Alpha-gone/agent-context-sharing/pull/100)의 구현 커밋 `e356d1b`를 로컬 개발 PostgreSQL 인스턴스에서 추가 검증했다. `.env`의 로컬 연결 정보를 메모리에서 읽고 기존 개발 DB와 분리된 `issue84_cugfqu_20261009` 시험 DB를 생성했다. 정식 `001_init` 마이그레이션 적용과 두 번째 실행의 미적용 상태를 확인했다. 접속 정보와 자격 증명은 기록하지 않았다.
+
+- Go 1.27.1로 `GO_BIN`·`TEST_DATABASE_URL`을 지정하고 저장소 루트의 `sh client/internal/client/test-live.sh`를 실행했다. 실행기는 `TEST_DATABASE_REQUIRED=1`을 강제하며 전체 실행 18.222초, 종료 코드 0으로 통과했다.
+- `TestClientServiceLive`의 `issued_token`·`renewal_window`와 자식 프로세스의 `TestClientLiveService`가 실제 PostgreSQL·AGE·TLS·인가·MCP 경계를 통과했다. 도구 13종, PKCE·DPoP, 8종 쓰기 키 유지, 최초 쓰기 응답 유실 후 저장된 결과 재생, 교차 인가 인스턴스의 proof 재생 거부와 갱신된 접근 토큰 사용을 확인했다.
+- 이어서 실행기가 수행하는 서버 `internal/mcp`·`internal/authz`·`cmd/server`의 `go test -json -race -count=1`도 통과했다. 서버·자식 시험의 건너뛰기가 있으면 실패하는 실행기의 최종 판정이 건너뜀 없이 통과했다.
+- 시험 종료 후 남은 DB 연결이 0개임을 확인하고 이번 작업에서 만든 시험 DB만 삭제했다. 시험 DB가 없음을 재확인했고 기존 개발 컨테이너 ID와 기동 시각은 동일했다. 기존 개발 DB·볼륨·`.env`와 사용자 IDE staging은 변경하지 않았다.
+
+이 실행은 기존 실제 서비스 suite를 보완한 결과이며 세 결함의 모든 오류 주입 조합을 실제 DB에서 다시 실행한 것은 아니다. 세 결함의 상세 회귀는 위의 모의 전송·stdio·실제 loopback 시험으로 검증했다. 세션 판단·브라우저 opener·임베딩은 시험 대체이므로 실제 사용자 로그인·시스템 브라우저 또는 외부 임베딩 제공자 검증으로 보고하지 않는다.
+
 ## DOX pass와 제한
 
 루트→`client/`→`host`·`remote`·`authorize`와 루트→`spec/`→`service/`→`agent-context-client/`의 계약을 확인했다. 세 패키지의 소유 DOX와 SDD·개발 계획·요청 기록을 갱신했다. 부모·서비스 DOX와 Child DOX Index는 목적·소유권·경로가 바뀌지 않아 유지했다. 기존 `FR-AGENT_CONTEXT_CLIENT-016`·`019`·`031` 등의 계약을 복원하므로 SRS·공개 도구 manifest·용어집·외부 근거·모듈 의존성·배포 구성은 변경하지 않았다. 개발 계획의 남은 공식 출시 판정도 유지했다.
 
-이번 검증은 모의 원격 HTTP, 실제 로컬 loopback과 stdio 경계에 한정한다. DB·실제 서비스의 `client_live`, 시스템 브라우저·사용자 로그인·WSL2·지원 호스트·공식 conformance와 운영 배포는 실행하지 않았다. 기존 `.env`·개발 DB·볼륨·사용자 IDE staging은 변경하지 않았다. 로컬 구현과 검증 기록이며 커밋·푸시·PR 생성·이슈 직접 종료는 수행하지 않았다.
+초기 구현 검증은 모의 원격 HTTP, 실제 로컬 loopback과 stdio 경계에 한정했고 당시 커밋·푸시·PR 생성·이슈 직접 종료는 수행하지 않았다. 후속으로 PR #100을 생성했으며 위의 실제 DB·서비스 `client_live` 추가 검증도 통과했다. 시스템 브라우저·실제 사용자 로그인·WSL2·지원 호스트·공식 conformance와 운영 배포는 여전히 미검증이다. 이번 추가 검증 결과는 PR #100의 후속 검증 근거로 남긴다. DOX를 다시 확인했으며 계약·소유권·경로 변경이 없어 SRS·SDD·AGENTS.md와 Child DOX Index는 유지했다.
 
 세션 그래프 저장 요청은 응답 지연으로 완료 여부를 확인하지 못했다. 검증 결과는 이 문서에 보존한다.

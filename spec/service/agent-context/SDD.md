@@ -2426,30 +2426,36 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 
 파일 변경만으로 이미 실행 중인 컨테이너의 포트와 이미지가 바뀌지는 않는다. 기존 데이터를 유지하여 적용할 때는 `docker compose -f compose.dev.yaml up -d --build --force-recreate db wal_cleanup`로 기본 서비스를 재생성한다. 이미 실행 중인 Ollama가 불필요하면 `docker compose -f compose.dev.yaml --profile ollama stop ollama`로 중지한다. profile 전환으로 기존 컨테이너·볼륨을 자동 삭제하지 않으며 이 변경의 적용에는 볼륨 삭제가 필요하지 않다.
 
-`test-dev-compose.sh`는 Docker Compose와 `jq`를 사용하여 기본 기동의 Ollama 제외, 명시적 profile 기동, 기본 포트와 포트 번호 재정의의 loopback 바인딩 및 버전 고정을 검사한다. `--runtime`을 주면 `curl`도 사용하고, 캐시 없는 DB 이미지 빌드 뒤 기본 기동에서 Ollama 컨테이너·볼륨이 없는지 확인한 다음 profile로 Ollama를 기동하여 실제 공개 주소·설치 버전·서비스 응답을 검증한다. 별도 Compose 프로젝트와 테스트 자격 증명·볼륨을 사용하며 `.env`를 읽지 않고 모델을 내려받지 않는다. 종료 시 이 테스트가 만든 자원만 정리한다. 기존 개발 컨테이너의 재생성이나 기존 볼륨 삭제는 수행하지 않는다.
+호스트의 Cloudflare Tunnel 커넥터가 `http://localhost:80`으로 접속하는 컨테이너 실행은 개발 Compose의 `server` profile이 소유한다. `docker compose -f compose.dev.yaml --profile server up -d --build`로 DB 준비 확인 → `migrate up` 성공 종료 → `server` 기동을 수행한다. `Dockerfile.server`를 재사용하고 애플리케이션 구성은 `.env`에서 받으며 DB 접속 주소는 `db:5432`로 덮어쓴다. HTTP 수신은 컨테이너의 `:8080`, 호스트 바인딩은 `127.0.0.1:80`이다. `TLS_TERMINATION=proxy`, 인증서·키 빈 값과 내부 HTTP 상태 확인을 고정한다. 공개 URL·허용 Origin은 실제 터널의 HTTPS 도메인으로 설정한다. 기본 DB·WAL 기동과 Ollama profile은 유지하며 `cloudflared`를 Compose에 추가하지 않는다.
 
-운영 구성은 소수 사용자 시험을 위한 단일 호스트 배치다. 2026-10-05 사용자가 원본 연결은 평문임을 명시하여 Cloudflare DNS 프록시가 클라이언트 TLS를 종단하고 Oracle Cloud 호스트에는 HTTP로 접속하는 배치로 정정했다. Tunnel을 사용하지 않으며 「배포 구성」의 기존 `TLS_TERMINATION=proxy` 지원을 사용한다. Cloudflare SSL/TLS 모드는 `Flexible`이며 공개 클라이언트 URL은 HTTPS를 유지한다. 이는 SRS 「transport와 프로토콜」의 시험 운영 예외이고 원본 구간의 비밀번호·토큰·세션 쿠키·본문은 암호화되지 않는다. 전 구간 TLS나 `NFR-AGENT_CONTEXT-013` 전송 보호 충족을 주장하지 않는다. 공식 근거는 `reference.md`의 Flexible·전달 헤더·접속 대역 항목을 따른다.
+서버는 DB 접속용 기본 네트워크와 터널 원본 접속용 `tunnel` 네트워크에 함께 속한다. 후자는 `10.204.0.0/24`, 게이트웨이 `10.204.0.1`이고 `priority=1`로 먼저 연결하여 공개 포트의 접속 경로로 사용하며 `gw_priority=1`로 서버의 기본 게이트웨이를 정한다. Linux Docker에서 호스트의 루프백 공개 포트로 들어오는 요청을 이 게이트웨이에서 받도록 구성하고 `TRUSTED_PROXY_CIDRS=10.204.0.1/32`만 신뢰한다. 전체 Docker 대역이나 Cloudflare 공인 대역을 신뢰하지 않는다. Compose 2.33.1 이상이 필요하며 고정 대역이 기존 네트워크와 충돌하지 않는지 확인한다. Docker Desktop 등에서 실제 접속 상대가 달라지는 경우 주소를 확인하여 배치와 신뢰 경로를 함께 조정하고, 대역을 넓혀 우회하지 않는다. 로컬 신뢰 경로의 다른 프로세스도 전달 헤더를 보낼 수 있으므로 호스트 접근 권한은 운영 신뢰 경계에 포함된다. 터널 없이 `/login`에 직접 HTTP로 접속하면 `400 https_required`가 정상이며, `/healthz`·`/readyz`만 헤더 없이 `200`을 반환한다.
+
+`test-dev-compose.sh`는 Docker Compose와 `jq`를 사용하여 기본 기동의 서버·Ollama 제외, 각 profile의 서비스 구성, 기본 포트와 포트 번호 재정의의 loopback 바인딩 및 버전 고정을 검사한다. 서버 profile은 `127.0.0.1:80` 공개, DB 접속 주소, 기동 의존성, 프록시 종단·단일 게이트웨이 신뢰·인증서 미사용·HTTP 상태 확인을 정적으로 검사한다. `--runtime`은 기존 DB·Ollama 계층만 대상으로 `curl`을 사용하고, 캐시 없는 DB 이미지 빌드 뒤 기본 기동에서 선택적 컨테이너·볼륨이 없는지 확인한 다음 Ollama를 기동하여 실제 공개 주소·설치 버전·서비스 응답을 검증한다. 별도 Compose 프로젝트와 테스트 자격 증명·볼륨을 사용하며 `.env`를 읽지 않고 모델을 내려받지 않는다. 종료 시 이 테스트가 만든 자원만 정리한다. 서버 profile의 이미지 빌드·실제 터널 접속 검증을 대신하지 않는다.
+
+#### 운영 터널 구성
+
+운영 구성은 소수 사용자 시험을 위한 단일 호스트 배치다. 호스트의 `cloudflared`가 Cloudflare와 암호화된 터널을 유지하고 같은 호스트의 `http://localhost:80`으로 요청을 전달한다. 커넥터는 Compose 밖에서 관리하며 「배포 구성」의 기존 `TLS_TERMINATION=proxy` 지원을 사용한다. 공개 클라이언트 URL은 HTTPS를 유지한다. 로컬 HTTP 원본 구간은 SRS 「transport와 프로토콜」의 시험 운영 예외이며 비밀번호·토큰·세션 쿠키·본문을 암호화하지 않는다. 암호화된 터널과 로컬 HTTP 구간을 구분하고 전 구간 TLS나 `NFR-AGENT_CONTEXT-013` 전송 보호 충족을 주장하지 않는다. 공식 근거는 `reference.md`의 Tunnel·Compose 네트워크 항목을 따른다.
 
 | 항목         | 운영 구성                                                                                                                       |
 |--------------|---------------------------------------------------------------------------------------------------------------------------------|
 | 프로젝트     | 이름을 `agent_context_prod`로 고정해 같은 호스트의 개발 컨테이너·볼륨과 섞이지 않는다                                            |
 | 서비스       | `db`, 1회 실행 `migrate`, `server`. Ollama와 WAL 자동 정리는 두지 않는다                                                        |
-| 공개 범위    | `server`만 IPv4 `0.0.0.0`의 `HTTP_PORT`(기본 80)에 HTTP로 공개하고 DB는 호스트에 공개하지 않는다. OCI와 호스트 방화벽에서 Cloudflare 원본 접속 대역만 허용한다 |
+| 공개 범위    | `server`만 IPv4 `127.0.0.1`의 `HTTP_PORT`(기본 80)에 HTTP로 연결하고 DB는 호스트에 공개하지 않는다. 커넥터의 원본 URL은 같은 포트로 맞춘다 |
 | TLS 경계     | `TLS_TERMINATION=proxy`. 실제 접속자가 `TRUSTED_PROXY_CIDRS`에 속하고 단일 `X-Forwarded-Proto` 값이 `https`일 때만 업무 요청을 처리한다 |
-| 신뢰 대역    | 2026-10-05 공식 Cloudflare IPv4·IPv6 접속 대역 22개를 Compose에 고정한다. 전체 네트워크·Docker 게이트웨이를 신뢰하지 않으며 공식 목록 갱신 시 검사 기대값과 방화벽도 함께 검토한다 |
+| 신뢰 대역    | 호스트의 루프백 공개 포트 접속 경로인 Docker 게이트웨이 `10.203.0.1/32`만 고정한다. 전체 Docker 대역이나 Cloudflare 공인 접속 대역을 신뢰하지 않는다 |
 | 구성 값      | `.env`(예시 `.env.prod.example`)에서 읽고 `DATABASE_URL`·`HTTP_ADDR`·TLS 배치와 신뢰 대역은 Compose가 덮어쓴다. 서버의 `TLS_CERT_FILE`·`TLS_KEY_FILE`은 빈 값이며 인증서·키를 마운트하지 않는다 |
 | 상태 확인    | 컨테이너 내부 HTTP `/healthz`를 검사한다. 자격 증명 없는 `/healthz`·`/readyz`만 프록시 헤더 없이 허용하며 외부 점검은 공개 HTTPS URL을 사용한다 |
 | 기동 순서    | `db` 준비 확인 → `migrate up` 성공 종료 → `server` 기동                                                                         |
 | 종료         | 요청 대기 30초와 작업자 종료 10초 뒤에도 멈추지 않으면 50초에 강제 종료한다                                                       |
 | 이미지       | `Dockerfile.server`가 서버·마이그레이션 실행기·감사 도구를 정적 바이너리로 담고 베이스 이미지의 태그·digest를 고정한다              |
 
-기본 Docker 네트워크 `10.203.0.0/24`는 DB와 애플리케이션의 내부 접속에만 사용하며 HTTPS 판정의 신뢰 대역이 아니다. 신뢰 판정은 요청의 실제 접속 주소를 사용하며 방문자 주소인 `CF-Connecting-IP`나 `X-Forwarded-For`를 사용하지 않는다. Linux 원본 호스트의 연결 경로에서 Cloudflare 출발지 주소가 서버까지 보존되어야 한다. 출발지가 다른 프록시·게이트웨이로 바뀌어 `https_required`가 나오면 그 경로를 조사하고 전체 대역 신뢰로 우회하지 않는다. 공인 IPv4로 원본에 접속하므로 Cloudflare의 A 레코드는 해당 호스트를 가리켜야 한다. IPv6 원본 수신·방화벽을 별도로 준비하지 않았다면 원본을 가리키는 AAAA 레코드를 추가하지 않는다. Cloudflare 대역의 허용은 원본 우회 노출을 줄이기 위한 호스트 운영 절차이며 Compose가 자동으로 방화벽을 변경하지 않는다. 이 허용만으로 특정 Cloudflare 계정의 요청을 인증하는 것은 아니다.
+기본 Docker 네트워크는 `10.203.0.0/24`, 게이트웨이는 `10.203.0.1`로 고정하며 이 게이트웨이 한 주소만 HTTPS 전달 헤더의 신뢰 경로로 사용한다. 신뢰 판정은 요청의 실제 접속 주소를 사용하며 방문자 주소인 `CF-Connecting-IP`나 `X-Forwarded-For`를 사용하지 않는다. Linux Docker의 호스트 루프백 공개 포트 접속 경로를 전제로 하며 Docker Desktop 등에서 접속 상대가 달라지면 실제 주소와 연결 경로를 조사하고 배치·신뢰 설정을 함께 조정한다. 전체 대역 신뢰로 우회하지 않는다. 같은 호스트의 다른 프로세스도 이 경로로 전달 헤더를 보낼 수 있으므로 호스트 접근 권한이 운영 신뢰 경계에 포함된다. Docker Engine 28.0.0 미만에서 loopback 공개 포트가 같은 L2 네트워크에 노출되는 제약을 피하도록 28.0.0 이상을 사용한다. 공개 호스트 이름은 Tunnel로 연결하고 원본 TCP 80·443의 외부 인바운드 허용은 필요하지 않다. Compose는 Cloudflare나 방화벽 설정을 자동 변경하지 않는다.
 
-기존 Tunnel 또는 직접 TLS 배치에서 전환할 때는 원본 방화벽과 Cloudflare 설정을 먼저 준비하고 `.env`의 `HTTP_PORT`를 명시적으로 80으로 바꾼 뒤 서버를 재생성한다. 원본 인증서·키 경로는 필요하지 않다. 원본의 HTTP→HTTPS 리디렉션은 Flexible 연결에서 반복 리디렉션을 일으킬 수 있으므로 클라이언트 HTTP의 HTTPS 전환은 Cloudflare에서 처리한다. 상태 확인을 제외한 원래 HTTP 클라이언트 요청과 신뢰 대역 밖의 요청은 `https_required`로 거부한다. 민감 데이터를 쓰는 일반 운영에서는 원본 구간도 TLS로 보호하는 별도 배치가 필요하다.
+기존 DNS 프록시 또는 직접 TLS 배치에서 전환할 때는 호스트의 커넥터와 공개 호스트 이름을 준비하고 `.env`의 `HTTP_PORT`를 80으로 맞춘 뒤 서버를 재생성한다. 커넥터의 원본 URL은 `http://localhost:80`이며 원본 인증서·키 경로는 필요하지 않다. 공개 URL은 HTTPS를 유지한다. 상태 확인을 제외한 단일 HTTPS 전달 헤더 없는 요청과 신뢰 대역 밖의 요청은 `https_required`로 거부한다. 민감 데이터를 쓰는 일반 운영에서는 로컬 원본 구간도 TLS로 보호하는 별도 배치가 필요하다.
 
 운영 DB는 「백업과 복구」의 시점 복구를 위해 WAL 보관을 켜고 보관본을 데이터와 별도 볼륨에 둔다. 개발 구성의 시간 기준 정리는 기본 백업이 없는 개발 환경 전용이므로 운영에 두지 않는다. 보관본은 계속 쌓이므로 운영자가 기본 백업을 받은 뒤 그보다 오래된 보관본을 정리하고 볼륨 사용량을 감시한다.
 
-`test-prod-compose.sh`는 Docker Compose와 `jq`로 운영 구성을 정적으로 검사한다. DB 비밀번호 누락 시 구성 거부, 인증서·키 없이 구성 가능, 서비스 구성, DB 비공개와 애플리케이션의 기본 HTTP 80·재정의 포트 공개, 프록시 종단과 공식 Cloudflare 대역의 정확한 일치, 인증서·키 미사용·마운트 없음, HTTP 상태 확인, WAL 보관과 베이스 이미지 고정을 확인한다. 호출자의 전체 CIDR·직접 TLS 설정으로 고정 배치를 바꿀 수 없는지도 검사한다. 실제 `.env`를 해석하지 않고 이미지를 빌드하거나 컨테이너를 띄우지 않으며 방화벽·출발지 주소 보존·실제 Cloudflare 연결의 검증을 대신하지 않는다.
+`test-prod-compose.sh`는 Docker Compose와 `jq`로 운영 구성을 정적으로 검사한다. DB 비밀번호 누락 시 구성 거부, 인증서·키 없이 구성 가능, 서비스 구성, DB 비공개와 애플리케이션의 기본 HTTP 80·재정의 포트의 loopback 바인딩, 프록시 종단과 단일 호스트 게이트웨이 신뢰, 인증서·키 미사용·마운트 없음, HTTP 상태 확인, WAL 보관과 베이스 이미지 고정을 확인한다. 호출자의 전체 CIDR·직접 TLS 설정으로 고정 배치를 바꿀 수 없는지도 검사한다. 실제 `.env`를 해석하지 않고 이미지를 빌드하거나 컨테이너를 띄우지 않으며 방화벽·실제 접속 상대와 Cloudflare 연결의 검증을 대신하지 않는다.
 
 ### 임베딩 제공자 전환
 

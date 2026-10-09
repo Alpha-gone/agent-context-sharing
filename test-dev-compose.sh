@@ -28,7 +28,7 @@ cleanup() {
         fi
         compose --profile ollama down --volumes --rmi local || result=1
     fi
-    rm -f "$test_dir/default.json" "$test_dir/ollama.json" "$test_dir/ports.json" "$test_dir/runtime.json"
+    rm -f "$test_dir/default.json" "$test_dir/ollama.json" "$test_dir/ports.json" "$test_dir/runtime.json" "$test_dir/server.json"
     rmdir "$test_dir" || result=1
     exit "$result"
 }
@@ -56,19 +56,50 @@ check_config() {
     fi
 }
 
-compose config --format json > "$test_dir/default.json"
+compose config --no-env-resolution --format json > "$test_dir/default.json"
 jq -e '
     (.services | keys == ["db", "wal_cleanup"]) and
+    (.networks | keys == ["default"]) and
     (.volumes | keys == ["db_data"]) and
     (.services.db.ports[0] | .host_ip == "127.0.0.1" and .target == 5432 and .published == "5432")
 ' "$test_dir/default.json" > /dev/null
-compose --profile ollama config --format json > "$test_dir/ollama.json"
+compose --profile ollama config --no-env-resolution --format json > "$test_dir/ollama.json"
 check_config "$test_dir/ollama.json" 5432 11434
 export POSTGRES_PORT=15432 OLLAMA_PORT=21434
-compose --profile ollama config --format json > "$test_dir/ports.json"
+compose --profile ollama config --no-env-resolution --format json > "$test_dir/ports.json"
 check_config "$test_dir/ports.json" 15432 21434
+
+# 실제 .env를 읽지 않고 호출자의 넓은 신뢰 설정도 고정 경로를 바꾸지 않는지 확인한다.
+export HTTP_ADDR=0.0.0.0:9999 TLS_TERMINATION=direct TRUSTED_PROXY_CIDRS='0.0.0.0/0,::/0'
+export TLS_CERT_FILE=/unused/cert.pem TLS_KEY_FILE=/unused/key.pem
+compose --profile server config --no-env-resolution --format json > "$test_dir/server.json"
+jq -e '
+    (.services | keys == ["db", "migrate", "server", "wal_cleanup"]) and
+    (.services.server.profiles == ["server"]) and
+    (.services.migrate.profiles == ["server"]) and
+    (.services.server.ports | length == 1) and
+    (.services.server.ports[0] | .host_ip == "127.0.0.1" and .target == 8080 and .published == "80") and
+    (.services.migrate.ports // [] | length == 0) and
+    (.services.server.environment.HTTP_ADDR == ":8080") and
+    (.services.server.environment.TLS_TERMINATION == "proxy") and
+    (.services.server.environment.TRUSTED_PROXY_CIDRS == "10.204.0.1/32") and
+    (.services.server.environment.TLS_CERT_FILE == "") and
+    (.services.server.environment.TLS_KEY_FILE == "") and
+    (.services.server.volumes // [] | length == 0) and
+    (.services.server.environment.DATABASE_URL == "postgres://dev_compose_test:dev_compose_test@db:5432/dev_compose_test") and
+    (.services.migrate.environment.DATABASE_URL == .services.server.environment.DATABASE_URL) and
+    (.services.migrate.command == ["migrate", "up"]) and
+    (.services.migrate.depends_on.db.condition == "service_healthy") and
+    (.services.server.depends_on.migrate.condition == "service_completed_successfully") and
+    (.services.server.networks | keys == ["default", "tunnel"]) and
+    (.services.server.networks.tunnel.priority == 1) and
+    (.services.server.networks.tunnel.gw_priority == 1) and
+    (.networks.tunnel.ipam.config[0] | .subnet == "10.204.0.0/24" and .gateway == "10.204.0.1") and
+    (.services.server.healthcheck.test == ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"])
+' "$test_dir/server.json" > /dev/null
+unset HTTP_ADDR TLS_TERMINATION TRUSTED_PROXY_CIDRS TLS_CERT_FILE TLS_KEY_FILE
 grep -Eq 'apt-get install .*postgresql-18-pgvector=0[.]8[.]6-1[.]pgdg13[+]1([[:space:]]|$)' "$repo_root/Dockerfile"
-echo "개발 구성 검사 통과: 기본 기동의 Ollama 제외, 명시적 profile과 loopback·버전 고정"
+echo "개발 구성 검사 통과: 선택적 profile, 서버 localhost:80·신뢰 경로와 loopback·버전 고정"
 
 if [ "$runtime" -eq 0 ]; then
     exit 0
@@ -76,7 +107,7 @@ fi
 
 # Docker가 사용 가능한 임시 포트를 배정하며 기존 개발 포트·볼륨을 사용하지 않는다.
 export POSTGRES_PORT=0 OLLAMA_PORT=0
-compose --profile ollama config --format json > "$test_dir/runtime.json"
+compose --profile ollama config --no-env-resolution --format json > "$test_dir/runtime.json"
 check_config "$test_dir/runtime.json" 0 0
 runtime_started=1
 compose build --no-cache db

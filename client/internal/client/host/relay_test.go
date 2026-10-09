@@ -339,6 +339,13 @@ func TestListEnvelopeOutputLimitUsesJSONRPCError(t *testing.T) {
 }
 
 func TestSDKClientReadsActualHostToolsAndErrors(t *testing.T) {
+	for _, revision := range hostProtocolVersions {
+		t.Run(revision, func(t *testing.T) { testSDKClientReadsActualHostToolsAndErrors(t, revision) })
+	}
+}
+
+func testSDKClientReadsActualHostToolsAndErrors(t *testing.T, revision string) {
+	t.Helper()
 	remote := newToolRemote(t)
 	policy, _ := contract.NewPolicy("all", nil)
 	in, input := io.Pipe()
@@ -354,7 +361,7 @@ func TestSDKClientReadsActualHostToolsAndErrors(t *testing.T) {
 		out.Close()
 	}()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-sdk-host", Version: "1"}, &mcp.ClientOptions{Logger: logger})
-	session, err := client.Connect(ctx, &mcp.IOTransport{Reader: output, Writer: input}, &mcp.ClientSessionOptions{ProtocolVersion: protocolVersion})
+	session, err := client.Connect(ctx, &mcp.IOTransport{Reader: output, Writer: input}, &mcp.ClientSessionOptions{ProtocolVersion: revision})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +374,7 @@ func TestSDKClientReadsActualHostToolsAndErrors(t *testing.T) {
 	if err != nil || result.IsError {
 		t.Fatalf("SDK 정상 호출=%+v err=%v", result, err)
 	}
-	if info, ok := result.GetMeta()[mcp.MetaKeyServerInfo].(map[string]any); !ok || info["name"] != "agent-context-client" || info["version"] != "sdk-host" {
+	if info, ok := result.GetMeta()[mcp.MetaKeyServerInfo].(map[string]any); revision == protocolVersion && (!ok || info["name"] != "agent-context-client" || info["version"] != "sdk-host") {
 		t.Fatal("SDK 클라이언트 serverInfo 불일치")
 	}
 	for _, failure := range []error{contract.ErrConfiguration, contract.ErrAuthorization, contract.ErrTransport, context.DeadlineExceeded, contract.ErrProtocol, contract.ErrIndeterminate, contract.ErrBusy} {

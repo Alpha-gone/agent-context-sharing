@@ -145,7 +145,7 @@ func TestOversizedFrameWithoutSafeIDUsesNullID(t *testing.T) {
 	}
 }
 
-func TestInvalidAndLegacyRequestsDoNotBreakFraming(t *testing.T) {
+func TestInvalidRequestsDoNotBreakFraming(t *testing.T) {
 	var output bytes.Buffer
 	input := "\n\r\n \t\r\nnot-json\n\n" + `{"jsonrpc":"2.0","id":false,"method":"server/discover"}` + "\n" +
 		`{"jsonrpc":"2.0","id":2,"method":"initialize"}` + "\n" +
@@ -179,7 +179,7 @@ func TestInvalidAndLegacyRequestsDoNotBreakFraming(t *testing.T) {
 		errors = append(errors, response)
 	}
 	if errors[0].Error.Code != jsonrpc.CodeParseError || errors[1].Error.Code != jsonrpc.CodeInvalidRequest ||
-		errors[2].Error.Code != jsonrpc.CodeMethodNotFound || errors[3].Error.Code != jsonrpc.CodeInvalidParams {
+		errors[2].Error.Code != jsonrpc.CodeInvalidParams || errors[3].Error.Code != jsonrpc.CodeInvalidParams {
 		t.Fatalf("오류 코드가 다릅니다: %+v", errors)
 	}
 }

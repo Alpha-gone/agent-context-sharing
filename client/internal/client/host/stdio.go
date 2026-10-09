@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"agent_context_sharing/client/internal/client/contract"
@@ -46,9 +47,9 @@ func (t *stdioTransport) Connect(ctx context.Context) (mcp.Connection, error) {
 		closed:  make(chan struct{}),
 		drained: make(chan struct{}),
 		tools:   t.tools, life: life, cancel: cancel, calls: make(map[jsonrpc.ID]*activeCall),
-		discoveries: make(map[jsonrpc.ID]bool),
-		logger:      t.logger,
-		version:     t.version,
+		lifecycle: make(map[jsonrpc.ID]string),
+		logger:    t.logger,
+		version:   t.version,
 	}
 	go c.readLoop()
 	go c.writeLoop()
@@ -80,7 +81,8 @@ type stdioConn struct {
 	cancel      context.CancelFunc
 	callsMu     sync.Mutex
 	calls       map[jsonrpc.ID]*activeCall
-	discoveries map[jsonrpc.ID]bool // callsMu가 발견·도구의 ID 접수와 기록 시작을 직렬화한다.
+	lifecycle   map[jsonrpc.ID]string // callsMu가 lifecycle·도구의 ID 접수와 기록 시작을 직렬화한다.
+	legacyReady atomic.Bool
 	toolPending int
 	stopped     bool
 	workers     sync.WaitGroup
@@ -174,6 +176,13 @@ func (c *stdioConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 			continue
 		}
 		switch request.Method {
+		case "notifications/initialized":
+			if !request.IsCall() {
+				return message, nil
+			}
+			if err := c.writeError(ctx, request.ID, jsonrpc.CodeInvalidRequest, "알림에는 요청 ID를 지정할 수 없습니다.", ""); err != nil {
+				return nil, err
+			}
 		case "notifications/cancelled":
 			if !request.IsCall() {
 				c.cancelRequest(request.Params)
@@ -182,10 +191,18 @@ func (c *stdioConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 			if err := c.writeError(ctx, request.ID, jsonrpc.CodeInvalidRequest, "알림에는 요청 ID를 지정할 수 없습니다.", ""); err != nil {
 				return nil, err
 			}
-		case "server/discover":
+		case "initialize", "server/discover", "ping":
+			if request.Method == "initialize" && !validInitialize(request.Params) {
+				if request.IsCall() {
+					if err := c.writeError(ctx, request.ID, jsonrpc.CodeInvalidParams, "초기 연결의 revision·기능·클라이언트 식별 정보가 필요합니다.", "client_protocol"); err != nil {
+						return nil, err
+					}
+				}
+				continue
+			}
 			if request.IsCall() {
 				c.callsMu.Lock()
-				if c.discoveries[request.ID] || c.calls[request.ID] != nil {
+				if c.lifecycle[request.ID] != "" || c.calls[request.ID] != nil {
 					c.callsMu.Unlock()
 					if err := c.writeError(ctx, request.ID, jsonrpc.CodeInvalidRequest,
 						"진행 중인 요청 ID를 재사용할 수 없습니다.", ""); err != nil {
@@ -193,7 +210,7 @@ func (c *stdioConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 					}
 					continue
 				}
-				c.discoveries[request.ID] = true
+				c.lifecycle[request.ID] = request.Method
 				c.pendingMu.Lock()
 				c.pending++
 				c.pendingMu.Unlock()
@@ -258,14 +275,17 @@ func (c *stdioConn) Write(ctx context.Context, message jsonrpc.Message) (err err
 	var before []func() bool
 	if response, ok := message.(*jsonrpc.Response); ok {
 		c.callsMu.Lock()
-		tracked := c.discoveries[response.ID]
+		method := c.lifecycle[response.ID]
 		c.callsMu.Unlock()
-		if tracked {
+		if method != "" {
 			defer c.finishResponse()
 			before = append(before, func() bool {
 				c.callsMu.Lock()
-				delete(c.discoveries, response.ID)
+				delete(c.lifecycle, response.ID)
 				c.callsMu.Unlock()
+				if method == "initialize" && response.Error == nil {
+					c.legacyReady.Store(true)
+				}
 				return true
 			})
 		}
@@ -346,19 +366,23 @@ func (c *stdioConn) cancelRequest(params []byte) {
 }
 
 func (c *stdioConn) dispatch(ctx context.Context, request *jsonrpc.Request) error {
+	if len(request.Params) == 0 {
+		request.Params = []byte(`{}`)
+	}
+	legacy := c.legacyRequest(request.Params)
 	c.callsMu.Lock()
 	if c.stopped {
 		c.callsMu.Unlock()
 		return mcp.ErrConnectionClosed
 	}
-	if c.calls[request.ID] != nil || c.discoveries[request.ID] {
+	if c.calls[request.ID] != nil || c.lifecycle[request.ID] != "" {
 		c.callsMu.Unlock()
 		return c.writeError(ctx, request.ID, jsonrpc.CodeInvalidRequest, "진행 중인 요청 ID를 재사용할 수 없습니다.", "")
 	}
 	if c.toolPending >= 8+128 {
 		c.callsMu.Unlock()
 		field, raw := clientErrorResponse(request.Method, contract.ErrBusy)
-		return c.writeRaw(ctx, request.ID, request.Method, field, raw)
+		return c.writeResponse(ctx, request.ID, request.Method, field, raw, legacy)
 	}
 	work, cancel := context.WithCancel(contract.WithCorrelation(c.life))
 	call := &activeCall{cancel: cancel}
@@ -388,7 +412,7 @@ func (c *stdioConn) dispatch(ctx context.Context, request *jsonrpc.Request) erro
 		defer func() { finish(); c.callsMu.Lock(); c.toolPending--; c.callsMu.Unlock() }()
 		process := func(work context.Context) error {
 			started := time.Now()
-			result, err := c.toolResult(work, request)
+			result, err := c.toolResult(work, request, legacy)
 			if err == nil && len(result) > maxOutputBytes {
 				result, err = nil, contract.ErrProtocol
 			}
@@ -415,7 +439,7 @@ func (c *stdioConn) dispatch(ctx context.Context, request *jsonrpc.Request) erro
 					field, result = clientErrorResponse(request.Method, err)
 				}
 			}
-			if writeErr := c.writeRaw(c.life, request.ID, request.Method, field, result, beginWrite); writeErr != nil {
+			if writeErr := c.writeResponse(c.life, request.ID, request.Method, field, result, legacy, beginWrite); writeErr != nil {
 				outcome = "output_failed"
 				c.cancel()
 				_ = c.in.Close()
@@ -448,8 +472,8 @@ func (c *stdioConn) dispatch(ctx context.Context, request *jsonrpc.Request) erro
 	return nil
 }
 
-func (c *stdioConn) toolResult(ctx context.Context, request *jsonrpc.Request) (jsontext.Value, error) {
-	if c.tools == nil || !validRequestMeta(request.Params) {
+func (c *stdioConn) toolResult(ctx context.Context, request *jsonrpc.Request, legacy bool) (jsontext.Value, error) {
+	if c.tools == nil || !legacy && !validRequestMeta(request.Params) {
 		return nil, contract.ErrProtocol
 	}
 	if request.Method == "tools/list" {
@@ -471,7 +495,7 @@ func (c *stdioConn) toolResult(ctx context.Context, request *jsonrpc.Request) (j
 		if err != nil {
 			return nil, err
 		}
-		return annotateResult(raw, c.version)
+		return raw, nil
 	}
 	var input struct {
 		Name      string         `json:"name"`
@@ -490,7 +514,7 @@ func (c *stdioConn) toolResult(ctx context.Context, request *jsonrpc.Request) (j
 	if result == nil {
 		return nil, contract.ErrProtocol
 	}
-	return annotateResult(result.Raw(), c.version)
+	return result.Raw(), nil
 }
 
 func clientErrorResult(err error) jsontext.Value {
@@ -525,6 +549,10 @@ func clientErrorResponse(method string, err error) (string, jsontext.Value) {
 }
 
 func (c *stdioConn) writeRaw(ctx context.Context, id jsonrpc.ID, method, field string, raw jsontext.Value, before ...func() bool) error {
+	return c.writeResponse(ctx, id, method, field, raw, false, before...)
+}
+
+func (c *stdioConn) writeResponse(ctx context.Context, id jsonrpc.ID, method, field string, raw jsontext.Value, legacy bool, before ...func() bool) error {
 	if len(raw) > maxOutputBytes {
 		field, raw = clientErrorResponse(method, contract.ErrProtocol)
 	}
@@ -538,9 +566,12 @@ func (c *stdioConn) writeRaw(ctx context.Context, id jsonrpc.ID, method, field s
 	if field == "result" {
 		var err error
 		raw, err = annotateResult(raw, c.version)
+		if err == nil && legacy {
+			raw, err = legacyResult(raw)
+		}
 		if err != nil {
 			field, raw = clientErrorResponse(method, contract.ErrProtocol)
-			return c.writeRaw(ctx, id, method, field, raw, before...)
+			return c.writeResponse(ctx, id, method, field, raw, legacy, before...)
 		}
 	}
 	idRaw, err := json.Marshal(id.Raw())
@@ -553,7 +584,7 @@ func (c *stdioConn) writeRaw(ctx context.Context, id jsonrpc.ID, method, field s
 	frame = append(frame, '}', '\n')
 	if len(frame)-1 > maxOutputBytes {
 		field, raw = clientErrorResponse(method, contract.ErrProtocol)
-		return c.writeRaw(ctx, id, method, field, raw, before...)
+		return c.writeResponse(ctx, id, method, field, raw, legacy, before...)
 	}
 	return c.writeFrame(ctx, frame, before...)
 }

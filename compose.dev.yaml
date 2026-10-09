@@ -1,4 +1,9 @@
-# 개발용 데이터베이스와 임베딩 제공자. 운영 배포 구성은 compose.prod.yaml이 다룬다.
+# 개발용 DB·임베딩 제공자와 선택적 애플리케이션 서버.
+# 호스트의 cloudflared 원본 http://localhost:80:
+#   docker compose -f compose.dev.yaml --profile server up -d --build
+x-app-environment: &app-environment
+  DATABASE_URL: postgres://${POSTGRES_USER:-agent_context}:${POSTGRES_PASSWORD:-agent_context}@db:5432/${POSTGRES_DB:-agent_context}
+
 services:
   db:
     build: .
@@ -58,6 +63,57 @@ services:
         sleep 86400;
         done
 
+  # 기본 기동은 기존처럼 DB·WAL 정리만 수행한다. 서버 profile에서 스키마를 먼저 적용한다.
+  migrate:
+    profiles: [server]
+    build: &app-build
+      context: .
+      dockerfile: Dockerfile.server
+    image: agent_context_dev-app
+    command: ["migrate", "up"]
+    env_file:
+      - path: .env
+        required: false
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  server:
+    profiles: [server]
+    build: *app-build
+    image: agent_context_dev-app
+    command: ["server"]
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *app-environment
+      HTTP_ADDR: ":8080"
+      TLS_TERMINATION: proxy
+      # Linux Docker에서 호스트의 loopback 공개 포트로 들어오는 경로만 신뢰한다.
+      TRUSTED_PROXY_CIDRS: "10.204.0.1/32"
+      TLS_CERT_FILE: ""
+      TLS_KEY_FILE: ""
+    ports:
+      - "127.0.0.1:80:8080"
+    networks:
+      default: {}
+      tunnel:
+        priority: 1
+        gw_priority: 1
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    stop_grace_period: 50s
+
   # Gemini 개발 기본값과 비교하거나 Ollama 구성으로 복귀할 때 사용하는 제공자.
   # 기본 기동에서 제외하며 --profile ollama로 명시적으로 기동한다.
   # Gemini 실패 시 자동 대체하지 않는다. 태그와 다중 아키텍처 digest를 함께 고정한다.
@@ -78,6 +134,15 @@ services:
 # 않기 위해서이며, 아래를 한 번 실행해 준비한다.
 #   docker compose -f compose.dev.yaml --profile ollama up -d ollama
 #   docker compose -f compose.dev.yaml --profile ollama exec ollama ollama pull bge-m3
+networks:
+  default: {}
+  # 서버 profile에서만 사용한다. 기본 DB·Ollama 네트워크는 변경하지 않는다.
+  tunnel:
+    ipam:
+      config:
+        - subnet: 10.204.0.0/24
+          gateway: 10.204.0.1
+
 volumes:
   db_data:
   ollama_data:

@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"io"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -75,7 +76,7 @@ func (r *runningHost) readLine(t *testing.T) string {
 	}
 }
 
-func TestHostDiscoverAndLegacyHandshake(t *testing.T) {
+func TestHostDiscoverAdvertisesCompatibleVersions(t *testing.T) {
 	running := startHost(t)
 	if _, err := io.WriteString(running.input, discoverRequest+"\n"); err != nil {
 		t.Fatal(err)
@@ -95,8 +96,7 @@ func TestHostDiscoverAndLegacyHandshake(t *testing.T) {
 	if err := json.Unmarshal([]byte(running.readLine(t)), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.ID != 1 || len(response.Result.SupportedVersions) != 1 ||
-		response.Result.SupportedVersions[0] != protocolVersion || response.Result.Capabilities.Tools == nil ||
+	if response.ID != 1 || !slices.Equal(response.Result.SupportedVersions, hostProtocolVersions) || response.Result.Capabilities.Tools == nil ||
 		response.Result.Capabilities.Resources != nil || response.Result.Capabilities.Prompts != nil {
 		t.Fatalf("discover 계약이 다릅니다: %+v", response)
 	}
@@ -107,8 +107,8 @@ func TestHostDiscoverAndLegacyHandshake(t *testing.T) {
 	if _, err := io.WriteString(running.input, `{"jsonrpc":"2.0","id":2,"method":"initialize"}`+"\n"); err != nil {
 		t.Fatal(err)
 	}
-	if line := running.readLine(t); !strings.Contains(line, `"code":-32601`) {
-		t.Fatalf("구형 handshake가 거부되지 않았습니다: %s", line)
+	if line := running.readLine(t); !strings.Contains(line, `"code":-32602`) {
+		t.Fatalf("잘못된 초기 연결이 거부되지 않았습니다: %s", line)
 	}
 	if err := running.input.Close(); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestHostDiscoverImmediatelyBeforeEOF(t *testing.T) {
 	if err := json.Unmarshal(lines[0], &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.ID != 1 || len(response.Result.SupportedVersions) != 1 || response.Result.SupportedVersions[0] != protocolVersion {
+	if response.ID != 1 || !slices.Equal(response.Result.SupportedVersions, hostProtocolVersions) {
 		t.Fatalf("EOF 직전 discover 응답 = %+v", response)
 	}
 }

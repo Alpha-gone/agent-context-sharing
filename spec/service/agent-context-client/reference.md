@@ -2,6 +2,7 @@
 
 | 조회 날짜 | 조회 시각 | 제목 | URL | 요약 | 반영 위치 |
 |-----------|-----------|------|-----|------|-----------|
+| 2026-10-09 | 17:50 KST | MCP 2025-11-25 Lifecycle | https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle | 호스트는 initialize로 revision·기능·식별 정보를 교환하고 initialized 뒤 도구 요청을 보낸다. 미지원 revision은 서버가 지원하는 판으로 응답하며 호스트가 연결 유지 여부를 판단한다. SDK v1.8.0의 기존 초기 연결 처리로 호스트 호환을 제공하고 원격 무상태 프로토콜은 유지한다. | #96, SRS `FR-AGENT_CONTEXT_CLIENT-002`·`-003`·`-027`, SDD 「lifecycle과 도구 공개」 |
 | 2026-10-03 | 21:35 KST | MCP conformance CLI 소스 | https://github.com/modelcontextprotocol/conformance/blob/main/src/index.ts | 확인한 서버 CLI는 HTTP `--url`을 받는다. client `--command` 경로는 클라이언트 시험이며 stdio 서버 적합성 실행을 대신하지 않는다. 직접 stdio 호스트 시험은 미실행으로 기록한다. | 6단계 검토의 공식 conformance 보류 |
 | 2026-10-03 | 21:35 KST | SPDX 2.3 문서·패키지 정보 | https://spdx.github.io/spdx-spec/v2.3/document-creation-information/ ; https://spdx.github.io/spdx-spec/v2.3/package-information/ | 문서 namespace·CC0·생성 정보·패키지 식별자·미확인 라이선스와 관계를 구성하고 실제 연결된 Go 모듈을 목록화한다. | SDD 「CPU 아키텍처별 산출물」, 배포 후보 도구 |
 | 2026-10-03 | 21:35 KST | SPDX 2.3 공식 JSON schema | https://raw.githubusercontent.com/spdx/spdx-spec/v2.3/schemas/spdx-schema.json | 생성한 네 플랫폼 SBOM을 이 schema와 format 검사로 검증했다. 형식 검증은 공급망 신뢰나 라이선스 확정을 뜻하지 않는다. | 6단계 배포 후보 검증 |

@@ -19,21 +19,34 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// TestHostDuplicateDiscoverDrainsAfterEOF는 첫 SDK 핸들러를 멈춰 중복 ID가
+// TestHostDuplicateLifecycleDrainsAfterEOF는 첫 SDK 핸들러를 멈춰 중복 ID가
 // 진행 중인 요청과 확실히 겹쳐도 EOF 뒤 응답을 기록하고 종료하는지 확인한다.
-func TestHostDuplicateDiscoverDrainsAfterEOF(t *testing.T) {
+func TestHostDuplicateLifecycleDrainsAfterEOF(t *testing.T) {
+	for _, request := range []string{discoverRequest, initializeRequest, `{"jsonrpc":"2.0","id":1,"method":"ping"}`} {
+		var decoded struct {
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal([]byte(request), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		t.Run(decoded.Method, func(t *testing.T) { testHostDuplicateLifecycleDrainsAfterEOF(t, request, decoded.Method) })
+	}
+}
+
+func testHostDuplicateLifecycleDrainsAfterEOF(t *testing.T, frame, trackedMethod string) {
+	t.Helper()
 	for _, id := range []string{`1`, `"duplicate"`} {
 		t.Run(id, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			entered, release := make(chan struct{}), make(chan struct{})
 			server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1"}, &mcp.ServerOptions{
-				SupportedProtocolVersions: []string{protocolVersion},
+				SupportedProtocolVersions: hostProtocolVersions,
 				Logger:                    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 			})
 			server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 				return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
-					if method == "server/discover" {
+					if method == trackedMethod {
 						select {
 						case <-entered:
 						default:
@@ -44,7 +57,7 @@ func TestHostDuplicateDiscoverDrainsAfterEOF(t *testing.T) {
 					return next(ctx, method, request)
 				}
 			})
-			request := strings.Replace(discoverRequest, `"id":1`, `"id":`+id, 1)
+			request := strings.Replace(frame, `"id":1`, `"id":`+id, 1)
 			// marker의 로컬 오류는 reader가 중복 요청을 넘어서 읽었음을 보장한다.
 			input := request + "\n" + request + "\n" + `{"jsonrpc":"2.0","id":"marker","method":"unsupported"}` + "\n"
 			output := &discoverMarkerWriter{marker: make(chan struct{})}

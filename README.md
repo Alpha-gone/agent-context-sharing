@@ -21,8 +21,32 @@ AI 에이전트가 작업 중 얻은 지식과 맥락을 저장하고, 관계를
 
 - 서버: 루트 Go 모듈의 `cmd/server`와 `internal/`
 - MCP 클라이언트: 독립 Go 모듈인 `client/`
-- 개발 환경: 호스트에서 Go 프로그램을 실행하고 `compose.dev.yaml`로 DB를 기동
-- 시험 운영 환경: `compose.prod.yaml`로 서버·마이그레이션·DB를 실행하고 Cloudflare DNS 프록시가 TLS를 종단한 뒤 HTTP 원본에 접속. 서버는 Cloudflare의 HTTPS 전달 헤더만 신뢰하며 원본 구간은 암호화되지 않음([운영 제약](OPERATIONS.md#1-운영-전제와-개방-조건) 확인)
+- 개발 환경: 호스트에서 Go 프로그램을 실행하고 `compose.dev.yaml`로 DB를 기동하거나, `server` 프로필로 애플리케이션까지 컨테이너에서 실행
+- 현재 터널 연결: 호스트의 `cloudflared`가 `http://localhost:80`으로 전달. 개발용 실행은 아래 「호스트 터널에 연결하는 컨테이너 서버」 절차를 사용
+- 운영 환경: 별도 `compose.prod.yaml`로 DB·마이그레이션·서버를 실행하고 같은 호스트 터널에 연결. 설정·적용·백업 절차는 [운영 매뉴얼](OPERATIONS.md)을 사용
+
+## 호스트 터널에 연결하는 컨테이너 서버
+
+`cloudflared`와 Docker는 같은 호스트에서 실행합니다. `compose.dev.yaml`의 `server` 프로필은 DB 준비와 마이그레이션 완료 뒤 서버를 기동하고 `127.0.0.1:80`을 컨테이너의 HTTP 8080에 연결합니다. 터널의 원본 주소는 `http://localhost:80`으로 지정합니다. Docker Compose 2.33.1 이상을 사용하고 호스트의 80번 포트와 `10.204.0.0/24` 네트워크가 사용 가능한지 확인합니다.
+
+개발용 `.env`에 Gemini API 키 등 기존 구성을 채우고 공개 주소 세 값을 실제 터널 도메인으로 설정합니다.
+
+```dotenv
+RESOURCE_SERVER_URL=https://agent-context.example.com/mcp
+AUTHORIZATION_SERVER_URL=https://agent-context.example.com
+MCP_ALLOWED_ORIGINS=https://agent-context.example.com
+```
+
+```sh
+docker compose -f compose.dev.yaml --profile server up -d --build --wait
+curl --fail --show-error http://localhost:80/healthz
+curl --fail --show-error http://localhost:80/readyz
+curl --fail --show-error --output /dev/null https://agent-context.example.com/login
+```
+
+로컬 상태 확인은 `200`, 터널을 통과한 HTTPS 로그인 화면도 `200`이 기대 결과입니다. 로컬 HTTP `/login`은 HTTPS 전달 헤더가 없으므로 `400 https_required`가 정상입니다. 서버는 호스트 접속 경로인 `10.204.0.1/32`에서 온 단일 HTTPS 전달 헤더만 신뢰합니다. 터널을 통해 전달되는 원본 HTTP는 호스트 내부에 한정되며 호스트 접근 권한도 신뢰 경계에 포함됩니다. `cloudflared`는 이 Compose 파일이 관리하지 않습니다. Ollama를 컨테이너 서버와 함께 사용한다면 `ollama` 프로필도 켜고 임베딩 원본 주소를 `http://ollama:11434`로 설정합니다.
+
+이 구성은 개발용 DB 자격 증명과 WAL 자동 정리를 사용합니다. 운영 데이터에는 별도 `compose.prod.yaml`과 [운영 매뉴얼](OPERATIONS.md)의 백업·적용 절차를 사용합니다.
 
 ## 로컬 시작
 
@@ -108,6 +132,8 @@ docker compose -f compose.dev.yaml --profile ollama exec ollama ollama pull bge-
 `doctor`는 앞서 내보낸 `.env`의 `AGENT_CONTEXT_CLIENT_*` 값을 사용합니다. 브라우저를 열 수 있는 사용자 컴퓨터에서 실행하고 로그인·인가를 완료합니다. 전체 성공의 종료 코드는 `0`이며, `1`은 실패, `2`는 사용법 오류, `3`은 실패 없이 건너뛴 검사가 있는 상태입니다.
 
 MCP 호스트에는 다음 실행 정보와 환경 변수를 등록합니다. 호스트마다 설정 파일 형식은 다르므로 해당 호스트의 MCP 설정 위치에 맞춰 적용하십시오.
+
+Codex·JetBrains의 `initialize` 기반 연결과 MCP `2026-07-28`의 `server/discover` 연결을 모두 지원합니다. 특정 Codex 기능 플래그를 필수로 설정할 필요는 없습니다. 클라이언트를 다시 빌드한 뒤 호스트의 MCP 연결을 재시작하면 변경된 실행 파일이 적용됩니다. 초기 연결에는 인증이 필요 없으며 도구 목록을 처음 조회할 때 브라우저 인가를 진행합니다.
 
 ```json
 {

@@ -5,10 +5,10 @@
 | 항목 | 내용 |
 |------|------|
 | 문서 상태 | 확정 |
-| 최종 수정일 | 2026-09-30 |
+| 최종 수정일 | 2026-10-09 |
 | 서비스 식별자 | `AGENT_CONTEXT_CLIENT` |
 | 담당 범위 | 에이전트 호스트와 에이전트 컨텍스트 관리 시스템 사이에서 인증과 MCP 도구 호출을 중계하는 로컬 클라이언트 프로세스 |
-| 기준 프로토콜 | 호스트 경계의 MCP `2026-07-28`, 원격 경계의 MCP `2026-07-28` 메시지·수명주기·도구 계약과 서비스 전용 RFC 9449 DPoP 인증 프로필 |
+| 기준 프로토콜 | 호스트 경계의 MCP `2026-07-28` 및 `initialize` 기반 호환 연결, 원격 경계의 MCP `2026-07-28` 메시지·수명주기·도구 계약과 서비스 전용 RFC 9449 DPoP 인증 프로필 |
 | 정본 연동 계약 | `../agent-context/SRS.md`, `../agent-context/SDD.md` |
 
 이 문서는 클라이언트 요구사항의 정본이며 2026-09-19에 작성한 초안을 대체한다. 이전 초안의 요구사항과 미정 사항은 새 문서의 입력으로 승계하지 않았으며, 서버의 현재 공개 계약과 MCP `2026-07-28`의 무상태 요청 모델에서 다시 도출했다. 구현 단계와 진행 상태는 `DEVELOPMENT_PLAN.md`가 소유한다.
@@ -32,9 +32,9 @@
 | 지원 운영체제 판 | Apple 보안 업데이트 대상인 macOS 14 Sonoma 이상, Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상 또는 Debian Security·LTS 지원 기간인 Debian 12 이상, Microsoft 지원 기간인 Windows 11 25H2 이상에서 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상 실행 |
 | 첫 지원 에이전트 호스트 | Codex CLI `0.156.1` |
 | 호스트 연결 | 표준 입출력을 사용하는 MCP `stdio` transport |
-| 호스트 프로토콜 기능 | Codex `config.toml`에서 `features.mcp_2026_07_28`을 활성화 |
+| 호스트 프로토콜 기능 | `server/discover` 기반 연결과 Codex·JetBrains의 `initialize` 기반 연결을 모두 제공하며 새 프로토콜 기능 활성화를 필수로 요구하지 않음 |
 | 원격 연결 | TLS로 보호된 HTTP 기반 Streamable HTTP |
-| 프로토콜 revision | 호스트 경계는 MCP `2026-07-28` 전체 계약을 따르고, 원격 경계는 같은 revision의 메시지·수명주기·도구 계약에 서비스 전용 DPoP 인증 프로필을 적용 |
+| 프로토콜 revision | 호스트는 MCP `2026-07-28`과 `2025-11-25`·`2025-06-18`·`2025-03-26`·`2024-11-05`의 도구 연결을 제공하고, 원격은 `2026-07-28` 메시지·수명주기·도구 계약에 서비스 전용 DPoP 인증 프로필을 적용 |
 | 프로세스 범위 | 사용자 계정 하나와 행위 에이전트 하나를 대표하며 여러 컨텍스트 그래프를 사용할 수 있음 |
 | 도구 범위 | 원격 서버가 공개한 도구 13종 전체 |
 | 인증 | 시스템 브라우저와 루프백 콜백을 이용한 Authorization Code with PKCE(`S256`) |
@@ -65,7 +65,7 @@
 
 ### 목표
 
-- MCP `2026-07-28`을 사용하는 에이전트 호스트가 원격 도구 13종을 같은 이름과 의미로 호출할 수 있게 한다.
+- MCP `2026-07-28` 또는 `initialize` 기반 호환 연결을 사용하는 에이전트 호스트가 원격 도구 13종을 같은 이름과 의미로 호출할 수 있게 한다.
 - 사용자가 비밀번호나 접근 토큰을 에이전트 호스트에 전달하지 않고 브라우저에서 인가를 완료하게 한다.
 - 접근 토큰 갱신과 재인증을 도구 호출 흐름 안에서 안전하게 처리한다.
 - 유출된 접근 토큰만으로 보호된 요청을 재생할 수 없게 한다.
@@ -139,8 +139,8 @@
 | ID | 요구사항 | 판정 기준 | 상태 | 출처 |
 |----|----------|-----------|------|------|
 | `FR-AGENT_CONTEXT_CLIENT-001` | 클라이언트는 에이전트 호스트가 자식 프로세스로 실행하고 표준 입력으로 요청을 보내며 표준 출력으로 응답을 받는 MCP `stdio` 서비스를 제공해야 한다. | 프로토콜 메시지 밖의 출력이 표준 출력에 섞이지 않고, 유효한 요청 직후 stdin EOF가 와도 그 요청의 응답을 보존한다. | 확정 | 제품 기준선 |
-| `FR-AGENT_CONTEXT_CLIENT-002` | 클라이언트는 MCP `2026-07-28`의 무상태 요청 모델을 사용해야 하며 `initialize`·`initialized` 또는 `Mcp-Session-Id`에 의존해서는 안 된다. | 각 요청의 `_meta`에 protocol version과 `clientCapabilities`를 포함하고, `clientInfo`를 보낼 때는 유효한 형식을 사용하며 이전 요청 상태 없이 처리한다. | 확정 | MCP `2026-07-28`, `reference.md` |
-| `FR-AGENT_CONTEXT_CLIENT-003` | 클라이언트는 호스트에 애플리케이션 primitive로 `tools/list`와 `tools/call`을 제공하고 원격 서버의 도구 13종을 같은 이름으로 노출해야 한다. | 도구 이름의 누락·추가·변경이 없으며 웹 전용 기능과 다른 application primitive가 목록에 나타나지 않는다. 단, 프로토콜 lifecycle RPC인 `server/discover`는 지원한다. | 확정 | agent-context SRS 「MCP 연산 매핑」, MCP `2026-07-28` |
+| `FR-AGENT_CONTEXT_CLIENT-002` | 클라이언트의 원격 연결과 MCP `2026-07-28` 호스트 연결은 무상태 요청 모델을 사용해야 한다. 호스트에는 `initialize` 기반 호환 연결도 제공해야 한다. | 무상태 연결은 요청별 `_meta`와 기능 선언을 검증한다. 호환 연결은 성공한 초기 연결 뒤 요청별 revision 메타데이터 없이 도구를 조회·호출하고 응답 외피를 협상한 revision에 맞춘다. 원격은 `initialize`·`initialized` 또는 `Mcp-Session-Id`에 의존하지 않는다. | 확정 | MCP `2026-07-28`, MCP `2025-11-25` lifecycle, #96 사용자 요청 |
+| `FR-AGENT_CONTEXT_CLIENT-003` | 클라이언트는 호스트에 애플리케이션 primitive로 `tools/list`와 `tools/call`을 제공하고 원격 서버의 도구 13종을 같은 이름으로 노출해야 한다. | 도구 이름의 누락·추가·변경이 없으며 웹 전용 기능과 다른 application primitive가 목록에 나타나지 않는다. 호스트 lifecycle의 `server/discover`와 호환 연결의 `initialize`·`notifications/initialized`·`ping`도 지원한다. | 확정 | agent-context SRS 「MCP 연산 매핑」, MCP lifecycle, #96 |
 | `FR-AGENT_CONTEXT_CLIENT-004` | 클라이언트는 인증 뒤 원격 `tools/list`에서 이름, 설명과 `inputSchema`를 읽어 호스트 측 도구 정의를 구성해야 한다. | 원격 목록이 13종 계약과 다르거나 스키마가 유효하지 않으면 도구를 부분 공개하지 않고 호환성 오류로 중단한다. | 확정 | agent-context SDD 「MCP 표면」 |
 | `FR-AGENT_CONTEXT_CLIENT-005` | 클라이언트는 도구 스키마의 타입, 필수 값, 열거형, 길이와 개수 제약으로 호스트 입력을 선검증해야 한다. | 선검증 실패는 원격 요청을 보내지 않으며 서버의 재검증과 오류 의미를 바꾸지 않는다. | 확정 | agent-context SDD 「입력 검증」 |
 | `FR-AGENT_CONTEXT_CLIENT-006` | 클라이언트는 시작 구성으로 받은 UUIDv7 행위 에이전트 식별자를 변경 연산의 `created_by_agent`에 주입해야 한다. | `node_create`, `node_update`, `node_discard`, `node_restore`, `relation_confirm`, `relation_discard`의 호스트 측 스키마에서는 해당 필드를 받지 않고 구성값만 원격에 보낸다. | 확정 | agent-context SRS 「계정 매핑과 인가 범위」 |
@@ -184,7 +184,7 @@
 
 | ID | 요구사항 | 판정 기준 | 상태 | 출처 |
 |----|----------|-----------|------|------|
-| `FR-AGENT_CONTEXT_CLIENT-027` | 클라이언트는 호스트 측 `server/discover`에 응답하고, 원격 인증 뒤 `server/discover`로 `2026-07-28` 지원·기능 선언·서버 식별 정보를 검증해야 한다. | 호스트는 `server/discover` 뒤 13종 도구를 조회·호출할 수 있고, 원격 서버가 고정 revision 또는 `tools` capability를 광고하지 않으면 도구를 공개하지 않고 `client_protocol`로 중단한다. `io.github.alpha-gone/write-idempotency` 확장과 24시간 보관 선언이 있으면 쓰기 멱등성 경로를 활성화하며, 없으면 기존 비협상 경로를 유지한다. 호스트 응답에는 클라이언트 프로세스의 `serverInfo`를 넣는다. | 확정 | MCP `2026-07-28`, MCP extension framework, MCP Go SDK lifecycle |
+| `FR-AGENT_CONTEXT_CLIENT-027` | 클라이언트는 호스트 측 `server/discover` 또는 호환 초기 연결에 응답하고, 원격 인증 뒤 `server/discover`로 `2026-07-28` 지원·기능 선언·서버 식별 정보를 검증해야 한다. | 호스트는 발견 또는 `initialize`·`notifications/initialized` 뒤 도구를 조회·호출할 수 있고 원격이 고정 revision 또는 `tools` capability를 광고하지 않으면 `client_protocol`로 중단한다. 쓰기 멱등성 확장과 24시간 보관 선언이 있으면 협상 경로를 활성화하며 없으면 기존 비협상 경로를 유지한다. 호스트 초기 연결·발견에는 클라이언트 `serverInfo`를 넣고 도구 응답 외피는 요청 방식에 맞춘다. | 확정 | MCP lifecycle, extension framework, MCP Go SDK, #96 |
 | `FR-AGENT_CONTEXT_CLIENT-028` | 클라이언트는 원격 `tools/list`의 `ttlMs`와 `cacheScope`를 지켜 도구 정의를 캐시하고, 캐시가 만료되면 다음 노출 또는 호출 전에 스키마를 재검증해야 한다. | `ttlMs`가 없거나 `0`이면 캐시된 결과를 새 요청에 사용하지 않으며, `private` 결과는 현재 프로세스와 인증 주체 밖에서 재사용하지 않는다. 이름·설명·입력 스키마의 변경은 부분 공개 없이 `client_protocol`로 처리한다. | 확정 | MCP `2026-07-28` |
 | `FR-AGENT_CONTEXT_CLIENT-029` | 클라이언트는 공유 브라우저 인가를 기다리는 요청의 취소를 대기자별로 분리해야 한다. | 한 대기자의 취소·제한 시간은 다른 대기자의 인가를 취소하지 않고, 마지막 대기자가 사라지면 인가와 콜백 수신기를 종료한다. 종료된 요청에는 뒤늦은 인증 결과를 전달하지 않는다. | 확정 | 제품 기준선, `NFR-AGENT_CONTEXT_CLIENT-006` |
 | `FR-AGENT_CONTEXT_CLIENT-030` | 클라이언트는 기동 정책으로 기본 `all`, `read_only`, allowlist 도구 공개 모드를 제공해야 한다. | 정책은 원격 서버의 도구·권한을 새로 추가하지 않고 노출을 축소만 하며, `tools/list`와 `tools/call`의 결과가 같은 정책을 따른다. 서버의 권한 판정은 항상 정본으로 유지한다. | 확정 | 제품 기준선 |
@@ -256,7 +256,7 @@
 | `NFR-AGENT_CONTEXT_CLIENT-002` | 인가 무결성 | 클라이언트는 인가 요청마다 독립적인 `state`와 PKCE 값을 사용하고 콜백을 단 한 번 소비해야 한다. | 재사용, 불일치, 만료, 다른 포트·경로와 병렬 인가 혼선을 자동화 테스트가 거부함을 확인한다. | 확정 | OAuth 2.1 |
 | `NFR-AGENT_CONTEXT_CLIENT-003` | 전송 보안 | 원격 통신은 검증된 TLS만 사용하고 인증서·호스트 이름 검증을 끄는 운영 구성을 제공해서는 안 된다. | 평문 URL과 인증서 오류를 연결 전에 또는 TLS 단계에서 거부한다. | 확정 | agent-context `FR-AGENT_CONTEXT-140` |
 | `NFR-AGENT_CONTEXT_CLIENT-004` | 개인정보와 본문 보호 | 클라이언트는 `body`, `work_context`, `judgment_input`, 도구 결과 본문을 운영 로그나 원격 분석 서비스에 기록해서는 안 된다. | 로그에는 요청 식별자, 도구 이름, 상태, 지연과 크기만 남고 외부 telemetry는 기본 비활성이다. | 확정 | agent-context SDD 「로그에서 제외하는 것」 |
-| `NFR-AGENT_CONTEXT_CLIENT-005` | 프로토콜 적합성 | 호스트 경계는 MCP `2026-07-28` 전체 계약을, 원격 경계는 같은 revision의 요청별 메타데이터·무상태·수명주기·도구 계약과 서비스 전용 DPoP 인증 프로필을 지켜야 한다. | 호스트 경계는 공식 conformance 시나리오를 통과하고, 원격 경계는 메시지·수명주기·도구 계약과 DPoP 계약 시험을 분리해 통과한다. 원격 DPoP 인증 결과를 MCP `2026-07-28` 핵심 인증 적합성으로 보고하지 않는다. | 확정 | MCP `2026-07-28`, RFC 9449, 제품 기준선 |
+| `NFR-AGENT_CONTEXT_CLIENT-005` | 프로토콜 적합성 | 호스트는 MCP `2026-07-28`과 명시한 초기 연결 revision의 도구 계약을, 원격은 `2026-07-28` 요청별 메타데이터·무상태·수명주기·도구 계약과 서비스 전용 DPoP를 지켜야 한다. | 호스트의 무상태·호환 연결 계약을 검증하고 공식 conformance 결과는 별도 기록한다. 원격 메시지·수명주기·도구 시험과 DPoP 시험도 구분하며 DPoP 결과를 MCP 핵심 인증 적합성으로 보고하지 않는다. | 확정 | MCP lifecycle, RFC 9449, 제품 기준선, #96 |
 | `NFR-AGENT_CONTEXT_CLIENT-006` | 동시성 | 동시 호출, 토큰 갱신과 재인증이 요청 상관관계와 자격 증명 상태를 손상해서는 안 된다. | 100개 동시 호출과 겹친 갱신·인증 테스트에서 응답 혼선, data race와 중복 브라우저 인가가 없다. | 확정 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-007` | 지연 | 인증이 필요하지 않은 중계가 원격 왕복을 제외하고 과도한 지연을 추가해서는 안 된다. | 준비된 프로세스와 루프백 모의 서버에서 1KiB 요청·응답 100개를 동시에 중계할 때 클라이언트 자체 처리 시간 p95가 50ms 이하이다. | 확정 | 제품 기준선 |
 | `NFR-AGENT_CONTEXT_CLIENT-008` | 장애 격리 | 한 요청의 취소·오류·잘못된 응답이 다른 진행 중 요청이나 인증 상태를 실패시켜서는 안 된다. | 오류 주입 테스트에서 영향이 해당 요청에 한정되고 프로세스는 후속 정상 요청을 처리한다. | 확정 | 제품 기준선 |
@@ -275,7 +275,7 @@
 |--------|-----------|-----------|
 | 인가 응답의 발급자 식별 | agent-context 서버 SRS 「프로토콜 매핑」과 SDD 「인가 코드 흐름」이 성공·오류 인가 응답의 `iss`와 메타데이터 선언을 확정했다. | 서버 구현이 `iss`를 포함하고 계약 테스트를 통과한다. |
 | 공개 클라이언트 사전 등록 | 서버는 사전 등록된 `client_id`와 루프백 `redirect_uri`만 허용한다. | 배포 환경마다 클라이언트 식별자와 등록된 콜백 경로를 제공한다. |
-| 호스트의 MCP `2026-07-28` 지원 | `TBD-AGENT_CONTEXT_CLIENT-001`이 Codex CLI `0.156.1`을 첫 지원 호스트로 확정했다. 호환성 검증은 아직 실행하지 않았다. | `features.mcp_2026_07_28`을 활성화한 Codex CLI `0.156.1`에서 `stdio` 종단 간 검증을 통과한다. |
+| 호스트 MCP 연결 | Codex CLI `0.156.1`을 첫 공식 검증 호스트로 정했으며 #96에 따라 `initialize` 호환 처리를 추가한다. | 무상태 발견과 호환 초기 연결의 목록·호출·오류·취소 계약을 각각 검증하고 실제 실행 표면의 검증 결과를 구분한다. |
 | 원격 수명주기·캐시 계약 | agent-context 서버 SRS 「외부 연동 요구사항」과 SDD 「MCP 표면」이 `server/discover`, 요청별 `_meta`, 응답 `resultType`과 `serverInfo`, `tools/list`의 `ttlMs`·`cacheScope`를 확정했다. | 서버 구현이 이 표면을 제공하고 계약 테스트를 통과한다. |
 | 서비스 전용 DPoP 인증 프로필 | agent-context 서버 SRS가 ES256 DPoP 토큰 발급, 보호 요청 proof 검증, 공유 재생 방어와 갱신 결합을 확정했다. 이 프로필은 MCP `2026-07-28` 핵심 Bearer 인증과 호환되지 않는다. | 서버 구현과 클라이언트가 RFC 9449 종단 간 계약 및 Bearer 하향 거부 시험을 통과하고, 원격 인증 결과를 공식 MCP 핵심 인증 conformance와 분리해 보고한다. |
 
@@ -283,14 +283,14 @@
 
 ### 호스트 구성
 
-첫 출시의 공식 호환성 검증 대상은 Codex CLI `0.156.1`이다. 이 판에서 호스트 측 MCP `2026-07-28`을 사용하도록 다음 Codex `config.toml` 설정을 활성화해야 한다.
+첫 공식 호환성 검증 대상은 Codex CLI `0.156.1`이다. 호스트 측 MCP `2026-07-28` 무상태 연결을 선택하는 경우 다음 Codex `config.toml` 설정을 활성화한다.
 
 ```toml
 [features]
 mcp_2026_07_28 = true
 ```
 
-설정이 없거나 비활성인 Codex는 첫 출시의 지원 대상이 아니다. `0.156.1`과 다른 Codex 판도 같은 `server/discover`, `tools/list`, `tools/call`, 취소와 오류 중계 종단 간 계약 테스트를 통과하기 전에는 공식 호환 대상으로 간주하지 않는다. Codex CLI와 설정을 공유하는 다른 Codex 실행 표면도 별도 종단 간 검증 없이 지원 범위에 포함하지 않는다.
+이 기능이 없거나 비활성인 Codex와 JetBrains에는 `initialize` 기반 호환 연결을 제공한다. 기능 플래그는 연결의 필수 조건이 아니다. 다른 Codex 판과 실행 표면의 공식 호환성은 목록·호출·취소·오류 중계의 종단 간 검증 결과로 별도 판정한다.
 
 ### 자원 상한
 
@@ -365,7 +365,7 @@ mcp_2026_07_28 = true
 
 | ID | 항목 | 결정 | 상태 | 출처 |
 |----|------|------|------|------|
-| `TBD-AGENT_CONTEXT_CLIENT-001` | 지원 에이전트 호스트 | 첫 출시의 공식 종단 간 호환성 검증 대상은 `features.mcp_2026_07_28`을 활성화한 Codex CLI `0.156.1`이다. 다른 Codex 판과 실행 표면은 같은 계약 테스트를 통과한 뒤 지원 대상으로 추가한다. | 확정 | 사용자 확정, OpenAI Docs, 로컬 설치본 확인 |
+| `TBD-AGENT_CONTEXT_CLIENT-001` | 지원 에이전트 호스트 | 첫 공식 검증 호스트는 Codex CLI `0.156.1`이다. #96에 따라 Codex·JetBrains의 `initialize` 호환 연결을 추가하고 특정 기능 플래그를 필수 조건에서 제외한다. 다른 판·실행 표면의 공식 지원은 해당 종단 간 검증 결과로 판정한다. | 확정 | 사용자 확정 및 #96 호환 요청, 로컬 로그·실행 파일 확인 |
 | `TBD-AGENT_CONTEXT_CLIENT-002` | 구현 언어와 저장소 배치 | Go `1.27.1`과 공식 MCP Go SDK를 사용한다. 서버와 클라이언트를 이 저장소의 서로 다른 Go 모듈로 두고 클라이언트는 독립 실행 파일로 배포한다. 구체적인 모듈 경로, 실행 명령 경로와 내부 패키지 경계는 SDD가 소유한다. | 확정 | 사용자 확정 및 모듈 분리 요청, 저장소 Go 기준, MCP Go SDK lifecycle |
 | `TBD-AGENT_CONTEXT_CLIENT-003` | 재시도 기본값 | 허용된 읽기, 원격 전달 전 실패가 확실한 쓰기와 멱등성 확장을 협상한 쓰기는 최초 시도 제외 최대 3회 재시도한다. 각 대기 상한은 250ms, 500ms, 1초이며 실제 대기는 0부터 해당 상한 사이에서 무작위 선택한다. 취소와 도구 호출 제한 시간이 우선하고 재인증 뒤 재전송은 재시도 횟수를 초기화하지 않는다. | 확정 | 사용자 채택, 제품 기준선 |
 | `TBD-AGENT_CONTEXT_CLIENT-004` | 지원 운영체제 판 | 첫 출시는 Apple 보안 업데이트 대상인 macOS 14 Sonoma 이상, Canonical 표준 보안 유지 기간인 Ubuntu LTS 22.04 이상 또는 Debian Security·LTS 지원 기간인 Debian 12 이상, Microsoft 지원 기간인 Windows 11 25H2 이상에서 지원한다. Windows의 공식 실행 환경은 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상이며 브라우저 인가와 loopback callback을 Windows 호스트와 함께 검증한다. CPU 아키텍처별 배포본 범위는 SDD가 소유한다. | 확정 | 사용자 채택, Codex CLI 설치 요구사항, Go 최소 요구사항, 운영체제 수명 주기 |

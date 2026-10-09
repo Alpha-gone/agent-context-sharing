@@ -1,16 +1,16 @@
 # 서버 시험 운영 매뉴얼
 
-이 문서는 Oracle Cloud 단일 호스트에서 `compose.prod.yaml`과 Cloudflare DNS 프록시를 사용하는 시험 운영 절차입니다. Tunnel은 사용하지 않습니다. 서비스 계약은 [서버 설계](spec/service/agent-context/SDD.md), 구성 항목은 [.env.prod.example](.env.prod.example)을 기준으로 합니다. 로컬 개발은 [README](README.md)를 따릅니다.
+이 문서는 `compose.prod.yaml`과 호스트에서 실행하는 Cloudflare Tunnel의 `http://localhost:80` 연결을 사용하는 서버 시험 운영 절차입니다. 서비스 계약은 [서버 설계](spec/service/agent-context/SDD.md), 운영 구성 항목은 [.env.prod.example](.env.prod.example)을 기준으로 합니다. 개발용 서버 profile은 운영 데이터에 사용하지 않습니다.
 
 명령은 별도 표시가 없으면 서버용 체크아웃의 저장소 루트에서 실행합니다. `agent-context.example.com`, 절대 경로, 백업 이름은 실제 값으로 바꾸십시오. 배포·복구 명령은 운영자가 점검한 뒤 실행하는 절차이며, 문서 작성만으로 서버에 적용되지는 않습니다.
 
 ## 1. 운영 전제와 개방 조건
 
-시험 운영 담당자는 호스트·Docker 관리 권한, Cloudflare 도메인·SSL 설정과 OCI 네트워크 관리 권한, Gemini API 이용 권한을 준비합니다. 서버에서 Go를 직접 설치할 필요는 없으며 애플리케이션 이미지는 고정된 Go 1.27.1로 빌드합니다. Docker Compose, `curl`, `jq`가 필요하며 원본 서버 인증서·개인 키는 사용하지 않습니다.
+시험 운영 담당자는 호스트·Docker 관리 권한, Cloudflare 도메인·Tunnel 설정과 OCI 네트워크 관리 권한, Gemini API 이용 권한을 준비합니다. `cloudflared`는 Docker와 같은 호스트에서 별도로 실행합니다. 서버에서 Go를 직접 설치할 필요는 없으며 애플리케이션 이미지는 고정된 Go 1.27.1로 빌드합니다. Docker Compose, `curl`, `jq`가 필요하며 원본 서버 인증서·개인 키는 사용하지 않습니다.
 
-- DB 포트는 호스트에 공개하지 않습니다. 애플리케이션은 IPv4 `0.0.0.0:80`에 HTTP로 공개합니다. 원본으로 들어오는 TCP 80은 OCI와 호스트 방화벽에서 Cloudflare 접속 대역으로 제한합니다.
-- 사용자→Cloudflare는 HTTPS, Cloudflare→원본 서버는 HTTP인 `Flexible` 모드입니다. 서버는 실제 접속자가 Cloudflare 대역이고 `X-Forwarded-Proto: https`가 전달된 업무 요청만 처리합니다. 전체 네트워크를 신뢰하지 않습니다.
-- **원본 구간은 암호화되지 않습니다.** 비밀번호·토큰·세션 쿠키·본문도 그 구간에서는 평문으로 전송되며 IP 접근 제한으로 암호화를 대체할 수 없습니다. 이는 사용자가 명시한 시험 운영 예외이고 전 구간 TLS·토큰 전송 보호 기준을 충족하지 않습니다. 민감 데이터를 쓰는 일반 운영에는 원본 TLS를 갖춘 별도 배치가 필요합니다.
+- DB 포트는 호스트에 공개하지 않습니다. 애플리케이션은 IPv4 `127.0.0.1:80`에만 HTTP로 연결합니다. 원본 TCP 80·443을 외부에 공개할 필요가 없습니다.
+- 사용자→Cloudflare는 HTTPS, Cloudflare→호스트 커넥터는 암호화된 터널, 커넥터→컨테이너 서버는 로컬 HTTP입니다. 서버는 호스트의 공개 포트 접속 경로인 `10.203.0.1/32`와 단일 `X-Forwarded-Proto: https`를 함께 검증합니다. Cloudflare 공인 대역이나 전체 Docker 대역을 신뢰하지 않습니다.
+- **로컬 HTTP 원본 구간은 암호화되지 않습니다.** 비밀번호·토큰·세션 쿠키·본문도 그 구간에서는 평문으로 전송됩니다. 이는 시험 운영 예외이고 전 구간 TLS·토큰 전송 보호 기준을 충족하지 않습니다. 같은 호스트의 다른 프로세스도 전달 헤더를 보낼 수 있으므로 호스트 접근 권한이 신뢰 경계에 포함됩니다. 민감 데이터를 쓰는 일반 운영에는 로컬 원본 TLS를 갖춘 별도 배치가 필요합니다.
 - 운영 구성에는 Ollama와 WAL 자동 정리 서비스가 없습니다. 기본 임베딩 구성은 Gemini입니다.
 - 컨텍스트 본문과 검색 질의가 Gemini로 전송됩니다. 기밀 데이터 입력 여부, API 정책·예산·할당량을 먼저 확인합니다.
 - 가입한 모든 계정이 운영자 복구 자격을 갖는 검증 단계입니다. 승인된 시험 참여자로 접근을 제한하고 실제 민감 데이터는 사용하지 않습니다. 외부 접근 제어를 추가했다면 웹 로그인과 MCP 인가·요청 경로가 모두 동작하는지 확인합니다.
@@ -36,26 +36,26 @@ chmod 600 .env
 - `AUTHORIZATION_SERVER_URL=https://agent-context.example.com`
 - `MCP_ALLOWED_ORIGINS=https://agent-context.example.com`
 - `OAUTH_CLIENTS`: 실제 클라이언트 ID와 허용할 리디렉션 URI를 등록합니다. 예시는 `agent-context`와 IPv4·IPv6 루프백 callback을 등록하며 동적 루프백 포트를 허용합니다.
-- `HTTP_PORT=80`: 기존 설정의 `8080` 또는 `443`을 그대로 두지 않습니다. Flexible의 일반 HTTPS 접속은 원본 HTTP 80으로 전달됩니다. 별도 origin rule이 있다면 그 설정과 실제 수신 포트를 대조합니다.
+- `HTTP_PORT=80`: 커넥터의 원본 URL `http://localhost:80`과 맞춥니다. 기존 설정의 `8080` 또는 `443`을 그대로 두지 않습니다. 포트를 재정의하면 커넥터의 원본 URL도 함께 바꿉니다.
 
-Compose는 `.env`를 읽으며 서버 컨테이너의 `DATABASE_URL`, HTTP 수신 주소와 TLS 배치는 운영 구성에 맞게 덮어씁니다. `TLS_TERMINATION=proxy`, `TRUSTED_PROXY_CIDRS`는 공식 Cloudflare 접속 대역으로 고정합니다. 서버의 `TLS_CERT_FILE`·`TLS_KEY_FILE`은 빈 값이며 인증서·키를 마운트하지 않습니다. 이전 설정에 이 값이 남아 있어도 서버에서는 사용하지 않습니다. 개발용 `DATABASE_URL`을 복사하여 호스트 DB에 연결하려고 하지 마십시오. 이 절차에서는 `.env`를 셸에 내보낼 필요가 없습니다.
+Compose는 `.env`를 읽으며 서버 컨테이너의 `DATABASE_URL`, HTTP 수신 주소와 TLS 배치는 운영 구성에 맞게 덮어씁니다. `TLS_TERMINATION=proxy`, `TRUSTED_PROXY_CIDRS=10.203.0.1/32`를 고정합니다. 서버의 `TLS_CERT_FILE`·`TLS_KEY_FILE`은 빈 값이며 인증서·키를 마운트하지 않습니다. 이전 설정에 이 값이 남아 있어도 서버에서는 사용하지 않습니다. 개발용 `DATABASE_URL`을 복사하여 호스트 DB에 연결하려고 하지 마십시오. 이 절차에서는 `.env`를 셸에 내보낼 필요가 없습니다.
 
 `.env`, 백업과 개인 키는 버전 관리 및 공개 로그에 넣지 않습니다. `docker compose config`의 전체 출력은 비밀번호와 API 키를 포함할 수 있으므로 다음 검사처럼 `--quiet`를 사용합니다.
 
-### DNS와 원본 접근 준비
+### 터널과 원본 접근 준비
 
-1. Cloudflare DNS의 프록시 활성화된 A 레코드가 Oracle 호스트의 공인 IPv4를 가리키는지 확인합니다. IPv6 원본 수신을 준비하지 않았다면 원본을 가리키는 AAAA 레코드는 사용하지 않습니다.
-2. Cloudflare SSL/TLS 모드는 `Flexible`로 지정합니다. 브라우저 측 HTTPS 인증서가 활성화되어 있는지 확인하고 공개 클라이언트 URL은 HTTPS를 유지합니다. 원본에서 HTTP→HTTPS 리디렉션을 추가하지 않습니다.
-3. OCI의 유효한 NSG·보안 목록과 호스트의 컨테이너 유입 방화벽에서 TCP 80을 Cloudflare의 [현재 원본 접속 IP 대역](https://www.cloudflare.com/ips/)에만 허용하고 다른 출처의 원본 접속은 차단합니다. 기존 `0.0.0.0/0` 허용 규칙이 남아 있지 않은지도 확인합니다. Docker 공개 포트는 일반 호스트 INPUT 규칙만으로 제한되지 않을 수 있으므로 실제 컨테이너 유입 경계와 OCI 규칙을 검증합니다. SSH 관리 경로는 별도로 보존합니다.
+1. 호스트의 `cloudflared`와 Tunnel 상태를 확인하고 공개 호스트 이름을 해당 터널로 연결합니다. 원본 서비스 URL은 `http://localhost:80`으로 지정합니다. `HTTP_PORT`를 바꿨다면 동일한 포트를 사용합니다.
+2. 브라우저 측 HTTPS 인증서가 활성화되어 있는지 확인하고 공개 클라이언트 URL을 실제 터널 도메인의 HTTPS 주소로 맞춥니다. 이전 DNS 프록시 배치의 `Flexible` 설정을 이 절차의 필수 조건으로 사용하지 않습니다. 커넥터의 HTTP 원본 URL이 로컬 연결 방식을 정합니다.
+3. 원본 TCP 80·443의 외부 인바운드 허용은 필요하지 않습니다. 기존 원본 공개 규칙의 제거 여부를 검토하고 터널의 아웃바운드 연결이 가능한지 확인합니다. SSH 관리 경로와 다른 서비스에 필요한 규칙은 보존합니다.
 
-Cloudflare 대역 허용은 원본 우회 노출을 줄이지만 특정 Cloudflare 계정을 인증하지는 않습니다. 방화벽 규칙은 자동으로 적용되지 않습니다. [Flexible 안내](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/flexible/), [원본 접근 제한 안내](https://developers.cloudflare.com/fundamentals/concepts/cloudflare-ip-addresses/)와 [Docker 방화벽 경계](https://docs.docker.com/engine/network/packet-filtering-firewalls/)를 확인하십시오. Compose의 신뢰 대역은 2026-10-05 공식 IPv4·IPv6 목록과 대조했으며, 공식 목록이 바뀌면 구성·검사 기대값·방화벽을 함께 갱신합니다.
+Cloudflare·방화벽·호스트의 커넥터 설정은 자동으로 적용되지 않습니다. [Tunnel 원본 프로토콜 안내](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/protocols/)와 [Docker 포트 공개 안내](https://docs.docker.com/engine/network/port-publishing/)를 확인하십시오. loopback 공개 포트가 같은 L2 네트워크에 노출되는 구버전 제약을 피하려면 Docker Engine 28.0.0 이상을 사용합니다. 호스트의 접근 권한을 제한하고 로컬 신뢰 경로를 다른 용도의 비신뢰 프로세스에 제공하지 않습니다.
 
 ```sh
 docker compose -f compose.prod.yaml config --quiet
 sh ./test-prod-compose.sh
 ```
 
-정적 검사는 실제 `.env`를 읽거나 이미지 빌드·컨테이너 기동을 하지 않습니다. 방화벽·실제 접속 출발지와 Cloudflare 연결은 별도 점검 대상입니다. 운영 예시의 고정 네트워크 `10.203.0.0/24`가 호스트의 기존 네트워크와 충돌하는지도 확인합니다. 이 내부 네트워크는 HTTPS 전달 헤더의 신뢰 대역이 아닙니다.
+정적 검사는 실제 `.env`를 읽거나 이미지 빌드·컨테이너 기동을 하지 않습니다. 방화벽·실제 접속 상대와 Cloudflare 연결은 별도 점검 대상입니다. 운영 예시의 고정 네트워크 `10.203.0.0/24`가 호스트의 기존 네트워크와 충돌하는지도 확인합니다. 이 네트워크 전체가 아니라 호스트 접속 경로의 게이트웨이 `10.203.0.1/32`만 HTTPS 전달 헤더를 신뢰합니다.
 
 ## 3. 최초 배포
 
@@ -94,18 +94,18 @@ curl --fail --show-error http://127.0.0.1:80/readyz
 
 `/healthz`는 프로세스 생존, `/readyz`는 종료 중이 아니며 DB 연결이 가능한 상태를 확인합니다. 둘 다 정상 시 HTTP `200`을 반환합니다. Compose의 서버 healthcheck는 `/healthz`만 검사하므로 `healthy`만으로 업무 준비 완료를 판정하지 않습니다. 두 경로는 임베딩 API의 정상 동작이나 색인 완료를 보장하지 않습니다.
 
-### Cloudflare DNS 프록시 연결
+### Cloudflare Tunnel 연결
 
-원본 준비와 `Flexible` 설정을 마친 뒤 외부의 실제 HTTPS 경로를 확인합니다. 기본 원본은 HTTP 80이며 별도 origin rule이 포트나 호스트를 덮어쓰고 있지 않은지도 확인합니다. 클라이언트의 HTTP 접속을 HTTPS로 전환하려면 Cloudflare의 HTTPS 리디렉션을 사용합니다. 원본에서 HTTPS로 돌려보내면 Flexible에서 반복 리디렉션이 발생할 수 있습니다.
+내부 상태 확인을 마친 뒤 호스트의 커넥터와 공개 호스트 이름의 원본 URL `http://localhost:80`을 확인하고 외부의 실제 HTTPS 경로를 점검합니다. 커넥터를 컨테이너 안에서 실행한다면 `localhost`의 의미가 달라지므로 이 배치의 절차를 그대로 사용하지 않습니다.
 
 ```sh
 curl --fail --show-error https://agent-context.example.com/readyz
 curl --fail --show-error --output /dev/null https://agent-context.example.com/login
 ```
 
-외부 HTTPS의 준비 확인과 로그인 화면은 `200`이 기대 결과입니다. 서버는 실제 접속 주소가 Cloudflare 대역이고 단일 `X-Forwarded-Proto` 값이 `https`일 때만 업무 요청을 처리합니다. [Cloudflare 전달 헤더 안내](https://developers.cloudflare.com/fundamentals/reference/http-headers/)에 따라 이 값은 방문자의 원래 접속 프로토콜이며 방문자 주소인 `CF-Connecting-IP`와 구분합니다. 로컬 원본의 `/login`에 직접 HTTP로 접속하면 `400 https_required`가 정상입니다. 로컬 요청에 전달 헤더를 임의로 붙여도 신뢰 대역 밖이면 거부되어야 합니다. 외부 검증에서는 TLS 검증을 끄거나 위조 헤더를 정상 연결 검증의 대용으로 사용하지 않습니다.
+외부 HTTPS의 준비 확인과 로그인 화면은 `200`이 기대 결과입니다. 서버는 실제 접속 주소가 `10.203.0.1`이고 단일 `X-Forwarded-Proto` 값이 `https`일 때만 업무 요청을 처리합니다. [Cloudflare 전달 헤더 안내](https://developers.cloudflare.com/fundamentals/reference/http-headers/)에 따라 이 값은 방문자의 원래 접속 프로토콜이며 방문자 주소인 `CF-Connecting-IP`와 구분합니다. 전달 헤더 없이 로컬 원본의 `/login`에 직접 HTTP로 접속하면 `400 https_required`가 정상입니다. 같은 호스트의 다른 프로세스는 신뢰 경로에서 헤더를 보낼 수 있으므로 호스트 권한을 제한합니다. 외부 검증에서는 TLS 검증을 끄거나 위조 헤더를 정상 연결 검증의 대용으로 사용하지 않습니다.
 
-기존 Tunnel 또는 직접 TLS 구성에서 전환한 경우 서버를 재생성해야 합니다. `.env`의 `HTTP_PORT=80`, 방화벽과 Cloudflare 설정을 준비한 뒤 `docker compose -f compose.prod.yaml up -d --build --force-recreate --wait server`로 적용합니다. DB 볼륨은 삭제하지 않습니다. 실패하면 설정·포트·방화벽과 서버가 실제로 받는 접속 출발지를 확인하며 전체 CIDR 허용으로 우회하지 않습니다.
+기존 DNS 프록시 또는 직접 TLS 구성에서 전환한 경우 서버를 재생성해야 합니다. `.env`의 `HTTP_PORT=80`, 호스트 커넥터의 원본 URL과 공개 호스트 이름을 준비한 뒤 `docker compose -f compose.prod.yaml up -d --build --force-recreate --wait server`로 적용합니다. DB 볼륨은 삭제하지 않습니다. 실패하면 설정·포트와 서버가 실제로 받는 접속 상대를 확인하며 전체 CIDR 허용으로 우회하지 않습니다.
 
 ## 4. 참여자 연결과 개방 확인
 
@@ -195,7 +195,7 @@ docker compose -f compose.prod.yaml run --rm --no-deps server audit
 
 ### 백업 원칙
 
-Apache AGE 그래프는 스키마 OID를 참조하므로 `pg_dump`·`pg_restore`만으로 그래프를 정상 복구할 수 없습니다. **기본 물리 백업과 연속 WAL 보관**을 사용합니다. 계정·권한·원본·관계·서명 키를 함께 보존하며 운영 `.env`, 배포 commit, 이미지 ID와 DNS·Cloudflare SSL 모드 및 방화벽 설정도 별도로 보호합니다.
+Apache AGE 그래프는 스키마 OID를 참조하므로 `pg_dump`·`pg_restore`만으로 그래프를 정상 복구할 수 없습니다. **기본 물리 백업과 연속 WAL 보관**을 사용합니다. 계정·권한·원본·관계·서명 키를 함께 보존하며 운영 `.env`, 배포 commit, 이미지 ID, Tunnel 공개 호스트 이름·원본 URL, 커넥터 설정·자격 증명과 방화벽 설정도 별도로 보호합니다.
 
 아래 예시는 추가 tablespace가 없는 기본 운영 구성입니다. `EMBEDDING_COLD_TABLESPACE`를 지정했다면 tablespace별 백업·마운트 복구 계획을 먼저 마련하십시오. 백업에는 비밀번호 해시·서명 키·컨텍스트 본문이 들어 있으므로 접근 제한과 외부 저장소 암호화가 필요합니다.
 
@@ -283,7 +283,7 @@ docker compose -f compose.prod.yaml up -d --wait server
 ## 8. 장애 대응
 
 - **컨테이너는 healthy인데 업무 요청 실패:** `/readyz`, 외부 `/login`, `doctor`와 색인 상태를 따로 확인합니다. DB·TLS·인가·임베딩 경계를 구분합니다.
-- **외부 접속 실패:** DNS A 레코드의 원본 IP·프록시 상태, `Flexible` 모드, 원본 TCP 80 공개와 OCI·호스트 방화벽을 확인합니다. 원본 HTTP에 `Full`·`Full (strict)`로 접속하면 TLS 연결이 맞지 않습니다. `https_required`가 나오면 서버의 `TLS_TERMINATION=proxy`, 실제 접속 출발지의 Cloudflare 대역 포함 여부와 단일 `X-Forwarded-Proto: https` 전달을 확인합니다. Docker 또는 중간 프록시가 출발지 주소를 바꿨다면 연결 경로를 조사하고 전체 CIDR·Docker 게이트웨이 신뢰로 우회하지 않습니다. 외부 인증서 오류는 Cloudflare의 방문자 측 인증서·도메인을 대조합니다.
+- **외부 접속 실패:** Tunnel·호스트 커넥터 상태, 공개 호스트 이름의 원본 URL, 로컬 `/readyz`와 네트워크를 확인합니다. `https_required`가 나오면 서버의 `TLS_TERMINATION=proxy`, 실제 접속 상대 `10.203.0.1`과 단일 `X-Forwarded-Proto: https` 전달을 확인합니다. Docker Desktop 또는 중간 프록시가 접속 주소를 바꿨다면 배치·신뢰 경로를 함께 조사하고 전체 CIDR 허용으로 우회하지 않습니다. 외부 인증서 오류는 Cloudflare의 방문자 측 인증서·도메인을 대조합니다.
 - **`migrate` 실패:** DB 준비 상태, 기존 적용 파일의 checksum과 치환 구성, 권한·확장 버전을 확인합니다. 적용 이력을 삭제하지 않습니다.
 - **서버 시작 시 임베딩 스키마 불일치:** 실행 구성과 DB의 벡터 타입·차원을 대조합니다. 기존 DB의 변경은 정식 마이그레이션으로 수행합니다.
 - **의미 검색 누락·부분 검색:** Gemini 키·할당량·네트워크와 큐를 확인합니다. 미색인 컨텍스트는 의미 유사도 채널에서 빠질 수 있습니다. 원본 조회·키워드 검색과 구분하여 안내합니다.
@@ -295,7 +295,7 @@ docker compose -f compose.prod.yaml up -d --wait server
 
 ## 9. 시험 종료
 
-참여자에게 종료 시각과 데이터 보존·반출 정책을 알립니다. 원본으로 들어오는 서비스 트래픽을 차단한 뒤 서버를 정상 종료하여 요청과 주기 작업의 추가 쓰기를 멈춥니다. 도메인의 프록시를 끄고 평문 원본을 직접 노출하는 방식으로 종료하지 않습니다.
+참여자에게 종료 시각과 데이터 보존·반출 정책을 알립니다. 해당 공개 호스트 이름의 터널 경로를 비활성화한 뒤 서버를 정상 종료하여 요청과 주기 작업의 추가 쓰기를 멈춥니다. 다른 서비스도 사용하는 커넥터를 함께 중지하거나 평문 원본을 직접 노출하는 방식으로 종료하지 않습니다.
 
 ```sh
 docker compose -f compose.prod.yaml stop server

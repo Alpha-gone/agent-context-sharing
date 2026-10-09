@@ -172,7 +172,7 @@ func TestServeDiscoverImmediatelyBeforeEOF(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &response); err != nil {
 		t.Fatalf("요청 직후 EOF 응답 = %q: %v", stdout.String(), err)
 	}
-	if response.ID != 1 || len(response.Result.SupportedVersions) != 1 || response.Result.SupportedVersions[0] != "2026-07-28" {
+	if response.ID != 1 || len(response.Result.SupportedVersions) != 5 || response.Result.SupportedVersions[0] != "2026-07-28" || response.Result.SupportedVersions[1] != "2025-11-25" {
 		t.Fatalf("요청 직후 EOF discover 응답 = %+v", response)
 	}
 }

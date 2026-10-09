@@ -5,7 +5,7 @@
 | 항목 | 내용 |
 |------|------|
 | 문서 상태 | 확정 |
-| 최종 수정일 | 2026-09-30 |
+| 최종 수정일 | 2026-10-09 |
 | 서비스 식별자 | `AGENT_CONTEXT_CLIENT` |
 | 기준 요구사항 | `SRS.md`의 `FR-AGENT_CONTEXT_CLIENT-001`~`035`, `NFR-AGENT_CONTEXT_CLIENT-001`~`016` |
 | 정본 연동 계약 | `../agent-context/SRS.md`, `../agent-context/SDD.md` |
@@ -15,7 +15,7 @@
 
 ## 설계 목표와 원칙
 
-- 호스트 경계에서는 MCP `2026-07-28` `stdio` 서버로, 원격 경계에서는 같은 revision의 무상태 Streamable HTTP 클라이언트로 동작한다.
+- 호스트 경계에서는 MCP `2026-07-28`과 `initialize` 기반 호환 연결의 `stdio` 서버로, 원격 경계에서는 `2026-07-28`의 무상태 Streamable HTTP 클라이언트로 동작한다.
 - 원격 도구 결과는 해석하거나 재구성하지 않고, 로컬 정책과 `created_by_agent` 주입에 필요한 최소 변환만 수행한다.
 - 인증 정보, DPoP 개인 키, PKCE 값과 컨텍스트 본문은 프로세스 수명을 넘기거나 관측 출력에 포함하지 않는다.
 - 원격 서버의 권한, 버전 충돌, 검색, 절단과 도메인 오류 판단을 클라이언트가 대신하지 않는다.
@@ -34,7 +34,7 @@ flowchart LR
     auth[인가 서버]
     resource[MCP 리소스 서버]
 
-    host -->|MCP 2026-07-28 stdio| client
+    host -->|MCP stdio 무상태·초기 연결 호환| client
     client -->|인가 URL 열기| browser
     browser -->|로그인과 인가| auth
     auth -->|루프백 인가 코드| client
@@ -160,7 +160,9 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 
 ### lifecycle과 도구 공개
 
-호스트 `server/discover`는 원격 인증 없이 클라이언트 자체의 `supportedVersions=["2026-07-28"]`, `tools` capability와 클라이언트 `serverInfo`를 반환한다. 호스트 경계에 등록하는 RPC는 lifecycle의 `server/discover`와 애플리케이션 primitive의 `tools/list`·`tools/call`뿐이다. `initialize`·`initialized`, `Mcp-Session-Id`, `resources`, `prompts`, SSE와 서버에서 시작하는 요청은 구현하지 않는다. 원격 전송에만 쓰는 `io.github.alpha-gone/write-idempotency` 확장은 호스트 capability에 광고하지 않는다.
+호스트 `server/discover`는 원격 인증 없이 클라이언트 자체의 지원 revision, `tools` capability와 클라이언트 `serverInfo`를 반환한다. 지원 revision은 `2026-07-28`, `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`다. 호스트의 `initialize`, `notifications/initialized`, `ping`은 고정된 공식 SDK가 처리하며 초기 연결의 revision·기능·클라이언트 식별 정보가 유효해야 한다. 미지원 revision은 SDK가 지원하는 최신 초기 연결 revision으로 응답하여 호스트가 연결 유지 여부를 판단한다. 발견·초기 연결·ping의 진행 중 ID와 EOF 응답 대기는 같은 경계로 관리한다. 초기 연결 성공은 응답 기록 시작 시 반영하고 오류 응답은 호환 도구 연결을 활성화하지 않는다. `Mcp-Session-Id`, `resources`, `prompts`, SSE와 서버에서 시작하는 요청은 구현하지 않는다. 원격 전송에만 쓰는 `io.github.alpha-gone/write-idempotency` 확장은 호스트 capability에 광고하지 않는다.
+
+`2026-07-28` 호스트 요청은 기존 요청별 `_meta`를 계속 검증한다. 성공한 `initialize` 뒤 revision 메타데이터가 없는 `tools/list`·`tools/call`은 호환 요청으로 접수하며, 명시한 revision 메타데이터가 잘못된 요청을 호환 연결로 우회시키지 않는다. 호환 여부는 접수 시 고정하여 다른 요청의 초기 연결이 진행 중 응답 형식을 바꾸지 않게 한다. 호환 결과에서는 최상위 `resultType`·`ttlMs`·`cacheScope`와 `_meta`의 `io.modelcontextprotocol/serverInfo`만 제거하며 나머지 도구 본문·메타데이터·원격 오류의 원문을 보존한다. 원격 연결은 호스트 revision과 관계없이 기존 `2026-07-28` 요청 외피·발견·DPoP·캐시 계약을 사용한다. 이 경계는 `FR-AGENT_CONTEXT_CLIENT-002`·`-027`과 #96의 호환 요청을 구현한다.
 
 첫 `tools/list` 또는 `tools/call`은 다음 순서로 준비 상태를 만든다.
 
@@ -188,7 +190,7 @@ Windows 네이티브 실행 파일은 만들지 않는다. Windows 지원은 SRS
 
 - 원격 JSON-RPC 식별자를 원래 호스트 식별자로 교체한다.
 - 원격 `serverInfo`는 호스트에 전달하지 않고 클라이언트의 `serverInfo`를 사용한다.
-- 도구 결과의 `_meta`에서 클라이언트 `serverInfo`만 교체하고 나머지 metadata는 보존한다. 단일 왕복 결과의 `resultType`은 `complete`이며 누락한 대역 결과에도 호스트 외피에서 이 값을 추가한다. 정책을 적용한 호스트 목록은 `ttlMs=0`·`cacheScope=private`로 제공해 다음 요청의 원격 계약 재검증을 막지 않는다.
+- 무상태 호스트 결과는 `_meta`의 `serverInfo`만 클라이언트 값으로 교체하고 `resultType=complete`를 적용한다. 정책을 적용한 목록은 `ttlMs=0`·`cacheScope=private`로 제공한다. 호환 호스트 결과는 「lifecycle과 도구 공개」의 외피 제거 규칙을 따르며, 두 방식 모두 나머지 metadata와 도구 본문을 보존하고 다음 요청의 원격 계약 재검증을 유지한다.
 - 토큰 갱신 HTTP 헤더와 인증 도전은 호스트 결과에 포함하지 않는다.
 - 클라이언트에서 생긴 오류만 별도의 클라이언트 오류 구조로 직렬화한다.
 
@@ -461,7 +463,7 @@ opener는 별도 실행으로 시작하고 callback·opener 오류·인가 conte
 | 전송 계약 테스트 | 줄 구분 `stdio`, 요청 직후 EOF의 응답 보존, 요청별 `_meta`, 필수 헤더, JSON-RPC ID 상관, 본문 상한과 부분 stdout 방지 |
 | 모의 서버 통합 테스트 | 메타데이터·PKCE·DPoP, 갱신 헤더, 단일 공유 인가, redirect, retry, 13종 도구와 오류 보존 |
 | 실제 서버 통합 테스트 | 로컬 agent-context 서버와 도구 13종, 쓰기 멱등성, DPoP 재생·하향 거부, `context_flow_get` 보존 |
-| 호스트 종단 간 테스트 | `features.mcp_2026_07_28`을 켠 Codex CLI `0.156.1`의 발견·목록·호출·취소 |
+| 호스트 종단 간 테스트 | Codex·JetBrains의 초기 연결 및 무상태 발견, 목록·호출·정책·원문·오류·ID 충돌·취소·EOF. 실제 실행 표면과 SDK 시험 결과는 구분 |
 | 운영체제 행렬 | 네 배포 산출물에서 시작, browser-loopback, 대표 읽기·쓰기와 `doctor` |
 | 성능·race 테스트 | `go test -race`, 동시 호출 100개, 1 KiB 중계 p95와 대기열·메모리 상한 |
 

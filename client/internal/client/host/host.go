@@ -12,6 +12,8 @@ import (
 
 const protocolVersion = "2026-07-28"
 
+var hostProtocolVersions = []string{protocolVersion, "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
+
 // Run은 단일 호스트 MCP 세션을 실행하고 EOF의 응답 기록과 요청별 취소를 처리한다.
 func Run(ctx context.Context, in io.ReadCloser, out io.Writer, logger *slog.Logger, version string, tools ...*Tools) error {
 	var relay *Tools
@@ -19,7 +21,7 @@ func Run(ctx context.Context, in io.ReadCloser, out io.Writer, logger *slog.Logg
 		relay = tools[0]
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "agent-context-client", Version: version}, &mcp.ServerOptions{
-		SupportedProtocolVersions: []string{protocolVersion},
+		SupportedProtocolVersions: hostProtocolVersions,
 		Capabilities: &mcp.ServerCapabilities{
 			Tools: &mcp.ToolCapabilities{},
 		},

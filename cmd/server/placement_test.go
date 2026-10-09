@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -57,11 +58,57 @@ func TestShutdownGivesWorkersFreshBudgetWhenRequestDrainFails(t *testing.T) {
 		t.Error("요청 종료 대기 실패가 보고되지 않았다")
 	}
 	close(release)
-	if err := <-finished; err != nil {
-		t.Fatal(err)
+	if err := <-finished; err == nil {
+		t.Fatal("요청 대기 실패 뒤 진행 연결이 남았다")
 	}
 	if worker.remaining <= 0 || worker.remaining > workerShutdownTimeout {
 		t.Fatalf("작업자에게 새 종료 예산이 없다: %s", worker.remaining)
+	}
+}
+
+func TestShutdownFailureClosesActiveConnectionsWithoutWaitingForHandler(t *testing.T) {
+	entered, release, canceled := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		close(entered)
+		select {
+		case <-request.Context().Done():
+			close(canceled)
+		case <-release:
+			return
+		}
+		// 요청 취소에도 연결을 쥔 처리기를 기다리지 않고 종료 실패를 반환해야 한다.
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+	finished := make(chan error, 1)
+	go func() {
+		response, err := http.Get(server.URL)
+		if err == nil {
+			response.Body.Close()
+		}
+		finished <- err
+	}()
+	<-entered
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	app := newApplication(&fakeReadiness{}, logger, proxyTransport(), nil)
+	if err := app.shutdown(ctx, server.Config); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("종료 실패 = %v", err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("진행 요청의 연결과 컨텍스트가 종료되지 않았다")
+	}
+	select {
+	case err := <-finished:
+		if err == nil {
+			t.Fatal("진행 요청의 연결이 정상 응답으로 남았다")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("진행 요청의 클라이언트 연결이 남았다")
 	}
 }
 

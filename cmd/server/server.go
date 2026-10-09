@@ -210,7 +210,6 @@ func (app *application) ready(writer http.ResponseWriter, request *http.Request)
 	writeStatus(writer, http.StatusOK, "ready")
 }
 
-// shutdown은 준비 상태를 먼저 내려 새 트래픽을 막고 진행 요청을 끝낸 뒤 풀을 닫는다.
 // shutdown은 트래픽을 끊고 진행 중인 요청이 끝날 때까지 기다린다.
 //
 // 연결 풀은 여기에서 닫지 않는다. 풀을 쓰는 것이 요청 경로만이 아니라 색인 작업자도
@@ -219,6 +218,11 @@ func (app *application) ready(writer http.ResponseWriter, request *http.Request)
 func (app *application) shutdown(ctx context.Context, server *http.Server) error {
 	app.accepting.Store(false)
 	if err := server.Shutdown(ctx); err != nil {
+		// Shutdown은 기한 초과 시 진행 연결을 닫지 않는다. 취소를 전파하되
+		// 취소를 따르지 않는 처리기의 반환까지 기다리지는 않는다.
+		if closeErr := server.Close(); closeErr != nil {
+			return fmt.Errorf("진행 요청 종료 대기: %w; HTTP 연결 종료: %w", err, closeErr)
+		}
 		return fmt.Errorf("진행 요청 종료 대기: %w", err)
 	}
 	return nil

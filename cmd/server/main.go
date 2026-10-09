@@ -87,7 +87,13 @@ func runConfigured(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
-	defer database.Close()
+	requestsDrained := true
+	defer func() {
+		// 끝나지 않은 요청이 빌린 연결을 기다리면 종료 오류를 main에 반환할 수 없다.
+		if requestsDrained {
+			database.Close()
+		}
+	}()
 	periodic, err := newPeriodicWorker(database, cfg.AccountPlans, slog.Default())
 	if err != nil {
 		return fmt.Errorf("주기 작업 준비: %w", err)
@@ -201,6 +207,7 @@ func runConfigured(cfg config.Config) error {
 	shutdownErr := shutdownInOrder(shutdownContext, context.Background(), app, server, slog.Default(), workers...)
 	workers = nil
 	if shutdownErr != nil {
+		requestsDrained = false
 		return shutdownErr
 	}
 	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {

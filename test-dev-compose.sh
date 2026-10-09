@@ -98,6 +98,10 @@ jq -e '
     (.services.server.healthcheck.test == ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"])
 ' "$test_dir/server.json" > /dev/null
 unset HTTP_ADDR TLS_TERMINATION TRUSTED_PROXY_CIDRS TLS_CERT_FILE TLS_KEY_FILE
+if ! grep -Eq '^FROM apache/age:release_PG18_1[.]8[.]0@sha256:47a0b054c3663a3e64a25fc0c5a982f1b58348019274b326a691cdf77f78eb58$' "$repo_root/Dockerfile"; then
+    echo "개발 구성 검사 실패: DB 베이스 이미지 태그와 digest 고정을 확인하십시오." >&2
+    exit 1
+fi
 grep -Eq 'apt-get install .*postgresql-18-pgvector=0[.]8[.]6-1[.]pgdg13[+]1([[:space:]]|$)' "$repo_root/Dockerfile"
 echo "개발 구성 검사 통과: 선택적 profile, 서버 localhost:80·신뢰 경로와 loopback·버전 고정"
 

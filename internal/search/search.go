@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"math/big"
 	"slices"
 	"strings"
 	"sync"
@@ -450,7 +451,7 @@ func failureReason(err error) string {
 type combinedCandidate struct {
 	value    model.Context
 	channels []string
-	score    float64
+	score    *big.Rat
 	folded   int
 	distance int
 }
@@ -497,7 +498,7 @@ func (service *Service) graphCandidates(ctx context.Context, input Input, entryP
 		result.metric.Failure = "no_entry_points"
 		return result
 	}
-	if service.config.GraphStage == GraphStageBaseline && !globalFallback {
+	if service.config.GraphStage == GraphStageBaseline && input.Scope != "global" && !globalFallback {
 		result.metric.Failure = failureDisabled
 		return result
 	}
@@ -641,17 +642,18 @@ func combine(results []channelResult) []combinedCandidate {
 				distance = result.distances[candidate.Context.ID]
 			}
 			if index, found := byID[candidate.Context.ID]; found {
-				combined[index].score += 1 / float64(rank+1)
+				combined[index].score.Add(combined[index].score, big.NewRat(1, int64(rank+1)))
 				combined[index].channels = append(combined[index].channels, result.name)
 				combined[index].distance = min(combined[index].distance, distance)
 				continue
 			}
 			byID[candidate.Context.ID] = len(combined)
-			combined = append(combined, combinedCandidate{value: candidate.Context, channels: []string{result.name}, score: 1 / float64(rank+1), distance: distance})
+			combined = append(combined, combinedCandidate{value: candidate.Context, channels: []string{result.name}, score: big.NewRat(1, int64(rank+1)), distance: distance})
 		}
 	}
 	slices.SortFunc(combined, func(left, right combinedCandidate) int {
-		if order := cmp.Compare(right.score, left.score); order != 0 {
+		// 역수 합을 정확히 비교해 동점 판정이 채널 순서나 반올림에 의존하지 않게 한다.
+		if order := right.score.Cmp(left.score); order != 0 {
 			return order
 		}
 		if order := right.value.RecordedAt.Compare(left.value.RecordedAt); order != 0 {

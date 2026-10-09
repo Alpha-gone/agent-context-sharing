@@ -39,16 +39,21 @@ func (m *Manager) CheckBrowserLoopback(ctx context.Context) error {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Content-Length", "0")
 			remote, _, err := net.SplitHostPort(r.RemoteAddr)
 			if err != nil || !net.ParseIP(remote).IsLoopback() || r.Method != http.MethodGet || r.Host != listener.Addr().String() || r.URL.EscapedPath() != "/diagnostic" || r.URL.RawQuery != "" || r.URL.ForceQuery {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			w.WriteHeader(http.StatusOK)
+			var result error
+			if err := http.NewResponseController(w).Flush(); err != nil {
+				result = ErrAuthorization
+			}
 			select {
-			case completed <- nil:
+			case completed <- result:
 			default:
 			}
-			w.WriteHeader(http.StatusOK)
 		}),
 	}
 	done := make(chan struct{})

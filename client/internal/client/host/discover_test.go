@@ -35,7 +35,7 @@ func TestHostDuplicateLifecycleDrainsAfterEOF(t *testing.T) {
 
 func testHostDuplicateLifecycleDrainsAfterEOF(t *testing.T, frame, trackedMethod string) {
 	t.Helper()
-	for _, id := range []string{`1`, `"duplicate"`} {
+	for _, id := range []string{`1`, `9007199254740993`, `9223372036854775808`, `-0`, `"duplicate"`, `"\u0000number:9007199254740993"`} {
 		t.Run(id, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()

@@ -151,7 +151,7 @@ func (c *stdioConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 		if len(bytes.Trim(next.frame, " \t\r\n")) == 0 {
 			continue
 		}
-		message, err := jsonrpc.DecodeMessage(next.frame)
+		message, err := decodeHostMessage(next.frame)
 		if err != nil {
 			code := int64(jsonrpc.CodeParseError)
 			if jsontext.Value(next.frame).IsValid() {
@@ -294,6 +294,16 @@ func (c *stdioConn) Write(ctx context.Context, message jsonrpc.Message) (err err
 	if err != nil {
 		return err
 	}
+	if response, ok := message.(*jsonrpc.Response); ok {
+		id, err := marshalHostID(response.ID)
+		if err != nil {
+			return err
+		}
+		frame, err = setMember(frame, "id", id)
+		if err != nil {
+			return err
+		}
+	}
 	if len(frame) > maxOutputBytes {
 		response, ok := message.(*jsonrpc.Response)
 		if !ok {
@@ -349,17 +359,13 @@ func (c *stdioConn) cancelRequest(params []byte) {
 	if json.Unmarshal(params, &input) != nil {
 		return
 	}
-	message, err := jsonrpc.DecodeMessage(append(append([]byte(`{"jsonrpc":"2.0","method":"tools/call","id":`), input.ID...), '}'))
-	if err != nil {
-		return
-	}
-	request, ok := message.(*jsonrpc.Request)
+	id, ok := parseHostID(input.ID)
 	if !ok {
 		return
 	}
 	c.callsMu.Lock()
 	defer c.callsMu.Unlock()
-	if call := c.calls[request.ID]; call != nil {
+	if call := c.calls[id]; call != nil {
 		call.cancelled = true
 		call.cancel()
 	}
@@ -574,7 +580,7 @@ func (c *stdioConn) writeResponse(ctx context.Context, id jsonrpc.ID, method, fi
 			return c.writeResponse(ctx, id, method, field, raw, legacy, before...)
 		}
 	}
-	idRaw, err := json.Marshal(id.Raw())
+	idRaw, err := marshalHostID(id)
 	if err != nil {
 		return err
 	}
@@ -593,14 +599,19 @@ func (*stdioConn) SessionID() string { return "" }
 
 func (c *stdioConn) writeError(ctx context.Context, id jsonrpc.ID, code int64, message, clientCode string, before ...func() bool) error {
 	response := struct {
-		JSONRPC string `json:"jsonrpc"`
-		ID      any    `json:"id"`
+		JSONRPC string         `json:"jsonrpc"`
+		ID      jsontext.Value `json:"id"`
 		Error   struct {
 			Code    int64  `json:"code"`
 			Message string `json:"message"`
 			Data    any    `json:"data,omitempty"`
 		} `json:"error"`
-	}{JSONRPC: "2.0", ID: id.Raw()}
+	}{JSONRPC: "2.0"}
+	idRaw, err := marshalHostID(id)
+	if err != nil {
+		return err
+	}
+	response.ID = idRaw
 	response.Error.Code = code
 	response.Error.Message = message
 	if clientCode != "" {
@@ -716,16 +727,10 @@ func idFromPrefix(frame []byte) jsonrpc.ID {
 				return jsonrpc.ID{}
 			}
 		}
-		candidate := append([]byte(`{"jsonrpc":"2.0","id":`), value...)
-		candidate = append(candidate, []byte(`,"method":"ping"}`)...)
-		message, err := jsonrpc.DecodeMessage(candidate)
-		if err != nil {
-			return jsonrpc.ID{}
-		}
-		request, ok := message.(*jsonrpc.Request)
+		id, ok := parseHostID(value)
 		if !ok {
 			return jsonrpc.ID{}
 		}
-		return request.ID
+		return id
 	}
 }

@@ -171,6 +171,9 @@ func validateSample(sample attackSample, baseLayers map[string]string, queryIDs 
 	}
 	criteria := map[string]successCriteria{}
 	for _, item := range sample.SuccessCriteria {
+		if _, duplicate := criteria[item.QueryID]; duplicate {
+			return fmt.Errorf("질의 %q의 성공 조건이 중복된다", item.QueryID)
+		}
 		if _, ok := targets[item.QueryID]; !ok {
 			return fmt.Errorf("성공 조건의 질의 %q가 대상이 아니다", item.QueryID)
 		}

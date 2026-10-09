@@ -21,6 +21,16 @@ type loadedGraph struct {
 	Keys      map[string]model.ID
 }
 
+// dropGraph는 취소와 독립된 제한 시간에 평가 그래프를 소프트 삭제하고 실패를 반환한다.
+func dropGraph(ctx context.Context, database *store.Store, graph loadedGraph) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := database.SetGraphDeleted(cleanupCtx, graph.GraphID, graph.AccountID, true); err != nil {
+		return fmt.Errorf("평가 그래프 정리: %w", err)
+	}
+	return nil
+}
+
 // loadGraph는 평가 전용 계정과 그래프를 새로 만들고 컨텍스트 집합을 올린다.
 //
 // 그래프를 회차마다 새로 만드는 이유는 개발 데이터베이스를 다른 작업과 공유하기
@@ -64,13 +74,13 @@ func loadGraph(ctx context.Context, database *store.Store, set contextSet) (load
 	if err := createContexts(ctx, database, graph.ID, accountID, set.Contexts, keys); err != nil {
 		// 절반만 찬 그래프를 남기지 않는다. 적재가 실패하면 호출자가 그래프 식별자를
 		// 받지 못하므로 여기에서 지우지 않으면 정리할 방법이 남지 않는다.
-		if deleteErr := database.SetGraphDeleted(ctx, graph.ID, accountID, true); deleteErr != nil {
+		if deleteErr := dropGraph(ctx, database, loadedGraph{GraphID: graph.ID, AccountID: accountID}); deleteErr != nil {
 			return loadedGraph{}, errors.Join(err, fmt.Errorf("적재 실패 뒤 평가 그래프 정리: %w", deleteErr))
 		}
 		return loadedGraph{}, err
 	}
 	if err := confirmRelations(ctx, database, graph.ID, accountID, set, keys); err != nil {
-		if deleteErr := database.SetGraphDeleted(ctx, graph.ID, accountID, true); deleteErr != nil {
+		if deleteErr := dropGraph(ctx, database, loadedGraph{GraphID: graph.ID, AccountID: accountID}); deleteErr != nil {
 			return loadedGraph{}, errors.Join(err, fmt.Errorf("관계 확정 실패 뒤 평가 그래프 정리: %w", deleteErr))
 		}
 		return loadedGraph{}, err

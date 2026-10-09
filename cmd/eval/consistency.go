@@ -24,6 +24,15 @@ import (
 // 둘과 임시 파생 하나를 더해도 채널 후보 상한보다 작아야 일관성 판정이 성립한다.
 const consistencyToggled = 20
 
+const consistencyActiveContexts = consistencyToggled + 4
+
+func validateConsistencyCandidateLimit(limit int) error {
+	if limit <= consistencyActiveContexts {
+		return fmt.Errorf("일관성 평가의 SEARCH_CHANNEL_CANDIDATE_LIMIT는 최대 활성 컨텍스트 %d개보다 커야 한다", consistencyActiveContexts)
+	}
+	return nil
+}
+
 // consistencyVariant는 비교할 구성 하나다.
 type consistencyVariant struct {
 	Name        string
@@ -123,7 +132,7 @@ type latencySummary struct {
 
 func summarize(values []float64) latencySummary {
 	if len(values) == 0 {
-		return latencySummary{}
+		return latencySummary{Mean: undefinedMetric, P50: undefinedMetric, P95: undefinedMetric, Max: undefinedMetric}
 	}
 	sorted := slices.Sorted(slices.Values(values))
 	at := func(percent int) float64 { return sorted[(percent*len(sorted)+99)/100-1] }
@@ -146,6 +155,9 @@ func consistencyService(database *store.Store, worker search.Embedder, loaded se
 
 // runConsistency는 결과 동등성과 동시 쓰기 일관성을 차례로 잰다.
 func runConsistency(ctx context.Context, database *store.Store, worker *index.Worker, graph loadedGraph, contexts contextSet, queries querySet, loaded settings, conditions consistencyConditions) (result consistencyReport, err error) {
+	if err := validateConsistencyCandidateLimit(loaded.candidateLimit); err != nil {
+		return consistencyReport{}, err
+	}
 	stage := search.GraphStage(conditions.GraphStage)
 	result = consistencyReport{StartedAt: time.Now().UTC(), ContextVersion: contexts.Version, QueryVersion: queries.Version, Conditions: conditions}
 	variants := consistencyVariants()
@@ -343,12 +355,7 @@ func createConsistencyScenario(ctx context.Context, database *store.Store, worke
 }
 
 func deleteConsistencyGraph(ctx context.Context, database *store.Store, graph loadedGraph) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-	if err := database.SetGraphDeleted(cleanupCtx, graph.GraphID, graph.AccountID, true); err != nil {
-		return fmt.Errorf("동시 쓰기 그래프 정리: %w", err)
-	}
-	return nil
+	return dropGraph(ctx, database, graph)
 }
 
 // writerState는 쓰기 작업자가 돌아가며 바꾸는 상태다.
@@ -416,7 +423,7 @@ func (scenario *consistencyScenario) write(ctx context.Context, state *writerSta
 
 // measure는 쓰기 작업자를 돌리는 동안 한 구성으로 요청을 차례로 보낸다.
 func (scenario *consistencyScenario) measure(ctx context.Context, service *search.Service, variant consistencyVariant, conditions consistencyConditions, pause time.Duration) (concurrentReadResult, error) {
-	result := concurrentReadResult{Variant: variant.Name, WritePauseMS: int(pause.Milliseconds()), Requests: conditions.Requests}
+	result := concurrentReadResult{Variant: variant.Name, WritePauseMS: int(pause.Milliseconds()), Requests: conditions.Requests, Connections: undefinedMetric, PeakConnections: -1}
 	measureStarted := time.Now()
 	stop := make(chan struct{})
 	var group sync.WaitGroup

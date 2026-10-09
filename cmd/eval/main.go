@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	json "encoding/json/v2"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -60,7 +61,7 @@ func main() {
 	}
 }
 
-func run() error {
+func run() (err error) {
 	defaultLimits := plan.Default()
 	contextsPath := flag.String("contexts", "", "컨텍스트 집합 파일 경로")
 	queriesPath := flag.String("queries", "", "질의 집합 파일 경로")
@@ -92,6 +93,21 @@ func run() error {
 	attacksPath := flag.String("attacks", "", "공격 표본 파일 경로. -adversarial의 입력이자 own-adversarial 생성의 출력이다")
 	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
 	flag.Parse()
+	var modes []string
+	for _, mode := range []struct {
+		name    string
+		enabled bool
+	}{
+		{"convert", *convert != ""}, {"business", *businessPath != ""}, {"continual", *continual},
+		{"adaptive", *adaptive}, {"consistency", *consistency}, {"adversarial", *adversarial},
+	} {
+		if mode.enabled {
+			modes = append(modes, mode.name)
+		}
+	}
+	if len(modes) > 1 {
+		return fmt.Errorf("평가 모드는 하나만 지정해야 한다: %s", strings.Join(modes, ", "))
+	}
 
 	// 변환은 데이터베이스에 닿지 않는다. 같은 두 경로를 출력 자리로 쓰므로 변환한
 	// 파일을 그대로 측정에 넘길 수 있다.
@@ -153,6 +169,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if *consistency {
+		if err := validateConsistencyCandidateLimit(settings.candidateLimit); err != nil {
+			return err
+		}
+	}
 	ctx := context.Background()
 	// 관계 후보 제안과 유예 기간을 주지 않는다. 제안은 확정되기 전까지 그래프 경로
 	// 채널에 쓰이지 않으므로 측정에 들어가지 않고, 끄면 회차마다 같은 그래프 상태에서
@@ -188,11 +209,7 @@ func run() error {
 	}
 	// 평가 그래프는 측정이 끝나면 소프트 삭제해 다음 회차의 검색 대상에서 뺀다.
 	// 「소프트 삭제 수명주기」가 영구 삭제를 하지 않으므로 기록은 남는다.
-	defer func() {
-		if err := database.SetGraphDeleted(ctx, graph.GraphID, graph.AccountID, true); err != nil {
-			slog.Error("평가 그래프 정리 실패", "graph_id", graph.GraphID.String(), "error", err)
-		}
-	}()
+	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
 	if err := drainIndexQueue(ctx, worker, graph.GraphID, len(contexts.Contexts)*4+64); err != nil {
 		return err
 	}
@@ -305,19 +322,19 @@ func run() error {
 
 // runConvert는 공개 벤치마크를 데이터셋 두 파일로 옮기고 끝낸다.
 func runConvert(format, source, name string, limit int, useCase, contextsPath, queriesPath, attacksPath string) error {
+	if format == convertOwnAdversarial && useCase != "" {
+		return fmt.Errorf("own-adversarial은 모든 공격 표본을 함께 생성하므로 -convert-use-case를 사용할 수 없다")
+	}
 	var contexts contextSet
 	var queries querySet
+	var attacks attackSet
 	var err error
 	switch format {
 	case convertOwnAdversarial:
 		if name == "" || attacksPath == "" {
 			return fmt.Errorf("-convert-name과 -attacks가 필요하다")
 		}
-		var attacks attackSet
 		if contexts, queries, attacks, err = convertOwnAdversarialSet(name, max(limit, 12)); err != nil {
-			return err
-		}
-		if err := writeDataset(attacksPath, attacks); err != nil {
 			return err
 		}
 	case convertHippoRAG:
@@ -350,11 +367,21 @@ func runConvert(format, source, name string, limit int, useCase, contextsPath, q
 	if err != nil {
 		return err
 	}
+	if format == convertOwnAdversarial {
+		if err := validateAttackSet(attacks, contexts, queries); err != nil {
+			return err
+		}
+	}
 	if err := writeDataset(contextsPath, contexts); err != nil {
 		return err
 	}
 	if err := writeDataset(queriesPath, queries); err != nil {
 		return err
+	}
+	if format == convertOwnAdversarial {
+		if err := writeDataset(attacksPath, attacks); err != nil {
+			return err
+		}
 	}
 	// 만든 파일을 바로 읽어 적재 전 검증을 통과하는지 확인한다. 변환이 형식을 어기면
 	// 측정 단계가 아니라 여기에서 드러나야 한다.

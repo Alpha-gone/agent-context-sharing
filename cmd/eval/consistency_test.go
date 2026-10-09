@@ -55,7 +55,7 @@ func TestSummarizeLatency(t *testing.T) {
 	if got.Mean != 3 || got.P50 != 3 || got.P95 != 5 || got.Max != 5 {
 		t.Fatalf("지연 요약 = %+v", got)
 	}
-	if summarize(nil) != (latencySummary{}) {
-		t.Fatal("빈 표본의 요약이 0 값이 아니다")
+	if summarize(nil).Mean != undefinedMetric {
+		t.Fatal("빈 표본의 요약이 미측정 값이 아니다")
 	}
 }

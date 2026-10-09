@@ -257,6 +257,8 @@ func (s *httpSource) execute(ctx context.Context, method, name string, arguments
 		if possiblyDelivered && key != "" && !s.now().Before(keyDeadline) {
 			return nil, contract.ErrIndeterminate
 		}
+		// 이전 쓰기의 적용 여부는 이번 인증·프로토콜 오류로 확정되지 않는다.
+		unresolvedWrite := write && possiblyDelivered
 		result, required, sent, retry, err := s.attempt(ctx, method, name, arguments, key, authenticated)
 		possiblyDelivered = possiblyDelivered || sent
 		if required != nil {
@@ -297,12 +299,12 @@ func (s *httpSource) execute(ctx context.Context, method, name string, arguments
 				continue
 			}
 		}
-		return nil, completionError(err, write && possiblyDelivered)
+		return nil, completionError(err, unresolvedWrite || write && sent && errors.Is(err, contract.ErrTransport))
 	}
 }
 
 func completionError(err error, writeUncertain bool) error {
-	if writeUncertain && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, contract.ErrTransport)) {
+	if writeUncertain {
 		return contract.ErrIndeterminate
 	}
 	return err

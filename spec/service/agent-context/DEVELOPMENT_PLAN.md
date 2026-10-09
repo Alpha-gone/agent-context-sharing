@@ -1151,7 +1151,7 @@ go run ./cmd/eval -business <업무 효과 집계>.json -out <업무 효과 결�
 - [x] 개발 검사에서 DB 베이스 이미지 태그·digest를 대조하고 임시 복사본의 고정 제거·태그 변경·digest 변경을 거부하는지 확인한다.
 - [x] 핵심 회귀 10회, 양쪽 모듈 전체 race·build·vet, 개발·운영 Compose 정적 검사와 DOX pass를 수행한다.
 
-실행한 회귀는 통과했으며 `TEST_DATABASE_URL`이 없는 서버 DB 통합 시험 165건은 건너뛰었다. 실제 DB 연결 점유 상태의 프로세스 종료·개발 runtime 검사는 수행하지 않았다. 상세 근거와 제한은 [검증 기록](./reviews/2026-10-09-server-search-validation.md)에 남긴다.
+최초 실행에서 접속 설정을 전달하지 않아 건너뛴 DB 통합 계층은 로컬 개발 PostgreSQL의 별도 임시 DB로 추가 검증했다. `TEST_DATABASE_REQUIRED=1`의 서버 전체 race 검사에서 테스트 항목 968개가 실패·건너뛰기 없이 통과했다. 실제 서버의 DB 잠금 대기 요청에 `SIGTERM`을 보내 30.024초 뒤 종료 코드 1과 진행 연결 종료를 확인했다. 시험 DB는 삭제했고 기존 개발 데이터는 초기화하지 않았다. 개발 runtime·외부 API·운영 실연결은 검증하지 않았으며 상세 근거와 제한은 [검증 기록](./reviews/2026-10-09-server-search-validation.md)에 남긴다.
 
 ## 공통 검증 명령
 

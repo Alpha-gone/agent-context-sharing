@@ -13,11 +13,16 @@ const controls = new Map();
 function control(id, textContent = '') {
   const element = new EventTarget();
   element.textContent = textContent;
+  const attributes = new Map();
+  element.setAttribute = (name, value) => attributes.set(name, value);
+  element.getAttribute = (name) => attributes.get(name);
   controls.set(id, element);
   return element;
 }
 const prompt = '노드를 선택하면 본문과 근거 경로를 표시합니다.';
 const details = control('node-details', prompt);
+const evidencePrompt = '노드를 선택하면 표시된 부분 그래프의 근거 연결을 안내합니다.';
+const evidence = control('node-evidence', evidencePrompt);
 const range = control('hop-range');
 range.value = html.match(/id="hop-range" type="range" min="0" max="(\d+)"/)[1];
 const maximum = range.value;
@@ -25,7 +30,8 @@ const fullView = control('full-view');
 const status = control('scope-status', '전체 보기');
 control('context-graph');
 const choices = [...html.matchAll(/data-context-id="([^"]+)"/g)].map((match) => {
-  const button = new EventTarget();
+  const button = control('choice-' + match[1]);
+  button.setAttribute('aria-pressed', 'false');
   button.dataset = { contextId: match[1] };
   return button;
 });
@@ -73,6 +79,15 @@ function expectFullView() {
   assert.equal(cy.nodes(':selected').length, 0);
   assert.equal(details.textContent, prompt);
   assert.equal(status.textContent, '전체 보기');
+  assert.equal(evidence.textContent, evidencePrompt);
+  assert.ok(choices.every((button) => button.getAttribute('aria-pressed') === 'false'));
+}
+
+function expectSelection(node) {
+  assert.match(status.textContent, new RegExp(node.id()));
+  assert.match(status.textContent, /본문과 근거 정보를 갱신했습니다/);
+  assert.ok(choices.every((button) => button.getAttribute('aria-pressed') === String(button.dataset.contextId === node.id())));
+  assert.match(details.textContent, new RegExp(node.id()));
 }
 
 try {
@@ -85,9 +100,11 @@ try {
     console.log('빈 그래프의 전체 보기·빈 영역·Esc·0홉: 통과');
   } else {
     for (const reset of [() => click(fullView), () => cy.emit('tap'), escape]) {
-      choose('고립 노드');
+      const isolated = choose('고립 노드');
+      expectSelection(isolated);
       assert.deepEqual(visibleNodes(), ['고립 노드']);
-      assert.equal(status.textContent, '국소 보기');
+      assert.match(status.textContent, /^국소 보기/);
+      assert.match(evidence.textContent, /표시된 부분 그래프에 이 노드의 근거 연결이 없습니다/);
       changeHops(0);
       assert.deepEqual(visibleNodes(), ['고립 노드']);
       changeHops(maximum);
@@ -106,25 +123,37 @@ try {
     const choice = choices.find((button) => button.dataset.contextId === derived.id());
     assert.ok(choice, '숨겨진 파생도 목록에서 선택할 수 있어야 한다');
     click(choice);
+    expectSelection(derived);
     assert.deepEqual(visibleNodes(), ['선택 파생']);
     assert.match(details.textContent, /선택 파생/);
     assert.equal(range.value, '0');
     assert.equal(cy.edges('.evidence').length, 1);
     assert.equal(cy.edges('.evidence').source().id(), derived.id(), '들어오는 파생 후손은 근거가 아니다');
+    assert.equal(evidence.textContent, '파생 ' + derived.id() + ' → 근거 ' + cy.edges('.evidence').target().id() + ' (derived_from)');
+    assert.doesNotMatch(evidence.textContent, new RegExp(cy.nodes().filter((node) => node.data('body') === '파생 후손').id()));
     changeHops(1);
     assert.deepEqual(visibleNodes(), ['근거 원천', '선택 파생', '파생 후손'].sort());
     cy.edges('.evidence').emit('tap');
-    assert.equal(status.textContent, '국소 보기', '간선 클릭은 국소 보기를 해제하지 않는다');
+    assert.match(status.textContent, /^국소 보기/, '간선 클릭은 국소 보기를 해제하지 않는다');
     changeHops(maximum);
     assert.deepEqual(visibleNodes(), ['근거 원천', '선택 파생', '파생 후손', '사건 노드'].sort());
     assert.equal(cy.edges('.evidence').length, 1, '홉 변경은 근거 강조를 유지한다');
+    expectSelection(derived);
+    click(choice);
+    expectFullView();
+    click(choice);
+    expectSelection(derived);
     click(fullView);
     expectFullView();
-    choose('파생 후손');
+    const descendant = choose('파생 후손');
+    expectSelection(descendant);
     assert.equal(cy.edges('.evidence').length, 2, '반복 선택에서도 원천까지의 근거 경로를 강조한다');
+    assert.equal(evidence.textContent.split('\n').length, 2, '텍스트 근거와 강조 간선이 같아야 한다');
+    choose('파생 후손');
+    expectFullView();
     click(fullView);
     expectFullView();
-    console.log('고립 노드 해제 3종·다른 노드 반복 선택·목록 선택·0/1/최대 홉·근거 방향: 통과');
+    console.log('고립 노드 해제 3종·포인터/목록 토글과 pressed 동기화·0/1/최대 홉·텍스트 근거 방향·변경 안내: 통과');
   }
 } finally {
   cy.destroy();

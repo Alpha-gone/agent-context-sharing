@@ -78,7 +78,7 @@ func run() error {
 	return runConfigured(cfg)
 }
 
-func runConfigured(cfg config.Config) error {
+func runConfigured(cfg config.Config) (resultErr error) {
 	database, err := store.New(context.Background(), cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
 		AdjacencyWindow:     cfg.RelationAdjacencyWindow,
 		SimilarityThreshold: cfg.RelationSimilarityThreshold,
@@ -87,12 +87,10 @@ func runConfigured(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
-	requestsDrained := true
+	poolCloseSafe := true
+	var workers []worker
 	defer func() {
-		// 끝나지 않은 요청이 빌린 연결을 기다리면 종료 오류를 main에 반환할 수 없다.
-		if requestsDrained {
-			database.Close()
-		}
+		resultErr = errors.Join(resultErr, closeServerResources(context.Background(), slog.Default(), database.Close, poolCloseSafe, workers...))
 	}()
 	periodic, err := newPeriodicWorker(database, cfg.AccountPlans, slog.Default())
 	if err != nil {
@@ -116,15 +114,12 @@ func runConfigured(cfg config.Config) error {
 	// 분리 배치에서는 다른 배포 단위가 작업 큐를 소비한다. 시작하지 않아도 만들어 두는
 	// 이유는 질의 임베딩이 요청 경로에 있어 배치와 무관하게 필요하기 때문이다.
 	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
-	workers := []worker{periodic}
+	workers = append(workers, periodic)
 	if cfg.IndexWorkerPlacement == config.PlacementEmbedded {
 		workers = append(workers, indexer)
 	}
-	// 풀의 defer보다 나중에 등록하므로 모든 반환 경로에서 작업자를 먼저 닫는다.
-	// 정리 시점에 새 예산을 만들고, 정상 종료에서 이미 닫았으면 목록을 비워 중복을 막는다.
-	defer func() {
-		closeWorkers(context.Background(), slog.Default(), workers...)
-	}()
+	// 종료 책임은 풀 준비 직후 등록했다. 시작 전에 목록에 추가하고, 정상 종료에서 이미
+	// 종료를 시도한 목록은 비워 기동 실패 정리와 같은 경계를 쓰되 중복 호출하지 않는다.
 	if cfg.IndexWorkerPlacement == config.PlacementEmbedded {
 		indexer.Start(context.Background())
 	}
@@ -207,7 +202,7 @@ func runConfigured(cfg config.Config) error {
 	shutdownErr := shutdownInOrder(shutdownContext, context.Background(), app, server, slog.Default(), workers...)
 	workers = nil
 	if shutdownErr != nil {
-		requestsDrained = false
+		poolCloseSafe = false
 		return shutdownErr
 	}
 	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {

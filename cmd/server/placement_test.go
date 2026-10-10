@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -185,17 +184,22 @@ func TestShutdownClosesWorkersEvenWhenRequestsDoNotDrain(t *testing.T) {
 	}
 }
 
-// TestShutdownReportsRequestDrainErrorOverWorkerError는 작업자 종료가 실패해도 요청 대기
-// 결과를 우선 돌려주는지 확인한다. 호출자가 보는 값은 트래픽을 안전하게 뺐는지다.
-func TestShutdownReportsRequestDrainErrorOverWorkerError(t *testing.T) {
+// TestShutdownReportsWorkerErrors는 요청 종료가 성공해도 모든 작업자 오류를 보존한다.
+func TestShutdownReportsWorkerErrors(t *testing.T) {
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
 	server := &http.Server{Handler: app.handler()}
-	events := make([]string, 0, 1)
+	events := make([]string, 0, 3)
+	firstErr, secondErr := errors.New("주기 작업자 종료 실패"), errors.New("색인 작업자 종료 실패")
 
 	err := shutdownInOrder(t.Context(), t.Context(), app, server, slog.New(slog.NewTextHandler(io.Discard, nil)),
-		recordingWorker{name: "색인 작업자", app: app, events: &events, failure: fmt.Errorf("작업자 종료 실패")})
-	if err != nil {
-		t.Fatalf("작업자 종료 실패가 정상 종료를 실패로 만들었다: %v", err)
+		recordingWorker{name: "주기 작업자", app: app, events: &events, failure: firstErr},
+		recordingWorker{name: "색인 작업자", app: app, events: &events, failure: secondErr},
+		recordingWorker{name: "마지막 작업자", app: app, events: &events})
+	if !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
+		t.Fatalf("작업자 오류가 누락됐다: %v", err)
+	}
+	if want := []string{"주기 작업자", "색인 작업자", "마지막 작업자"}; !slices.Equal(events, want) {
+		t.Fatalf("실패 뒤 남은 작업자의 종료 시도가 누락됐다: %v", events)
 	}
 }
 

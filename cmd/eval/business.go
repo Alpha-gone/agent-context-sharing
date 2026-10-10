@@ -39,6 +39,24 @@ type businessMetrics struct {
 	CollaborationUsage float64 `json:"collaboration_usage"`
 }
 
+// UnmarshalJSON는 미측정 지표를 실제 측정값 0과 구분해 필수 숫자만 받는다.
+func (value *businessMetrics) UnmarshalJSON(raw []byte) error {
+	var measured struct {
+		CompletionTimeMS   *int64   `json:"completion_time_ms"`
+		ReworkCount        *int     `json:"rework_count"`
+		ResumeInteractions *int     `json:"resume_interactions"`
+		CollaborationUsage *float64 `json:"collaboration_usage"`
+	}
+	if err := json.Unmarshal(raw, &measured, json.RejectUnknownMembers(true)); err != nil {
+		return err
+	}
+	if measured.CompletionTimeMS == nil || measured.ReworkCount == nil || measured.ResumeInteractions == nil || measured.CollaborationUsage == nil {
+		return fmt.Errorf("업무 효과의 네 지표는 누락·null 없이 명시적인 숫자여야 한다")
+	}
+	*value = businessMetrics{CompletionTimeMS: *measured.CompletionTimeMS, ReworkCount: *measured.ReworkCount, ResumeInteractions: *measured.ResumeInteractions, CollaborationUsage: *measured.CollaborationUsage}
+	return nil
+}
+
 type businessReport struct {
 	StartedAt         time.Time          `json:"started_at"`
 	Version           string             `json:"dataset_version"`

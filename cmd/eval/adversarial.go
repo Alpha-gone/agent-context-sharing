@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -532,13 +533,12 @@ func runAdversarial(ctx context.Context, database *store.Store, worker *index.Wo
 // runBaseline은 공격 없는 평가 그래프에서 질의를 반복 실행한다. 어느 반복에서든 표본의 성공
 // 조건이 이미 성립하거나 정상 기대 경로가 성립하지 않으면 그 표본을 거부한다. 돌려주는
 // 값은 첫 반복의 응답이며 표본 그래프의 공격 전 응답과 견줘 상태 누출을 찾는 데 쓴다.
-func runBaseline(ctx context.Context, database *store.Store, worker *index.Worker, service *search.Service, contexts contextSet, queries querySet, attacks attackSet, conditions adversarialConditions, base baseShape, pathsByQuery map[string][]expectedPath) (map[string]response, error) {
+func runBaseline(ctx context.Context, database *store.Store, worker *index.Worker, service *search.Service, contexts contextSet, queries querySet, attacks attackSet, conditions adversarialConditions, base baseShape, pathsByQuery map[string][]expectedPath) (first map[string]response, err error) {
 	graph, err := loadAdversarialGraph(ctx, database, worker, contexts)
 	if err != nil {
 		return nil, err
 	}
-	defer dropGraph(ctx, database, graph)
-	var first map[string]response
+	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
 	for repeat := 1; repeat <= conditions.Repeats; repeat++ {
 		responses, err := runQueries(ctx, service, graph, queries, conditions)
 		if err != nil {
@@ -568,12 +568,12 @@ func runBaseline(ctx context.Context, database *store.Store, worker *index.Worke
 // runAttackRepeat은 표본 하나의 한 반복이다. 새 그래프에 기준 집합을 올려 공격 전 응답을
 // 기준선과 견주고, 공격을 적용해 불변식 감사를 통과하는지 본 뒤 공격 후 응답을 잰다. 같은
 // 그래프에서 복구를 적용하고 다시 감사한 뒤 복구 후 응답을 잰다.
-func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.Worker, service *search.Service, contexts contextSet, queries querySet, sample attackSample, conditions adversarialConditions, expect store.EmbeddingExpectation, base baseShape, pathsByQuery map[string][]expectedPath, baseline map[string]response, runs *sampleRuns) ([]hopWarning, error) {
+func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.Worker, service *search.Service, contexts contextSet, queries querySet, sample attackSample, conditions adversarialConditions, expect store.EmbeddingExpectation, base baseShape, pathsByQuery map[string][]expectedPath, baseline map[string]response, runs *sampleRuns) (warnings []hopWarning, err error) {
 	graph, err := loadAdversarialGraph(ctx, database, worker, contexts)
 	if err != nil {
 		return nil, err
 	}
-	defer dropGraph(ctx, database, graph)
+	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
 	if err := auditClean(ctx, database, graph, expect, "공격 전"); err != nil {
 		return nil, err
 	}
@@ -635,7 +635,6 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 		return nil, fmt.Errorf("복구 후: %w", err)
 	}
 
-	var warnings []hopWarning
 	flaggedBefore, flaggedAfter, contaminatedAfter, warnedAfter, controls := 0, 0, 0, 0, 0
 	for _, query := range queries.Queries {
 		if slices.Contains(sample.TargetQueryIDs, query.ID) {
@@ -688,17 +687,9 @@ func loadAdversarialGraph(ctx context.Context, database *store.Store, worker *in
 		return loadedGraph{}, err
 	}
 	if err := drainIndexQueue(ctx, worker, graph.GraphID, len(contexts.Contexts)*4+64); err != nil {
-		dropGraph(ctx, database, graph)
-		return loadedGraph{}, err
+		return loadedGraph{}, errors.Join(err, dropGraph(ctx, database, graph))
 	}
 	return graph, nil
-}
-
-// dropGraph는 평가 그래프를 소프트 삭제해 다음 표본·반복의 검색 대상에서 뺀다.
-func dropGraph(ctx context.Context, database *store.Store, graph loadedGraph) {
-	if err := database.SetGraphDeleted(ctx, graph.GraphID, graph.AccountID, true); err != nil {
-		slog.Error("평가 그래프 정리 실패", "graph_id", graph.GraphID.String(), "error", err)
-	}
 }
 
 // auditClean은 그래프 불변식 전체 감사가 위반 없이 끝나는지 본다. 공격은 구조적으로 유효한

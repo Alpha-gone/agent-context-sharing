@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -111,15 +112,7 @@ func runContinualScenario(ctx context.Context, database *store.Store, worker *in
 	if err != nil {
 		return continualRun{}, err
 	}
-	defer func() {
-		if deleteErr := database.SetGraphDeleted(ctx, graph.GraphID, graph.AccountID, true); deleteErr != nil {
-			if err == nil {
-				err = fmt.Errorf("평가 그래프 정리: %w", deleteErr)
-			} else {
-				err = fmt.Errorf("%w; 평가 그래프 정리: %v", err, deleteErr)
-			}
-		}
-	}()
+	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
 	if err := drainIndexQueue(ctx, worker, graph.GraphID, len(scenario.contexts.Contexts)*4+64); err != nil {
 		return continualRun{}, err
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 func TestGradeMutationRechecksActorAfterGraphLockIntegration(t *testing.T) {
-	for _, action := range []string{"grant", "revoke"} {
+	for _, action := range []string{"grant", "grant_team", "revoke"} {
 		for _, change := range []string{"직접 등급 하향", "팀 구성원 제거", "팀 삭제"} {
 			t.Run(action+"/"+change, func(t *testing.T) {
 				database := newIntegrationStore(t)
@@ -22,6 +22,10 @@ func TestGradeMutationRechecksActorAfterGraphLockIntegration(t *testing.T) {
 				graphID := createTestGraph(t, database, actorID)
 				grantAccount(t, database, graphID, remainingID, model.GraphGradeOwner)
 				grantAccount(t, database, graphID, targetID, model.GraphGradeViewer)
+				targetTeamID := newTestID(t)
+				if action == "grant_team" {
+					createTestTeam(t, database, targetTeamID, remainingID, false)
+				}
 				teamID := newTestID(t)
 				if change == "직접 등급 하향" {
 					grantAccount(t, database, graphID, actorID, model.GraphGradeOwner)
@@ -53,6 +57,8 @@ func TestGradeMutationRechecksActorAfterGraphLockIntegration(t *testing.T) {
 				worker.Go(func() {
 					if action == "grant" {
 						result <- database.GrantGraph(ctx, graphID, actorID, targetID, GrantSubjectAccount, model.GraphGradeEditor)
+					} else if action == "grant_team" {
+						result <- database.GrantGraph(ctx, graphID, actorID, targetTeamID, GrantSubjectTeam, model.GraphGradeEditor)
 					} else {
 						result <- database.RevokeGraphGrantWithAudit(ctx, graphID, actorID, targetID, GrantSubjectAccount)
 					}
@@ -95,6 +101,12 @@ func TestGradeMutationRechecksActorAfterGraphLockIntegration(t *testing.T) {
 					t.Fatalf("대상 등급이 바뀌었다: %q %t %v", grade, found, err)
 				}
 				var audits int
+				if action == "grant_team" {
+					var grants int
+					if err := database.pool.QueryRow(ctx, `SELECT count(*) FROM public.graph_grant WHERE graph_id = $1 AND subject_type = 'team' AND subject_id = $2`, graphID.String(), targetTeamID.String()).Scan(&grants); err != nil || grants != 0 {
+						t.Fatalf("거부한 팀 부여 = %d, 오류 %v", grants, err)
+					}
+				}
 				if err := database.pool.QueryRow(ctx, `SELECT count(*) FROM public.web_audit_log WHERE graph_id = $1`, graphID.String()).Scan(&audits); err != nil || audits != 0 {
 					t.Fatalf("거부한 변경의 감사 기록 = %d, 오류 %v", audits, err)
 				}

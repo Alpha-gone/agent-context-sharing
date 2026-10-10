@@ -164,6 +164,14 @@ type fakeGraphStore struct {
 	cursor             string
 	revokeErr          error
 	grantErr           error
+	grantSubjectID     model.ID
+	grantSubjectType   store.GrantSubjectType
+	grantGrade         model.GraphGrade
+	managedTeams       []model.Team
+	grantableTeams     []model.Team
+	grantableTeamsErr  error
+	grantableQueried   bool
+	grants             []model.GrantSubject
 	requestRestoreErr  error
 	operatorRestoreErr error
 	// outside에는 목록에는 실리지 않지만 그래프에는 있는 컨텍스트를 둔다.
@@ -215,17 +223,22 @@ func (fake fakeGraphStore) ListDeletedContexts(context.Context, model.ID, int) (
 func (fake fakeGraphStore) ListOwnedDeletedGraphs(context.Context, model.ID) ([]model.Graph, error) {
 	return fake.ownedDeleted, nil
 }
-func (fakeGraphStore) ListGraphGrants(context.Context, model.ID) ([]model.GrantSubject, error) {
-	return nil, nil
+func (fake fakeGraphStore) ListGraphGrants(context.Context, model.ID) ([]model.GrantSubject, error) {
+	return fake.grants, nil
 }
-func (fakeGraphStore) ListManagedTeams(context.Context, model.ID) ([]model.Team, error) {
-	return nil, nil
+func (fake fakeGraphStore) ListManagedTeams(context.Context, model.ID) ([]model.Team, error) {
+	return fake.managedTeams, nil
+}
+func (fake *fakeGraphStore) ListGrantableTeams(context.Context) ([]model.Team, error) {
+	fake.grantableQueried = true
+	return fake.grantableTeams, fake.grantableTeamsErr
 }
 func (fakeGraphStore) AccountByLoginID(context.Context, string) (store.Account, error) {
 	return store.Account{}, nil
 }
-func (fake *fakeGraphStore) GrantGraph(context.Context, model.ID, model.ID, model.ID, store.GrantSubjectType, model.GraphGrade) error {
+func (fake *fakeGraphStore) GrantGraph(_ context.Context, _, _, subjectID model.ID, subjectType store.GrantSubjectType, grade model.GraphGrade) error {
 	fake.granted = true
+	fake.grantSubjectID, fake.grantSubjectType, fake.grantGrade = subjectID, subjectType, grade
 	return fake.grantErr
 }
 func (fake fakeGraphStore) RevokeGraphGrantWithAudit(context.Context, model.ID, model.ID, model.ID, store.GrantSubjectType) error {

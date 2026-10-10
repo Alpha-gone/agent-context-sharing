@@ -19,6 +19,8 @@ type Team struct {
 	ManagerAccountID ID
 	CreatedAt        time.Time
 	DeletedAt        *time.Time
+	// MemberLoginIDs는 관리 팀 조회에서만 채우는 현재 구성원의 로그인 아이디다.
+	MemberLoginIDs []string
 }
 
 // DeletionImpact는 삭제 전에 안내할 연결된 대상의 수를 담는다.

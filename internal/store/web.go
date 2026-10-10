@@ -28,6 +28,15 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 	if err := requireGraphOwner(ctx, tx, graphID, actorID); err != nil {
 		return err
 	}
+	if subjectType == GrantSubjectTeam {
+		var active bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.team WHERE team_id = $1 AND deleted_at IS NULL)`, subjectID.String()).Scan(&active); err != nil {
+			return fmt.Errorf("부여 대상 팀 조회: %w", err)
+		}
+		if !active {
+			return ErrNotFound
+		}
+	}
 	var before *string
 	if err := tx.QueryRow(ctx, `SELECT grade FROM public.graph_grant WHERE graph_id = $1 AND subject_type = $2 AND subject_id = $3`, graphID.String(), subjectType, subjectID.String()).Scan(&before); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("기존 그래프 등급 조회: %w", err)
@@ -181,14 +190,11 @@ func (s *Store) CreateTeam(ctx context.Context, actorID model.ID, name string) (
 	return model.Team{ID: teamID, Name: name, ManagerAccountID: actorID, CreatedAt: now}, nil
 }
 
-// ListManagedTeams는 요청 계정이 관리하는 활성·삭제 팀을 모두 읽는다.
-func (s *Store) ListManagedTeams(ctx context.Context, managerID model.ID) ([]model.Team, error) {
-	if !managerID.IsV7() {
-		return nil, fmt.Errorf("팀 관리자 식별자가 UUIDv7이 아니다")
-	}
-	rows, err := s.pool.Query(ctx, `SELECT team_id, name, manager_account_id, created_at, deleted_at FROM public.team WHERE manager_account_id = $1 ORDER BY name, team_id`, managerID.String())
+// ListGrantableTeams는 소유자의 부여 양식에 사용할 활성 팀을 구성원 정보 없이 읽는다.
+func (s *Store) ListGrantableTeams(ctx context.Context) ([]model.Team, error) {
+	rows, err := s.pool.Query(ctx, `SELECT team_id, name, manager_account_id, created_at, deleted_at FROM public.team WHERE deleted_at IS NULL ORDER BY name, team_id`)
 	if err != nil {
-		return nil, fmt.Errorf("관리 팀 목록 조회: %w", err)
+		return nil, fmt.Errorf("부여 대상 팀 목록 조회: %w", err)
 	}
 	defer rows.Close()
 	teams := make([]model.Team, 0)
@@ -197,6 +203,36 @@ func (s *Store) ListManagedTeams(ctx context.Context, managerID model.ID) ([]mod
 		if err != nil {
 			return nil, err
 		}
+		teams = append(teams, team)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("부여 대상 팀 목록 행 읽기: %w", err)
+	}
+	return teams, nil
+}
+
+// ListManagedTeams는 요청 계정이 관리하는 활성·삭제 팀과 현재 구성원을 함께 읽는다.
+func (s *Store) ListManagedTeams(ctx context.Context, managerID model.ID) ([]model.Team, error) {
+	if !managerID.IsV7() {
+		return nil, fmt.Errorf("팀 관리자 식별자가 UUIDv7이 아니다")
+	}
+	rows, err := s.pool.Query(ctx, `SELECT team_id, name, manager_account_id, created_at, deleted_at,
+		ARRAY(SELECT account.login_id FROM public.team_member AS member
+			JOIN public.account AS account ON account.account_id = member.account_id
+			WHERE member.team_id = team.team_id ORDER BY account.login_id)
+		FROM public.team AS team WHERE manager_account_id = $1 ORDER BY name, team_id`, managerID.String())
+	if err != nil {
+		return nil, fmt.Errorf("관리 팀 목록 조회: %w", err)
+	}
+	defer rows.Close()
+	teams := make([]model.Team, 0)
+	for rows.Next() {
+		var members []string
+		team, err := scanTeam(rows, &members)
+		if err != nil {
+			return nil, err
+		}
+		team.MemberLoginIDs = members
 		teams = append(teams, team)
 	}
 	if err := rows.Err(); err != nil {
@@ -380,10 +416,11 @@ func requireTeamManager(ctx context.Context, tx pgx.Tx, teamID, accountID model.
 	return nil
 }
 
-func scanTeam(row pgx.Row) (model.Team, error) {
+func scanTeam(row pgx.Row, extra ...any) (model.Team, error) {
 	var rawID, rawManager string
 	var team model.Team
-	if err := row.Scan(&rawID, &team.Name, &rawManager, &team.CreatedAt, &team.DeletedAt); err != nil {
+	destinations := append([]any{&rawID, &team.Name, &rawManager, &team.CreatedAt, &team.DeletedAt}, extra...)
+	if err := row.Scan(destinations...); err != nil {
 		return model.Team{}, fmt.Errorf("팀 행 해석: %w", err)
 	}
 	var err error

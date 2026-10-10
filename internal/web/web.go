@@ -66,6 +66,7 @@ type GraphStore interface {
 	ListDeletedContexts(context.Context, model.ID, int) ([]model.Context, bool, error)
 	ListGraphGrants(context.Context, model.ID) ([]model.GrantSubject, error)
 	ListManagedTeams(context.Context, model.ID) ([]model.Team, error)
+	ListGrantableTeams(context.Context) ([]model.Team, error)
 	AccountByLoginID(context.Context, string) (store.Account, error)
 	GrantGraph(context.Context, model.ID, model.ID, model.ID, store.GrantSubjectType, model.GraphGrade) error
 	RevokeGraphGrantWithAudit(context.Context, model.ID, model.ID, model.ID, store.GrantSubjectType) error
@@ -126,6 +127,7 @@ func New(auth Authentication, graphs GraphStore, config Config) (*Server, error)
 	}
 	templates, err := template.New("pages").Funcs(template.FuncMap{
 		"formatTime": func(value time.Time) string { return value.UTC().Format(time.RFC3339) },
+		"accessPath": accessPath,
 	}).Parse(pageTemplates)
 	if err != nil {
 		return nil, fmt.Errorf("웹 템플릿 해석: %w", err)
@@ -425,6 +427,12 @@ func (server *Server) graphAccess(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		value.Grants = grants
+		teams, err := server.graphs.ListGrantableTeams(request.Context())
+		if err != nil {
+			server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "권한과 팀 관리", Error: "부여할 팀 목록을 읽을 수 없습니다."})
+			return
+		}
+		value.GrantableTeams = teams
 	}
 	teams, err := server.graphs.ListManagedTeams(request.Context(), accountID)
 	if err != nil {
@@ -458,23 +466,36 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 	}
 	ctx := request.Context()
 	action := request.PostForm.Get("action")
-	if (action == "grant_account" || action == "revoke") && !owner {
+	if (action == "grant_account" || action == "grant_team" || action == "revoke") && !owner {
 		server.render(writer, http.StatusForbidden, "message", pageData{Title: "접근 제한", Error: "등급을 바꿀 권한이 없습니다."})
 		return
 	}
 	switch action {
-	case "grant_account":
-		account, err := server.graphs.AccountByLoginID(ctx, request.PostForm.Get("login_id"))
-		if err != nil {
-			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "대상 계정을 찾을 수 없습니다."})
-			return
+	case "grant_account", "grant_team":
+		var subjectID model.ID
+		subjectType := store.GrantSubjectAccount
+		if action == "grant_team" {
+			var err error
+			subjectID, err = model.ParseID(request.PostForm.Get("team_id"))
+			if err != nil {
+				server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "팀 식별자가 올바르지 않습니다."})
+				return
+			}
+			subjectType = store.GrantSubjectTeam
+		} else {
+			account, err := server.graphs.AccountByLoginID(ctx, request.PostForm.Get("login_id"))
+			if err != nil {
+				server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "대상 계정을 찾을 수 없습니다."})
+				return
+			}
+			subjectID = account.ID
 		}
 		grade := model.GraphGrade(request.PostForm.Get("grade"))
 		if !grade.Valid() {
 			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "등급이 올바르지 않습니다."})
 			return
 		}
-		if err := server.graphs.GrantGraph(ctx, graphID, actorID, account.ID, store.GrantSubjectAccount, grade); err != nil {
+		if err := server.graphs.GrantGraph(ctx, graphID, actorID, subjectID, subjectType, grade); err != nil {
 			status, message := http.StatusInternalServerError, "등급을 부여할 수 없습니다."
 			switch {
 			case errors.Is(err, store.ErrLastOwner):
@@ -860,6 +881,7 @@ type pageData struct {
 	Owner           bool
 	Grants          []model.GrantSubject
 	Teams           []model.Team
+	GrantableTeams  []model.Team
 	Impact          model.DeletionImpact
 	AuditEntries    []model.AuditEntry
 	RestoreRequests []model.RestoreRequest
@@ -928,7 +950,7 @@ body { margin: 0; } main { max-width: 1120px; margin: 32px auto; padding: 0 16px
 {{define "message"}}{{template "head" .}}<h1>{{.Title}}</h1><p><a href="/graphs">그래프 목록</a></p>{{template "foot" .}}{{end}}
 {{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav><form class="panel actions" method="get" action="/graphs"><label>이름 필터<input name="name" value="{{.NameFilter}}"></label><label>등급<select name="grade"><option value="">모든 등급</option><option value="owner">소유자</option><option value="editor">편집자</option><option value="viewer">열람자</option></select></label><button type="submit">적용</button></form>{{if .Graphs}}<table><thead><tr><th>이름</th><th>설명</th><th>마지막 활동</th><th>내 등급</th></tr></thead><tbody>{{range .Graphs}}<tr><td><a href="/graphs/{{.ID}}">{{.Name}}</a></td><td>{{.Description}}</td><td>{{formatTime .LastActivityAt}}</td><td>{{.Grade}}</td></tr>{{end}}</tbody></table>{{else}}<p>접근 가능한 그래프가 없습니다.</p>{{end}}{{if .NextCursor}}<p><a href="{{.NextPage}}">더 보기</a></p>{{end}}{{if .DeletedGraphs}}<section class="panel"><h2>내가 삭제한 그래프</h2>{{range .DeletedGraphs}}<p><a href="/graphs/{{.ID}}/deletion">{{.Name}} 복구</a></p>{{end}}</section>{{end}}{{if .RestoreGraphs}}<section class="panel"><h2>자동 삭제된 그래프</h2>{{range .RestoreGraphs}}<form class="inline" method="post" action="/graphs"><input type="hidden" name="restore_graph_id" value="{{.ID}}"><button type="submit">{{.Name}} 복구 요청</button></form>{{end}}</section>{{end}}{{template "foot" .}}{{end}}
 {{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p>{{.Graph.Description}}</p><p>전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다.</p><label>국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section><section class="graph-layout"><div id="context-graph" aria-label="컨텍스트 그래프"></div><aside class="panel"><h2>선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code><p>{{.Body}}</p>{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){const elements={{.VisualizationJSON}};const details=document.getElementById('node-details');const range=document.getElementById('hop-range');const cy=cytoscape({container:document.getElementById('context-graph'),elements:elements,style:[{selector:'node',style:{'label':'data(label)','color':'#fff','text-valign':'center','text-halign':'center','width':42,'height':42,'font-size':10}},{selector:'node.source',style:{'background-color':'#2563eb'}},{selector:'node.derived',style:{'background-color':'#7c3aed'}},{selector:'node.event',style:{'background-color':'#047857'}},{selector:'node.disputed',style:{'border-width':4,'border-color':'#f59e0b'}},{selector:'node.evidence-invalidated',style:{'shape':'diamond'}},{selector:'edge',style:{'curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'#64748b','line-color':'#64748b','width':2,'label':'data(kind)','font-size':8,'text-rotation':'autorotate'}},{selector:'edge.evidence',style:{'line-color':'#dc2626','target-arrow-color':'#dc2626','width':5}}],layout:{name:'cose',animate:false}});let selected=null;function applyScope(){cy.elements().show();if(!selected)return;const hops=Number(range.value);if(hops===0){cy.elements().hide();selected.show();return;}let scope=selected;for(let i=0;i<hops;i++)scope=scope.closedNeighborhood();cy.elements().hide();scope.show();}function showDetails(node){selected=node;cy.edges().removeClass('evidence');/* DERIVED_FROM은 파생에서 근거로 향하므로 나가는 간선만 따라가면 근거 원천에 닿는다. 들어오는 간선까지 따르면 이 노드에 기대는 파생 후손까지 강조된다. */let frontier=node;const seen={};seen[node.id()]=true;while(frontier.length){const edges=frontier.outgoers('edge[kind = "derived_from"]');edges.addClass('evidence');frontier=edges.targets().filter(function(n){if(seen[n.id()])return false;seen[n.id()]=true;return true;});}details.textContent=node.data('layer')+'\n'+node.data('body');applyScope();}cy.on('tap','node',function(event){showDetails(event.target);});range.addEventListener('input',applyScope);})();</script>{{template "foot" .}}{{end}}
-{{define "access"}}{{template "head" .}}<nav><h1>권한과 팀 관리</h1>{{if .GraphID.IsV7}}<a href="/graphs/{{.GraphID}}">그래프 상세</a>{{end}}<a href="/graphs">그래프 목록</a></nav>{{if .Owner}}<section class="panel"><h2>현재 등급</h2><table><thead><tr><th>대상</th><th>종류</th><th>등급</th><th>부여 방식</th><th>회수</th></tr></thead><tbody>{{range .Grants}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td>{{.Grade}}</td><td>{{if .Inherited}}팀 상속{{else}}직접{{end}}</td><td>{{if .Inherited}}상속 등급{{else if .CanRevoke}}<form class="inline" method="post"><input type="hidden" name="action" value="revoke"><input type="hidden" name="subject_id" value="{{.ID}}"><input type="hidden" name="subject_type" value="{{.Type}}"><button type="submit">회수</button></form>{{else}}<button disabled title="그래프에는 소유자가 최소 하나 필요합니다.">마지막 소유자</button>{{end}}</td></tr>{{end}}</tbody></table><form method="post" class="actions"><input type="hidden" name="action" value="grant_account"><label>계정 로그인 아이디<input name="login_id" required></label><label>등급<select name="grade"><option value="viewer">열람자</option><option value="editor">편집자</option><option value="owner">소유자</option></select></label><button type="submit">계정 등급 부여</button></form></section>{{else if .GraphID.IsV7}}<p class="notice">등급 부여와 회수는 이 그래프의 소유자만 할 수 있습니다.</p>{{end}}<section class="panel"><h2>관리 팀</h2><form method="post" class="actions"><input type="hidden" name="action" value="create_team"><label>새 팀 이름<input name="team_name" required></label><button type="submit">팀 생성</button></form>{{range .Teams}}<article><h3>{{.Name}} {{if .DeletedAt}}(삭제됨){{end}}</h3><form class="inline" method="post"><input type="hidden" name="team_id" value="{{.ID}}">{{if .DeletedAt}}<input type="hidden" name="action" value="restore_team"><button type="submit">팀 복구</button>{{else}}<input type="hidden" name="action" value="delete_team"><button type="submit">팀 삭제</button>{{end}}</form><form method="post" class="actions"><input type="hidden" name="team_id" value="{{.ID}}"><input type="hidden" name="action" value="add_member"><label>구성원 로그인 아이디<input name="login_id" required></label><button type="submit">추가</button></form><form method="post" class="actions"><input type="hidden" name="team_id" value="{{.ID}}"><input type="hidden" name="action" value="remove_member"><label>제거할 구성원 로그인 아이디<input name="login_id" required></label><button type="submit">제거</button></form></article>{{else}}<p>관리하는 팀이 없습니다.</p>{{end}}</section>{{template "foot" .}}{{end}}
+{{define "access"}}{{template "head" .}}<nav><h1>권한과 팀 관리</h1>{{if .GraphID.IsV7}}<a href="/graphs/{{.GraphID}}">그래프 상세</a>{{end}}<a href="/graphs">그래프 목록</a></nav>{{if .Owner}}<section class="panel"><h2>현재 등급</h2><table><thead><tr><th>대상</th><th>종류</th><th>등급</th><th>부여 방식</th><th>회수</th></tr></thead><tbody>{{range .Grants}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td>{{.Grade}}</td><td>{{if .Inherited}}팀 상속{{else}}직접{{end}}</td><td>{{if .Inherited}}상속 등급{{else if .CanRevoke}}<form class="inline" method="post"><input type="hidden" name="action" value="revoke"><input type="hidden" name="subject_id" value="{{.ID}}"><input type="hidden" name="subject_type" value="{{.Type}}"><button type="submit">회수</button></form>{{else}}<button disabled title="그래프에는 소유자가 최소 하나 필요합니다.">마지막 소유자</button>{{end}}</td></tr>{{end}}</tbody></table><form method="post" action="{{accessPath .GraphID}}" class="actions"><input type="hidden" name="action" value="grant_account"><label for="grant-login-id">계정 로그인 아이디 (필수)<input id="grant-login-id" name="login_id" autocorrect="off" autocapitalize="off" spellcheck="false" required></label><label for="account-grade">등급<select id="account-grade" name="grade"><option value="viewer">열람자</option><option value="editor">편집자</option><option value="owner">소유자</option></select></label><button type="submit">계정 등급 부여</button></form>{{if .GrantableTeams}}<form method="post" action="{{accessPath .GraphID}}" class="actions"><input type="hidden" name="action" value="grant_team"><label for="grant-team-id">대상 팀 (필수)<select id="grant-team-id" name="team_id" required><option value="">팀을 선택하십시오</option>{{range .GrantableTeams}}<option value="{{.ID}}">{{.Name}} · {{.ID}}</option>{{end}}</select></label><label for="team-grade">등급<select id="team-grade" name="grade"><option value="viewer">열람자</option><option value="editor">편집자</option><option value="owner">소유자</option></select></label><button type="submit">팀 등급 부여</button></form>{{else}}<p>등급을 부여할 활성 팀이 없습니다.</p>{{end}}</section>{{else if .GraphID.IsV7}}<p class="notice">등급 부여와 회수는 이 그래프의 소유자만 할 수 있습니다.</p>{{end}}<section class="panel"><h2>관리 팀</h2><form method="post" class="actions"><input type="hidden" name="action" value="create_team"><label>새 팀 이름<input name="team_name" required></label><button type="submit">팀 생성</button></form>{{range .Teams}}<article><h3>{{.Name}} {{if .DeletedAt}}(삭제됨){{end}}</h3><p>팀 식별자: <code>{{.ID}}</code></p><h4>현재 구성원</h4>{{if .MemberLoginIDs}}<ul>{{range .MemberLoginIDs}}<li>{{.}}</li>{{end}}</ul>{{else}}<p>구성원이 없습니다.</p>{{end}}<form class="inline" method="post"><input type="hidden" name="team_id" value="{{.ID}}">{{if .DeletedAt}}<input type="hidden" name="action" value="restore_team"><button type="submit">팀 복구</button>{{else}}<input type="hidden" name="action" value="delete_team"><button type="submit">팀 삭제</button>{{end}}</form><form method="post" class="actions"><input type="hidden" name="team_id" value="{{.ID}}"><input type="hidden" name="action" value="add_member"><label>구성원 로그인 아이디<input name="login_id" required></label><button type="submit">추가</button></form><form method="post" class="actions"><input type="hidden" name="team_id" value="{{.ID}}"><input type="hidden" name="action" value="remove_member"><label>제거할 구성원 로그인 아이디<input name="login_id" required></label><button type="submit">제거</button></form></article>{{else}}<p>관리하는 팀이 없습니다.</p>{{end}}</section>{{template "foot" .}}{{end}}
 {{define "deletion"}}{{template "head" .}}<nav><h1>삭제와 복구</h1><a href="/graphs/{{.GraphID}}">그래프 상세</a><a href="/graphs">그래프 목록</a></nav><section class="panel"><h2>{{.Graph.Name}}</h2><p>영향: 활성 컨텍스트 {{.Impact.Contexts}}개, 확정 관계 {{.Impact.Relations}}개, 접근이 차단될 계정 {{.Impact.Accounts}}개</p>{{if .Graph.DeletedAt}}<form method="post"><input type="hidden" name="action" value="restore"><button type="submit">그래프 복구</button></form>{{else}}<form method="post"><input type="hidden" name="action" value="delete"><label>그래프 이름 확인<input name="graph_name" required></label><button type="submit">소프트 삭제</button></form>{{end}}</section><section class="panel"><h2>노드 삭제</h2>{{if .ContextsTruncated}}<p class="notice">컨텍스트가 많아 최근 것만 표시했습니다. 목록에 없는 컨텍스트는 <code>?context_id=</code>로 직접 열 수 있습니다.</p>{{end}}{{if .Selected}}<article><strong>{{.Selected.Layer}}</strong> <code>{{.Selected.ID}}</code><p>{{.Selected.Body}}</p><p>영향: 이 컨텍스트를 근거로 둔 파생 {{.SelectedImpact.Derived}}개, 확정 관계 {{.SelectedImpact.Relations}}개</p><p>연쇄 삭제는 하지 않습니다. 파생에는 근거 무효 표시만 남습니다.</p><form method="post"><input type="hidden" name="action" value="delete_context"><input type="hidden" name="context_id" value="{{.Selected.ID}}"><button type="submit">이 노드 소프트 삭제</button></form></article>{{end}}{{range .ActiveContexts}}<p><a href="/graphs/{{$.GraphID}}/deletion?context_id={{.ID}}">{{.Layer}} · {{.ID}}</a></p>{{else}}<p>삭제할 활성 컨텍스트가 없습니다.</p>{{end}}</section><section class="panel"><h2>삭제된 노드</h2>{{range .DeletedContexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code><p>{{.Body}}</p><form class="inline" method="post"><input type="hidden" name="action" value="restore_context"><input type="hidden" name="context_id" value="{{.ID}}"><button type="submit">복구</button></form></article>{{else}}<p>삭제된 컨텍스트가 없습니다.</p>{{end}}</section>{{template "foot" .}}{{end}}
 {{define "audit"}}{{template "head" .}}<nav><h1>감사 기록</h1><a href="/graphs/{{.GraphID}}">그래프 상세</a></nav><table><thead><tr><th>시각</th><th>종류</th><th>동작</th><th>대상</th><th>상세</th></tr></thead><tbody>{{range .AuditEntries}}<tr><td>{{formatTime .OccurredAt}}</td><td>{{.Kind}}</td><td>{{.Action}}</td><td>{{.Target}}</td><td>{{.Detail}}</td></tr>{{end}}</tbody></table>{{template "foot" .}}{{end}}
 {{define "operator_restores"}}{{template "head" .}}<nav><h1>운영자 복구</h1><a href="/graphs">그래프 목록</a></nav><p>대기 중인 요청만 표시하며 컨텍스트 본문은 조회하지 않습니다.</p><table><thead><tr><th>그래프</th><th>요청 계정</th><th>요청 시각</th><th>처리</th></tr></thead><tbody>{{range .RestoreRequests}}<tr><td>{{.GraphName}}</td><td>{{.RequestedBy}}</td><td>{{formatTime .RequestedAt}}</td><td><form class="inline" method="post"><input type="hidden" name="graph_id" value="{{.GraphID}}"><button type="submit">복구</button></form></td></tr>{{else}}<tr><td colspan="4">대기 중인 요청이 없습니다.</td></tr>{{end}}</tbody></table>{{template "foot" .}}{{end}}`

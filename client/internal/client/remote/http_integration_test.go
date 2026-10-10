@@ -54,7 +54,12 @@ func keyHash(key testPublicKey) string {
 
 func signedTestToken(t *testing.T, key *ecdsa.PrivateKey, issuer, thumbprint, subject string, exp int64) string {
 	t.Helper()
-	header, _ := json.Marshal(map[string]string{"alg": "ES256", "kid": "server-key", "typ": "JWT"})
+	return signedTestTokenWithKid(t, key, issuer, thumbprint, subject, exp, "server-key")
+}
+
+func signedTestTokenWithKid(t *testing.T, key *ecdsa.PrivateKey, issuer, thumbprint, subject string, exp int64, kid string) string {
+	t.Helper()
+	header, _ := json.Marshal(map[string]string{"alg": "ES256", "kid": kid, "typ": "JWT"})
 	body, _ := json.Marshal(map[string]any{"iss": issuer, "sub": subject, "aud": []string{issuer + "/mcp"}, "exp": exp, "cnf": map[string]string{"jkt": thumbprint}, "jti": uuid.NewV7().String()})
 	unsigned := testEncoding.EncodeToString(header) + "." + testEncoding.EncodeToString(body)
 	hash := sha256.Sum256([]byte(unsigned))
@@ -116,6 +121,12 @@ func TestHTTPWithRealTLSAuthorizationAndConcurrentCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rotatedKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rotated atomic.Bool
+	var keyRequests, rotatedRequests atomic.Int32
 	fixture := newCatalogSource(t)
 	var base atomic.Value
 	var subject atomic.Value
@@ -139,8 +150,14 @@ func TestHTTPWithRealTLSAuthorizationAndConcurrentCalls(t *testing.T) {
 		case "/.well-known/oauth-authorization-server":
 			writeJSON(map[string]any{"issuer": issuer, "authorization_endpoint": issuer + "/authorize", "token_endpoint": issuer + "/token", "jwks_uri": issuer + "/jwks", "code_challenge_methods_supported": []string{"S256"}, "dpop_signing_alg_values_supported": []string{"ES256"}, "scopes_supported": []string{"agent-context"}, "token_endpoint_auth_methods_supported": []string{"none"}, "response_types_supported": []string{"code"}, "grant_types_supported": []string{"authorization_code"}, "authorization_response_iss_parameter_supported": true})
 		case "/jwks":
+			keyRequests.Add(1)
 			public := publicKey(key)
-			writeJSON(map[string]any{"keys": []any{map[string]string{"crv": public.Crv, "kty": public.Kty, "x": public.X, "y": public.Y, "kid": "server-key"}}})
+			keys := []any{map[string]string{"crv": public.Crv, "kty": public.Kty, "x": public.X, "y": public.Y, "kid": "server-key"}}
+			if rotated.Load() {
+				public = publicKey(rotatedKey)
+				keys = append(keys, map[string]string{"crv": public.Crv, "kty": public.Kty, "x": public.X, "y": public.Y, "kid": "rotated-key"})
+			}
+			writeJSON(map[string]any{"keys": keys})
 		case "/token":
 			exchanges.Add(1)
 			if err := r.ParseForm(); err != nil {
@@ -199,9 +216,21 @@ func TestHTTPWithRealTLSAuthorizationAndConcurrentCalls(t *testing.T) {
 				result = fixture.discovery
 			case "tools/list":
 				result = fixture.tools
-				w.Header().Set("Mcp-Access-Token", signedTestToken(t, key, issuer, thumbprint, "account-a", now.Unix()+7200))
+				rotated.Store(true)
+				w.Header().Set("Mcp-Access-Token", signedTestTokenWithKid(t, rotatedKey, issuer, thumbprint, "account-a", now.Unix()+7200, "rotated-key"))
 				w.Header().Set("Mcp-Access-Token-Expires-At", strconv.FormatInt(now.Unix()+7200, 10))
 			case "tools/call":
+				if opens.Load() == 1 {
+					parts := strings.Split(token, ".")
+					header, _ := testEncoding.DecodeString(parts[0])
+					var jwtHeader struct {
+						Kid string `json:"kid"`
+					}
+					if json.Unmarshal(header, &jwtHeader) != nil || jwtHeader.Kid != "rotated-key" {
+						t.Error("키 회전 갱신 토큰이 다음 도구 호출에 적용되지 않았습니다")
+					}
+					rotatedRequests.Add(1)
+				}
 				if request.Params.Name == "graph_create" {
 					attempt := writeAttempts.Add(1)
 					mu.Lock()
@@ -285,6 +314,9 @@ func TestHTTPWithRealTLSAuthorizationAndConcurrentCalls(t *testing.T) {
 	if opens.Load() != 1 || exchanges.Load() != 1 {
 		t.Fatal("초기 실제 보호 도전이 단일 인가로 이어지지 않았습니다")
 	}
+	if keyRequests.Load() != 2 {
+		t.Fatalf("최초 JWKS와 회전 재조회 횟수 = %d", keyRequests.Load())
+	}
 	identity, err := manager.Identity(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -303,6 +335,9 @@ func TestHTTPWithRealTLSAuthorizationAndConcurrentCalls(t *testing.T) {
 		})
 	}
 	wg.Wait()
+	if rotatedRequests.Load() != 100 || keyRequests.Load() != 2 {
+		t.Fatal("회전 토큰·정상 응답 보존 또는 불필요한 JWKS 조회 제한이 다릅니다")
+	}
 	testTLSStdioRelay(t, c, cfg)
 	if peak.Load() > 8 {
 		t.Fatal("실제 TLS 동시 전송이 8개를 넘었습니다")

@@ -40,7 +40,7 @@
 ## Child DOX Index
 
 - `cmd/release/AGENTS.md`: 네 플랫폼의 배포 후보·SPDX·출처 기록·오프라인 서명과 검증 경계를 정의한다.
-- `internal/client/authorize/AGENTS.md`: 브라우저 인가, 메모리 자격 증명과 DPoP 키의 로컬 작업 계약을 정의한다.
+- `internal/client/authorize/AGENTS.md`: 브라우저 인가, 메모리 자격 증명·DPoP 키와 서명 키 회전의 제한된 JWKS 재조회 계약을 정의한다.
 - `internal/client/host/AGENTS.md`: 호스트 stdio의 무상태·초기 연결 호환 처리, 정책·오류·응답 보존·취소의 로컬 작업 계약을 정의한다.
 - `internal/client/doctor/AGENTS.md`: 독립 순차 진단·출력·수명과 검증의 로컬 작업 계약을 정의한다.
 - `internal/client/remote/AGENTS.md`: 원격 HTTP 시도, 멱등성·재인가·자원 상한과 계약 캐시의 로컬 작업 계약을 정의한다.

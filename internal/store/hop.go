@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	json "encoding/json/v2"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -62,12 +63,16 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 // 채널의 결과를 모아 확장 채널의 시작 노드로 넘기라고 확정했고, 따로 호출하면 「채널
 // 구현」이 하나로 두기로 한 결과 상한이 시작 노드 수만큼 겹쳐 어느 것이 잘랐는지 알 수
 // 없게 된다. 거리는 가장 가까운 시작 노드까지의 최단 홉 거리다.
-func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []model.Context, hops int, direction string, filter []string, limit int) (HopResult, error) {
+func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []model.Context, hops int, direction string, filter []string, limit int) (result HopResult, err error) {
 	ctx, release, err := s.enterReadScope(ctx)
 	if err != nil {
 		return HopResult{}, err
 	}
-	defer release()
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			result, err = HopResult{}, errors.Join(err, releaseErr)
+		}
+	}()
 	queries := 0
 	return s.traverseHops(ctx, graphID, starts, hops, filter, limit, &queries, func(frontier []model.ID, label traversalLabel) ([]hopNeighbor, error) {
 		queries++

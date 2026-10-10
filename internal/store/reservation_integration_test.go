@@ -106,7 +106,7 @@ func TestReadSnapshotLimitsConcurrentReadsIntegration(t *testing.T) {
 		t.Fatalf("스냅숏 시작: %v", err)
 	}
 	ctx := snapshot.Context(t.Context())
-	releases := make([]func(), 0, snapshotConnections-1)
+	releases := make([]func() error, 0, snapshotConnections-1)
 	for range snapshotConnections - 1 {
 		_, release, err := database.enterReadScope(ctx)
 		if err != nil {
@@ -121,14 +121,20 @@ func TestReadSnapshotLimitsConcurrentReadsIntegration(t *testing.T) {
 		t.Fatalf("자리가 찬 스냅숏의 읽기 = %v, want 대기 뒤 %v", err, context.DeadlineExceeded)
 	}
 
-	releases[0]()
+	if err := releases[0](); err != nil {
+		t.Fatal(err)
+	}
 	_, release, err := database.enterReadScope(ctx)
 	if err != nil {
 		t.Fatalf("앞선 읽기가 끝난 뒤 읽기 시작: %v", err)
 	}
-	release()
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
 	for _, release := range releases[1:] {
-		release()
+		if err := release(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if stats := snapshot.Close(context.Background()); stats.PeakConnections > snapshotConnections {
 		t.Fatalf("스냅숏 동시 연결 최대 = %d, want %d 이하", stats.PeakConnections, snapshotConnections)

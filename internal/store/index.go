@@ -403,7 +403,7 @@ func websearchOrQuery(query string) string {
 	return strings.Join(strings.Fields(query), " OR ")
 }
 
-func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query string, current time.Time, limit int) ([]SearchCandidate, error) {
+func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query string, current time.Time, limit int) (result []SearchCandidate, err error) {
 	query = websearchOrQuery(query)
 	if !graphID.IsV7() || !current.UTC().Equal(current) || limit < 1 {
 		return nil, fmt.Errorf("키워드 검색 인자가 올바르지 않다")
@@ -412,7 +412,11 @@ func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query s
 	if err != nil {
 		return nil, err
 	}
-	defer release()
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			result, err = nil, errors.Join(err, releaseErr)
+		}
+	}()
 	rows, err := s.reader(ctx).Query(ctx, `
 		SELECT properties ->> 'context_id'::text
 		FROM `+s.contextTable()+`
@@ -439,7 +443,7 @@ func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query s
 }
 
 // TimeCandidates는 지정 시점에 유효했던 활성 컨텍스트를 최근 기록 순으로 읽는다.
-func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.Time, limit int) ([]SearchCandidate, error) {
+func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.Time, limit int) (result []SearchCandidate, err error) {
 	if !graphID.IsV7() || !asOf.UTC().Equal(asOf) || limit < 1 {
 		return nil, fmt.Errorf("시간 검색 인자가 올바르지 않다")
 	}
@@ -447,7 +451,11 @@ func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.
 	if err != nil {
 		return nil, err
 	}
-	defer release()
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			result, err = nil, errors.Join(err, releaseErr)
+		}
+	}()
 	rows, err := s.reader(ctx).Query(ctx, `
 		SELECT properties ->> 'context_id'::text
 		FROM `+s.contextTable()+`
@@ -471,7 +479,7 @@ func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.
 }
 
 // GlobalSummaryCandidates는 전역 범위 흐름의 시작점이 될 활성 전역 요약 파생을 최근 순으로 읽는다.
-func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, asOf time.Time, limit int) ([]SearchCandidate, error) {
+func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, asOf time.Time, limit int) (result []SearchCandidate, err error) {
 	if !graphID.IsV7() || !asOf.UTC().Equal(asOf) || limit < 1 {
 		return nil, fmt.Errorf("전역 요약 검색 인자가 올바르지 않다")
 	}
@@ -479,7 +487,11 @@ func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, a
 	if err != nil {
 		return nil, err
 	}
-	defer release()
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			result, err = nil, errors.Join(err, releaseErr)
+		}
+	}()
 	rows, err := s.reader(ctx).Query(ctx, `
 		SELECT properties ->> 'context_id'::text
 		FROM `+s.contextTable()+`
@@ -502,7 +514,7 @@ func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, a
 }
 
 // SemanticCandidates는 현재 모델과 같은 벡터만 사용해 활성 기본 검색 후보를 읽는다.
-func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelID string, embedding []float64, current time.Time, limit int) ([]SearchCandidate, error) {
+func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelID string, embedding []float64, current time.Time, limit int) (result []SearchCandidate, err error) {
 	if !graphID.IsV7() || modelID == "" || len(embedding) == 0 || !current.UTC().Equal(current) || limit < 1 {
 		return nil, fmt.Errorf("의미 유사도 검색 인자가 올바르지 않다")
 	}
@@ -516,7 +528,11 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	if err != nil {
 		return nil, err
 	}
-	defer release()
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			result, err = nil, errors.Join(err, releaseErr)
+		}
+	}()
 	tx, scoped := ctx.Value(readTxKey{}).(pgx.Tx)
 	if !scoped {
 		tx, err = s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
@@ -623,8 +639,8 @@ func (s *Store) searchCandidates(ctx context.Context, graphID model.ID, ids []mo
 // 컨텍스트마다 근거 트리를 따로 타면 같은 원천을 후보 수만큼 다시 읽고 질의가 후보 수에
 // 비례해 늘어난다. 흐름 응답은 담긴 컨텍스트 전부의 출처가 필요하므로, 한 깊이씩 넓혀 가며
 // 묶어 읽고 방문한 정점을 호출 전체에서 공유한다.
-func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contextIDs []model.ID) (map[model.ID][]model.OriginKind, error) {
-	result := make(map[model.ID][]model.OriginKind, len(contextIDs))
+func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contextIDs []model.ID) (result map[model.ID][]model.OriginKind, err error) {
+	result = make(map[model.ID][]model.OriginKind, len(contextIDs))
 	if len(contextIDs) == 0 {
 		return result, nil
 	}
@@ -632,7 +648,11 @@ func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contex
 	if err != nil {
 		return nil, err
 	}
-	defer release()
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			result, err = nil, errors.Join(err, releaseErr)
+		}
+	}()
 	// 근거를 따라가며 만나는 모든 정점을 한 번씩만 읽는다.
 	loaded := make(map[model.ID]model.Context)
 	frontier := slices.Clone(contextIDs)

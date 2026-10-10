@@ -172,7 +172,15 @@ func (s *Store) CleanupAuditRecords(ctx context.Context, now time.Time, auditDay
 	for _, graph := range graphs {
 		if days := auditDaysFor(graph.createdBy); days > 0 {
 			cutoff := now.AddDate(0, 0, -days)
-			result, err := s.pool.Exec(ctx, `DELETE FROM public.operation_log WHERE graph_id = $1 AND result = 'applied' AND applied_at <= $2`, graph.id.String(), cutoff)
+			result, err := s.pool.Exec(ctx, `DELETE FROM public.operation_log AS operation
+				WHERE graph_id = $1 AND result = 'applied' AND applied_at <= $2
+				  AND NOT (operation_kind = 'discard' AND EXISTS (
+				    SELECT 1 FROM `+s.contextTable()+` AS node
+				    WHERE node.properties ->> 'graph_id'::text = operation.graph_id::text
+				      AND node.properties ->> 'context_id'::text = operation.context_id::text
+				      AND node.properties ->> 'deleted_at'::text IS NOT NULL
+				      AND operation.applied_at >= (node.properties ->> 'deleted_at'::text)::timestamptz
+				  ))`, graph.id.String(), cutoff)
 			if err != nil {
 				return deleted, fmt.Errorf("적용 관리 기록 정리: %w", err)
 			}

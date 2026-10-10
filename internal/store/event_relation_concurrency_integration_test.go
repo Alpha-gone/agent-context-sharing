@@ -41,7 +41,7 @@ func TestEventDeletionSerializationIntegration(t *testing.T) {
 						}
 					}
 					eventAction := func(ctx context.Context) error {
-						_, err := database.DiscardContext(ctx, graphID, event.ID, nil, WriteLimits{})
+						_, err := database.DiscardContext(ctx, graphID, event.ID, testMCPDiscardOperation(event), WriteLimits{})
 						return err
 					}
 					otherAction := func(ctx context.Context) error {

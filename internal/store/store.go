@@ -25,6 +25,9 @@ var ErrNotFound = errors.New("대상을 찾지 못했다")
 // ErrInvalidState는 현재 상태에서 허용되지 않는 전이를 요청했음을 나타낸다.
 var ErrInvalidState = errors.New("현재 상태에서 허용되지 않는 연산이다")
 
+// ErrRestoreChannel은 현재 삭제가 MCP 폐기의 복구 대상이 아님을 나타낸다.
+var ErrRestoreChannel = errors.New("현재 삭제는 웹에서 복구해야 한다")
+
 // ErrInvalidRelation은 관계의 양 끝, 시간 또는 순환 제약을 위반했음을 나타낸다.
 var ErrInvalidRelation = errors.New("관계 제약을 위반했다")
 

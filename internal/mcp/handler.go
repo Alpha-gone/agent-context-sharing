@@ -34,7 +34,6 @@ type Operations interface {
 	ListContextRelations(context.Context, model.ID, model.ID, []model.RelationState, []model.RelationType, string, int) ([]model.Relation, string, error)
 	ConfirmRelation(context.Context, model.ID, model.Relation, *store.OperationRecord) (model.Relation, error)
 	DiscardRelation(context.Context, model.ID, model.ID, *store.OperationRecord) (model.Relation, error)
-	HasAppliedDiscard(context.Context, model.ID, model.ID) (bool, error)
 	RecordRejectedOperation(context.Context, store.OperationRecord, string) error
 	OwnedGraphCount(context.Context, model.ID) (int, error)
 }
@@ -514,15 +513,6 @@ func (h handler) restoreNode(ctx context.Context, accountID model.ID, arguments 
 		h.recordRejected(ctx, operation, errors.New("컨텍스트가 활성 상태다"))
 		return ToolResult{}, &Error{Code: "invalid_argument"}
 	}
-	wasDiscarded, err := h.operations.HasAppliedDiscard(ctx, graphID, contextID)
-	if err != nil {
-		return ToolResult{}, mapError(err)
-	}
-	if !wasDiscarded {
-		rejected := &Error{Code: "not_supported", Data: map[string]any{"alternative_channel": "web"}}
-		h.recordRejected(ctx, operation, rejected)
-		return ToolResult{}, rejected
-	}
 	stored, err := h.operations.RestoreContext(ctx, graphID, contextID, &operation, h.writeLimits(accountID))
 	if err != nil {
 		h.recordRejected(ctx, operation, err)
@@ -643,6 +633,8 @@ func rejectReason(cause error) string {
 	switch {
 	case errors.Is(cause, store.ErrNotFound):
 		return "not_found"
+	case errors.Is(cause, store.ErrRestoreChannel):
+		return "not_supported"
 	default:
 		if _, ok := errors.AsType[store.VersionConflictError](cause); ok {
 			return "version_conflict"
@@ -669,6 +661,9 @@ func mapError(err error) error {
 	}
 	if errors.Is(err, store.ErrInvalidState) {
 		return invalidArgument(err)
+	}
+	if errors.Is(err, store.ErrRestoreChannel) {
+		return &Error{Code: "not_supported", Data: map[string]any{"alternative_channel": "web"}}
 	}
 	if errors.Is(err, store.ErrInvalidRelation) {
 		return invalidArgument(err)

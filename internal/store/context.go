@@ -257,16 +257,36 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 		if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 			return model.Context{}, err
 		}
-		previous, err = s.context(ctx, tx, graphID, contextID)
-		if err != nil {
-			return model.Context{}, err
+	}
+	// 원천의 판은 1로 고정된다. 현재 삭제와 그 기록을 판정하는 동안 웹 복구·재삭제가
+	// 끼어들지 않도록 모든 계층의 정점을 잠그고, 잠금 대기 뒤 상태를 다시 읽는다.
+	var locked int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM `+s.contextTable()+`
+		WHERE properties ->> 'graph_id'::text = $1 AND properties ->> 'context_id'::text = $2
+		FOR UPDATE`, graphID.String(), contextID.String()).Scan(&locked); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Context{}, ErrNotFound
 		}
+		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 잠금: %w", err)
+	}
+	previous, err = s.context(ctx, tx, graphID, contextID)
+	if err != nil {
+		return model.Context{}, err
 	}
 	if discard && previous.DeletedAt != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트가 이미 폐기됐다: %w", ErrInvalidState)
 	}
 	if !discard && previous.DeletedAt == nil {
 		return model.Context{}, fmt.Errorf("컨텍스트가 활성 상태다: %w", ErrInvalidState)
+	}
+	if !discard && webAudit == nil {
+		allowed, err := s.hasAppliedDiscard(ctx, tx, graphID, contextID)
+		if err != nil {
+			return model.Context{}, err
+		}
+		if !allowed {
+			return model.Context{}, ErrRestoreChannel
+		}
 	}
 	if discard {
 		if err := s.invalidateDerivedEvidence(ctx, tx, graphID, contextID); err != nil {
@@ -295,13 +315,11 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if err != nil {
 		return model.Context{}, err
 	}
-	// 쓰기 조건에 읽은 판 번호와 폐기 상태를 함께 건다. 조건이 없으면 같은 노드에 폐기
-	// 두 건이 동시에 와도 둘 다 성공해 저장량이 두 번 차감되고, 읽은 뒤 커밋된 수정을
-	// 옛 본문으로 덮어써 수정이 사라진다. 원천은 판 번호가 늘지 않으므로 폐기 상태
-	// 조건이 그 경우의 유일한 방어다.
+	// 정점 잠금과 함께 조건부 쓰기도 유지해 읽은 판과 삭제 회차를 대조한다. 원천은
+	// 판 번호가 늘지 않으므로 복구는 단순한 삭제 여부 대신 정확한 삭제 시각을 검사한다.
 	deletionGuard := " AND node.deleted_at IS NULL"
 	if !discard {
-		deletionGuard = " AND node.deleted_at IS NOT NULL"
+		deletionGuard = " AND node.deleted_at = " + cypherString(previous.DeletedAt.UTC().Format(time.RFC3339Nano))
 	}
 	query := "MATCH (node:Context) WHERE node.context_id = " + cypherString(contextID.String()) +
 		" AND node.graph_id = " + cypherString(graphID.String()) +

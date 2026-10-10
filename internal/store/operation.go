@@ -59,16 +59,27 @@ func (s *Store) RecordRejectedOperation(ctx context.Context, operation Operation
 	return s.insertOperation(ctx, queryer, operation, "rejected", reason)
 }
 
-// HasAppliedDiscard는 컨텍스트가 MCP 관리 연산으로 폐기됐는지 확인한다.
+// HasAppliedDiscard는 현재 삭제에 대응하는 MCP 폐기 기록이 있는지 확인한다.
+// 상태 변경의 허용 판정은 RestoreContext가 정점 잠금 뒤 같은 트랜잭션에서 다시 수행한다.
 func (s *Store) HasAppliedDiscard(ctx context.Context, graphID, contextID model.ID) (bool, error) {
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return false, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
+	return s.hasAppliedDiscard(ctx, s.pool, graphID, contextID)
+}
+
+func (s *Store) hasAppliedDiscard(ctx context.Context, queryer cypherQueryer, graphID, contextID model.ID) (bool, error) {
 	var found bool
-	if err := s.pool.QueryRow(ctx, `
+	if err := queryer.QueryRow(ctx, `
 		SELECT EXISTS (
-			SELECT 1 FROM public.operation_log
-			WHERE graph_id = $1 AND context_id = $2 AND operation_kind = 'discard' AND result = 'applied'
+			SELECT 1 FROM public.operation_log AS operation
+			JOIN `+s.contextTable()+` AS node
+			  ON node.properties ->> 'graph_id'::text = operation.graph_id::text
+			 AND node.properties ->> 'context_id'::text = operation.context_id::text
+			WHERE operation.graph_id = $1 AND operation.context_id = $2
+			  AND operation.operation_kind = 'discard' AND operation.result = 'applied'
+			  AND node.properties ->> 'deleted_at'::text IS NOT NULL
+			  AND operation.applied_at >= (node.properties ->> 'deleted_at'::text)::timestamptz
 		)`, graphID.String(), contextID.String()).Scan(&found); err != nil {
 		return false, fmt.Errorf("관리 연산 폐기 기록 조회: %w", err)
 	}

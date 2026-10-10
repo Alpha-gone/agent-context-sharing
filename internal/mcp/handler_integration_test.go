@@ -535,8 +535,26 @@ func TestHandlerIntegration(t *testing.T) {
 		t.Fatalf("웹 삭제 대상 파생 생성: %v", err)
 	}
 	webDeletedID := structured(t, createdWebDeleted)["context_id"].(string)
-	webDeleteContext(t, pool, graphName, graphID, webDeletedID)
-	_, restoreRejected := call(t.Context(), ownerID, "node_restore", map[string]any{"graph_id": graphID, "context_id": webDeletedID, "created_by_agent": ownerID.String()})
+	for _, name := range []string{"node_discard", "node_restore"} {
+		if _, err := call(t.Context(), ownerID, name, map[string]any{"graph_id": graphID, "context_id": webDeletedID, "created_by_agent": ownerID.String()}); err != nil {
+			t.Fatalf("과거 폐기·복구 기록 준비: %v", err)
+		}
+	}
+	webGraphID, err := model.ParseID(graphID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	webContextID, err := model.ParseID(webDeletedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.SetContextDeleted(t.Context(), webGraphID, webContextID, ownerID, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	editorID := newHandlerID(t)
+	createHandlerAccount(t, database, editorID)
+	grantHandlerGrade(t, pool, graphName, graphID, editorID, "editor")
+	_, restoreRejected := call(t.Context(), editorID, "node_restore", map[string]any{"graph_id": graphID, "context_id": webDeletedID, "created_by_agent": editorID.String()})
 	domain, ok := errors.AsType[*Error](restoreRejected)
 	if !ok || domain.Code != "not_supported" || domain.Data["alternative_channel"] != "web" {
 		t.Fatalf("웹 삭제분 복구가 웹 대체 채널로 안내되지 않았다: %v", restoreRejected)
@@ -574,19 +592,6 @@ func grantHandlerGrade(t *testing.T, pool *pgx.Conn, graphName, graphID string, 
 		INSERT INTO public.graph_grant (graph_id, subject_type, subject_id, grade)
 		VALUES ($1::uuid, 'account', $2::uuid, $3)`, graphID, accountID.String(), grade); err != nil {
 		t.Fatalf("테스트 등급 부여: %v", err)
-	}
-}
-
-// webDeleteContext는 폐기 연산 기록 없이 웹 직접 삭제 상태만 만든다.
-func webDeleteContext(t *testing.T, pool *pgx.Conn, graphName, graphID, contextID string) {
-	t.Helper()
-	deletedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	graphLiteral := strings.ReplaceAll(graphName, "'", "''")
-	cypher := fmt.Sprintf("MATCH (node:Context) WHERE node.context_id = %q AND node.graph_id = %q SET node += {deleted_at: %q} RETURN node",
-		contextID, graphID, deletedAt)
-	statement := "SELECT * FROM ag_catalog.cypher('" + graphLiteral + "', $$" + cypher + "$$) AS (node agtype)"
-	if _, err := pool.Exec(t.Context(), statement); err != nil {
-		t.Fatalf("웹 삭제 상태 표시: %v", err)
 	}
 }
 

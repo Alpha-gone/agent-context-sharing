@@ -73,6 +73,7 @@ type Service struct {
 	store             authStore
 	config            Config
 	dummyPasswordHash string
+	passwords         *passwordWork
 	// cache는 「토큰 검증」이 요청마다 가져오지 않기로 한 서명 키와 폐기 목록을 담는다.
 	cache *verificationCache
 }
@@ -128,7 +129,7 @@ func New(source authStore, config Config) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("더미 비밀번호 해시 생성: %w", err)
 	}
-	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash, cache: newVerificationCache()}, nil
+	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash, passwords: newPasswordWork(), cache: newVerificationCache()}, nil
 }
 
 // Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.
@@ -136,9 +137,16 @@ func (s *Service) Register(ctx context.Context, loginID, password string) (model
 	if !loginIDPattern.MatchString(loginID) || !validPassword(password) {
 		return model.ID{}, fmt.Errorf("로그인 아이디 또는 비밀번호가 올바르지 않다")
 	}
-	hash, err := hashPassword(password, s.config.BcryptCost)
+	if err := s.passwords.acquire(ctx); err != nil {
+		return model.ID{}, err
+	}
+	defer s.passwords.release()
+	hash, err := s.passwords.generate(password, s.config.BcryptCost)
 	if err != nil {
 		return model.ID{}, fmt.Errorf("비밀번호 해시 생성: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return model.ID{}, err
 	}
 	id, err := model.NewID()
 	if err != nil {
@@ -154,22 +162,41 @@ func (s *Service) Register(ctx context.Context, loginID, password string) (model
 // Authenticate는 저장된 bcrypt 해시와 제시한 비밀번호를 대조하고, 기존 직접 bcrypt
 // 해시는 성공한 로그인에서 현재 형식으로 바꾼다.
 func (s *Service) Authenticate(ctx context.Context, loginID, password string) (model.ID, error) {
+	if err := s.passwords.acquire(ctx); err != nil {
+		return model.ID{}, err
+	}
+	defer s.passwords.release()
 	account, err := s.store.AccountByLoginID(ctx, loginID)
+	if ctx.Err() != nil {
+		return model.ID{}, ctx.Err()
+	}
 	if errors.Is(err, store.ErrNotFound) {
-		_, err := comparePassword(s.dummyPasswordHash, password)
+		_, err := s.passwords.compare(s.dummyPasswordHash, password)
+		if ctx.Err() != nil {
+			return model.ID{}, ctx.Err()
+		}
+		if err == nil {
+			err = bcrypt.ErrMismatchedHashAndPassword
+		}
 		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
 	}
 	if err != nil {
 		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
 	}
-	legacy, err := comparePassword(account.PasswordHash, password)
+	legacy, err := s.passwords.compare(account.PasswordHash, password)
+	if ctx.Err() != nil {
+		return model.ID{}, ctx.Err()
+	}
 	if err != nil {
 		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
 	}
 	if legacy {
-		hash, err := hashPassword(password, s.config.BcryptCost)
+		hash, err := s.passwords.generate(password, s.config.BcryptCost)
 		if err != nil {
 			return model.ID{}, fmt.Errorf("비밀번호 해시 생성: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return model.ID{}, err
 		}
 		if _, err := s.store.UpdatePasswordHashIfMatches(ctx, account.ID, account.PasswordHash, hash); err != nil {
 			return model.ID{}, fmt.Errorf("비밀번호 해시 갱신: %w", err)

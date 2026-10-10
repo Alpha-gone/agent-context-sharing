@@ -152,8 +152,9 @@ func runConfigured(cfg config.Config) (resultErr error) {
 		trustedProxies: cfg.TrustedProxies,
 	}
 	webServer, err := web.New(webAuthentication{service: authorization}, database, web.Config{
-		SecureCookie: transport.isTLSRequest,
-		Plans:        cfg.AccountPlans,
+		SecureCookie:  transport.isTLSRequest,
+		ClientAddress: transport.clientAddress,
+		Plans:         cfg.AccountPlans,
 	})
 	if err != nil {
 		return fmt.Errorf("웹 서버 준비: %w", err)

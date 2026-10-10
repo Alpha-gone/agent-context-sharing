@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/model"
@@ -12,11 +13,19 @@ import (
 type webAuthentication struct{ service *authz.Service }
 
 func (adapter webAuthentication) Authenticate(ctx context.Context, loginID, password string) (model.ID, error) {
-	return adapter.service.Authenticate(ctx, loginID, password)
+	id, err := adapter.service.Authenticate(ctx, loginID, password)
+	if errors.Is(err, authz.ErrPasswordBusy) {
+		return model.ID{}, web.ErrAuthenticationBusy
+	}
+	return id, err
 }
 
 func (adapter webAuthentication) Register(ctx context.Context, loginID, password string) (model.ID, error) {
-	return adapter.service.Register(ctx, loginID, password)
+	id, err := adapter.service.Register(ctx, loginID, password)
+	if errors.Is(err, authz.ErrPasswordBusy) {
+		return model.ID{}, web.ErrAuthenticationBusy
+	}
+	return id, err
 }
 
 func (adapter webAuthentication) WebSession(ctx context.Context, accountID model.ID, audience string) (web.Session, error) {

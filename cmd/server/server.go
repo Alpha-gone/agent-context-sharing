@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -229,6 +230,7 @@ func (app *application) shutdown(ctx context.Context, server *http.Server) error
 }
 
 // worker는 종료 순서가 기다리는 상시 작업자다. 색인 작업자와 주기 작업자가 이 모양이다.
+// Close는 실행을 취소하고 ctx의 기한 안에 완료 여부를 반환해야 한다.
 type worker interface {
 	Close(context.Context) error
 }
@@ -239,26 +241,39 @@ type worker interface {
 // 아직 연결을 빌려 갔을 수 있어 풀을 닫는 것은 조립 지점의 마지막 일이기 때문이다.
 //
 // 요청 대기가 실패해도 작업자 종료를 건너뛰지 않는다. 건너뛰면 풀 닫기가 작업자의 연결이
-// 돌아오기를 기다리며 막힌다. 요청 대기에서 예산을 다 썼을 수 있으므로 작업자에는
-// workerCtx에 적용할 작업자 기한은 요청 대기 뒤 closeWorkers가 만든다. 돌려주는 오류는
-// 요청 대기의 것을 우선한다.
+// 돌아오기를 기다리며 막힌다. 요청 대기에서 예산을 다 썼을 수 있으므로 workerCtx에
+// 적용할 작업자 기한은 요청 대기 뒤 closeWorkers가 만든다. 요청과 작업자의
+// 종료 오류를 함께 보존한다.
 func shutdownInOrder(ctx, workerCtx context.Context, app *application, server *http.Server, logger *slog.Logger, workers ...worker) error {
 	shutdownErr := app.shutdown(ctx, server)
 	if shutdownErr != nil {
 		logger.Error("진행 요청 종료 대기", "error", shutdownErr)
 	}
-	closeWorkers(workerCtx, logger, workers...)
-	return shutdownErr
+	return errors.Join(shutdownErr, closeWorkers(workerCtx, logger, workers...))
 }
 
-func closeWorkers(ctx context.Context, logger *slog.Logger, workers ...worker) {
+func closeWorkers(ctx context.Context, logger *slog.Logger, workers ...worker) error {
 	ctx, cancel := context.WithTimeout(ctx, workerShutdownTimeout)
 	defer cancel()
-	for _, closing := range workers {
+	var failures []error
+	for position, closing := range workers {
 		if err := closing.Close(ctx); err != nil {
-			logger.Error("작업자 종료", "error", err)
+			failure := fmt.Errorf("작업자 %d 종료: %w", position+1, err)
+			logger.Error("작업자 종료", "error", failure)
+			failures = append(failures, failure)
 		}
 	}
+	return errors.Join(failures...)
+}
+
+// closeServerResources는 정상 종료와 기동 실패에 같은 풀 종료 조건을 적용한다.
+// 종료 실패 뒤 풀을 닫으면 아직 반환되지 않은 연결을 기다려 오류를 보고하지 못한다.
+func closeServerResources(ctx context.Context, logger *slog.Logger, closePool func(), poolCloseSafe bool, workers ...worker) error {
+	workerErr := closeWorkers(ctx, logger, workers...)
+	if poolCloseSafe && workerErr == nil {
+		closePool()
+	}
+	return workerErr
 }
 
 // logRequests는 본문·자격 증명·쿼리 문자열을 기록하지 않고 요청 결과만 남긴다.

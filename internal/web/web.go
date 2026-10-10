@@ -15,6 +15,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -771,8 +772,7 @@ func graphListPage(filter model.GraphListFilter, cursor string) string {
 func graphFilter(request *http.Request) (model.GraphListFilter, error) {
 	filter := model.GraphListFilter{Name: strings.TrimSpace(request.URL.Query().Get("name"))}
 	for _, value := range request.URL.Query()["grade"] {
-		// 기본 선택지인 "모든 등급"은 빈 값을 보낸다. 거르지 않으면 이름만으로 필터를
-		// 적용하는 것도 400이 된다.
+		// 기존 "모든 등급" URL의 빈 값도 등급 조건 없음으로 유지한다.
 		if value == "" {
 			continue
 		}
@@ -893,6 +893,11 @@ type pageData struct {
 	NextPage string
 }
 
+// HasGrade는 현재 등급 필터의 선택 상태를 양식에 반영한다.
+func (data pageData) HasGrade(grade model.GraphGrade) bool {
+	return slices.Contains(data.Grades, grade)
+}
+
 type visualizationData struct {
 	Nodes []visualizationNode `json:"nodes"`
 	Edges []visualizationEdge `json:"edges"`
@@ -943,13 +948,23 @@ const pageTemplates = `{{define "head"}}<!doctype html><html lang="ko"><head><me
 :root { font-family: system-ui, sans-serif; color: #1f2933; background: #f7f8fa; }
 body { margin: 0; } main { max-width: 1120px; margin: 32px auto; padding: 0 16px; } h1 { margin: 0 0 16px; font-size: 24px; } section, form, table { margin: 16px 0; } .panel { padding: 16px; background: #fff; border: 1px solid #d9dee5; } label { display: block; margin: 8px 0; } input, select, button { box-sizing: border-box; padding: 8px; font: inherit; } input { width: 100%; } button { cursor: pointer; } .notice { padding: 8px; background: #e8f3ee; } .error { padding: 8px; background: #fdecec; } table { width: 100%; border-collapse: collapse; background: #fff; } th, td { padding: 8px; text-align: left; border: 1px solid #d9dee5; } nav { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; } .inline { display: inline; } .actions { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } .actions label { min-width: 140px; flex: 1; } .graph-layout { display: grid; grid-template-columns: 1fr 260px; gap: 16px; } #context-graph { min-height: 540px; border: 1px solid #d9dee5; } #node-details { white-space: pre-wrap; } @media (max-width: 720px) { .graph-layout { grid-template-columns: 1fr; } #context-graph { min-height: 420px; } }
 #full-view:focus-visible, [data-context-id]:focus-visible, #hop-range:focus-visible { outline: 2px solid #2563eb; outline-offset: 4px; }
+.grade-filter { margin: 0; padding: 0; border: 0; } .grade-options { display: flex; flex-wrap: wrap; } .grade-filter label { display: flex; align-items: center; gap: 8px; min-width: 0; flex: none; margin: 0; padding: 0 8px; min-height: 48px; } .grade-filter input { width: auto; } .grade-filter p { margin: 4px 0; font-size: .875rem; } .grade-filter input:focus-visible { outline: 2px solid #2563eb; outline-offset: 4px; }
 </style></head><body><main>{{if .Message}}<p class="notice">{{.Message}}</p>{{end}}{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{end}}
 {{define "foot"}}</main></body></html>{{end}}
 {{define "login"}}{{template "head" .}}<h1>로그인</h1><form class="panel" method="post" action="/login">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}<label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" required></label><label>비밀번호<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">로그인</button></form><p><a href="/register">계정 등록</a></p>{{template "foot" .}}{{end}}
 {{define "register"}}{{template "head" .}}<h1>계정 등록</h1><form class="panel" method="post" action="/register"><label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" pattern="[a-z0-9_]{3,32}" required></label><p>영문 소문자, 숫자, 밑줄을 사용해 3~32자로 입력합니다.</p><label>비밀번호<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="128" required></label><p>비밀번호는 8~128자입니다.</p><button type="submit">등록</button></form><p><a href="/login">로그인으로 돌아가기</a></p>{{template "foot" .}}{{end}}
 {{define "logout"}}{{template "head" .}}<h1>로그아웃</h1><form class="panel" method="post" action="/logout"><p>이 브라우저의 세션을 종료합니다.</p><button type="submit">로그아웃</button></form>{{template "foot" .}}{{end}}
 {{define "message"}}{{template "head" .}}<h1>{{.Title}}</h1><p><a href="/graphs">그래프 목록</a></p>{{template "foot" .}}{{end}}
-{{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav><form class="panel actions" method="get" action="/graphs"><label>이름 필터<input name="name" value="{{.NameFilter}}"></label><label>등급<select name="grade"><option value="">모든 등급</option><option value="owner">소유자</option><option value="editor">편집자</option><option value="viewer">열람자</option></select></label><button type="submit">적용</button></form>{{if .Graphs}}<table><thead><tr><th>이름</th><th>설명</th><th>마지막 활동</th><th>내 등급</th></tr></thead><tbody>{{range .Graphs}}<tr><td><a href="/graphs/{{.ID}}">{{.Name}}</a></td><td>{{.Description}}</td><td>{{formatTime .LastActivityAt}}</td><td>{{.Grade}}</td></tr>{{end}}</tbody></table>{{else}}<p>접근 가능한 그래프가 없습니다.</p>{{end}}{{if .NextCursor}}<p><a href="{{.NextPage}}">더 보기</a></p>{{end}}{{if .DeletedGraphs}}<section class="panel"><h2>내가 삭제한 그래프</h2>{{range .DeletedGraphs}}<p><a href="/graphs/{{.ID}}/deletion">{{.Name}} 복구</a></p>{{end}}</section>{{end}}{{if .RestoreGraphs}}<section class="panel"><h2>자동 삭제된 그래프</h2>{{range .RestoreGraphs}}<form class="inline" method="post" action="/graphs"><input type="hidden" name="restore_graph_id" value="{{.ID}}"><button type="submit">{{.Name}} 복구 요청</button></form>{{end}}</section>{{end}}{{template "foot" .}}{{end}}
+{{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav>
+<form class="panel actions" method="get" action="/graphs">
+<label for="graph-name">이름 필터<input id="graph-name" name="name" value="{{.NameFilter}}"></label>
+<fieldset class="grade-filter" aria-describedby="grade-filter-help"><legend>등급</legend><div class="grade-options">
+<label for="grade-owner"><input id="grade-owner" type="checkbox" name="grade" value="owner"{{if .HasGrade "owner"}} checked{{end}}>소유자</label>
+<label for="grade-editor"><input id="grade-editor" type="checkbox" name="grade" value="editor"{{if .HasGrade "editor"}} checked{{end}}>편집자</label>
+<label for="grade-viewer"><input id="grade-viewer" type="checkbox" name="grade" value="viewer"{{if .HasGrade "viewer"}} checked{{end}}>열람자</label>
+</div><p id="grade-filter-help">선택하지 않으면 모든 등급을 조회합니다.</p></fieldset>
+<button type="submit">적용</button></form>
+{{if .Graphs}}<table><thead><tr><th>이름</th><th>설명</th><th>마지막 활동</th><th>내 등급</th></tr></thead><tbody>{{range .Graphs}}<tr><td><a href="/graphs/{{.ID}}">{{.Name}}</a></td><td>{{.Description}}</td><td>{{formatTime .LastActivityAt}}</td><td>{{.Grade}}</td></tr>{{end}}</tbody></table>{{else}}<p>접근 가능한 그래프가 없습니다.</p>{{end}}{{if .NextCursor}}<p><a href="{{.NextPage}}">더 보기</a></p>{{end}}{{if .DeletedGraphs}}<section class="panel"><h2>내가 삭제한 그래프</h2>{{range .DeletedGraphs}}<p><a href="/graphs/{{.ID}}/deletion">{{.Name}} 복구</a></p>{{end}}</section>{{end}}{{if .RestoreGraphs}}<section class="panel"><h2>자동 삭제된 그래프</h2>{{range .RestoreGraphs}}<form class="inline" method="post" action="/graphs"><input type="hidden" name="restore_graph_id" value="{{.ID}}"><button type="submit">{{.Name}} 복구 요청</button></form>{{end}}</section>{{end}}{{template "foot" .}}{{end}}
 {{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p>{{.Graph.Description}}</p><p id="scope-help">전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다. 빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다. 국소 보기에서도 목록에서 다른 노드를 선택할 수 있습니다.</p><button id="full-view" type="button">전체 보기</button><p id="scope-status" role="status">전체 보기</p><label for="hop-range">국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}" aria-describedby="scope-help"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section><section class="graph-layout"><div id="context-graph" aria-label="컨텍스트 그래프"></div><aside class="panel"><h2>선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code> <button type="button" data-context-id="{{.ID}}" aria-label="{{.ID}} 노드 선택">노드 선택</button><p>{{.Body}}</p>{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){
 const elements={{.VisualizationJSON}};
 const details=document.getElementById('node-details');

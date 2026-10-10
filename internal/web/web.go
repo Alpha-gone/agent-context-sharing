@@ -14,6 +14,7 @@ import (
 	"html/template"
 	"math"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -90,6 +91,9 @@ type GraphStore interface {
 type Config struct {
 	// SecureCookie는 현재 요청이 애플리케이션의 TLS 판정을 통과했는지 알려 준다.
 	SecureCookie func(*http.Request) bool
+	// ClientAddress는 조립 계층에서 기존 프록시 신뢰 검사를 적용한 출처 주소다.
+	// 없으면 실제 접속 상대만 사용하며 전달 헤더를 해석하지 않는다.
+	ClientAddress func(*http.Request) netip.Addr
 	// Plans는 계정별 그래프 목록 페이지 크기를 제공한다.
 	Plans plan.AccountPlans
 }
@@ -102,6 +106,7 @@ type Server struct {
 	templates   *template.Template
 	asset       staticAsset
 	crossOrigin http.CrossOriginProtection
+	attempts    *authAttempts
 }
 
 // staticAsset은 빌드에 고정된 시각화 자산과 조건부 요청에 쓸 내용 해시다.
@@ -137,7 +142,7 @@ func New(auth Authentication, graphs GraphStore, config Config) (*Server, error)
 	if err != nil {
 		return nil, err
 	}
-	return &Server{auth: auth, graphs: graphs, config: config, templates: templates, asset: asset}, nil
+	return &Server{auth: auth, graphs: graphs, config: config, templates: templates, asset: asset, attempts: newAuthAttempts()}, nil
 }
 
 // loadAsset은 내장 자산을 한 번 읽고 내용 해시로 ETag를 만든다.
@@ -225,15 +230,25 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 		}
 		server.render(writer, http.StatusOK, "login", pageData{Title: "로그인", Message: message, Next: localRedirect(request.URL.Query().Get("next"))})
 	case http.MethodPost:
+		if !server.allowAuthentication(writer, request) {
+			return
+		}
 		if err := request.ParseForm(); err != nil {
-			server.render(writer, http.StatusBadRequest, "login", pageData{Title: "로그인", Error: "입력을 처리할 수 없습니다."})
+			server.authenticationFormError(writer, "login", err)
 			return
 		}
 		next := localRedirect(request.PostForm.Get("next"))
 		loginID := request.PostForm.Get("login_id")
 		accountID, err := server.auth.Authenticate(request.Context(), loginID, request.PostForm.Get("password"))
 		if err != nil {
+			if errors.Is(err, ErrAuthenticationBusy) {
+				server.authenticationLimited(writer, time.Second)
+				return
+			}
 			server.render(writer, http.StatusUnauthorized, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "로그인 아이디 또는 비밀번호가 올바르지 않습니다."})
+			return
+		}
+		if request.Context().Err() != nil {
 			return
 		}
 		session, err := server.auth.WebSession(request.Context(), accountID, SessionAudience)
@@ -258,12 +273,19 @@ func (server *Server) register(writer http.ResponseWriter, request *http.Request
 	case http.MethodGet:
 		server.render(writer, http.StatusOK, "register", pageData{Title: "계정 등록"})
 	case http.MethodPost:
+		if !server.allowAuthentication(writer, request) {
+			return
+		}
 		if err := request.ParseForm(); err != nil {
-			server.render(writer, http.StatusBadRequest, "register", pageData{Title: "계정 등록", Error: "입력을 처리할 수 없습니다."})
+			server.authenticationFormError(writer, "register", err)
 			return
 		}
 		loginID := request.PostForm.Get("login_id")
 		if _, err := server.auth.Register(request.Context(), loginID, request.PostForm.Get("password")); err != nil {
+			if errors.Is(err, ErrAuthenticationBusy) {
+				server.authenticationLimited(writer, time.Second)
+				return
+			}
 			server.render(writer, http.StatusBadRequest, "register", pageData{Title: "계정 등록", LoginID: loginID, Error: "로그인 아이디 또는 비밀번호 형식이 올바르지 않거나 이미 사용 중입니다."})
 			return
 		}

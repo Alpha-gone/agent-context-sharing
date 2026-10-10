@@ -174,6 +174,23 @@ func (security transportSecurity) isTrustedProxy(peer netip.Addr) bool {
 	})
 }
 
+// clientAddress는 기존 HTTPS·프록시 경계 안에서만 Cloudflare의 단일 주소를 읽는다.
+// 범용 전달 주소 목록은 사용자 입력을 포함하므로 출처별 예산의 키로 사용하지 않는다.
+func (security transportSecurity) clientAddress(request *http.Request) netip.Addr {
+	peer, _ := remoteAddr(request.RemoteAddr)
+	if security.directTLS || !security.isTrustedProxy(peer) || !security.isTLSRequest(request) {
+		return peer
+	}
+	values := request.Header.Values("CF-Connecting-IP")
+	if len(values) == 1 {
+		address, err := netip.ParseAddr(strings.TrimSpace(values[0]))
+		if err == nil && address.Zone() == "" {
+			return address.Unmap()
+		}
+	}
+	return peer
+}
+
 // remoteAddr는 http.Request.RemoteAddr의 host:port 표기에서 비교 가능한 주소를 뽑는다.
 // IPv4-mapped IPv6로 들어온 상대도 구성에 적은 IPv4 대역과 맞도록 편다.
 func remoteAddr(value string) (netip.Addr, bool) {

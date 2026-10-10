@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"net"
 	"net/http"
 	"strconv"
@@ -62,22 +63,25 @@ type flight struct {
 	err        error
 }
 
-// Manager는 프로세스 키·단일 계정 결합·현재 토큰·공유 인가 하나를 관리한다.
+// Manager는 프로세스 키·계정 결합·토큰과 공유 인가·JWKS 조회 수명을 관리한다.
 type Manager struct {
-	cfg            config.Config
-	transport      http.RoundTripper
-	ownedTransport *http.Transport
-	open           func(context.Context, string) error
-	listen         func(context.Context, string, string) (net.Listener, error)
-	now            func() time.Time
-	mu             sync.Mutex
-	key            *ecdsa.PrivateKey
-	jkt            string
-	boundIdentity  string
-	current        Credential
-	metadata       metadata
-	flight         *flight
-	closed         bool
+	cfg             config.Config
+	transport       http.RoundTripper
+	ownedTransport  *http.Transport
+	open            func(context.Context, string) error
+	listen          func(context.Context, string, string) (net.Listener, error)
+	now             func() time.Time
+	mu              sync.Mutex
+	key             *ecdsa.PrivateKey
+	jkt             string
+	boundIdentity   string
+	current         Credential
+	metadata        metadata
+	metadataVersion uint64
+	keyFlight       *keyFlight
+	nextKeyRefresh  time.Time
+	flight          *flight
+	closed          bool
 }
 
 // New는 네트워크 접근 없이 프로세스 수명의 ES256 키를 생성한다.
@@ -202,6 +206,7 @@ func (m *Manager) run(f *flight, challenge Challenge) {
 			m.boundIdentity = credential.identity
 			m.current = credential
 			m.metadata = md
+			m.metadataVersion++
 		}
 	} else if err == nil {
 		err = ErrAuthorization
@@ -312,9 +317,25 @@ func (m *Manager) Refresh(ctx context.Context, header http.Header) error {
 		return contract.ErrProtocol
 	}
 	m.mu.Lock()
-	md, jkt := m.metadata, m.jkt
+	md, jkt, version := m.metadata, m.jkt, m.metadataVersion
 	m.mu.Unlock()
 	claims, err := verifyToken(tokens[0], md.keys, md.Issuer, md.resource, jkt, m.now())
+	if errors.Is(err, errUnknownSigningKey) {
+		keys, refreshErr := m.refreshKeys(ctx, md, version)
+		if refreshErr != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errors.Is(refreshErr, ErrAuthorization) {
+				return ErrAuthorization
+			}
+			return contract.ErrProtocol
+		}
+		claims, err = verifyToken(tokens[0], keys, md.Issuer, md.resource, jkt, m.now())
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err != nil || expires != claims.Expires {
 		return contract.ErrProtocol
 	}
@@ -350,17 +371,24 @@ func tokenHash(value string) string {
 	return encoding.EncodeToString(hash[:])
 }
 
-// Close는 진행 중 인가를 취소하고 수신기 정리 뒤 비밀 참조를 폐기한다.
+// Close는 인가·JWKS 조회를 취소하고 수신기·HTTP 정리 뒤 비밀 참조를 폐기한다.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	m.closed = true
 	f := m.flight
+	kf := m.keyFlight
 	if f != nil {
 		f.cancel()
+	}
+	if kf != nil {
+		kf.cancel()
 	}
 	m.mu.Unlock()
 	if f != nil {
 		<-f.done
+	}
+	if kf != nil {
+		<-kf.done
 	}
 	m.mu.Lock()
 	m.current = Credential{}

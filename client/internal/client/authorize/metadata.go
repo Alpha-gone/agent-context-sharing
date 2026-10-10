@@ -226,28 +226,36 @@ func (m *Manager) authorizationServer(ctx context.Context, resource ResourceMeta
 			return md, err
 		}
 	}
+	keys, err := m.signingKeys(ctx, md.JWKS)
+	if err != nil {
+		return md, err
+	}
+	md.keys = keys
+	md.resource = resource.resource
+	return md, nil
+}
+
+func (m *Manager) signingKeys(ctx context.Context, target string) ([]jwk, error) {
 	var set struct {
 		Keys []jwk `json:"keys"`
 	}
-	if err := m.getJSON(ctx, md.JWKS, &set); err != nil {
-		return md, err
+	if err := m.getJSON(ctx, target, &set); err != nil {
+		return nil, err
 	}
 	if len(set.Keys) == 0 {
-		return md, contract.ErrProtocol
+		return nil, contract.ErrProtocol
 	}
 	seen := make(map[string]bool)
 	for _, key := range set.Keys {
 		if key.Kid == "" || seen[key.Kid] {
-			return md, contract.ErrProtocol
+			return nil, contract.ErrProtocol
 		}
 		if _, err := key.publicKey(); err != nil {
-			return md, err
+			return nil, err
 		}
 		seen[key.Kid] = true
 	}
-	md.keys = slices.Clone(set.Keys)
-	md.resource = resource.resource
-	return md, nil
+	return slices.Clone(set.Keys), nil
 }
 
 // Challenge는 검증된 DPoP 발견 힌트다. 제로 값은 well-known 위치를 사용한다.

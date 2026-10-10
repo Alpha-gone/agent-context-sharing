@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"fmt"
 	"math/big"
 	"net"
 	"net/url"
@@ -21,6 +22,8 @@ import (
 )
 
 var encoding = base64.RawURLEncoding.Strict()
+
+var errUnknownSigningKey = fmt.Errorf("알 수 없는 서명 키: %w", contract.ErrProtocol)
 
 type jwk struct {
 	Kty string         `json:"kty"`
@@ -132,7 +135,7 @@ func verifyToken(raw string, keys []jwk, issuer, resource, jkt string, now time.
 		Crit jsontext.Value `json:"crit"`
 		B64  jsontext.Value `json:"b64"`
 	}
-	if eh != nil || eb != nil || es != nil || len(signature) != 64 || json.Unmarshal(headerBytes, &header) != nil || header.Alg != "ES256" || header.Kid == "" || len(header.Crit) != 0 || len(header.B64) != 0 {
+	if eh != nil || eb != nil || es != nil || len(signature) != 64 || json.Unmarshal(headerBytes, &header) != nil || header.Alg != "ES256" || header.Kid == "" || len(header.Crit) != 0 || len(header.B64) != 0 || jsontext.Value(body).Kind() != '{' || json.Unmarshal(body, &claims) != nil {
 		return claims, contract.ErrProtocol
 	}
 	var key *ecdsa.PublicKey
@@ -148,8 +151,11 @@ func verifyToken(raw string, keys []jwk, issuer, resource, jkt string, now time.
 			}
 		}
 	}
+	if key == nil {
+		return claims, errUnknownSigningKey
+	}
 	hash := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if key == nil || !ecdsa.Verify(key, hash[:], new(big.Int).SetBytes(signature[:32]), new(big.Int).SetBytes(signature[32:])) || json.Unmarshal(body, &claims) != nil {
+	if !ecdsa.Verify(key, hash[:], new(big.Int).SetBytes(signature[:32]), new(big.Int).SetBytes(signature[32:])) {
 		return claims, contract.ErrProtocol
 	}
 	var audiences []string

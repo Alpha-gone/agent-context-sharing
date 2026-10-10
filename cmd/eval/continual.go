@@ -113,7 +113,7 @@ func runContinualScenario(ctx context.Context, database *store.Store, worker *in
 		return continualRun{}, err
 	}
 	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
-	if err := drainIndexQueue(ctx, worker, graph.GraphID, len(scenario.contexts.Contexts)*4+64); err != nil {
+	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(scenario.contexts.Contexts)*4+64); err != nil {
 		return continualRun{}, err
 	}
 	service, err := search.New(database, worker, search.Config{
@@ -131,7 +131,7 @@ func runContinualScenario(ctx context.Context, database *store.Store, worker *in
 	if err := applyContinualMutation(ctx, database, graph, scenario); err != nil {
 		return continualRun{}, err
 	}
-	if err := drainIndexQueue(ctx, worker, graph.GraphID, 64); err != nil {
+	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, 64); err != nil {
 		return continualRun{}, err
 	}
 	current, currentFlow, err := measureContinualQuery(ctx, service, graph, scenario.query, maxHops, maxHopNodes)

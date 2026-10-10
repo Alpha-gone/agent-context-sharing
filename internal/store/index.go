@@ -88,6 +88,42 @@ func (s *Store) ProcessNextIndexTaskInGraph(ctx context.Context, graphID model.I
 	return s.processNextIndexTask(ctx, graphID, processor)
 }
 
+// CheckGraphIndexReady는 평가 그래프의 작업과 현재 모델 임베딩이 모두 준비됐는지 확인한다.
+// 지금 확보할 작업이 없어도 재시도 대기·리스·최종 실패가 남으면 완료가 아니다.
+func (s *Store) CheckGraphIndexReady(ctx context.Context, graphID model.ID, modelID string) error {
+	if !graphID.IsV7() || strings.TrimSpace(modelID) == "" {
+		return fmt.Errorf("색인 준비 검사에 그래프와 현재 모델 식별자가 필요하다")
+	}
+	var pending, deferred, failed, missing int
+	var failure string
+	// 한 명령의 스냅숏에서 큐와 임베딩을 함께 대조한다. 작업 삭제와 임베딩 공개는
+	// 같은 트랜잭션이므로 다른 작업자의 커밋 전후를 섞어 완료로 오인하지 않는다.
+	if err := s.pool.QueryRow(ctx, `WITH tasks AS (
+		SELECT state, next_attempt_at, last_error, task_id FROM public.index_task WHERE graph_id = $1
+	), targets AS (
+		SELECT properties ->> 'context_id'::text AS context_id FROM `+s.contextTable()+`
+		WHERE properties ->> 'graph_id'::text = $1::text
+		  AND properties ->> 'deleted_at'::text IS NULL
+		  AND ($3::boolean OR properties ->> 'layer'::text <> 'source')
+	)
+	SELECT (SELECT count(*) FROM tasks WHERE state = 'pending'),
+	       (SELECT count(*) FROM tasks WHERE state = 'pending' AND next_attempt_at > statement_timestamp()),
+	       (SELECT count(*) FROM tasks WHERE state = 'failed'),
+	       (SELECT count(*) FROM targets WHERE NOT EXISTS (
+	           SELECT 1 FROM public.context_embedding AS embedding
+	           WHERE embedding.graph_id = $1 AND embedding.context_id::text = targets.context_id
+	             AND embedding.model_id = $2)),
+	       COALESCE((SELECT last_error FROM tasks WHERE last_error IS NOT NULL
+	           ORDER BY (state = 'failed') DESC, task_id LIMIT 1), '')`,
+		graphID.String(), modelID, s.indexTargets != IndexTargetsWithoutSource).Scan(&pending, &deferred, &failed, &missing, &failure); err != nil {
+		return fmt.Errorf("평가 그래프 색인 준비 검사: %w", err)
+	}
+	if pending != 0 || failed != 0 || missing != 0 {
+		return fmt.Errorf("색인 미완료: pending=%d (재시도 대기·리스=%d), failed=%d, 현재 모델 임베딩 누락=%d, 최근 실패 사유=%q", pending, deferred, failed, missing, failure)
+	}
+	return nil
+}
+
 // processNextIndexTask는 확보 범위만 다른 두 진입점의 공통 구현이다. scope가 비어
 // 있으면 그래프를 가리지 않는다.
 func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, processor IndexTaskProcessor) (IndexProcessResult, error) {

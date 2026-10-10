@@ -210,7 +210,7 @@ func run() (err error) {
 	// 평가 그래프는 측정이 끝나면 소프트 삭제해 다음 회차의 검색 대상에서 뺀다.
 	// 「소프트 삭제 수명주기」가 영구 삭제를 하지 않으므로 기록은 남는다.
 	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
-	if err := drainIndexQueue(ctx, worker, graph.GraphID, len(contexts.Contexts)*4+64); err != nil {
+	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(contexts.Contexts)*4+64); err != nil {
 		return err
 	}
 

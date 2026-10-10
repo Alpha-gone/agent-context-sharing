@@ -10,6 +10,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 
 	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
@@ -36,6 +37,7 @@ type HopResult struct {
 	// expansionQueries 필드에는 확장에 쓴 데이터베이스 질의 수를 둔다. 「홉 탐색 구현 비교」가
 	// 두 구현의 왕복 횟수를 견주는 측정 지점이며 응답에는 싣지 않는다.
 	expansionQueries int
+	work             hopWork
 }
 
 // hopNeighborSource는 한 깊이의 기준 정점 전체를 label 하나로 확장한 이웃을 돌려준다.
@@ -44,6 +46,8 @@ type hopNeighborSource func(frontier []model.ID, label traversalLabel) ([]hopNei
 
 // HopContexts는 graph_id 안에서 확정 참조와 관계를 따라 너비 우선으로 탐색한다.
 func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops int, direction string, filter []string, limit int) (HopResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, hopWorkTimeout)
+	defer cancel()
 	if !graphID.IsV7() || !startID.IsV7() {
 		return HopResult{}, fmt.Errorf("홉 탐색 인자가 올바르지 않다")
 	}
@@ -64,6 +68,11 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 // 구현」이 하나로 두기로 한 결과 상한이 시작 노드 수만큼 겹쳐 어느 것이 잘랐는지 알 수
 // 없게 된다. 거리는 가장 가까운 시작 노드까지의 최단 홉 거리다.
 func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []model.Context, hops int, direction string, filter []string, limit int) (result HopResult, err error) {
+	ctx, cancel := context.WithTimeout(ctx, hopWorkTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return HopResult{}, err
+	}
 	ctx, release, err := s.enterReadScope(ctx)
 	if err != nil {
 		return HopResult{}, err
@@ -73,12 +82,17 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 			result, err = HopResult{}, errors.Join(err, releaseErr)
 		}
 	}()
+	if limit > 0 {
+		return s.hopContextsBounded(ctx, graphID, starts, hops, direction, filter, limit)
+	}
 	queries := 0
 	return s.traverseHops(ctx, graphID, starts, hops, filter, limit, &queries, func(frontier []model.ID, label traversalLabel) ([]hopNeighbor, error) {
 		queries++
 		return s.hopNeighbors(ctx, graphID, frontier, label, direction)
 	})
 }
+
+const hopWorkTimeout = 30 * time.Second
 
 // hopContextsPrefetched는 「홉 탐색 구현 비교」의 후보다. 첫 확장 전에 가변 길이 간선 질의
 // 한 번으로 도달 가능한 정점의 인접 간선을 모두 가져오고, 깊이·label별 확장은 그 결과에서
@@ -100,7 +114,8 @@ func (s *Store) hopContextsPrefetched(ctx context.Context, graphID model.ID, sta
 	})
 }
 
-// traverseHops는 두 구현이 공유하는 너비 우선 규칙이다. 이웃을 어디에서 가져오는지만 다르다.
+// traverseHops는 한도 없음과 가변 길이 비교 후보의 너비 우선 규칙이다.
+// 양수 상한의 식별자 중심 구현은 같은 결과 계약을 별도 기준선 대조 시험으로 확인한다.
 func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []model.Context, hops int, filter []string, limit int, queries *int, source hopNeighborSource) (HopResult, error) {
 	// limit 0은 「계정 플랜」이 선언한 대로 한도 없음이다. 값을 그대로 내려받아 여기에서
 	// 해석하지 않으면 한도를 푸는 설정이 연산을 죽인다.

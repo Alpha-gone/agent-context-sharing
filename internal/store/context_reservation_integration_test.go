@@ -78,7 +78,7 @@ func TestContextAGEConflictsDoNotStarveSmallPoolIntegration(t *testing.T) {
 				}
 			}
 			if action == "restore" {
-				target, err = database.DiscardContext(t.Context(), graphID, target.ID, nil, WriteLimits{})
+				target, err = database.DiscardContext(t.Context(), graphID, target.ID, testMCPDiscardOperation(target), WriteLimits{})
 				if err != nil {
 					t.Fatal(err)
 				}

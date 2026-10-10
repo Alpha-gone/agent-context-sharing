@@ -116,7 +116,7 @@ func TestRestoreRequeuesMissingIndexAndChecksLimitIntegration(t *testing.T) {
 			if _, err := database.ProcessNextIndexTaskInGraph(t.Context(), graph, scopeTestProcessor(embeddingDimension(t, database))); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := database.DiscardContext(t.Context(), graph, target.ID, nil, WriteLimits{}); err != nil {
+			if _, err := database.DiscardContext(t.Context(), graph, target.ID, testMCPDiscardOperation(target), WriteLimits{}); err != nil {
 				t.Fatal(err)
 			}
 			// 차원 전환이 삭제 대상의 임베딩과 대기 작업을 비운 상태를 재현한다.

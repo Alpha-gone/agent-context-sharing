@@ -88,7 +88,7 @@ func TestConcurrentRestoreReportsInvalidStateIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.DiscardContext(t.Context(), graphID, target.ID, nil, WriteLimits{}); err != nil {
+	if _, err := database.DiscardContext(t.Context(), graphID, target.ID, testMCPDiscardOperation(target), WriteLimits{}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)

@@ -248,7 +248,7 @@ func TestContinualRecordsUnmeasuredMetricsAsUndefinedIntegration(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if err := drainIndexQueue(t.Context(), worker, graph.GraphID, len(scenario.contexts.Contexts)*4); err != nil {
+	if err := drainIndexQueue(t.Context(), database, worker, graph.GraphID, len(scenario.contexts.Contexts)*4); err != nil {
 		t.Fatal(err)
 	}
 	service, err := consistencyService(database, worker, settings{candidateLimit: 50, semanticThreshold: 0.7, foldThreshold: 0.95}, search.GraphStageRelations, consistencyVariants()[0])

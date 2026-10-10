@@ -590,7 +590,7 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 	if err := createContexts(ctx, database, graph.GraphID, graph.AccountID, sample.AddContexts, graph.Keys); err != nil {
 		return nil, fmt.Errorf("공격 컨텍스트 추가: %w", err)
 	}
-	if err := drainIndexQueue(ctx, worker, graph.GraphID, len(sample.AddContexts)*4+64); err != nil {
+	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(sample.AddContexts)*4+64); err != nil {
 		return nil, err
 	}
 	if err := confirmRelations(ctx, database, graph.GraphID, graph.AccountID, contextSet{Relations: sample.AddRelations}, graph.Keys); err != nil {
@@ -624,7 +624,7 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 	if err := confirmRelations(ctx, database, graph.GraphID, graph.AccountID, contextSet{Relations: sample.DiscardRelations}, graph.Keys); err != nil {
 		return nil, fmt.Errorf("복구 관계 재확정: %w", err)
 	}
-	if err := drainIndexQueue(ctx, worker, graph.GraphID, len(sample.AddContexts)*4+64); err != nil {
+	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(sample.AddContexts)*4+64); err != nil {
 		return nil, err
 	}
 	if err := auditClean(ctx, database, graph, expect, "복구 후"); err != nil {
@@ -686,7 +686,7 @@ func loadAdversarialGraph(ctx context.Context, database *store.Store, worker *in
 	if err != nil {
 		return loadedGraph{}, err
 	}
-	if err := drainIndexQueue(ctx, worker, graph.GraphID, len(contexts.Contexts)*4+64); err != nil {
+	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(contexts.Contexts)*4+64); err != nil {
 		return loadedGraph{}, errors.Join(err, dropGraph(ctx, database, graph))
 	}
 	return graph, nil

@@ -344,7 +344,7 @@ func createConsistencyScenario(ctx context.Context, database *store.Store, worke
 			err = errors.Join(err, deleteConsistencyGraph(ctx, database, graph))
 		}
 	}()
-	if err := drainIndexQueue(ctx, worker, graph.GraphID, len(set.Contexts)*4); err != nil {
+	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(set.Contexts)*4); err != nil {
 		return nil, err
 	}
 	scenario = &consistencyScenario{database: database, worker: worker, graph: graph, hub: graph.Keys["hub"], events: [2]model.ID{graph.Keys["e0"], graph.Keys["e1"]}}

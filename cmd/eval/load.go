@@ -233,15 +233,21 @@ func utcOrNil(value *time.Time) *time.Time {
 // 확보를 그래프로 좁히는 이유는 개발 데이터베이스를 공유하기 때문이다. 가리지 않고
 // 비우면 다른 그래프가 남긴 대기 작업을 평가가 대신 처리하게 되고, 그만큼 측정 시작
 // 상태가 회차마다 달라진다.
-func drainIndexQueue(ctx context.Context, worker *index.Worker, graphID model.ID, limit int) error {
+func drainIndexQueue(ctx context.Context, database *store.Store, worker *index.Worker, graphID model.ID, limit int) error {
+	if limit < 1 {
+		return fmt.Errorf("색인 처리 상한은 양수여야 한다")
+	}
 	for range limit {
 		found, err := worker.RunOnceInGraph(ctx, graphID)
 		if err != nil {
 			return fmt.Errorf("색인 작업 처리: %w", err)
 		}
 		if !found {
-			return nil
+			return database.CheckGraphIndexReady(ctx, graphID, worker.ModelID())
 		}
 	}
-	return fmt.Errorf("색인 대기 작업이 %d회 안에 비워지지 않았다", limit)
+	if err := database.CheckGraphIndexReady(ctx, graphID, worker.ModelID()); err != nil {
+		return fmt.Errorf("색인 처리 상한 %d회: %w", limit, err)
+	}
+	return nil
 }

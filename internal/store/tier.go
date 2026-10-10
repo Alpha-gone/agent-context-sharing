@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"agent_context_sharing/internal/model"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -13,8 +16,15 @@ const (
 	embeddingTierCold = "cold"
 )
 
+type embeddingAccess struct {
+	graphID    model.ID
+	contextIDs []model.ID
+	at         time.Time
+}
+
 // touchEmbeddings는 실제 조회에 쓰인 활성 컨텍스트의 임베딩 접근 시각을 갱신하고
 // cold 행을 hot 파티션으로 되돌린다. 임베딩이 없는 컨텍스트는 그대로 통과한다.
+// 스냅숏 읽기 안이면 요청을 모으고, enterReadScope의 종료 함수가 읽기 연결 반환 뒤 실행한다.
 func (s *Store) touchEmbeddings(ctx context.Context, graphID model.ID, contextIDs []model.ID, at time.Time) error {
 	if len(contextIDs) == 0 {
 		return nil
@@ -29,11 +39,16 @@ func (s *Store) touchEmbeddings(ctx context.Context, graphID model.ID, contextID
 		}
 		ids = append(ids, contextID.String())
 	}
+	if accesses, ok := ctx.Value(readAccessKey{}).(*[]embeddingAccess); ok {
+		*accesses = append(*accesses, embeddingAccess{graphID: graphID, contextIDs: slices.Clone(contextIDs), at: at})
+		return nil
+	}
 	// 대상 행을 context_id 순서로 잠그고 다른 요청이 잠근 행은 건너뛴다. 흐름 응답마다 담긴
 	// 컨텍스트 전부를 기록하므로 동시 요청은 겹치는 행을 서로 다른 순서로 잠그게 되고, 한
 	// 문장으로 갱신하면 교착과 교착 감지 대기가 연결 풀을 고갈시킨다. 건너뛴 행은 잠근 요청이
 	// 같은 시각으로 기록하므로 접근 기록으로서 잃는 것이 없다.
-	if _, err := s.pool.Exec(ctx, `
+	err := retryEmbeddingAccess(func() error {
+		_, err := s.pool.Exec(ctx, `
 		UPDATE public.context_embedding AS embedding
 		SET last_accessed_at = $3, storage_tier = $4
 		FROM (
@@ -43,10 +58,23 @@ func (s *Store) touchEmbeddings(ctx context.Context, graphID model.ID, contextID
 			FOR UPDATE SKIP LOCKED
 		) AS target
 		WHERE embedding.graph_id = $1 AND embedding.context_id = target.context_id
-	`, graphID.String(), ids, at.UTC(), embeddingTierHot); err != nil {
+	`, graphID.String(), ids, at.UTC(), embeddingTierHot)
+		return err
+	})
+	if err != nil {
 		return fmt.Errorf("임베딩 되읽기 기록: %w", err)
 	}
 	return nil
+}
+
+// retryEmbeddingAccess는 동시 파티션 이동의 40001에만 한 번 다시 시도한다. 접근 기록은
+// 같은 대상·시각으로 반복해도 같은 갱신이며, 앞선 자동 커밋 문장의 연결은 이미 반환됐다.
+func retryEmbeddingAccess(execute func() error) error {
+	err := execute()
+	if failure, ok := errors.AsType[*pgconn.PgError](err); ok && failure.Code == "40001" {
+		return execute()
+	}
+	return err
 }
 
 // MoveColdEmbeddings는 접근이 차단됐거나 플랜 기준보다 오래 쓰이지 않은 임베딩을

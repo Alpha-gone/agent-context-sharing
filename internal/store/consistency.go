@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sync"
@@ -29,8 +30,8 @@ type ReadStats struct {
 // readScope는 요청 컨텍스트에 싣는 스냅숏 표식과 연결 사용량이다.
 type readScope struct {
 	snapshot string
-	// reads는 경계 안에서 동시에 열 수 있는 읽기 트랜잭션의 자리다. 조정 연결과 합쳐
-	// 예약한 snapshotConnections를 넘지 않게 하며, 넘는 읽기는 앞선 읽기가 끝나기를 기다린다.
+	// reads는 읽기와 그 접근 기록이 공유하는 연결 자리다. 조정 연결과 합쳐 예약한
+	// snapshotConnections를 넘지 않게 하며, 넘는 읽기는 앞선 접근 기록까지 기다린다.
 	reads  chan struct{}
 	mu     sync.Mutex
 	opened int
@@ -55,6 +56,8 @@ func (scope *readScope) release() {
 type readScopeKey struct{}
 
 type readTxKey struct{}
+
+type readAccessKey struct{}
 
 // snapshotPattern은 pg_export_snapshot이 돌려주는 식별자 모양이다. SET TRANSACTION
 // SNAPSHOT은 매개변수를 받지 않으므로 리터럴로 넣기 전에 모양을 확인한다.
@@ -118,36 +121,50 @@ func (snapshot *ReadSnapshot) Close(ctx context.Context) ReadStats {
 
 // enterReadScope는 요청 컨텍스트에 스냅숏이 있으면 읽기 전용 REPEATABLE READ 트랜잭션을
 // 열고 그 스냅숏을 가져온다. 돌려준 컨텍스트로 부른 reader가 이 트랜잭션을 쓴다. 이미
-// 트랜잭션 안이거나 스냅숏이 없으면 아무것도 하지 않는다. release는 항상 불러야 한다.
+// 트랜잭션 안이거나 스냅숏이 없으면 아무것도 하지 않는다. release는 항상 부르고 오류를
+// 호출 결과에 반영해야 한다. 접근 기록은 읽기 연결을 반환한 뒤 같은 자리에서 처리한다.
 //
 // 경계 안 읽기 자리가 모두 차 있으면 연결을 잡기 전에 앞선 읽기가 끝나기를 기다린다.
 // 같은 요청의 읽기만 자리를 돌려주므로 이 대기는 다른 요청을 기다리지 않는다.
-func (s *Store) enterReadScope(ctx context.Context) (context.Context, func(), error) {
+func (s *Store) enterReadScope(ctx context.Context) (context.Context, func() error, error) {
 	scope, _ := ctx.Value(readScopeKey{}).(*readScope)
 	if scope == nil || ctx.Value(readTxKey{}) != nil {
-		return ctx, func() {}, nil
+		return ctx, func() error { return nil }, nil
 	}
 	select {
 	case scope.reads <- struct{}{}:
 	case <-ctx.Done():
-		return ctx, func() {}, fmt.Errorf("스냅숏 읽기 자리 대기: %w", context.Cause(ctx))
+		return ctx, func() error { return nil }, fmt.Errorf("스냅숏 읽기 자리 대기: %w", context.Cause(ctx))
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		<-scope.reads
-		return ctx, func() {}, fmt.Errorf("스냅숏 읽기 트랜잭션 시작: %w", err)
+		return ctx, func() error { return nil }, fmt.Errorf("스냅숏 읽기 트랜잭션 시작: %w", err)
 	}
 	if _, err := tx.Exec(ctx, "SET TRANSACTION SNAPSHOT '"+scope.snapshot+"'"); err != nil {
 		_ = tx.Rollback(ctx)
 		<-scope.reads
-		return ctx, func() {}, fmt.Errorf("스냅숏 가져오기: %w", err)
+		return ctx, func() error { return nil }, fmt.Errorf("스냅숏 가져오기: %w", err)
 	}
 	scope.acquire()
-	return context.WithValue(ctx, readTxKey{}, tx), func() {
-		_ = tx.Rollback(context.WithoutCancel(ctx))
+	accesses := new([]embeddingAccess)
+	readContext := context.WithValue(context.WithValue(ctx, readTxKey{}, tx), readAccessKey{}, accesses)
+	return readContext, sync.OnceValue(func() error {
+		// 먼저 읽기 연결을 반환해 접근 기록 연결을 위한 몫을 확보한다. 자리를 먼저
+		// 반납하면 새 읽기가 그 연결을 차지해 같은 풀에서 다시 대기할 수 있다.
+		err := tx.Rollback(context.WithoutCancel(ctx))
 		scope.release()
-		<-scope.reads
-	}, nil
+		defer func() { <-scope.reads }()
+		if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			return fmt.Errorf("스냅숏 읽기 트랜잭션 종료: %w", err)
+		}
+		for _, access := range *accesses {
+			if err := s.touchEmbeddings(ctx, access.graphID, access.contextIDs, access.at); err != nil {
+				return err
+			}
+		}
+		return nil
+	}), nil
 }
 
 // reader는 읽기 경계 안이면 그 트랜잭션을, 아니면 연결 풀을 돌려준다.

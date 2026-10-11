@@ -45,18 +45,30 @@ type HopResult struct {
 type hopNeighborSource func(frontier []model.ID, label traversalLabel) ([]hopNeighbor, error)
 
 // HopContexts는 graph_id 안에서 확정 참조와 관계를 따라 너비 우선으로 탐색한다.
-func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops int, direction string, filter []string, limit int) (HopResult, error) {
+func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops int, direction string, filter []string, limit int) (result HopResult, err error) {
 	ctx, cancel := context.WithTimeout(ctx, hopWorkTimeout)
 	defer cancel()
 	if !graphID.IsV7() || !startID.IsV7() {
 		return HopResult{}, fmt.Errorf("홉 탐색 인자가 올바르지 않다")
 	}
-	start, err := s.Context(ctx, graphID, startID)
+	ctx, release, err := s.enterHopReadScope(ctx)
+	if err != nil {
+		return HopResult{}, err
+	}
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			result, err = HopResult{}, errors.Join(err, releaseErr)
+		}
+	}()
+	start, err := s.context(ctx, s.reader(ctx), graphID, startID)
 	if err != nil {
 		return HopResult{}, err
 	}
 	if start.DeletedAt != nil {
 		return HopResult{}, ErrNotFound
+	}
+	if err := s.touchEmbeddings(ctx, graphID, []model.ID{startID}, nowUTC()); err != nil {
+		return HopResult{}, err
 	}
 	return s.HopContextsFrom(ctx, graphID, []model.Context{start}, hops, direction, filter, limit)
 }
@@ -73,7 +85,8 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 	if err := ctx.Err(); err != nil {
 		return HopResult{}, err
 	}
-	ctx, release, err := s.enterReadScope(ctx)
+	standalone := ctx.Value(readScopeKey{}) == nil && ctx.Value(readTxKey{}) == nil
+	ctx, release, err := s.enterHopReadScope(ctx)
 	if err != nil {
 		return HopResult{}, err
 	}
@@ -82,6 +95,25 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 			result, err = HopResult{}, errors.Join(err, releaseErr)
 		}
 	}()
+	if standalone && len(starts) > 0 {
+		ids := make([]model.ID, len(starts))
+		for i, start := range starts {
+			ids[i] = start.ID
+		}
+		values, readErr := s.contextVerticesByIDs(ctx, s.reader(ctx), graphID, ids)
+		if readErr != nil {
+			return HopResult{}, readErr
+		}
+		// 입력 슬라이스는 호출자가 소유하므로 현재 읽기 상태의 시작 목록을 따로 만든다.
+		starts = make([]model.Context, len(ids))
+		for i, id := range ids {
+			value, found := values[id]
+			if !found || value.DeletedAt != nil {
+				return HopResult{}, missingContextError{ID: id}
+			}
+			starts[i] = value
+		}
+	}
 	if limit > 0 {
 		return s.hopContextsBounded(ctx, graphID, starts, hops, direction, filter, limit)
 	}
@@ -187,7 +219,8 @@ func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []mod
 	result.Distances = distances
 	result.Edges = slices.SortedFunc(edgesValues(edges, distances), compareHopEdges)
 	result.expansionQueries = *queries
-	if err := s.fillHopReferences(ctx, graphID, result.Contexts); err != nil {
+	result.work.referenceRows, err = s.fillHopReferences(ctx, graphID, result.Contexts)
+	if err != nil {
 		return HopResult{}, err
 	}
 	accessed := make([]model.ID, 0, len(result.Contexts))
@@ -207,8 +240,8 @@ func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []mod
 // hopNeighbors는 정점 속성만 읽어 오는데 참조는 속성이 아니라 간선에 있다. 비우면 흐름
 // 응답의 확장 노드에서 `derived_from`과 `member_refs`가 빈 목록으로 나가고, 「예산 적용과
 // 절단」이 근거가 다르면 접지 않기로 한 중복 파생 접기가 근거를 구분하지 못한다.
-// 노드마다 묶어 읽지 않고 두 질의로 한 번에 읽는다.
-func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, contexts []model.Context) error {
+// 노드마다 묶어 읽지 않고 두 질의로 한 번에 읽으며, 두 질의가 받은 참조 행 수를 반환한다.
+func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, contexts []model.Context) (int, error) {
 	needs := make([]string, 0, len(contexts))
 	for _, value := range contexts {
 		if value.Layer == model.LayerDerived || value.Layer == model.LayerEvent {
@@ -216,16 +249,23 @@ func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, context
 		}
 	}
 	if len(needs) == 0 {
-		return nil
+		return 0, nil
 	}
 	list := "[" + strings.Join(needs, ", ") + "]"
 	references, err := s.edgeTargetsBySource(ctx, s.reader(ctx), graphID, "DERIVED_FROM", list)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	members, err := s.edgeTargetsBySource(ctx, s.reader(ctx), graphID, "HAS_MEMBER", list)
 	if err != nil {
-		return err
+		return 0, err
+	}
+	rows := 0
+	for _, targets := range references {
+		rows += len(targets)
+	}
+	for _, targets := range members {
+		rows += len(targets)
 	}
 	for index, value := range contexts {
 		switch value.Layer {
@@ -239,7 +279,7 @@ func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, context
 			}
 		}
 	}
-	return nil
+	return rows, nil
 }
 
 type traversalLabel struct {

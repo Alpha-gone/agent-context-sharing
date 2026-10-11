@@ -14,8 +14,8 @@ import (
 
 // 요청 단위 일관 읽기의 동기화 스냅숏 후보다. 조정 연결이 읽기 전용 REPEATABLE READ
 // 트랜잭션에서 스냅숏을 내보내고, 검색이 부르는 읽기 메서드는 요청 컨텍스트에 실린 그
-// 스냅숏을 자기 읽기 전용 트랜잭션에서 가져와 같은 커밋 상태를 읽는다. 표식이 없는 요청은
-// 지금처럼 풀에서 바로 읽으므로 현행 검색의 동작은 바뀌지 않는다.
+// 스냅숏을 자기 읽기 전용 트랜잭션에서 가져와 같은 커밋 상태를 읽는다. 단일 홉 조회는
+// 별도의 한 연결 읽기 경계를 쓰며, 그 밖의 표식 없는 요청은 풀에서 바로 읽는다.
 
 // ReadStats는 한 요청이 읽기 경계에서 쓴 연결 자원이다.
 type ReadStats struct {
@@ -157,6 +157,31 @@ func (s *Store) enterReadScope(ctx context.Context) (context.Context, func() err
 		defer func() { <-scope.reads }()
 		if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
 			return fmt.Errorf("스냅숏 읽기 트랜잭션 종료: %w", err)
+		}
+		for _, access := range *accesses {
+			if err := s.touchEmbeddings(ctx, access.graphID, access.contextIDs, access.at); err != nil {
+				return err
+			}
+		}
+		return nil
+	}), nil
+}
+
+// enterHopReadScope는 검색 스냅숏을 재사용하거나 홉 하나의 일관 읽기 경계를 연다.
+// 단일 경계는 읽기 연결을 반환한 뒤 접근 기록을 실행하므로 추가 연결 예약이 필요 없다.
+func (s *Store) enterHopReadScope(ctx context.Context) (context.Context, func() error, error) {
+	if ctx.Value(readScopeKey{}) != nil || ctx.Value(readTxKey{}) != nil {
+		return s.enterReadScope(ctx)
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return ctx, func() error { return nil }, fmt.Errorf("홉 읽기 트랜잭션 시작: %w", err)
+	}
+	accesses := new([]embeddingAccess)
+	readContext := context.WithValue(context.WithValue(ctx, readTxKey{}, tx), readAccessKey{}, accesses)
+	return readContext, sync.OnceValue(func() error {
+		if err := tx.Rollback(context.WithoutCancel(ctx)); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			return fmt.Errorf("홉 읽기 트랜잭션 종료: %w", err)
 		}
 		for _, access := range *accesses {
 			if err := s.touchEmbeddings(ctx, access.graphID, access.contextIDs, access.at); err != nil {

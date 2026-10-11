@@ -24,7 +24,7 @@ type embeddingAccess struct {
 
 // touchEmbeddings는 실제 조회에 쓰인 활성 컨텍스트의 임베딩 접근 시각을 갱신하고
 // cold 행을 hot 파티션으로 되돌린다. 임베딩이 없는 컨텍스트는 그대로 통과한다.
-// 스냅숏 읽기 안이면 요청을 모으고, enterReadScope의 종료 함수가 읽기 연결 반환 뒤 실행한다.
+// 읽기 경계 안이면 요청을 모으고, 그 종료 함수가 읽기 연결 반환 뒤 실행한다.
 func (s *Store) touchEmbeddings(ctx context.Context, graphID model.ID, contextIDs []model.ID, at time.Time) error {
 	if len(contextIDs) == 0 {
 		return nil

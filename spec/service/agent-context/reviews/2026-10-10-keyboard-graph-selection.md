@@ -39,4 +39,15 @@
 - 적용 DOX와 변경 문서 11개의 한국어 내용·코드 블록 경계·상대 링크를 확인하고 맞춤법을 검토했다. SRS의 기존 요구사항 172개가 SDD에 연결되어 있음을 확인했으며 ID를 추가·재번호화하지 않았다.
 - SRS `FR-AGENT_CONTEXT-111`을 기존 요구사항의 접근 가능한 조작으로 구체화하고 SDD 화면 계약·시험 전략·추적표를 함께 갱신했다. 코드보다 설계를 먼저 반영했다.
 - 새 도메인 용어, API·DB 스키마·의존성·배포·권한 계약 변경이 없어 DICTIONARY·README·OPERATIONS와 클라이언트 명세는 유지한다. 기존 IDE staging과 개발 데이터·환경을 보존한다.
-- 커밋·push·PR·이슈 종료·운영 배포는 수행하지 않는다. 수동 검증 전 #111 전체 완료로 간주하지 않는다.
+- 2026-10-10의 구현·검증 단계에서는 커밋·push·PR·이슈 종료·운영 배포를 수행하지 않았다. 수동 검증 전 #111 전체 완료로 간주하지 않는다.
+
+## 2026-10-11 최신 dev 반영 검증
+
+- 사용자의 최신 `dev` 반영 요청에 따라 `fix/issue-111-keyboard-graph`에 `dev`의 `6fadf8f`(#128 병합 포함)를 merge한다. 공유 이력은 재작성하지 않는다.
+- 원본 `dev` 작업 트리의 `.idea/deployment.xml`·`.idea/webServers.xml` staging을 보존하기 위해 별도 임시 worktree를 사용했다.
+- 충돌은 루트·spec·service DOX의 Child DOX Index와 `logs/prompt.md`·`reference.md` 5개 문서에만 있었다. 키보드 선택과 홉 일관 읽기·후보 조회의 지침을 함께 유지하고 양쪽 요청·참고 기록을 날짜순으로 보존했다. 새로운 요구사항·설계 결정을 만들지 않았다.
+- 병합 결과의 `internal/web/` 코드는 기존 #111 브랜치와 같고, `internal/store/`·`migrations/`·`cmd/`는 최신 `dev`와 같다. 코드 충돌 해결이나 추가 구현 수정은 없다.
+- Go 1.27.1로 양쪽 모듈 `go build ./...`·`go vet ./...`, 루트 `gofmt -l .`·`git diff --check`를 통과했다.
+- 별도 `issue111_merge_20261011` DB에 최신 정식 마이그레이션을 적용하고 `TEST_DATABASE_REQUIRED=1 go test -race -json ./internal/web ./cmd/server -count=1`을 실행했다. 렌더링된 JavaScript·Cytoscape 검사를 포함한 208개 테스트·하위 사례가 실패·건너뜀 없이 통과했다. 서버·클라이언트 전체 race와 실제 브라우저·보조 기술 수동 검증은 이번 병합에서 실행하지 않았다.
+- DOX pass로 변경 문서 11개의 한국어·맞춤법·Markdown·상대 링크 47개·하위 DOX 경로 8개와 기존 요구사항 172개의 SDD 연결을 확인했다. 요청·참고 기록의 양쪽 기존 행도 모두 보존되었다.
+- 검증 DB 연결이 0개임을 확인한 뒤 DB와 합성 데이터를 제거했다. 같은 마이그레이션과 테스트로 재생성할 수 있으며 기존 개발 DB는 변경하지 않았다. 기존 수동 검증 미완료 상태는 그대로 유지한다.

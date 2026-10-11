@@ -12,6 +12,7 @@
 
 ## 로컬 계약
 
+- 아래 구현 계약은 전환 전 클라이언트의 유지·회귀·복귀에 적용한다. 호스트 직접 연결의 목표 계약은 서버 `spec/service/agent-context/SRS.md`와 `SDD.md`가 소유하며, 실제 호스트 인수와 사용자 전환·복귀 확인 전에는 이 모듈을 제거하지 않는다.
 - `client/go.mod`의 모듈 경로는 `agent_context_sharing/client`이며 서버 루트 모듈의 패키지를 import하거나 `replace`로 참조하지 않는다.
 - `internal/client/contract/tool_manifest.json`은 서버 `internal/mcp`의 공개 도구 13종과 입력 스키마를 고정한 공유 검증 자료다. 클라이언트 계약 검사는 이를 사용하고 서버의 스냅샷 테스트가 실제 도구 정의와 대조한다.
 - 공식 MCP Go SDK 판은 `client/go.mod`에 고정한다. `contract`의 SDK 확인 테스트는 `2026-07-28` lifecycle·`stdio` 타입을, `host` 시험은 무상태 발견과 `initialize` 기반 호환 연결의 목록·호출·오류를 검증한다.

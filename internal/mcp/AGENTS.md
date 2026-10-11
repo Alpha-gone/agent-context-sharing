@@ -11,6 +11,7 @@
 
 ## 로컬 계약
 
+- 아래 전송·외피·DPoP·13종 도구 계약은 전환 전 구현 기준선이다. 호스트 직접 연결의 표준 수명주기·Bearer·14종 도구 목표는 서버 SDD의 「호스트 직접 연결 전환 설계」가 소유한다. 목표 구현 시 관련 테스트·공유 manifest·이 문서를 함께 전환하며 설계 채택만으로 현재 구현의 호환성을 주장하지 않는다.
 - `server/discover`는 지원 protocol revision, `tools` 기능과 `io.github.alpha-gone/write-idempotency` 확장만 알린다.
 - 협상된 쓰기에서 전송 계층은 `Idempotency-Key` 헤더 값과 요청 지문만 넘기고, 키 형식 검증과 결과 재생은 권한 확인 뒤 처리기가 맡는다.
 - `tools/list`는 `SRS.md`의 MCP 연산 13종만 이름, 설명과 `inputSchema`로 노출하며 캐시 힌트를 함께 싣는다.

@@ -18,8 +18,8 @@ func TestLoad(t *testing.T) {
 	if cfg.HTTPAddr != ":8080" || cfg.EmbeddingDimension != 1024 || cfg.SearchExecution != SearchExecutionParallel || cfg.SearchGraphStage != SearchGraphStageBaseline || !cfg.SearchGlobalFallback || cfg.SearchCandidateLimit != 50 || cfg.SearchSemanticThreshold != 0.7 || cfg.RelationAdjacencyWindow != time.Hour || cfg.RelationSimilarityThreshold != 0.8 || cfg.RelationProposalLimit != 10 {
 		t.Fatalf("핵심 구성 값이 다르다: %+v", cfg)
 	}
-	if len(cfg.OAuthClients) != 1 || len(cfg.OAuthClients["agent-context-dev"]) != 1 || cfg.ResourceServerURL.String() != "https://service.test/mcp" || cfg.AuthorizationServerURL.String() != "https://issuer.test" || len(cfg.MCPAllowedOrigins) != 1 {
-		t.Fatalf("OAuth 목록이 다르다: %+v", cfg)
+	if cfg.AuthorizationServerURL.String() != "https://issuer.test" {
+		t.Fatalf("웹 세션 issuer가 다르다: %+v", cfg)
 	}
 }
 
@@ -89,21 +89,6 @@ func TestLoadAccountPlanLimits(t *testing.T) {
 	}
 }
 
-// TestLoadPlacementDefaultsToEmbedded는 「배치 조합」이 기본값으로 삼은 둘 다 내장이
-// 구성 값을 비워 두었을 때 그대로 나오는지 확인한다.
-func TestLoadPlacementDefaultsToEmbedded(t *testing.T) {
-	values := validValues()
-	delete(values, "INDEX_WORKER_PLACEMENT")
-	delete(values, "AUTHORIZATION_SERVER_PLACEMENT")
-	cfg, err := Load(func(name string) string { return values[name] })
-	if err != nil {
-		t.Fatalf("구성 읽기: %v", err)
-	}
-	if cfg.IndexWorkerPlacement != PlacementEmbedded || cfg.AuthorizationServerPlacement != PlacementEmbedded {
-		t.Fatalf("기본 배치 = %q, %q; 둘 다 embedded여야 한다", cfg.IndexWorkerPlacement, cfg.AuthorizationServerPlacement)
-	}
-}
-
 // TestLoadIndexTargetsDefaultsToAllLayers는 「색인 대상 비교」에서 채택한
 // 원천 포함 구성을 빈 값의 기본으로 유지하는지 확인한다.
 func TestLoadIndexTargetsDefaultsToAllLayers(t *testing.T) {
@@ -131,23 +116,6 @@ func TestLoadIndexTargetsAcceptsWithoutSource(t *testing.T) {
 	}
 }
 
-func TestLoadAcceptsFourPlacementCombinations(t *testing.T) {
-	for _, worker := range []ComponentPlacement{PlacementEmbedded, PlacementExternal} {
-		for _, authorization := range []ComponentPlacement{PlacementEmbedded, PlacementExternal} {
-			values := validValues()
-			values["INDEX_WORKER_PLACEMENT"] = string(worker)
-			values["AUTHORIZATION_SERVER_PLACEMENT"] = string(authorization)
-			cfg, err := Load(func(name string) string { return values[name] })
-			if err != nil {
-				t.Fatalf("색인 %s, 인가 %s 구성 읽기: %v", worker, authorization, err)
-			}
-			if cfg.IndexWorkerPlacement != worker || cfg.AuthorizationServerPlacement != authorization {
-				t.Fatalf("배치 = %q, %q; want %q, %q", cfg.IndexWorkerPlacement, cfg.AuthorizationServerPlacement, worker, authorization)
-			}
-		}
-	}
-}
-
 // TestLoadRejectsInvalidValues은 기동 전에 잘못된 배포 구성이 거부되는지 확인한다.
 func TestLoadRejectsInvalidValues(t *testing.T) {
 	tests := map[string]func(map[string]string){
@@ -155,7 +123,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		"그래프 이름 형식 오류":    func(values map[string]string) { values["AGE_GRAPH_NAME"] = "bad-name" },
 		"벡터 차원 오류":        func(values map[string]string) { values["EMBEDDING_DIMENSION"] = "0" },
 		"색인 작업자 배치 오류":    func(values map[string]string) { values["INDEX_WORKER_PLACEMENT"] = "detached" },
-		"인가 서버 배치 오류":     func(values map[string]string) { values["AUTHORIZATION_SERVER_PLACEMENT"] = "detached" },
 		"검색 채널 실행 방식 오류":  func(values map[string]string) { values["SEARCH_CHANNEL_EXECUTION"] = "unknown" },
 		"검색 후보 수 상한 오류":   func(values map[string]string) { values["SEARCH_CHANNEL_CANDIDATE_LIMIT"] = "0" },
 		"검색 의미 유사도 하한 오류": func(values map[string]string) { values["SEARCH_SEMANTIC_SIMILARITY_THRESHOLD"] = "1.1" },
@@ -193,16 +160,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		"같은 계정의 중복 플랜": func(values map[string]string) {
 			values["ACCOUNT_PLAN_LIMITS"] = `{"019a0000-abcd-7000-8000-000000000001":{"max_hops":1},"019A0000-ABCD-7000-8000-000000000001":{"max_hops":2}}`
 		},
-		"보호 리소스 경로 오류":     func(values map[string]string) { values["RESOURCE_SERVER_URL"] = "https://service.test/other" },
-		"인가 서버 origin 오류":  func(values map[string]string) { values["AUTHORIZATION_SERVER_URL"] = "https://issuer.test/oauth" },
-		"허용 Origin 경로 오류":  func(values map[string]string) { values["MCP_ALLOWED_ORIGINS"] = "https://client.test/callback" },
-		"접기 임계값 범위 오류":     func(values map[string]string) { values["SEARCH_FOLD_SIMILARITY_THRESHOLD"] = "1.5" },
-		"클라이언트 구성 누락":      func(values map[string]string) { values["OAUTH_CLIENTS"] = "" },
-		"클라이언트 구성 JSON 오류": func(values map[string]string) { values["OAUTH_CLIENTS"] = "agent-context-dev" },
-		"클라이언트 빈 목록":       func(values map[string]string) { values["OAUTH_CLIENTS"] = `{"agent-context-dev":[]}` },
-		"클라이언트 redirect_uri 오류": func(values map[string]string) {
-			values["OAUTH_CLIENTS"] = `{"agent-context-dev":["ftp://127.0.0.1/callback"]}`
-		},
+		"인가 서버 origin 오류": func(values map[string]string) { values["AUTHORIZATION_SERVER_URL"] = "https://issuer.test/oauth" },
+		"접기 임계값 범위 오류":    func(values map[string]string) { values["SEARCH_FOLD_SIMILARITY_THRESHOLD"] = "1.5" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -280,10 +239,7 @@ func validValues() map[string]string {
 		"SEARCH_GRAPH_STAGE":                   "baseline",
 		"SEARCH_GLOBAL_FALLBACK_ENABLED":       "true",
 		"SEARCH_FOLD_SIMILARITY_THRESHOLD":     "0.90",
-		"OAUTH_CLIENTS":                        `{"agent-context-dev":["http://127.0.0.1/callback"]}`,
-		"RESOURCE_SERVER_URL":                  "https://service.test/mcp",
 		"AUTHORIZATION_SERVER_URL":             "https://issuer.test",
-		"MCP_ALLOWED_ORIGINS":                  "https://client.test",
 		"BCRYPT_COST":                          "12",
 		"RELATION_ADJACENCY_WINDOW":            "1h",
 		"RELATION_SIMILARITY_THRESHOLD":        "0.8",
@@ -293,5 +249,23 @@ func validValues() map[string]string {
 		"TRUSTED_PROXY_CIDRS":                  "10.0.0.0/8",
 		"TLS_CERT_FILE":                        "",
 		"TLS_KEY_FILE":                         "",
+	}
+}
+
+func TestLoadIndexWorkerPlacements(t *testing.T) {
+	for _, placement := range []ComponentPlacement{"", PlacementEmbedded, PlacementExternal} {
+		values := validValues()
+		values["INDEX_WORKER_PLACEMENT"] = string(placement)
+		cfg, err := Load(func(name string) string { return values[name] })
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := placement
+		if want == "" {
+			want = PlacementEmbedded
+		}
+		if cfg.IndexWorkerPlacement != want {
+			t.Fatalf("색인 작업자 배치 = %q, want %q", cfg.IndexWorkerPlacement, want)
+		}
 	}
 }

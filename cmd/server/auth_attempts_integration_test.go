@@ -32,7 +32,7 @@ func TestPublicAuthenticationAttemptsIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(backend.Close)
-	service, err := authz.New(backend, authz.Config{Issuer: "https://service.test", Resource: "https://service.test/mcp", Scope: "agent-context", BcryptCost: 4, Clients: map[string][]*url.URL{"test-client": {{Scheme: "http", Host: "127.0.0.1", Path: "/callback"}}}})
+	service, err := authz.New(backend, authz.Config{Issuer: "https://service.test", BcryptCost: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestPublicAuthenticationAttemptsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := newApplication(backend, nil, security, nil)
+	app := newApplication(backend, nil, security)
 	app.web = server
 	handler := app.handler()
 	id, err := model.NewID()

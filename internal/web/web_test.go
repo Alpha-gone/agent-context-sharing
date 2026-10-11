@@ -127,8 +127,7 @@ func testID(t *testing.T) model.ID {
 }
 
 type fakeAuthentication struct {
-	accountID       model.ID
-	authenticatedAt time.Time
+	accountID model.ID
 }
 
 func (fakeAuthentication) Authenticate(context.Context, string, string) (model.ID, error) {
@@ -138,13 +137,13 @@ func (fakeAuthentication) Register(context.Context, string, string) (model.ID, e
 	return model.ID{}, nil
 }
 func (authentication fakeAuthentication) WebSession(_ context.Context, _ model.ID, _ string) (Session, error) {
-	return Session{Raw: "web-session", ID: "session", ExpiresAt: time.Now().Add(time.Hour), AuthenticatedAt: authentication.authenticatedAt}, nil
+	return Session{Raw: "web-session", ID: "session", ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 func (authentication fakeAuthentication) VerifyWebSession(_ context.Context, raw, _ string) (model.ID, Session, error) {
 	if raw != "web-session" || !authentication.accountID.IsV7() {
 		return model.ID{}, Session{}, http.ErrNoCookie
 	}
-	return authentication.accountID, Session{Raw: raw, ID: "session", ExpiresAt: time.Now().Add(time.Hour), AuthenticatedAt: authentication.authenticatedAt}, nil
+	return authentication.accountID, Session{Raw: raw, ID: "session", ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 func (fakeAuthentication) Revoke(context.Context, Session) error { return nil }
 
@@ -418,11 +417,10 @@ func TestGraphListLinksRestoreForOwnDeletedGraphs(t *testing.T) {
 	}
 }
 
-// TestLoginReturnsToAuthorizeRequest는 로그인 뒤 원래의 인가 요청으로 돌아가는지
-// 확인한다. 「인가 코드 흐름」 5단계가 인가 요청으로 되돌아오는 유일한 통로다.
-func TestLoginReturnsToAuthorizeRequest(t *testing.T) {
+// TestLoginReturnsToLocalPage는 로그인 뒤 원래의 로컬 화면으로 돌아가는지 확인한다.
+func TestLoginReturnsToLocalPage(t *testing.T) {
 	server := newTestServer(t, model.ID{1}, model.ID{2})
-	next := "/authorize?client_id=test-client&resource=https%3A%2F%2Fservice.test%2Fmcp"
+	next := "/graphs?name=sample"
 	form := url.Values{"login_id": {"tester"}, "password": {"correct horse battery staple"}, "next": {next}}
 	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")

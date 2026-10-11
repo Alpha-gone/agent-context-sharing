@@ -41,10 +41,9 @@ func TestStartupFailureClosesWorkersIntegration(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	resource := &url.URL{Scheme: "https", Host: "service.test", Path: "/mcp"}
 	issuer := &url.URL{Scheme: "https", Host: "service.test"}
 	for _, placement := range []config.ComponentPlacement{config.PlacementEmbedded, config.PlacementExternal} {
-		for _, failure := range []string{"검색 실행기 준비", "인가 서버 준비", "HTTP 서버 수신"} {
+		for _, failure := range []string{"인가 서버 준비", "HTTP 서버 수신"} {
 			t.Run(string(placement)+"/"+failure, func(t *testing.T) {
 				listener, err := net.Listen("tcp", "127.0.0.1:0")
 				if err != nil {
@@ -56,13 +55,9 @@ func TestStartupFailureClosesWorkersIntegration(t *testing.T) {
 					EmbeddingProvider: "ollama", EmbeddingBaseURL: embeddingURL, EmbeddingModel: "startup-test", EmbeddingVectorType: "vector", EmbeddingDimension: dimension,
 					SearchExecution: config.SearchExecutionParallel, SearchCandidateLimit: 50, SearchSemanticThreshold: .5, SearchFoldThreshold: .9, SearchGraphStage: config.SearchGraphStageBaseline,
 					RelationAdjacencyWindow: time.Hour, RelationSimilarityThreshold: .8, RelationProposalLimit: 10,
-					BcryptCost: 4, ResourceServerURL: resource, AuthorizationServerURL: issuer, MCPAllowedOrigins: []*url.URL{issuer},
-					OAuthClients:         map[string][]*url.URL{"test-client": {{Scheme: "http", Host: "127.0.0.1", Path: "/callback"}}},
-					IndexWorkerPlacement: placement, AuthorizationServerPlacement: config.PlacementEmbedded, IndexTargetLayers: config.IndexTargetLayersAll, TLSMode: config.TLSModeProxy,
+					AuthorizationServerURL: issuer, BcryptCost: 4, IndexWorkerPlacement: placement,
 				}
 				switch failure {
-				case "검색 실행기 준비":
-					cfg.SearchExecution = "invalid"
 				case "인가 서버 준비":
 					cfg.BcryptCost = 0
 				}

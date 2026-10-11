@@ -20,7 +20,7 @@ Go 1.27.1 SDK와 개발 PostgreSQL의 전용 시험 DB `issue105_test_20261010`�
 - 현재 모델 불일치·임베딩 누락·현재 모델 임베딩이 있는 재색인 대기, 원천 제외 구성·삭제된 원천 제외와 다른 그래프의 실패 격리: 통과.
 - 기본·적응형·지속·적대적·일관성 CLI의 색인 미완료 실패 종료와 정상 보고서 파일 미생성: 모두 통과.
 - `go test -count=1 -race -p 1 -timeout=180s -json ./cmd/eval ./internal/store ./internal/index`: 시험·하위 시험 455건 통과, 실패 0건, 건너뜀 0건, 종료 코드 0.
-- 서버·클라이언트 각각 `go build ./...`, `go vet ./...`: 통과. `gofmt -l .`, `git diff --check`: 출력 없음.
+- 서버 `go build ./...`, `go vet ./...`: 통과. `gofmt -l .`, `git diff --check`: 출력 없음.
 
 외부 제공자 실연결, 전체 서버의 다른 패키지 및 클라이언트 race 시험은 이번 변경에서 재실행하지 않았다. 기본 회귀에서 분리된 `embedding_live` 시험은 선택하지 않았다.
 

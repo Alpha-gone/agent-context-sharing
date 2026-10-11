@@ -32,7 +32,6 @@
 - 최소 풀 4개 연결에서 두 진입점의 12개 동시 요청이 모두 완료하고 획득 연결이 0으로 회복했다. 검색 경로는 읽기 자리·활성 트랜잭션이 회복되며 조정 연결 하나만 남는 것을 대조했다.
 - 기존 `TestHopSharedBudgetIntegration`·`TestHopAssemblyCancellationIntegration`의 race 실행이 통과했다.
 - 작업 파일을 변경하지 않는 overlay에서 단일 홉 트랜잭션만 `Read Committed`로 낮추자 양수 상한의 두 진입점이 다시 `not_found`·빈 결과로 실패했다. 격리 수준의 회귀를 검출하는 것을 확인했다.
-- 서버·클라이언트 `go build ./...`, `go vet ./...`와 클라이언트 전체 race 테스트가 통과했다.
 - `TEST_DATABASE_REQUIRED=1 go test -race -json ./... -count=1` — 서버 전체 14개 시험 패키지, 테스트·하위 사례 1,227개 통과. 실패와 개별 시험 건너뜀이 없다. 시험이 없는 두 패키지의 JSON `skip`은 통합 시험 건너뜀이 아니다. 마지막에 추가한 최소 풀 회귀는 위 신규 회귀 3종의 10회 반복으로 따로 검증했다.
 - `gofmt -l .`·`git diff --check` — 출력·오류 없음. 문서의 한국어·맞춤법·용어·Markdown 구조·상대 링크·Child DOX Index를 확인했다.
 - 검증 종료 후 임시 DB의 연결이 0개임을 확인하고 DB와 합성 시험 데이터를 제거했다. 같은 마이그레이션과 시험으로 다시 만들 수 있으며 기존 개발 DB는 변경하지 않았다.

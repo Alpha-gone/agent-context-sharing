@@ -2,13 +2,13 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
 
-	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
+
+	"agent_context_sharing/internal/model"
 )
 
 // Account은 인증에 필요한 계정 식별자와 저장된 자격 증명이다.
@@ -17,22 +17,6 @@ type Account struct {
 	LoginID      string
 	PasswordHash string
 	CreatedAt    time.Time
-}
-
-// AuthorizationCode는 원문 없이 보관하는 인가 코드의 교환 정보다.
-type AuthorizationCode struct {
-	Hash                 string
-	ClientID             string
-	AccountID            model.ID
-	RedirectURI          string
-	CodeChallenge        string
-	Resource             string
-	IssuedAt             time.Time
-	AuthenticatedAt      time.Time
-	ExpiresAt            time.Time
-	ConsumedAt           *time.Time
-	IssuedTokenID        string
-	IssuedTokenExpiresAt *time.Time
 }
 
 // SigningKey는 데이터베이스에 보관하는 서명 키의 직렬화된 형태다.
@@ -44,32 +28,6 @@ type SigningKey struct {
 	State      string
 	CreatedAt  time.Time
 }
-
-// ReserveDPoPProof는 검증을 끝낸 proof를 모든 인스턴스에서 한 번만 쓸 수 있게 기록한다.
-// false는 같은 공개 키와 jti 조합이 이미 사용됐다는 뜻이며, 원문 jti는 받거나 저장하지 않는다.
-func (s *Store) ReserveDPoPProof(ctx context.Context, jwkThumbprint string, proofIDHash []byte, expiresAt time.Time) (bool, error) {
-	if jwkThumbprint == "" || len(proofIDHash) != sha256.Size || expiresAt.IsZero() {
-		return false, fmt.Errorf("DPoP proof 예약 인자가 올바르지 않다")
-	}
-	result, err := s.pool.Exec(ctx, `
-		INSERT INTO public.dpop_proof_replay (jwk_thumbprint, proof_id_hash, expires_at)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (jwk_thumbprint, proof_id_hash) DO NOTHING`, jwkThumbprint, proofIDHash, expiresAt.UTC())
-	if err != nil {
-		return false, fmt.Errorf("DPoP proof 예약: %w", err)
-	}
-	return result.RowsAffected() == 1, nil
-}
-
-// CodeUsedError는 이미 소비된 인가 코드를 다시 제시했음을 나타낸다.
-type CodeUsedError struct {
-	TokenID        string
-	IssuedAt       time.Time
-	TokenExpiresAt time.Time
-}
-
-// Error는 인가 코드 재사용 오류를 만든다.
-func (CodeUsedError) Error() string { return "인가 코드가 이미 사용됐다" }
 
 // CreateAccount는 로그인 아이디가 중복되지 않는 계정 행을 만든다.
 func (s *Store) CreateAccount(ctx context.Context, account Account) error {
@@ -116,137 +74,6 @@ func (s *Store) UpdatePasswordHashIfMatches(ctx context.Context, accountID model
 		return false, fmt.Errorf("비밀번호 해시 갱신: %w", err)
 	}
 	return result.RowsAffected() == 1, nil
-}
-
-// CreateAuthorizationCode는 인가 코드 해시만 저장한다.
-func (s *Store) CreateAuthorizationCode(ctx context.Context, code AuthorizationCode) error {
-	if !validAuthorizationCode(code) {
-		return fmt.Errorf("인가 코드 생성 인자가 올바르지 않다")
-	}
-	_, err := s.pool.Exec(ctx, `INSERT INTO public.authorization_code (code_hash, client_id, account_id, redirect_uri, code_challenge, resource, issued_at, expires_at, authenticated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, code.Hash, code.ClientID, code.AccountID.String(), code.RedirectURI, code.CodeChallenge, code.Resource, code.IssuedAt, code.ExpiresAt, code.AuthenticatedAt.UTC())
-	if err != nil {
-		return fmt.Errorf("인가 코드 저장: %w", err)
-	}
-	return nil
-}
-
-// AuthorizationCodeForExchange는 아직 소비되지 않고 만료되지 않은 인가 코드를 읽는다.
-// 이미 소비된 코드는 발급 토큰을 폐기할 수 있도록 CodeUsedError로 구분한다.
-func (s *Store) AuthorizationCodeForExchange(ctx context.Context, hash string, now time.Time) (AuthorizationCode, error) {
-	if hash == "" || now.IsZero() {
-		return AuthorizationCode{}, fmt.Errorf("인가 코드 조회 인자가 올바르지 않다")
-	}
-	code, err := s.authorizationCode(ctx, `
-		SELECT code_hash, client_id, account_id, redirect_uri, code_challenge, resource,
-		       issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at, authenticated_at
-		FROM public.authorization_code
-		WHERE code_hash = $1`, hash)
-	if errors.Is(err, ErrNotFound) {
-		return AuthorizationCode{}, ErrNotFound
-	}
-	if err != nil {
-		return AuthorizationCode{}, err
-	}
-	// 소비 여부를 만료보다 먼저 본다. 코드 수명은 60초이고 접근 토큰은 1시간이므로,
-	// 만료를 먼저 보면 탈취한 코드를 60초 뒤에 다시 제시할 때 재사용이 아니라 없는
-	// 코드로 판정되어 그 코드로 발급한 토큰이 폐기되지 않는다. 「인가 코드 흐름」이
-	// 소비 행을 남겨 두는 이유가 재사용 감지와 폐기 대상 찾기다.
-	if code.ConsumedAt != nil {
-		return AuthorizationCode{}, codeUsedError(code)
-	}
-	if !code.ExpiresAt.After(now) {
-		return AuthorizationCode{}, ErrNotFound
-	}
-	return code, nil
-}
-
-// ConsumeAuthorizationCode는 아직 소비되지 않고 만료되지 않은 코드만 조건부 갱신으로
-// 소비하며, 그 교환에서 발급한 토큰 식별자와 만료 시각을 같은 문장에서 기록한다.
-func (s *Store) ConsumeAuthorizationCode(ctx context.Context, hash, tokenID string, now, tokenExpiresAt time.Time) (AuthorizationCode, error) {
-	if hash == "" || tokenID == "" || now.IsZero() || tokenExpiresAt.IsZero() {
-		return AuthorizationCode{}, fmt.Errorf("인가 코드 소비 인자가 올바르지 않다")
-	}
-	code, err := s.authorizationCode(ctx, `
-		UPDATE public.authorization_code
-		SET consumed_at = $3, issued_token_id = $2, issued_token_expires_at = $4
-		WHERE code_hash = $1 AND consumed_at IS NULL AND expires_at > $3
-		RETURNING code_hash, client_id, account_id, redirect_uri, code_challenge, resource,
-		          issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at, authenticated_at`, hash, tokenID, now, tokenExpiresAt)
-	if err == nil {
-		return code, nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return AuthorizationCode{}, err
-	}
-	code, err = s.authorizationCode(ctx, `
-		SELECT code_hash, client_id, account_id, redirect_uri, code_challenge, resource,
-		       issued_at, expires_at, consumed_at, issued_token_id, issued_token_expires_at, authenticated_at
-		FROM public.authorization_code
-		WHERE code_hash = $1`, hash)
-	if errors.Is(err, ErrNotFound) {
-		return AuthorizationCode{}, ErrNotFound
-	}
-	if err != nil {
-		return AuthorizationCode{}, err
-	}
-	// 소비 여부를 만료보다 먼저 본다. 코드 수명은 60초이고 접근 토큰은 1시간이므로,
-	// 만료를 먼저 보면 탈취한 코드를 60초 뒤에 다시 제시할 때 재사용이 아니라 없는
-	// 코드로 판정되어 그 코드로 발급한 토큰이 폐기되지 않는다. 「인가 코드 흐름」이
-	// 소비 행을 남겨 두는 이유가 재사용 감지와 폐기 대상 찾기다.
-	if code.ConsumedAt != nil {
-		return AuthorizationCode{}, codeUsedError(code)
-	}
-	if !code.ExpiresAt.After(now) {
-		return AuthorizationCode{}, ErrNotFound
-	}
-	return AuthorizationCode{}, ErrNotFound
-}
-
-func (s *Store) authorizationCode(ctx context.Context, query string, args ...any) (AuthorizationCode, error) {
-	var code AuthorizationCode
-	var accountID string
-	var issuedTokenID *string
-	var issuedTokenExpiresAt *time.Time
-	var authenticatedAt *time.Time
-	err := s.pool.QueryRow(ctx, query, args...).Scan(
-		&code.Hash, &code.ClientID, &accountID, &code.RedirectURI, &code.CodeChallenge, &code.Resource,
-		&code.IssuedAt, &code.ExpiresAt, &code.ConsumedAt, &issuedTokenID, &issuedTokenExpiresAt, &authenticatedAt,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return AuthorizationCode{}, ErrNotFound
-	}
-	if err != nil {
-		return AuthorizationCode{}, fmt.Errorf("인가 코드 조회: %w", err)
-	}
-	parsed, err := model.ParseID(accountID)
-	if err != nil {
-		return AuthorizationCode{}, fmt.Errorf("저장된 인가 코드 계정 식별자: %w", err)
-	}
-	code.AccountID = parsed
-	code.IssuedAt, code.ExpiresAt = code.IssuedAt.UTC(), code.ExpiresAt.UTC()
-	if authenticatedAt != nil {
-		code.AuthenticatedAt = authenticatedAt.UTC()
-	}
-	if code.ConsumedAt != nil {
-		consumedAt := code.ConsumedAt.UTC()
-		code.ConsumedAt = &consumedAt
-	}
-	if issuedTokenID != nil {
-		code.IssuedTokenID = *issuedTokenID
-	}
-	if issuedTokenExpiresAt != nil {
-		expiresAt := issuedTokenExpiresAt.UTC()
-		code.IssuedTokenExpiresAt = &expiresAt
-	}
-	return code, nil
-}
-
-func codeUsedError(code AuthorizationCode) CodeUsedError {
-	used := CodeUsedError{TokenID: code.IssuedTokenID, IssuedAt: code.IssuedAt}
-	if code.IssuedTokenExpiresAt != nil {
-		used.TokenExpiresAt = *code.IssuedTokenExpiresAt
-	}
-	return used
 }
 
 // RevokeToken은 만료 시각까지 토큰 식별자를 폐기 목록에 둔다.
@@ -387,10 +214,6 @@ func (s *Store) signingKey(ctx context.Context, query string, args ...any) (Sign
 	}
 	key.CreatedAt = key.CreatedAt.UTC()
 	return key, nil
-}
-
-func validAuthorizationCode(code AuthorizationCode) bool {
-	return code.Hash != "" && code.ClientID != "" && code.AccountID.IsV7() && code.RedirectURI != "" && code.CodeChallenge != "" && code.Resource != "" && !code.IssuedAt.IsZero() && !code.ExpiresAt.IsZero() && code.ExpiresAt.After(code.IssuedAt) && !code.AuthenticatedAt.IsZero() && code.AuthenticatedAt.Unix() > 0 && !code.AuthenticatedAt.After(code.IssuedAt)
 }
 
 func validSigningKey(key SigningKey) bool {

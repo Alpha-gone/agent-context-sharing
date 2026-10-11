@@ -22,7 +22,7 @@ Go 1.27.1 `darwin/arm64` SDK를 사용했다. 실행 중인 개발 PostgreSQL �
 - 최소 풀·자리 유지·기록 오류 회귀 및 제한된 재시도 단위 시험을 `go test -count=20 -race -run '^Test(Snapshot(CandidateAccess|Access)|RetryEmbeddingAccess)' ./internal/store`로 반복: 통과. 처음 10회 반복에서 발견한 파티션 이동 충돌을 보완한 뒤 20회 반복했다.
 - 서버 `go test -count=1 -race -p 1 -json ./...`: 통과. 최종 집계에서 시험·하위 시험 1,063건 통과, 실패 0건, 건너뜀 0건을 확인했다. `cmd/migrate`와 `migrations`는 시험 파일이 없는 패키지 2개로 별도 집계했으며, 실행과 집계의 종료 코드도 0이었다. 실제 시험과 DB 통합 시험의 건너뜀은 없었다.
 - 클라이언트 `go test -count=1 -race -timeout=120s ./...`: 통과. 최초 샌드박스 실행은 loopback 수신 포트 생성 차단으로 실패·대기했고, 대기 시험의 스택을 확인해 종료한 뒤 로컬 수신이 허용된 환경에서 재실행했다. 클라이언트 코드는 수정하지 않았다.
-- 서버·클라이언트 각각 `go build ./...`, `go vet ./...`: 통과. 루트 `gofmt -l .`과 `git diff --check`: 출력 없음.
+- 서버 `go build ./...`, `go vet ./...`: 통과. 루트 `gofmt -l .`과 `git diff --check`: 출력 없음.
 
 시험 DB는 각 실행 종료 후 삭제했다. 서버 전체 시험 종료 뒤 `pg_database` 재조회 결과 0건으로 정리를 확인했다. 운영 시험·배포·GitHub 상태 변경·커밋·PR 생성은 수행하지 않았다.
 

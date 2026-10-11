@@ -13,7 +13,7 @@
 - **로컬 HTTP 원본 구간은 암호화되지 않습니다.** 비밀번호·토큰·세션 쿠키·본문도 그 구간에서는 평문으로 전송됩니다. 이는 시험 운영 예외이고 전 구간 TLS·토큰 전송 보호 기준을 충족하지 않습니다. 같은 호스트의 다른 프로세스도 전달 헤더를 보낼 수 있으므로 호스트 접근 권한이 신뢰 경계에 포함됩니다. 민감 데이터를 쓰는 일반 운영에는 로컬 원본 TLS를 갖춘 별도 배치가 필요합니다.
 - 운영 구성에는 Ollama와 WAL 자동 정리 서비스가 없습니다. 기본 임베딩 구성은 Gemini입니다.
 - 컨텍스트 본문과 검색 질의가 Gemini로 전송됩니다. 기밀 데이터 입력 여부, API 정책·예산·할당량을 먼저 확인합니다.
-- 가입한 모든 계정이 운영자 복구 자격을 갖는 검증 단계입니다. 승인된 시험 참여자로 접근을 제한하고 실제 민감 데이터는 사용하지 않습니다. 외부 접근 제어를 추가했다면 웹 로그인과 MCP 인가·요청 경로가 모두 동작하는지 확인합니다.
+- 가입한 모든 계정이 운영자 복구 자격을 갖는 검증 단계입니다. 승인된 시험 참여자로 접근을 제한하고 실제 민감 데이터는 사용하지 않습니다. 외부 접근 제어를 추가했다면 현재 제공하는 웹 로그인·관리 화면이 동작하는지 확인합니다.
 - 호스트 디스크 장애에 대비하여 물리 백업과 WAL을 다른 호스트 또는 별도 저장소에 보관합니다. 같은 호스트의 Docker 볼륨만으로는 재해 복구를 보장할 수 없습니다.
 
 개방 전에 담당자·연락 경로, 시험 기간, 참여자, 허용 데이터, 최대 허용 데이터 손실 시간과 복구 시간, 백업 보존 기간을 기록합니다. 이 값과 서버 용량은 시험 부하와 복구 리허설의 측정 결과로 정하며, 이 저장소가 운영 보장 수치를 제공하지는 않습니다.
@@ -40,10 +40,7 @@ chmod 600 .env
 - `POSTGRES_PASSWORD`: 개발 기본값을 사용하지 않습니다. 현재 Compose가 비밀번호를 URL에 그대로 넣으므로 충분히 긴 영문·숫자 조합을 사용합니다.
 - `POSTGRES_USER`, `POSTGRES_DB`, `AGE_GRAPH_NAME`: 최초 생성 후 임의로 바꾸지 않습니다. 초기화된 DB의 사용자 비밀번호는 `.env`만 바꿔도 변경되지 않습니다.
 - `GEMINI_API_KEY`: 실제 키를 지정합니다. `EMBEDDING_PROVIDER=gemini`, 모델·타입·차원은 우선 운영 예시를 유지합니다.
-- `RESOURCE_SERVER_URL=https://agent-context.example.com/mcp`
 - `AUTHORIZATION_SERVER_URL=https://agent-context.example.com`
-- `MCP_ALLOWED_ORIGINS=https://agent-context.example.com`
-- `OAUTH_CLIENTS`: 실제 클라이언트 ID와 허용할 리디렉션 URI를 등록합니다. 예시는 `agent-context`와 IPv4·IPv6 루프백 callback을 등록하며 동적 루프백 포트를 허용합니다.
 - `HTTP_PORT=80`: 커넥터의 원본 URL `http://localhost:80`과 맞춥니다. 기존 설정의 `8080` 또는 `443`을 그대로 두지 않습니다. 포트를 재정의하면 커넥터의 원본 URL도 함께 바꿉니다.
 
 Compose는 `.env`를 읽으며 서버 컨테이너의 `DATABASE_URL`, HTTP 수신 주소와 TLS 배치는 운영 구성에 맞게 덮어씁니다. `TLS_TERMINATION=proxy`, `TRUSTED_PROXY_CIDRS=10.203.0.1/32`를 고정합니다. 서버의 `TLS_CERT_FILE`·`TLS_KEY_FILE`은 빈 값이며 인증서·키를 마운트하지 않습니다. 이전 설정에 이 값이 남아 있어도 서버에서는 사용하지 않습니다. 개발용 `DATABASE_URL`을 복사하여 호스트 DB에 연결하려고 하지 마십시오. 이 절차에서는 `.env`를 셸에 내보낼 필요가 없습니다.
@@ -117,39 +114,7 @@ curl --fail --show-error --output /dev/null https://agent-context.example.com/lo
 
 ## 4. 참여자 연결과 개방 확인
 
-브라우저와 인증서를 검증할 수 있는 참여자 컴퓨터에서 MCP 클라이언트를 빌드합니다. 서버용 `.env`나 Gemini 키는 참여자에게 배포하지 않습니다.
-
-```sh
-(cd client && go build -o ../out/agent-context-client ./cmd/client)
-export AGENT_CONTEXT_CLIENT_REMOTE_URL=https://agent-context.example.com/mcp
-export AGENT_CONTEXT_CLIENT_ID=agent-context
-export AGENT_CONTEXT_CLIENT_AGENT_ID=0198e7c0-0000-7000-8000-000000000001
-export AGENT_CONTEXT_CLIENT_AUTH_TIMEOUT=5m
-export AGENT_CONTEXT_CLIENT_REQUEST_TIMEOUT=30s
-export AGENT_CONTEXT_CLIENT_TOOL_POLICY=all
-export AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST=
-./out/agent-context-client doctor
-```
-
-같은 절차를 `client-setup.sh`로 실행할 수 있습니다. `init`은 빌드 후 `out/client.env`를 만들며, 에이전트 식별자를 지정하지 않으면 UUIDv7을 생성하고 다시 실행해도 기존 식별자를 유지합니다. `host-config`는 MCP 호스트에 등록할 실행 정보를 출력합니다.
-
-```sh
-./client-setup.sh init https://agent-context.example.com/mcp agent-context
-./client-setup.sh doctor
-./client-setup.sh host-config
-```
-
-예시 에이전트 식별자를 실제 에이전트별 고유 UUIDv7로 바꿉니다. `/register`에서 시험 계정을 생성한 뒤 브라우저 인가를 완료합니다. `doctor` 종료 코드 `0`과 모든 검사 `pass`를 확인합니다. 클라이언트의 `serve` 실행 정보는 [README](README.md)의 호스트 연결 예시를 참고합니다.
-
-개방 전에는 전용 시험 그래프에서 다음 사항을 확인하고 결과·시각·서버 commit과 이미지 ID를 기록합니다.
-
-- MCP 도구 목록에서 정책 `all` 기준 13종을 확인하고 `graph_create`로 시험 그래프를 만듭니다.
-- `node_create`로 민감 정보가 없는 원천 컨텍스트를 저장하고 `node_get`으로 직접 조회합니다. 실제 인자는 도구 스키마를 사용합니다.
-- 색인 대기가 해소된 뒤 `context_flow_get`의 의미 검색과 키워드 검색을 확인합니다. 직접 조회 성공만으로 임베딩 제공자 성공을 판정하지 않습니다.
-- `/graphs`에서 시험 그래프 조회·국소 그래프 보기를 확인합니다. 소유자가 다른 시험 계정에 등급을 부여하고, 열람자의 쓰기가 거부되는지 확인합니다.
-- 클라이언트를 재시작하여 재인증을 확인하고, 잘못된 계정·인가 범위로 다른 그래프를 읽을 수 없는지 확인합니다.
-- 「백업과 복구」의 첫 물리 백업과 격리 복구 리허설을 완료합니다.
-- 호스트 재부팅 후 DB·서버와 원본 포트·방화벽이 정상으로 돌아오며 `/readyz`와 클라이언트 진단이 성공하는지 확인합니다.
+현재 개방 범위는 웹 로그인·관리 화면입니다. HTTPS `/login`을 확인하고 시험 계정의 권한 범위를 점검합니다. 표준 MCP·OAuth 직접 연결과 호스트 등록은 구현·호환성 인수 전까지 개방하지 않습니다.
 
 ## 5. 일상 점검
 
@@ -265,7 +230,7 @@ recovery_target_action = 'pause'
 7. `SELECT pg_is_wal_replay_paused();`와 목표 데이터의 존재·삭제 상태를 확인합니다. 목표를 확인한 운영자만 `SELECT pg_wal_replay_resume();`로 복구를 완료하고 `SELECT pg_is_in_recovery();`가 `false`인지 확인합니다. 기본 백업 완료 시점보다 앞선 목표는 그 백업으로 복구할 수 없습니다. 목표 설정과 일시 정지 동작은 [PostgreSQL 복구 목표 설정](https://www.postgresql.org/docs/18/runtime-config-wal.html#RUNTIME-CONFIG-WAL-RECOVERY-TARGET)을 참조하십시오.
 8. 복원한 스키마와 일치하는 애플리케이션 판으로 전체 `audit`를 실행합니다. 격리 Compose에서 `run --rm --no-deps server audit`가 **복원 DB만** 가리키는지 확인합니다. 아직 새 판의 `migrate up`을 자동 실행하지 않습니다.
 9. 감사 종료 코드 `0`, 그래프 조회, 권한 검사와 의미·키워드 검색을 확인합니다. 리허설에서 서버를 켜면 주기 작업과 외부 임베딩 요청이 실행될 수 있으므로 시험 계정·데이터로 제한하고 외부 전송을 통제합니다.
-10. 실제 장애 복구에서는 최종 복구 승인 후에만 새 DB로 배치를 전환하고 원본 접속을 다시 허용합니다. `/readyz`, 외부 로그인과 참여자 `doctor`를 확인합니다. 복구 후 새 기본 백업을 받아 새 timeline의 보관을 시작하고 실제 손실 범위·복구 시간을 기록합니다.
+10. 실제 장애 복구에서는 최종 복구 승인 후에만 새 DB로 배치를 전환하고 원본 접속을 다시 허용합니다. `/readyz`, 외부 로그인과 웹 관리 화면를 확인합니다. 복구 후 새 기본 백업을 받아 새 timeline의 보관을 시작하고 실제 손실 범위·복구 시간을 기록합니다.
 
 리허설용 복사본의 회수·삭제는 볼륨 이름과 보존 대상이 확인된 후 별도 승인된 정리로 수행합니다. 서명 키가 유실되거나 이전 상태로 돌아오면 기존 토큰·웹 세션이 무효가 될 수 있으므로 참여자에게 재인증을 안내합니다. 그래프 감사가 실패하면 개방하지 않습니다. 시점 복구의 상세 설정과 WAL 처리 기준은 [PostgreSQL 18 복구 문서](https://www.postgresql.org/docs/18/continuous-archiving.html)를 따릅니다.
 
@@ -290,13 +255,12 @@ docker compose -f compose.prod.yaml up -d --wait server
 
 ## 8. 장애 대응
 
-- **컨테이너는 healthy인데 업무 요청 실패:** `/readyz`, 외부 `/login`, `doctor`와 색인 상태를 따로 확인합니다. DB·TLS·인가·임베딩 경계를 구분합니다.
+- **컨테이너는 healthy인데 업무 요청 실패:** `/readyz`, 외부 `/login`과 색인 상태를 따로 확인합니다. DB·TLS·웹 인증·임베딩 경계를 구분합니다.
 - **외부 접속 실패:** Tunnel·호스트 커넥터 상태, 공개 호스트 이름의 원본 URL, 로컬 `/readyz`와 네트워크를 확인합니다. `https_required`가 나오면 서버의 `TLS_TERMINATION=proxy`, 실제 접속 상대 `10.203.0.1`과 단일 `X-Forwarded-Proto: https` 전달을 확인합니다. Docker Desktop 또는 중간 프록시가 접속 주소를 바꿨다면 배치·신뢰 경로를 함께 조사하고 전체 CIDR 허용으로 우회하지 않습니다. 외부 인증서 오류는 Cloudflare의 방문자 측 인증서·도메인을 대조합니다.
 - **`migrate` 실패:** DB 준비 상태, 기존 적용 파일의 checksum과 치환 구성, 권한·확장 버전을 확인합니다. 적용 이력을 삭제하지 않습니다.
 - **서버 시작 시 임베딩 스키마 불일치:** 실행 구성과 DB의 벡터 타입·차원을 대조합니다. 기존 DB의 변경은 정식 마이그레이션으로 수행합니다.
 - **의미 검색 누락·부분 검색:** Gemini 키·할당량·네트워크와 큐를 확인합니다. 미색인 컨텍스트는 의미 유사도 채널에서 빠질 수 있습니다. 원본 조회·키워드 검색과 구분하여 안내합니다.
 - **WAL 보관 실패·디스크 부족:** 외부 입력을 제한하고 보관 경로 권한·여유 공간·실패 시각을 확인합니다. 검증된 백업과 필요한 WAL을 먼저 보호하고 `pg_wal`을 직접 삭제하지 않습니다.
-- **MCP 인가 실패:** 공개 URL·issuer, 클라이언트 ID·redirect URI, 브라우저 루프백 도달, 호스트 시각과 도구 정책을 확인합니다. 클라이언트 재시작 후에는 재인증이 정상입니다.
 - **감사 위반·데이터 손상:** 개방 또는 변경 완료 판정을 중단하고 백업·현재 상태를 보존합니다. 자동 수정이나 광범위한 SQL 삭제 대신 위반 규칙과 대상에 한정한 수정·복구를 검토합니다.
 
 사고 기록에는 발생 시각, 영향 범위, 마지막 정상 확인, 배포 판, 안전한 로그와 조치·검증 결과만 남깁니다. 본문·토큰·API 키·비밀번호를 포함하지 않습니다.

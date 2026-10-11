@@ -2,9 +2,7 @@
 package config
 
 import (
-	"encoding/json/v2"
 	"fmt"
-	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -115,14 +113,8 @@ type Config struct {
 	SearchAdaptiveMarginThreshold float64
 	// IndexTargetLayers 필드에는 색인 작업으로 등록할 계층 범위를 둔다.
 	IndexTargetLayers IndexTargetLayers
-	// OAuthClients 필드에는 클라이언트별로 사전 등록한 OAuth 콜백 주소 목록을 둔다.
-	OAuthClients map[string][]*url.URL
-	// ResourceServerURL 필드에는 보호 리소스 서버의 고정 MCP 엔드포인트 주소를 둔다.
-	ResourceServerURL *url.URL
-	// AuthorizationServerURL 필드에는 인가 서버의 고정 issuer 주소를 둔다.
+	// AuthorizationServerURL 필드에는 웹 세션 JWT의 고정 issuer 주소를 둔다.
 	AuthorizationServerURL *url.URL
-	// MCPAllowedOrigins 필드에는 MCP 요청 Origin으로 허용할 웹 출처를 둔다.
-	MCPAllowedOrigins []*url.URL
 	// BcryptCost 필드에는 새 계정 비밀번호 해시에 쓸 비용 계수를 둔다.
 	BcryptCost int
 	// RelationAdjacencyWindow 필드에는 precedes 후보의 최대 시간 간격을 둔다.
@@ -136,9 +128,6 @@ type Config struct {
 	// IndexWorkerPlacement 필드에는 색인 작업자의 배치를 둔다. 분리면 이 인스턴스가
 	// 작업 큐를 소비하지 않는다. 질의 임베딩은 요청 경로에 있으므로 배치와 무관하다.
 	IndexWorkerPlacement ComponentPlacement
-	// AuthorizationServerPlacement 필드에는 인가 서버의 배치를 둔다. 분리면 이 인스턴스가
-	// 발급 경로를 등록하지 않는다. 이미 발급된 토큰의 검증은 배치와 무관하게 계속된다.
-	AuthorizationServerPlacement ComponentPlacement
 	// TLSMode 필드에는 TLS 종단 배치를 둔다.
 	TLSMode TLSMode
 	// TrustedProxies 필드에는 전달 헤더를 신뢰할 역방향 프록시의 주소 대역을 둔다.
@@ -160,21 +149,20 @@ func Load(env Environment) (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:                     strings.TrimSpace(env("HTTP_ADDR")),
-		DatabaseURL:                  strings.TrimSpace(env("DATABASE_URL")),
-		GraphName:                    strings.TrimSpace(env("AGE_GRAPH_NAME")),
-		EmbeddingModel:               strings.TrimSpace(env("EMBEDDING_MODEL")),
-		EmbeddingProvider:            strings.TrimSpace(env("EMBEDDING_PROVIDER")),
-		GeminiAPIKey:                 strings.TrimSpace(env("GEMINI_API_KEY")),
-		EmbeddingVectorType:          strings.TrimSpace(env("EMBEDDING_VECTOR_TYPE")),
-		SearchExecution:              SearchExecution(strings.TrimSpace(env("SEARCH_CHANNEL_EXECUTION"))),
-		SearchGraphStage:             SearchGraphStage(strings.TrimSpace(env("SEARCH_GRAPH_STAGE"))),
-		IndexTargetLayers:            IndexTargetLayers(strings.TrimSpace(env("INDEX_TARGET_LAYERS"))),
-		IndexWorkerPlacement:         ComponentPlacement(strings.TrimSpace(env("INDEX_WORKER_PLACEMENT"))),
-		AuthorizationServerPlacement: ComponentPlacement(strings.TrimSpace(env("AUTHORIZATION_SERVER_PLACEMENT"))),
-		TLSMode:                      TLSMode(strings.TrimSpace(env("TLS_TERMINATION"))),
-		TLSCertFile:                  strings.TrimSpace(env("TLS_CERT_FILE")),
-		TLSKeyFile:                   strings.TrimSpace(env("TLS_KEY_FILE")),
+		HTTPAddr:             strings.TrimSpace(env("HTTP_ADDR")),
+		DatabaseURL:          strings.TrimSpace(env("DATABASE_URL")),
+		GraphName:            strings.TrimSpace(env("AGE_GRAPH_NAME")),
+		EmbeddingModel:       strings.TrimSpace(env("EMBEDDING_MODEL")),
+		EmbeddingProvider:    strings.TrimSpace(env("EMBEDDING_PROVIDER")),
+		GeminiAPIKey:         strings.TrimSpace(env("GEMINI_API_KEY")),
+		EmbeddingVectorType:  strings.TrimSpace(env("EMBEDDING_VECTOR_TYPE")),
+		SearchExecution:      SearchExecution(strings.TrimSpace(env("SEARCH_CHANNEL_EXECUTION"))),
+		SearchGraphStage:     SearchGraphStage(strings.TrimSpace(env("SEARCH_GRAPH_STAGE"))),
+		IndexTargetLayers:    IndexTargetLayers(strings.TrimSpace(env("INDEX_TARGET_LAYERS"))),
+		IndexWorkerPlacement: ComponentPlacement(strings.TrimSpace(env("INDEX_WORKER_PLACEMENT"))),
+		TLSMode:              TLSMode(strings.TrimSpace(env("TLS_TERMINATION"))),
+		TLSCertFile:          strings.TrimSpace(env("TLS_CERT_FILE")),
+		TLSKeyFile:           strings.TrimSpace(env("TLS_KEY_FILE")),
 	}
 
 	if err := validateAddress(cfg.HTTPAddr); err != nil {
@@ -282,10 +270,9 @@ func Load(env Environment) (Config, error) {
 	if !slices.Contains([]IndexTargetLayers{IndexTargetLayersAll, IndexTargetLayersWithoutSource}, cfg.IndexTargetLayers) {
 		return Config{}, fmt.Errorf("INDEX_TARGET_LAYERS %q가 all_layers 또는 without_source가 아니다", cfg.IndexTargetLayers)
 	}
-	// 「배치 조합」이 둘 다 내장을 기본값으로 확정했으므로 비어 있으면 내장으로 읽는다.
+	// 색인 작업자의 배치가 비어 있으면 내장으로 읽는다.
 	placements := map[string]*ComponentPlacement{
-		"INDEX_WORKER_PLACEMENT":         &cfg.IndexWorkerPlacement,
-		"AUTHORIZATION_SERVER_PLACEMENT": &cfg.AuthorizationServerPlacement,
+		"INDEX_WORKER_PLACEMENT": &cfg.IndexWorkerPlacement,
 	}
 	for name, placement := range placements {
 		if *placement == "" {
@@ -296,26 +283,11 @@ func Load(env Environment) (Config, error) {
 		}
 	}
 
-	clients, err := parseOAuthClients("OAUTH_CLIENTS", env("OAUTH_CLIENTS"))
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.OAuthClients = clients
-	resourceServerURL, err := parseResourceServerURL(env("RESOURCE_SERVER_URL"))
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.ResourceServerURL = resourceServerURL
 	authorizationServerURL, err := parseOriginURL("AUTHORIZATION_SERVER_URL", env("AUTHORIZATION_SERVER_URL"))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.AuthorizationServerURL = authorizationServerURL
-	allowedOrigins, err := parseOriginURLs("MCP_ALLOWED_ORIGINS", env("MCP_ALLOWED_ORIGINS"))
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.MCPAllowedOrigins = allowedOrigins
 	bcryptCost, err := strconv.Atoi(strings.TrimSpace(env("BCRYPT_COST")))
 	if err != nil || bcryptCost < 4 || bcryptCost > 31 {
 		return Config{}, fmt.Errorf("BCRYPT_COST가 4에서 31 사이의 정수가 아니다")
@@ -411,17 +383,6 @@ func parseHTTPURL(name, raw string) (*url.URL, error) {
 	return parsed, nil
 }
 
-func parseResourceServerURL(raw string) (*url.URL, error) {
-	parsed, err := parseHTTPURL("RESOURCE_SERVER_URL", raw)
-	if err != nil {
-		return nil, err
-	}
-	if parsed.Path != "/mcp" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
-		return nil, fmt.Errorf("RESOURCE_SERVER_URL은 query, fragment, 사용자 정보 없이 /mcp 경로여야 한다")
-	}
-	return parsed, nil
-}
-
 func parseOriginURL(name, raw string) (*url.URL, error) {
 	parsed, err := parseHTTPURL(name, raw)
 	if err != nil {
@@ -491,73 +452,4 @@ func parsePrefix(name, value string) (netip.Prefix, error) {
 		return netip.Prefix{}, fmt.Errorf("%s의 %q에 호스트 비트가 남아 있다. %s로 적는다", name, value, prefix.Masked())
 	}
 	return prefix, nil
-}
-
-// parseOAuthClients는 클라이언트를 키로 하는 JSON 객체를 클라이언트별 redirect_uri
-// 허용 목록으로 해석한다. 목록이 클라이언트별이어야 등록된 어떤 클라이언트도 다른
-// 클라이언트의 콜백으로 인가 코드를 받지 못한다.
-func parseOAuthClients(name, raw string) (map[string][]*url.URL, error) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("%s가 비어 있다", name)
-	}
-	var clients map[string][]string
-	if err := json.Unmarshal([]byte(raw), &clients); err != nil {
-		return nil, fmt.Errorf("%s JSON 해석: %w", name, err)
-	}
-	if len(clients) == 0 {
-		return nil, fmt.Errorf("%s가 비어 있다", name)
-	}
-	parsed := make(map[string][]*url.URL, len(clients))
-	for _, clientID := range slices.Sorted(maps.Keys(clients)) {
-		if clientID == "" {
-			return nil, fmt.Errorf("%s에 빈 client_id가 있다", name)
-		}
-		allowed, err := parseClientRedirectURIs(name, clientID, clients[clientID])
-		if err != nil {
-			return nil, err
-		}
-		parsed[clientID] = allowed
-	}
-	return parsed, nil
-}
-
-// parseClientRedirectURIs는 한 클라이언트의 redirect_uri 배열을 검증해 해석한다.
-func parseClientRedirectURIs(name, clientID string, values []string) ([]*url.URL, error) {
-	if len(values) == 0 {
-		return nil, fmt.Errorf("%s의 클라이언트 %q redirect_uri 목록이 비어 있다", name, clientID)
-	}
-	allowed := make([]*url.URL, 0, len(values))
-	var seen []string
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			return nil, fmt.Errorf("%s의 클라이언트 %q에 빈 redirect_uri가 있다", name, clientID)
-		}
-		if slices.Contains(seen, trimmed) {
-			return nil, fmt.Errorf("%s의 클라이언트 %q에 중복 redirect_uri %q가 있다", name, clientID, trimmed)
-		}
-		seen = append(seen, trimmed)
-		redirect, err := parseHTTPURL(name, trimmed)
-		if err != nil {
-			return nil, fmt.Errorf("클라이언트 %q: %w", clientID, err)
-		}
-		allowed = append(allowed, redirect)
-	}
-	return allowed, nil
-}
-
-func parseOriginURLs(name, raw string) ([]*url.URL, error) {
-	values, err := parseList(name, raw)
-	if err != nil {
-		return nil, err
-	}
-	urls := make([]*url.URL, 0, len(values))
-	for _, value := range values {
-		parsed, err := parseOriginURL(name, value)
-		if err != nil {
-			return nil, err
-		}
-		urls = append(urls, parsed)
-	}
-	return urls, nil
 }

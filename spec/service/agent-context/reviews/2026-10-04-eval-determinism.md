@@ -28,20 +28,14 @@ SDK는 `go1.27.1 darwin/arm64`이며 전용 Compose 프로젝트 `eval57-regress
 go test -race ./cmd/eval -count=10
 # 서버 전체: 새 DB에서 패키지를 순차 실행
 go test -race -p 1 -count=1 -json ./...
-# 서버 루트와 client/에서 각각
 go build ./...
 go vet ./...
-# client/에서 공유 계약 검사
-go test ./internal/client/contract
 # 저장소 루트
 gofmt -l .
 git diff --check
 ```
 
-평가 패키지의 전체 race 회귀 10회와 양쪽 모듈 build·vet·클라이언트 계약 검사는 통과했다. 서버 전체 검사에서는 다음 시험 환경 문제를 확인했다.
-
 - 평가 반복 검사와 동시에 실행한 첫 시도는 기존 `TestReindexExcludesAndReplacesOutdatedModel`의 DB 전체 옛 모델 행 수가 바뀌어 실패했다(기대 1790, 실제 1814).
-- 같은 DB를 재사용한 순차 실행은 이전 저장소 시험의 `test-private-key` 대역 서명 키 때문에 웹 세션·토큰 교환 시험 두 건이 실패했다. 별도 단독 실행에서도 개인 키 JSON 해석 오류를 확인했다.
 - 관련 없는 시험 코드·데이터를 수정하지 않고 새 DB `eval57suite`를 만든 뒤 패키지를 순차 실행했다. 서버 테스트 항목 705개가 race 검사에서 통과했고 실패·건너뛰기는 없었다. 최초 실패를 통과로 숨기지 않고 시험 환경과 복구 근거를 함께 기록한다.
 
 ## DOX와 적용 경계

@@ -18,7 +18,7 @@ func (closing workerFunc) Close(ctx context.Context) error { return closing(ctx)
 
 func TestShutdownPreservesRequestAndWorkerErrors(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	app := newApplication(&fakeReadiness{}, logger, proxyTransport(), nil)
+	app := newApplication(&fakeReadiness{}, logger, proxyTransport())
 	entered, release := make(chan struct{}), make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		close(entered)
@@ -128,7 +128,7 @@ func TestNormalShutdownDoesNotRetryWorkersDuringCleanup(t *testing.T) {
 	}{{name: "성공"}, {name: "실패", failure: workerErr}} {
 		t.Run(test.name, func(t *testing.T) {
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-			app := newApplication(&fakeReadiness{}, logger, proxyTransport(), nil)
+			app := newApplication(&fakeReadiness{}, logger, proxyTransport())
 			calls, closed := 0, false
 			workers := []worker{workerFunc(func(context.Context) error { calls++; return test.failure })}
 			err := shutdownInOrder(t.Context(), t.Context(), app, &http.Server{}, logger, workers...)

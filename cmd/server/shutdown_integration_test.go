@@ -83,7 +83,7 @@ func TestWorkerShutdownTimeoutSkipsHeldConnectionPoolIntegration(t *testing.T) {
 					results <- run()
 					return
 				}
-				app := newApplication(database, logger, proxyTransport(), nil)
+				app := newApplication(database, logger, proxyTransport())
 				shutdownErr := shutdownInOrder(t.Context(), ctx, app, &http.Server{}, logger, periodic)
 				// 실제 조립 경로처럼 이미 종료를 시도한 작업자는 다시 닫지 않는다.
 				results <- errors.Join(shutdownErr, closeServerResources(ctx, logger, closePool, shutdownErr == nil))

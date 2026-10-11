@@ -17,7 +17,6 @@ sh -n test-dev-compose.sh
 sh test-dev-compose.sh
 sh test-dev-compose.sh --runtime
 sh test-wal-archive.sh
-# 서버 루트와 client/에서 각각
 go build ./...
 go vet ./...
 # 저장소 루트
@@ -31,7 +30,6 @@ git diff --check
 - 두 서비스의 healthcheck가 통과했고, 프록시를 우회한 호스트 loopback의 Ollama `/api/version` 응답이 `0.33.3`이었다. 모델 다운로드·임베딩 호출은 하지 않았다.
 - 최초 기동 시험은 베이스 이미지가 AGE를 이미 생성하여 시험의 중복 확장 생성이 실패했다. `IF NOT EXISTS`로 수정하고 최종 스크립트의 전체 기동 검증을 재실행하여 통과했다. 실패 실행의 자원도 정리됐다.
 - 기존 WAL 회귀가 새 볼륨·경로 준비 실패 시 기동 차단·기존 볼륨의 데이터 보존·보관 재개·원본 WAL 재활용·보관본 정리를 모두 통과했다. 결함 재현에서 약 176MiB였던 WAL이 복구 뒤 64MiB로 줄고 13개 합성 행이 보존됐으며 복구 뒤 새로운 보관 실패는 없었다.
-- 서버·독립 클라이언트 모듈의 build·vet가 통과했고 gofmt 미정리 파일은 없었다. 서버·클라이언트 전체 Go 테스트와 실제 서비스 종단 간 시험은 이번 개발 구성 변경에서 재실행하지 않았다. amd64 실제 기동·모델 추론·운영 배포·다른 호스트에서의 접속 시험도 수행하지 않았다.
 
 ## DOX와 적용 경계
 

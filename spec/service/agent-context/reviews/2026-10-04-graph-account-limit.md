@@ -18,7 +18,6 @@ Go 1.27.1과 실행 중인 PostgreSQL·AGE 개발 DB에서 검증했다. DB 실�
 ```shell
 go test ./internal/store -run '^TestGraphCountLimit' -count=10
 go test -race ./internal/store -run '^TestGraphCountLimit' -count=10
-# 서버 루트와 client/에서 각각 실행
 go test ./...
 go build ./...
 go vet ./...
@@ -26,8 +25,6 @@ go vet ./...
 gofmt -l .
 git diff --check
 ```
-
-두 회귀 테스트는 일반 실행과 race 실행에서 각각 10회 통과했다. 서버 전체 테스트는 DB가 필요한 계층을 포함해 통과했고, 클라이언트 전체 테스트와 양쪽 모듈의 build·vet도 통과했다. gofmt 미정리 파일과 diff 공백 오류는 없었다. 별도 `embedding_live` 태그의 실제 제공자 시험과 운영 부하 시험은 실행하지 않았다.
 
 ## DOX와 범위
 

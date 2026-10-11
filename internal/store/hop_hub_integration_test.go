@@ -31,7 +31,7 @@ func createHopHub(t testing.TB, database *Store, size int) (model.ID, model.Cont
 		defer tx.Rollback(ctx)
 		// DETACH DELETE의 정점별 간선 재검사 대신 이 시험이 만든 graph_id만
 		// 간선→정점 순서로 지운다. 운영 데이터의 삭제 경로로 사용하지 않는다.
-		for _, label := range []string{"DERIVED_FROM", "Context"} {
+		for _, label := range []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO", "Context"} {
 			table := pgx.Identifier{database.graphName, label}.Sanitize()
 			if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE properties ->> 'graph_id'::text = $1", graph.String()); err != nil {
 				t.Errorf("허브 시험 %s 정리: %v", label, err)
@@ -161,7 +161,7 @@ func TestHopHubBoundedWorkIntegration(t *testing.T) {
 		}
 		bounded, err := database.HopContextsFrom(t.Context(), graph, []model.Context{hub}, 2, "both", nil, limit)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("상한 %d: %v", limit, err)
 		}
 		compareHopResults(t, fmt.Sprint(limit), full, bounded)
 		if bounded.work.bodyRows != limit-1 || bounded.work.identifierRows > limit+14 || bounded.work.edgeRows != limit-1 {
@@ -204,9 +204,61 @@ func TestHopBoundedDeadlineReleasesConnectionIntegration(t *testing.T) {
 	}
 }
 
+func TestHopOwnBudgetAndConnectionIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	graph, hub := createHopHub(t, database, 1)
+	for _, name := range []string{"cancel", "own-budget"} {
+		t.Run(name, func(t *testing.T) {
+			before := database.pool.Stat().AcquiredConns()
+			tx, err := database.pool.Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(context.WithoutCancel(t.Context()))
+			if _, err := tx.Exec(t.Context(), "LOCK TABLE "+pgx.Identifier{database.graphName, "Context"}.Sanitize()+" IN ACCESS EXCLUSIVE MODE"); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if name == "cancel" {
+				stop := time.AfterFunc(100*time.Millisecond, cancel)
+				defer stop.Stop()
+			}
+			started := time.Now()
+			result, err := database.HopContextsFrom(ctx, graph, []model.Context{hub}, 1, "in", []string{"derived_from"}, 2)
+			elapsed := time.Since(started)
+			want := context.Canceled
+			if name == "own-budget" {
+				want = context.DeadlineExceeded
+				if elapsed < hopWorkTimeout-time.Second || elapsed > hopWorkTimeout+5*time.Second {
+					t.Fatalf("자체 조회 예산: %s", elapsed)
+				}
+			}
+			if !errors.Is(err, want) || !reflect.DeepEqual(result, HopResult{}) {
+				t.Fatalf("중단의 빈 결과·원인: %+v, %v", result, err)
+			}
+			if err := tx.Rollback(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.HopContextsFrom(t.Context(), graph, []model.Context{hub}, 1, "in", []string{"derived_from"}, 2); err != nil {
+				t.Fatalf("중단 뒤 재사용: %v", err)
+			}
+			if got := database.pool.Stat().AcquiredConns(); got != before {
+				t.Fatalf("연결 미반환: 이전 %d, 이후 %d", before, got)
+			}
+			t.Logf("elapsed=%s acquired-before=%d acquired-after=%d", elapsed, before, database.pool.Stat().AcquiredConns())
+		})
+	}
+}
+
 func TestHopHubQueryPlansIntegration(t *testing.T) {
 	database := newIntegrationStore(t)
 	graph, hub := createHopHub(t, database, 20000)
+	for _, name := range []string{"Context", "DERIVED_FROM"} {
+		if _, err := database.pool.Exec(t.Context(), "ANALYZE "+pgx.Identifier{database.graphName, name}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	label := traversalLabel{label: "DERIVED_FROM", kind: "derived_from"}
 	bounded, err := database.hopCandidateSQL(graph, []model.ID{hub.ID}, []model.ID{hub.ID}, label, "in", 1)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
@@ -137,18 +138,25 @@ func (s *Store) hopCandidateSQL(graphID model.ID, frontier, visited []model.ID, 
 	if err != nil {
 		return "", err
 	}
-	pattern := "-[edge:" + label.label + "]-"
-	if direction == "out" {
-		pattern += ">"
-	} else if direction == "in" {
-		pattern = "<" + pattern
-	}
 	graph := cypherString(graphID.String())
-	query := "MATCH (anchor:Context)" + pattern + "(neighbor:Context) WHERE anchor.context_id IN " + anchors +
-		" AND anchor.graph_id = " + graph + " AND neighbor.graph_id = " + graph + " AND edge.graph_id = " + graph +
-		" AND neighbor.deleted_at IS NULL AND NOT neighbor.context_id IN " + seen
-	if label.confirmed {
-		query += " AND edge.state = 'confirmed'"
+	directedPairs := func(incoming bool) string {
+		pattern := "-[edge:" + label.label + "]->"
+		if incoming {
+			pattern = "<-[edge:" + label.label + "]-"
+		}
+		query := "MATCH (anchor:Context)" + pattern + "(neighbor:Context) WHERE anchor.context_id IN " + anchors +
+			" AND anchor.graph_id = " + graph + " AND neighbor.graph_id = " + graph + " AND edge.graph_id = " + graph +
+			" AND neighbor.deleted_at IS NULL AND NOT neighbor.context_id IN " + seen
+		if label.confirmed {
+			query += " AND edge.state = 'confirmed'"
+		}
+		return s.cypherSQL(query+" RETURN anchor.context_id, neighbor.context_id", "anchor agtype, neighbor agtype")
+	}
+	pairs := directedPairs(direction == "in")
+	if direction != "in" && direction != "out" {
+		// AGE 무방향 패턴의 끝점 OR는 상관 존재 확인에서 인덱스 선택을 막는다.
+		// 두 방향을 같은 SQL 안에서 합치고 뒤에서 중복·발견 순서를 정한다.
+		pairs = "(" + directedPairs(false) + ") UNION ALL (" + directedPairs(true) + ")"
 	}
 	// 여러 기준 정점의 공통 이웃도 최초 발견 순서로 한 번만 선택한다.
 	// limit=MaxInt에서도 초과 확인용 덧셈이 넘치지 않게 한다.
@@ -156,29 +164,65 @@ func (s *Store) hopCandidateSQL(graphID model.ID, frontier, visited []model.ID, 
 	if remaining < int(^uint(0)>>1) {
 		probeLimit++
 	}
-	query += " RETURN anchor.context_id, neighbor.context_id"
-	// AGE의 정점 속성 GROUP BY는 정점 전체를 정렬할 수 있다. Cypher에서 식별자만
-	// 내보내고 SQL 외피에서 합쳐 본문이 중복 제거·정렬 작업에 실리지 않게 한다.
-	return "WITH candidates AS MATERIALIZED (" + s.cypherSQL(query, "anchor agtype, neighbor agtype") +
-		") SELECT neighbor, min(anchor::text COLLATE \"C\") AS first_anchor FROM candidates GROUP BY neighbor ORDER BY first_anchor, neighbor LIMIT " + fmt.Sprint(probeLimit), nil
+	if remaining == 0 {
+		// 초과 여부만 필요하므로 최초 기준 정점이나 이웃의 순서를 계산하지 않는다.
+		return "SELECT neighbor, anchor::text AS first_anchor FROM (" + pairs + ") AS pairs LIMIT 1", nil
+	}
+	anchorQuery := "MATCH (anchor:Context) WHERE anchor.graph_id = " + graph +
+		" AND anchor.context_id IN " + anchors + " RETURN anchor.context_id"
+	contextTable := pgx.Identifier{s.graphName, "Context"}.Sanitize()
+	seenText := make([]string, len(visited))
+	for index, id := range visited {
+		seenText[index] = sqlString(id.String())
+	}
+	// 작은 인접 집합은 정렬하고, 큰 집합은 정렬된 정점에서 관계를 확인한다.
+	// 각 기준 정점의 첫 K개 합집합에는 전체 발견 순서의 첫 K개가 모두 있다.
+	probe := max(64, probeLimit)
+	sampleLimit := probe
+	if probe < int(^uint(0)>>1) {
+		sampleLimit++
+	}
+	seenClause := ""
+	if len(seenText) > 0 {
+		seenClause = " AND node.properties ->> 'context_id'::text NOT IN (" + strings.Join(seenText, ",") + ")"
+	}
+	return fmt.Sprintf(`WITH pairs AS NOT MATERIALIZED (%s),
+anchors AS MATERIALIZED (%s),
+candidates AS (
+ SELECT anchors.anchor, candidate.neighbor
+ FROM anchors CROSS JOIN LATERAL (
+  WITH sample AS MATERIALIZED (
+   SELECT neighbor FROM pairs WHERE pairs.anchor = anchors.anchor LIMIT %d
+  )
+  (SELECT neighbor FROM sample WHERE (SELECT count(*) FROM sample) <= %d
+   GROUP BY neighbor ORDER BY neighbor LIMIT %d)
+  UNION ALL
+  (SELECT ag_catalog.agtype_access_operator(VARIADIC ARRAY[node.properties, '"context_id"'::agtype]) AS neighbor
+   FROM %s AS node
+   WHERE (SELECT count(*) FROM sample) > %d
+    AND node.properties ->> 'graph_id'::text = %s
+    AND node.properties ->> 'deleted_at'::text IS NULL
+    %s
+    AND EXISTS (SELECT 1 FROM pairs WHERE pairs.anchor = anchors.anchor
+      AND pairs.neighbor = ag_catalog.agtype_access_operator(VARIADIC ARRAY[node.properties, '"context_id"'::agtype]) OFFSET 0)
+   ORDER BY (node.properties ->> 'context_id'::text) COLLATE "C" LIMIT %d)
+ ) AS candidate
+)
+SELECT neighbor, min(anchor::text COLLATE "C") AS first_anchor
+FROM candidates GROUP BY neighbor ORDER BY first_anchor, neighbor LIMIT %d`,
+		pairs, s.cypherSQL(anchorQuery, "anchor agtype"), sampleLimit, probe, probeLimit,
+		contextTable, probe, sqlString(graphID.String()), seenClause, probeLimit, probeLimit), nil
 }
 
 func (s *Store) hopIncludedEdges(ctx context.Context, graphID model.ID, ids []model.ID, label traversalLabel) ([]HopEdge, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	list, err := cypherIDList(ids)
+	query, err := s.hopIncludedEdgeSQL(graphID, ids, label)
 	if err != nil {
 		return nil, err
 	}
-	graph := cypherString(graphID.String())
-	query := "MATCH (a:Context)-[edge:" + label.label + "]->(b:Context) WHERE a.context_id IN " + list + " AND b.context_id IN " + list +
-		" AND a.graph_id = " + graph + " AND b.graph_id = " + graph + " AND edge.graph_id = " + graph
-	if label.confirmed {
-		query += " AND edge.state = 'confirmed'"
-	}
-	query += " RETURN DISTINCT a.context_id, b.context_id"
-	rows, err := s.reader(ctx).Query(ctx, s.cypherSQL(query, "source agtype, target agtype"), pgx.QueryExecModeExec)
+	rows, err := s.reader(ctx).Query(ctx, query, pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("홉 내부 간선 조회: %w", err)
 	}
@@ -203,4 +247,18 @@ func (s *Store) hopIncludedEdges(ctx context.Context, graphID model.ID, ids []mo
 		return nil, fmt.Errorf("홉 내부 간선 행 읽기: %w", err)
 	}
 	return edges, nil
+}
+
+func (s *Store) hopIncludedEdgeSQL(graphID model.ID, ids []model.ID, label traversalLabel) (string, error) {
+	list, err := cypherIDList(ids)
+	if err != nil {
+		return "", err
+	}
+	graph := cypherString(graphID.String())
+	query := "MATCH (a:Context)-[edge:" + label.label + "]->(b:Context) WHERE a.context_id IN " + list + " AND b.context_id IN " + list +
+		" AND a.graph_id = " + graph + " AND b.graph_id = " + graph + " AND edge.graph_id = " + graph
+	if label.confirmed {
+		query += " AND edge.state = 'confirmed'"
+	}
+	return s.cypherSQL(query+" RETURN DISTINCT a.context_id, b.context_id", "source agtype, target agtype"), nil
 }

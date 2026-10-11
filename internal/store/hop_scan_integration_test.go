@@ -93,7 +93,8 @@ func hopHubScanBaseline(ctx context.Context, s *Store, graph model.ID, hub model
 	}
 	slices.SortFunc(result.Edges, compareHopEdges)
 	result.Edges = slices.Compact(result.Edges)
-	if err := s.fillHopReferences(ctx, graph, result.Contexts); err != nil {
+	result.work.referenceRows, err = s.fillHopReferences(ctx, graph, result.Contexts)
+	if err != nil {
 		return HopResult{}, err
 	}
 	if err := s.touchEmbeddings(ctx, graph, ids, nowUTC()); err != nil {

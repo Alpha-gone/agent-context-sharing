@@ -187,7 +187,8 @@ func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []mod
 	result.Distances = distances
 	result.Edges = slices.SortedFunc(edgesValues(edges, distances), compareHopEdges)
 	result.expansionQueries = *queries
-	if err := s.fillHopReferences(ctx, graphID, result.Contexts); err != nil {
+	result.work.referenceRows, err = s.fillHopReferences(ctx, graphID, result.Contexts)
+	if err != nil {
 		return HopResult{}, err
 	}
 	accessed := make([]model.ID, 0, len(result.Contexts))
@@ -207,8 +208,8 @@ func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []mod
 // hopNeighbors는 정점 속성만 읽어 오는데 참조는 속성이 아니라 간선에 있다. 비우면 흐름
 // 응답의 확장 노드에서 `derived_from`과 `member_refs`가 빈 목록으로 나가고, 「예산 적용과
 // 절단」이 근거가 다르면 접지 않기로 한 중복 파생 접기가 근거를 구분하지 못한다.
-// 노드마다 묶어 읽지 않고 두 질의로 한 번에 읽는다.
-func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, contexts []model.Context) error {
+// 노드마다 묶어 읽지 않고 두 질의로 한 번에 읽으며, 두 질의가 받은 참조 행 수를 반환한다.
+func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, contexts []model.Context) (int, error) {
 	needs := make([]string, 0, len(contexts))
 	for _, value := range contexts {
 		if value.Layer == model.LayerDerived || value.Layer == model.LayerEvent {
@@ -216,16 +217,23 @@ func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, context
 		}
 	}
 	if len(needs) == 0 {
-		return nil
+		return 0, nil
 	}
 	list := "[" + strings.Join(needs, ", ") + "]"
 	references, err := s.edgeTargetsBySource(ctx, s.reader(ctx), graphID, "DERIVED_FROM", list)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	members, err := s.edgeTargetsBySource(ctx, s.reader(ctx), graphID, "HAS_MEMBER", list)
 	if err != nil {
-		return err
+		return 0, err
+	}
+	rows := 0
+	for _, targets := range references {
+		rows += len(targets)
+	}
+	for _, targets := range members {
+		rows += len(targets)
 	}
 	for index, value := range contexts {
 		switch value.Layer {
@@ -239,7 +247,7 @@ func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, context
 			}
 		}
 	}
-	return nil
+	return rows, nil
 }
 
 type traversalLabel struct {

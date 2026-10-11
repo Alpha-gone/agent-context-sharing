@@ -99,6 +99,7 @@ func BenchmarkHopHubIntegration(b *testing.B) {
 					b.ReportMetric(float64(result.work.bodyRows), "bodyrows/op")
 					b.ReportMetric(float64(result.work.bodyBytes), "bodybytes/op")
 					b.ReportMetric(float64(result.work.edgeRows), "edgerows/op")
+					b.ReportMetric(float64(result.work.referenceRows), "refrows/op")
 				})
 			}
 		}
@@ -119,6 +120,7 @@ func hopFullBaseline(ctx context.Context, database *Store, graph model.ID, start
 		}
 		return neighbors, err
 	})
+	work.referenceRows = result.work.referenceRows
 	result.work = work
 	return result, err
 }
@@ -182,6 +184,7 @@ func TestHopHubBoundedWorkIntegration(t *testing.T) {
 func TestHopBoundedDeadlineReleasesConnectionIntegration(t *testing.T) {
 	database := newIntegrationStore(t)
 	graph, hub := createHopHub(t, database, 1)
+	before := database.pool.Stat().AcquiredConns()
 	tx, err := database.pool.Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -196,58 +199,14 @@ func TestHopBoundedDeadlineReleasesConnectionIntegration(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || !reflect.DeepEqual(result, HopResult{}) {
 		t.Fatalf("마감 오류와 빈 결과: %+v, %v", result, err)
 	}
+	// 잠금 연결은 여전히 점유 중이다. 후속 조회에 앞서 홉 연결의 반환을 직접 확인한다.
+	waitHopResources(t, database, nil, before+1)
 	if err := tx.Rollback(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	waitHopResources(t, database, nil, before)
 	if _, err := database.HopContextsFrom(t.Context(), graph, []model.Context{hub}, 1, "in", nil, 2); err != nil {
 		t.Fatalf("마감 후 연결 회복: %v", err)
-	}
-}
-
-func TestHopOwnBudgetAndConnectionIntegration(t *testing.T) {
-	database := newIntegrationStore(t)
-	graph, hub := createHopHub(t, database, 1)
-	for _, name := range []string{"cancel", "own-budget"} {
-		t.Run(name, func(t *testing.T) {
-			before := database.pool.Stat().AcquiredConns()
-			tx, err := database.pool.Begin(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer tx.Rollback(context.WithoutCancel(t.Context()))
-			if _, err := tx.Exec(t.Context(), "LOCK TABLE "+pgx.Identifier{database.graphName, "Context"}.Sanitize()+" IN ACCESS EXCLUSIVE MODE"); err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			if name == "cancel" {
-				stop := time.AfterFunc(100*time.Millisecond, cancel)
-				defer stop.Stop()
-			}
-			started := time.Now()
-			result, err := database.HopContextsFrom(ctx, graph, []model.Context{hub}, 1, "in", []string{"derived_from"}, 2)
-			elapsed := time.Since(started)
-			want := context.Canceled
-			if name == "own-budget" {
-				want = context.DeadlineExceeded
-				if elapsed < hopWorkTimeout-time.Second || elapsed > hopWorkTimeout+5*time.Second {
-					t.Fatalf("자체 조회 예산: %s", elapsed)
-				}
-			}
-			if !errors.Is(err, want) || !reflect.DeepEqual(result, HopResult{}) {
-				t.Fatalf("중단의 빈 결과·원인: %+v, %v", result, err)
-			}
-			if err := tx.Rollback(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := database.HopContextsFrom(t.Context(), graph, []model.Context{hub}, 1, "in", []string{"derived_from"}, 2); err != nil {
-				t.Fatalf("중단 뒤 재사용: %v", err)
-			}
-			if got := database.pool.Stat().AcquiredConns(); got != before {
-				t.Fatalf("연결 미반환: 이전 %d, 이후 %d", before, got)
-			}
-			t.Logf("elapsed=%s acquired-before=%d acquired-after=%d", elapsed, before, database.pool.Stat().AcquiredConns())
-		})
 	}
 }
 

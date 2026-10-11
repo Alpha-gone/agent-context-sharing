@@ -13,6 +13,8 @@ import (
 // hopWork는 DB 내부 스캔이 아니라 애플리케이션이 받은 행·본문의 측정값이다.
 type hopWork struct {
 	identifierRows, bodyRows, edgeRows, bodyBytes int
+	// referenceRows는 근거·구성원 묶음 조회 행이다. 내부 간선과 겹쳐도 별도로 센다.
+	referenceRows int
 }
 
 func (s *Store) hopContextsBounded(ctx context.Context, graphID model.ID, starts []model.Context, hops int, direction string, filter []string, limit int) (HopResult, error) {
@@ -92,7 +94,8 @@ func (s *Store) hopContextsBounded(ctx context.Context, graphID model.ID, starts
 	}
 	slices.SortFunc(result.Edges, compareHopEdges)
 	result.Edges = slices.Compact(result.Edges)
-	if err := s.fillHopReferences(ctx, graphID, result.Contexts); err != nil {
+	result.work.referenceRows, err = s.fillHopReferences(ctx, graphID, result.Contexts)
+	if err != nil {
 		return HopResult{}, err
 	}
 	if err := s.touchEmbeddings(ctx, graphID, ids, nowUTC()); err != nil {

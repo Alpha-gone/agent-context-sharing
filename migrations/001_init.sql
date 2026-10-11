@@ -370,6 +370,13 @@ CREATE INDEX IF NOT EXISTS context_context_id_agtype_idx
     ON "{{.GraphName}}"."Context" (
         ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"context_id"'::ag_catalog.agtype]));
 
+-- 작은 양수 홉 상한에서 활성 후보를 식별자 순서로 선택적으로 확인한다.
+CREATE INDEX IF NOT EXISTS context_active_graph_context_idx
+    ON "{{.GraphName}}"."Context" (
+        (properties ->> 'graph_id'::text),
+        ((properties ->> 'context_id'::text) COLLATE "C"))
+    WHERE (properties ->> 'deleted_at'::text) IS NULL;
+
 -- 키워드 채널. 「채널 구현」이 텍스트 검색 구성을 simple로 확정했다. PostgreSQL이
 -- 기본 제공하는 구성 중 한국어를 다루는 것이 없고 형태소 분석을 붙이려면 확장
 -- 의존이 하나 늘기 때문이다. simple은 어간 추출을 하지 않아 조사가 붙은 표기가
@@ -402,9 +409,27 @@ CREATE INDEX IF NOT EXISTS part_of_graph_id_agtype_idx
     ON "{{.GraphName}}"."PART_OF" (
         ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"graph_id"'::ag_catalog.agtype]));
 
+-- 홉 후보의 양 끝점 관계 존재 확인. AGE의 단일 끝점 인덱스는 보존한다.
+DO $hop_indexes$
+DECLARE
+    edge_label text;
+BEGIN
+    FOREACH edge_label IN ARRAY ARRAY['DERIVED_FROM', 'SUPERSEDES', 'HAS_MEMBER',
+                                     'PRECEDES', 'CAUSES', 'PART_OF', 'RELATES_TO']
+    LOOP
+        EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I.%I (start_id, end_id)',
+                       lower(edge_label) || '_hop_endpoints_idx', '{{.GraphName}}', edge_label);
+    END LOOP;
+END
+$hop_indexes$;
+
 -- 표현식 통계가 없으면 플래너가 선택도를 과대 추정하므로 인덱스를 만든
 -- 같은 적용에서 통계를 모은다.
 ANALYZE "{{.GraphName}}"."Context";
+ANALYZE "{{.GraphName}}"."DERIVED_FROM";
+ANALYZE "{{.GraphName}}"."SUPERSEDES";
+ANALYZE "{{.GraphName}}"."HAS_MEMBER";
 ANALYZE "{{.GraphName}}"."PRECEDES";
 ANALYZE "{{.GraphName}}"."CAUSES";
 ANALYZE "{{.GraphName}}"."PART_OF";
+ANALYZE "{{.GraphName}}"."RELATES_TO";

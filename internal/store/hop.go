@@ -45,18 +45,30 @@ type HopResult struct {
 type hopNeighborSource func(frontier []model.ID, label traversalLabel) ([]hopNeighbor, error)
 
 // HopContexts는 graph_id 안에서 확정 참조와 관계를 따라 너비 우선으로 탐색한다.
-func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops int, direction string, filter []string, limit int) (HopResult, error) {
+func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops int, direction string, filter []string, limit int) (result HopResult, err error) {
 	ctx, cancel := context.WithTimeout(ctx, hopWorkTimeout)
 	defer cancel()
 	if !graphID.IsV7() || !startID.IsV7() {
 		return HopResult{}, fmt.Errorf("홉 탐색 인자가 올바르지 않다")
 	}
-	start, err := s.Context(ctx, graphID, startID)
+	ctx, release, err := s.enterHopReadScope(ctx)
+	if err != nil {
+		return HopResult{}, err
+	}
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			result, err = HopResult{}, errors.Join(err, releaseErr)
+		}
+	}()
+	start, err := s.context(ctx, s.reader(ctx), graphID, startID)
 	if err != nil {
 		return HopResult{}, err
 	}
 	if start.DeletedAt != nil {
 		return HopResult{}, ErrNotFound
+	}
+	if err := s.touchEmbeddings(ctx, graphID, []model.ID{startID}, nowUTC()); err != nil {
+		return HopResult{}, err
 	}
 	return s.HopContextsFrom(ctx, graphID, []model.Context{start}, hops, direction, filter, limit)
 }
@@ -73,7 +85,8 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 	if err := ctx.Err(); err != nil {
 		return HopResult{}, err
 	}
-	ctx, release, err := s.enterReadScope(ctx)
+	standalone := ctx.Value(readScopeKey{}) == nil && ctx.Value(readTxKey{}) == nil
+	ctx, release, err := s.enterHopReadScope(ctx)
 	if err != nil {
 		return HopResult{}, err
 	}
@@ -82,6 +95,25 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 			result, err = HopResult{}, errors.Join(err, releaseErr)
 		}
 	}()
+	if standalone && len(starts) > 0 {
+		ids := make([]model.ID, len(starts))
+		for i, start := range starts {
+			ids[i] = start.ID
+		}
+		values, readErr := s.contextVerticesByIDs(ctx, s.reader(ctx), graphID, ids)
+		if readErr != nil {
+			return HopResult{}, readErr
+		}
+		// 입력 슬라이스는 호출자가 소유하므로 현재 읽기 상태의 시작 목록을 따로 만든다.
+		starts = make([]model.Context, len(ids))
+		for i, id := range ids {
+			value, found := values[id]
+			if !found || value.DeletedAt != nil {
+				return HopResult{}, missingContextError{ID: id}
+			}
+			starts[i] = value
+		}
+	}
 	if limit > 0 {
 		return s.hopContextsBounded(ctx, graphID, starts, hops, direction, filter, limit)
 	}

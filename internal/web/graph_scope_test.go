@@ -52,7 +52,10 @@ func TestGraphDetailScopeControls(t *testing.T) {
 			for _, markup := range []string{
 				`id="full-view" type="button">전체 보기</button>`,
 				`<label for="hop-range">`,
-				`id="scope-status" role="status">전체 보기</p>`,
+				`id="scope-status" role="status" aria-atomic="true">전체 보기</p>`,
+				`id="node-details-heading" tabindex="-1"`,
+				`id="details-link" href="#node-details-heading"`,
+				`id="node-evidence"`,
 				"빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다.",
 			} {
 				if !strings.Contains(html, markup) {
@@ -60,7 +63,7 @@ func TestGraphDetailScopeControls(t *testing.T) {
 				}
 			}
 			for _, node := range graphs.result.Contexts {
-				if !strings.Contains(html, `type="button" data-context-id="`+node.ID.String()+`"`) {
+				if !strings.Contains(html, `type="button" data-context-id="`+node.ID.String()+`" aria-label="`+node.ID.String()+` 노드 선택" aria-pressed="false" aria-controls="node-details node-evidence" aria-describedby="scope-help"`) {
 					t.Errorf("목록에 노드 %s의 선택 수단이 없다", node.ID)
 				}
 			}

@@ -969,7 +969,8 @@ func newVisualizationData(contexts []model.Context, edges []store.HopEdge) visua
 const pageTemplates = `{{define "head"}}<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Title}} · 에이전트 컨텍스트</title><style>
 :root { font-family: system-ui, sans-serif; color: #1f2933; background: #f7f8fa; }
 body { margin: 0; } main { max-width: 1120px; margin: 32px auto; padding: 0 16px; } h1 { margin: 0 0 16px; font-size: 24px; } section, form, table { margin: 16px 0; } .panel { padding: 16px; background: #fff; border: 1px solid #d9dee5; } label { display: block; margin: 8px 0; } input, select, button { box-sizing: border-box; padding: 8px; font: inherit; } input { width: 100%; } button { cursor: pointer; } .notice { padding: 8px; background: #e8f3ee; } .error { padding: 8px; background: #fdecec; } table { width: 100%; border-collapse: collapse; background: #fff; } th, td { padding: 8px; text-align: left; border: 1px solid #d9dee5; } nav { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; } .inline { display: inline; } .actions { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } .actions label { min-width: 140px; flex: 1; } .graph-layout { display: grid; grid-template-columns: 1fr 260px; gap: 16px; } #context-graph { min-height: 540px; border: 1px solid #d9dee5; } #node-details { white-space: pre-wrap; } @media (max-width: 720px) { .graph-layout { grid-template-columns: 1fr; } #context-graph { min-height: 420px; } }
-#full-view:focus-visible, [data-context-id]:focus-visible, #hop-range:focus-visible { outline: 2px solid #2563eb; outline-offset: 4px; }
+#full-view:focus-visible, [data-context-id]:focus-visible, #hop-range:focus-visible, #details-link:focus-visible, #node-details-heading:focus { outline: 2px solid #2563eb; outline-offset: 4px; }
+[data-context-id][aria-pressed="true"] { border: 2px solid #2563eb; background: #e8f3ee; } #node-details, #node-evidence { white-space: pre-wrap; overflow-wrap: anywhere; }
 .grade-filter { margin: 0; padding: 0; border: 0; } .grade-options { display: flex; flex-wrap: wrap; } .grade-filter label { display: flex; align-items: center; gap: 8px; min-width: 0; flex: none; margin: 0; padding: 0 8px; min-height: 48px; } .grade-filter input { width: auto; } .grade-filter p { margin: 4px 0; font-size: .875rem; } .grade-filter input:focus-visible { outline: 2px solid #2563eb; outline-offset: 4px; }
 </style></head><body><main>{{if .Message}}<p class="notice">{{.Message}}</p>{{end}}{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{end}}
 {{define "foot"}}</main></body></html>{{end}}
@@ -987,17 +988,20 @@ body { margin: 0; } main { max-width: 1120px; margin: 32px auto; padding: 0 16px
 </div><p id="grade-filter-help">선택하지 않으면 모든 등급을 조회합니다.</p></fieldset>
 <button type="submit">적용</button></form>
 {{if .Graphs}}<table><thead><tr><th>이름</th><th>설명</th><th>마지막 활동</th><th>내 등급</th></tr></thead><tbody>{{range .Graphs}}<tr><td><a href="/graphs/{{.ID}}">{{.Name}}</a></td><td>{{.Description}}</td><td>{{formatTime .LastActivityAt}}</td><td>{{.Grade}}</td></tr>{{end}}</tbody></table>{{else}}<p>접근 가능한 그래프가 없습니다.</p>{{end}}{{if .NextCursor}}<p><a href="{{.NextPage}}">더 보기</a></p>{{end}}{{if .DeletedGraphs}}<section class="panel"><h2>내가 삭제한 그래프</h2>{{range .DeletedGraphs}}<p><a href="/graphs/{{.ID}}/deletion">{{.Name}} 복구</a></p>{{end}}</section>{{end}}{{if .RestoreGraphs}}<section class="panel"><h2>자동 삭제된 그래프</h2>{{range .RestoreGraphs}}<form class="inline" method="post" action="/graphs"><input type="hidden" name="restore_graph_id" value="{{.ID}}"><button type="submit">{{.Name}} 복구 요청</button></form>{{end}}</section>{{end}}{{template "foot" .}}{{end}}
-{{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p>{{.Graph.Description}}</p><p id="scope-help">전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다. 빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다. 국소 보기에서도 목록에서 다른 노드를 선택할 수 있습니다.</p><button id="full-view" type="button">전체 보기</button><p id="scope-status" role="status">전체 보기</p><label for="hop-range">국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}" aria-describedby="scope-help"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section><section class="graph-layout"><div id="context-graph" aria-label="컨텍스트 그래프"></div><aside class="panel"><h2>선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code> <button type="button" data-context-id="{{.ID}}" aria-label="{{.ID}} 노드 선택">노드 선택</button><p>{{.Body}}</p>{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){
+{{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p>{{.Graph.Description}}</p><p id="scope-help">전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다. 빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다. 국소 보기에서도 목록에서 다른 노드를 선택할 수 있습니다. 목록의 노드 선택 버튼은 Enter 또는 Space로 선택·해제합니다.</p><button id="full-view" type="button">전체 보기</button> <a id="details-link" href="#node-details-heading">선택한 노드 상세로 이동</a><p id="scope-status" role="status" aria-atomic="true">전체 보기</p><label for="hop-range">국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}" aria-describedby="scope-help"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section><section class="graph-layout"><div id="context-graph" aria-label="컨텍스트 그래프"></div><aside class="panel"><h2 id="node-details-heading" tabindex="-1">선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p><h3>근거 경로</h3><p id="node-evidence">노드를 선택하면 표시된 부분 그래프의 근거 연결을 안내합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code> <button type="button" data-context-id="{{.ID}}" aria-label="{{.ID}} 노드 선택" aria-pressed="false" aria-controls="node-details node-evidence" aria-describedby="scope-help">노드 선택</button><p>{{.Body}}</p>{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){
 const elements={{.VisualizationJSON}};
 const details=document.getElementById('node-details');
 const emptyDetails=details.textContent;
+const evidence=document.getElementById('node-evidence');
+const emptyEvidence=evidence.textContent;
+const choices=document.querySelectorAll('[data-context-id]');
 const range=document.getElementById('hop-range');
 const status=document.getElementById('scope-status');
 const cy=cytoscape({container:document.getElementById('context-graph'),elements:elements,style:[{selector:'node',style:{'label':'data(label)','color':'#fff','text-valign':'center','text-halign':'center','width':42,'height':42,'font-size':10}},{selector:'node.source',style:{'background-color':'#2563eb'}},{selector:'node.derived',style:{'background-color':'#7c3aed'}},{selector:'node.event',style:{'background-color':'#047857'}},{selector:'node.disputed',style:{'border-width':4,'border-color':'#f59e0b'}},{selector:'node.evidence-invalidated',style:{'shape':'diamond'}},{selector:'edge',style:{'curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'#64748b','line-color':'#64748b','width':2,'label':'data(kind)','font-size':8,'text-rotation':'autorotate'}},{selector:'edge.evidence',style:{'line-color':'#dc2626','target-arrow-color':'#dc2626','width':5}}],layout:{name:'cose',animate:false}});
 let selected=null;
 function applyScope(){
   cy.elements().show();
-  status.textContent=selected?'국소 보기':'전체 보기';
+  status.textContent=selected?'국소 보기 · '+selected.id()+' 선택 · '+range.value+'홉 · 본문과 근거 정보를 갱신했습니다.':'전체 보기';
   if(!selected)return;
   const hops=Number(range.value);
   if(hops===0){
@@ -1017,8 +1021,19 @@ function showFullView(){
   details.textContent=emptyDetails;
   applyScope();
   cy.fit(undefined,24);
+  evidence.textContent=emptyEvidence;
+  updateChoices();
+}
+function updateChoices(){
+  choices.forEach(function(button){
+    button.setAttribute('aria-pressed',String(Boolean(selected&&button.dataset.contextId===selected.id())));
+  });
 }
 function showDetails(node){
+  if(selected&&selected.id()===node.id()){
+    showFullView();
+    return;
+  }
   selected=node;
   cy.nodes().unselect();
   node.select();
@@ -1037,7 +1052,12 @@ function showDetails(node){
       return true;
     });
   }
-  details.textContent=node.data('layer')+'\n'+node.data('body');
+  details.textContent=node.data('layer')+' · '+node.id()+'\n'+node.data('body');
+  const links=cy.edges('.evidence').map(function(edge){
+    return '파생 '+edge.source().id()+' → 근거 '+edge.target().id()+' (derived_from)';
+  });
+  evidence.textContent=links.length?links.join('\n'):'표시된 부분 그래프에 이 노드의 근거 연결이 없습니다.';
+  updateChoices();
   applyScope();
 }
 cy.on('tap','node',function(event){showDetails(event.target);});
@@ -1048,7 +1068,7 @@ document.getElementById('full-view').addEventListener('click',showFullView);
 document.addEventListener('keydown',function(event){
   if(event.key==='Escape')showFullView();
 });
-document.querySelectorAll('[data-context-id]').forEach(function(button){
+choices.forEach(function(button){
   button.addEventListener('click',function(){
     showDetails(cy.getElementById(button.dataset.contextId));
     cy.fit(cy.elements(':visible'),24);

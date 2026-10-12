@@ -108,11 +108,22 @@ curl --fail --show-error https://localhost:8080/readyz
 
 브라우저에서 `https://localhost:8080/register`로 계정을 생성하고 `/graphs`로 이동합니다. 직접 연결 구현 전에는 웹에서 기존 그래프를 조회·관리할 수 있지만 MCP를 통한 신규 그래프 생성과 컨텍스트 기여는 사용할 수 없습니다. 웹 화면은 조회·시각화와 권한 관리에 사용합니다.
 
-기존 DB의 벡터 타입·차원은 환경 변수만 바꿔 전환할 수 없습니다. [서버 설계](spec/service/agent-context/SDD.md)의 「전환·복귀 경계」를 따르십시오.
+기존 DB의 벡터 타입·차원은 환경 변수만 바꿔 전환할 수 없습니다. [임베딩 전환·복귀 설계](spec/service/agent-context/sdd/indexing.md#전환복귀-경계)를 따르십시오.
 
 ### 3. 현재 제공 범위
 
 표준 MCP·OAuth 직접 연결은 설계가 채택되었으나 아직 구현되지 않았습니다. 현재 `/mcp`, `/authorize`, `/token`과 OAuth 메타데이터 경로는 제공하지 않습니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다.
+
+### 개발 환경 재생성
+
+개발 환경을 처음부터 만들 때는 기존 개발 볼륨을 제거한 뒤 기동합니다. 이 절차는 개발 DB와 WAL 데이터를 삭제하므로 보존할 데이터가 없는 개발 환경에 적용합니다. 마이그레이션을 승인된 개발 통합 예외로 `001_init.sql`에 합쳐 checksum이 달라진 경우에도 이전 개발·시험 DB를 재생성합니다. 적용 조건은 [마이그레이션 계약](migrations/AGENTS.md)을 따릅니다.
+
+```sh
+docker compose -f compose.dev.yaml down -v
+docker compose -f compose.dev.yaml up -d --wait
+```
+
+재생성 뒤에는 위 기동 절차의 마이그레이션을 적용합니다.
 
 ## 검증
 
@@ -136,7 +147,7 @@ sh ./test-dev-compose.sh --runtime
 sh ./test-wal-archive.sh
 ```
 
-그래프 불변식 감사는 `go run ./cmd/audit`, 검색 품질 평가는 `cmd/eval`이 담당합니다. 평가 표본과 실행 방법은 서버 설계의 「테스트 전략」과 「검증을 가능하게 하는 설계」를 확인하십시오.
+그래프 불변식 감사는 `go run ./cmd/audit`, 검색 품질 평가는 `cmd/eval`이 담당합니다. 평가 표본과 실행 방법은 [테스트 설계](spec/service/agent-context/sdd/testing.md)와 [평가 검증 설계](spec/service/agent-context/sdd/evaluation.md#검증을-가능하게-하는-설계)를 확인하십시오.
 
 ## 문서와 저장소 구조
 

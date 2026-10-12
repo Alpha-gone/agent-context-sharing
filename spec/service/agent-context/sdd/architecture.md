@@ -2,7 +2,7 @@
 
 시스템 경계, 구현 기술, 패키지 의존, HTTP 진입점과 DB 연결 자원의 정본이다.
 
-[설계 전체](../SDD.md) · [요구사항과 설계 대응](traceability.md)
+[설계 전체](../SDD.md) · [요구사항과 설계 대응](traceability.md) · [신규 개발 계획](../development-plan/architecture.md)
 
 ## 구현 기술 기준
 
@@ -25,6 +25,8 @@
 | OAuth 2.1 + PKCE | `FR-AGENT_CONTEXT-090`, [SRS 프로토콜 매핑](../SRS.md#프로토콜-매핑)        |
 
 라이브러리 선택은 근거가 있는 것만 확정한다. HTTP 진입점, 데이터베이스 드라이버와 인가 서버는 이 문서와 [인증 설계](authentication.md#인가-서버)가 기술적 근거를 밝혀 정했고, 남은 선택은 [설계 미정 사항](traceability.md#설계-미정-사항)에 둔다.
+
+구현에서 SDK·라이브러리·모듈의 API나 동작을 사용할 때는 적용 판의 공식 문서와 API reference를 확인한다. 버전별 동작이나 호환성에 기대어 아키텍처 결정을 내리면 공식 출처를 [`reference.md`](../reference.md)에 기록한다. 공식 문서가 확인되지 않는 동작은 검증 전까지 확정된 계약으로 다루지 않는다.
 
 ## 외부 경계
 

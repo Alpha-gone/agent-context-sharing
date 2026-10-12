@@ -42,7 +42,7 @@ func TestWorkerProposesSimilarEventRelationsAfterIndexIntegration(t *testing.T) 
 	if err != nil {
 		t.Fatalf("임베딩 제공자 주소 해석: %v", err)
 	}
-	worker, err := New(database, Config{Provider: "ollama", BaseURL: baseURL, Model: "relation-test", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
+	worker, err := New(database, Config{Provider: "gemini", APIKey: "synthetic-key", BaseURL: baseURL, Model: "gemini-embedding-2", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
 	if err != nil {
 		t.Fatalf("색인 작업자 생성: %v", err)
 	}
@@ -130,10 +130,10 @@ func embeddingDimension(t *testing.T, databaseURL string) int {
 
 func embeddingServer(t *testing.T, dimension int) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	return httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		embedding := make([]float64, dimension)
 		embedding[0] = 1
-		body, err := json.Marshal(map[string]any{"embeddings": [][]float64{embedding}})
+		body, err := json.Marshal(map[string]any{"embedding": map[string]any{"values": embedding}})
 		if err != nil {
 			writer.WriteHeader(http.StatusInternalServerError)
 			return

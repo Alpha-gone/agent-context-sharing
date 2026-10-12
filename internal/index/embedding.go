@@ -19,7 +19,7 @@ func (cfg Config) Validate() error {
 	if err := cfg.ValidateMetadata(); err != nil {
 		return err
 	}
-	if cfg.Provider == "gemini" && (strings.TrimSpace(cfg.APIKey) == "" || strings.ContainsAny(cfg.APIKey, "\r\n")) {
+	if strings.TrimSpace(cfg.APIKey) == "" || strings.ContainsAny(cfg.APIKey, "\r\n") {
 		return fmt.Errorf("Gemini 임베딩의 API 키 구성이 올바르지 않다")
 	}
 	return nil
@@ -34,28 +34,18 @@ func (cfg Config) ValidateMetadata() error {
 	if strings.TrimSpace(cfg.Model) == "" || (cfg.VectorType != "vector" && cfg.VectorType != "halfvec") || cfg.Dimension < 1 || (cfg.VectorType == "vector" && cfg.Dimension > 2000) || (cfg.VectorType == "halfvec" && cfg.Dimension > 4000) {
 		return fmt.Errorf("임베딩 모델·저장 타입·차원이 올바르지 않다")
 	}
-	switch cfg.Provider {
-	case "ollama":
-		if strings.HasPrefix(cfg.Model, "gemini-embedding-") || strings.EqualFold(strings.TrimSuffix(cfg.BaseURL.Hostname(), "."), "generativelanguage.googleapis.com") {
-			return fmt.Errorf("Ollama에 Gemini 모델 또는 공식 주소를 지정할 수 없다")
-		}
-	case "gemini":
-		if cfg.BaseURL.Scheme != "https" || cfg.Model != "gemini-embedding-2" || cfg.Dimension < 128 || cfg.Dimension > 3072 {
-			return fmt.Errorf("Gemini 임베딩의 HTTPS·모델·차원 구성이 올바르지 않다")
-		}
-	default:
-		return fmt.Errorf("임베딩 제공자는 ollama 또는 gemini로 명시해야 한다")
+	if cfg.Provider != "gemini" {
+		return fmt.Errorf("임베딩 제공자는 gemini로 명시해야 한다")
+	}
+	if cfg.BaseURL.Scheme != "https" || cfg.Model != "gemini-embedding-2" || cfg.Dimension < 128 || cfg.Dimension > 3072 {
+		return fmt.Errorf("Gemini 임베딩의 HTTPS·모델·차원 구성이 올바르지 않다")
 	}
 	return nil
 }
 
-// ModelID는 제공자와 입력 형식까지 구분하고 기존 Ollama 식별자를 보존한다.
+// ModelID는 제공자·모델·입력 형식과 벡터 저장 구성을 구분한다.
 func (cfg Config) ModelID() string {
-	id := ModelID(cfg.Model, cfg.VectorType, cfg.Dimension)
-	if cfg.Provider == "gemini" {
-		return "gemini:" + cfg.Model + ":retrieval-v1:" + cfg.VectorType + ":" + fmt.Sprint(cfg.Dimension)
-	}
-	return id
+	return "gemini:" + cfg.Model + ":retrieval-v1:" + cfg.VectorType + ":" + fmt.Sprint(cfg.Dimension)
 }
 
 // ProviderError는 원문 응답 없이 장애 분류와 안전한 사유만 보존한다.
@@ -92,21 +82,12 @@ func (worker *Worker) embed(ctx context.Context, input string, document bool) ([
 		return nil, ProviderError{Reason: "임베딩 입력이 비어 있거나 UTF-8·8000자 한도를 위반했다"}
 	}
 	endpoint := worker.config.BaseURL.Clone()
-	var payload any
-	if worker.config.Provider == "gemini" {
-		prefix := "task: search result | query: "
-		if document {
-			prefix = "title: none | text: "
-		}
-		payload = geminiRequest(worker.config.Model, prefix+input, worker.config.Dimension)
-		endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/v1beta/models/" + worker.config.Model + ":embedContent"
-	} else {
-		payload = struct {
-			Model string `json:"model"`
-			Input string `json:"input"`
-		}{worker.config.Model, input}
-		endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/api/embed"
+	prefix := "task: search result | query: "
+	if document {
+		prefix = "title: none | text: "
 	}
+	payload := geminiRequest(worker.config.Model, prefix+input, worker.config.Dimension)
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/v1beta/models/" + worker.config.Model + ":embedContent"
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, ProviderError{Reason: "임베딩 요청 직렬화 실패"}
@@ -116,9 +97,7 @@ func (worker *Worker) embed(ctx context.Context, input string, document bool) ([
 		return nil, ProviderError{Reason: "임베딩 요청 생성 실패"}
 	}
 	request.Header.Set("Content-Type", "application/json")
-	if worker.config.Provider == "gemini" {
-		request.Header.Set("x-goog-api-key", worker.config.APIKey)
-	}
+	request.Header.Set("x-goog-api-key", worker.config.APIKey)
 	response, err := worker.httpClient.Do(request)
 	if err != nil {
 		return nil, safeTransportError(ctx, err)
@@ -132,7 +111,6 @@ func (worker *Worker) embed(ctx context.Context, input string, document bool) ([
 		Embedding struct {
 			Values []float64 `json:"values"`
 		} `json:"embedding"`
-		Embeddings [][]float64 `json:"embeddings"`
 	}
 	if err := json.UnmarshalRead(limited, &decoded); err != nil {
 		if limited.N <= 0 {
@@ -153,12 +131,6 @@ func (worker *Worker) embed(ctx context.Context, input string, document bool) ([
 		return nil, ProviderError{Reason: "임베딩 응답이 크기 상한을 넘었다"}
 	}
 	embedding := decoded.Embedding.Values
-	if worker.config.Provider != "gemini" {
-		if len(decoded.Embeddings) != 1 {
-			return nil, ProviderError{Reason: "임베딩 응답 벡터 개수가 올바르지 않다"}
-		}
-		embedding = decoded.Embeddings[0]
-	}
 	if len(embedding) != worker.config.Dimension {
 		return nil, DimensionError{Got: len(embedding), Want: worker.config.Dimension}
 	}

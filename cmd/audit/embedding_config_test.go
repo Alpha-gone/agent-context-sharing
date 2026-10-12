@@ -9,13 +9,10 @@ func TestAuditEmbeddingProvider(t *testing.T) {
 	for _, test := range []struct {
 		name, provider, address, model, modelID string
 	}{
-		{"명시적 Ollama", "ollama", "http://localhost:11434", "bge-m3", "bge-m3:vector:768"},
 		{"키 없는 Gemini 감사", "gemini", "https://generativelanguage.googleapis.com", "gemini-embedding-2", "gemini:gemini-embedding-2:retrieval-v1:vector:768"},
-		{"제공자 생략", "", "http://localhost:11434", "bge-m3", ""},
+		{"미지원 제공자", "unsupported", "https://generativelanguage.googleapis.com", "gemini-embedding-2", ""},
 		{"Gemini 제공자 생략", "", "https://generativelanguage.googleapis.com", "gemini-embedding-2", ""},
-		{"Gemini 모델 혼합", "ollama", "http://localhost:11434", "gemini-embedding-2", ""},
-		{"Gemini 주소 혼합", "ollama", "https://generativelanguage.googleapis.com", "bge-m3", ""},
-		{"Gemini 모델 오류", "gemini", "https://generativelanguage.googleapis.com", "bge-m3", ""},
+		{"Gemini 모델 오류", "gemini", "https://generativelanguage.googleapis.com", "other-model", ""},
 		{"Gemini 평문 주소", "gemini", "http://service.test", "gemini-embedding-2", ""},
 		{"주소 생략", "gemini", "", "gemini-embedding-2", ""},
 		{"잘못된 비밀 URL", "gemini", "https://%synthetic-secret", "gemini-embedding-2", ""},

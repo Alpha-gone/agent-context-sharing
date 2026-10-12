@@ -10,52 +10,6 @@ import (
 	"agent_context_sharing/internal/store"
 )
 
-func TestEmbed(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/api/embed" {
-			t.Fatalf("임베딩 요청 = %s %s", request.Method, request.URL.Path)
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"embeddings":[[0.25,0.75]]}`))
-	}))
-	defer server.Close()
-	baseURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("테스트 제공자 URL 해석: %v", err)
-	}
-	worker, err := New(testStore(t), Config{Provider: "ollama", BaseURL: baseURL, Model: "test", VectorType: "vector", Dimension: 2}, server.Client(), nil)
-	if err != nil {
-		t.Fatalf("색인 작업자 생성: %v", err)
-	}
-	embedding, err := worker.Embed(t.Context(), "색인 본문")
-	if err != nil {
-		t.Fatalf("임베딩 생성: %v", err)
-	}
-	if len(embedding) != 2 || embedding[0] != 0.25 || embedding[1] != 0.75 {
-		t.Fatalf("임베딩 = %v", embedding)
-	}
-}
-
-func TestEmbedRejectsDimensionMismatch(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_, _ = writer.Write([]byte(`{"embeddings":[[0.25]]}`))
-	}))
-	defer server.Close()
-	baseURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("테스트 제공자 URL 해석: %v", err)
-	}
-	worker, err := New(testStore(t), Config{Provider: "ollama", BaseURL: baseURL, Model: "test", VectorType: "vector", Dimension: 2}, server.Client(), nil)
-	if err != nil {
-		t.Fatalf("색인 작업자 생성: %v", err)
-	}
-	if _, err := worker.Embed(t.Context(), "색인 본문"); err == nil {
-		t.Fatal("차원이 다른 응답이 허용됐다")
-	} else if _, ok := err.(DimensionError); !ok {
-		t.Fatalf("차원 불일치 오류 = %T %v", err, err)
-	}
-}
-
 func testStore(t *testing.T) *store.Store {
 	t.Helper()
 	// New는 제공자 단위 테스트에서 데이터베이스 연결을 만들지 않도록 허용하지 않으므로,
@@ -83,9 +37,9 @@ func TestCloseBeforeStartDoesNotPanic(t *testing.T) {
 // TestEmbedRejectsOversizedResponse는 제공자 응답이 상한을 넘으면 거부하는지 확인한다.
 // 상한이 없으면 잘못 설정된 제공자가 작업자와 검색 경로의 메모리를 그대로 늘린다.
 func TestEmbedRejectsOversizedResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		writer.Write([]byte(`{"embeddings":[[`))
+		writer.Write([]byte(`{"embedding":{"values":[`))
 		// 상한을 넘을 때까지 값을 흘려보낸다.
 		chunk := strings.Repeat("1,", 4096)
 		for sent := 0; sent <= maxEmbeddingResponseBytes; sent += len(chunk) {
@@ -107,7 +61,7 @@ func TestEmbedRejectsOversizedResponse(t *testing.T) {
 // 경로만 검사하는 것이므로 주소만 형식을 맞춘다.
 func testWorker(t *testing.T, server *httptest.Server) *Worker {
 	t.Helper()
-	address := "http://127.0.0.1:1"
+	address := "https://127.0.0.1:1"
 	var client *http.Client
 	if server != nil {
 		address, client = server.URL, server.Client()
@@ -116,7 +70,7 @@ func testWorker(t *testing.T, server *httptest.Server) *Worker {
 	if err != nil {
 		t.Fatalf("테스트 제공자 URL 해석: %v", err)
 	}
-	worker, err := New(testStore(t), Config{Provider: "ollama", BaseURL: baseURL, Model: "test", VectorType: "vector", Dimension: 2}, client, nil)
+	worker, err := New(testStore(t), Config{Provider: "gemini", APIKey: testGeminiKey, BaseURL: baseURL, Model: "gemini-embedding-2", VectorType: "vector", Dimension: 128}, client, nil)
 	if err != nil {
 		t.Fatalf("색인 작업자 생성: %v", err)
 	}

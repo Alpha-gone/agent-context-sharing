@@ -17,7 +17,7 @@ AI 에이전트가 작업 중 얻은 지식과 맥락을 저장하고, 관계를
 
 ## 구성
 
-현재 서버는 웹 관리·계정 세션·그래프 저장·색인을 제공합니다. 검색과 감사·평가는 내부 패키지와 실행기로 검증합니다. 서버는 PostgreSQL의 Apache AGE로 그래프를, pgvector로 임베딩을 저장하며 임베딩 제공자는 Gemini 또는 Ollama를 명시적으로 선택합니다.
+현재 서버는 웹 관리·계정 세션·그래프 저장·색인을 제공합니다. 검색과 감사·평가는 내부 패키지와 실행기로 검증합니다. 서버는 PostgreSQL의 Apache AGE로 그래프를, pgvector로 임베딩을 저장하며 임베딩 제공자는 Gemini만 지원하며 명시적으로 구성합니다.
 
 - 서버: 루트 Go 모듈의 `cmd/server`와 `internal/`
 - 개발 환경: 호스트에서 Go 프로그램을 실행하고 `compose.dev.yaml`로 DB를 기동하거나, `server` 프로필로 애플리케이션까지 컨테이너에서 실행
@@ -41,7 +41,7 @@ curl --fail --show-error http://localhost:80/readyz
 curl --fail --show-error --output /dev/null https://agent-context.example.com/login
 ```
 
-로컬 상태 확인은 `200`, 터널을 통과한 HTTPS 로그인 화면도 `200`이 기대 결과입니다. 로컬 HTTP `/login`은 HTTPS 전달 헤더가 없으므로 `400 https_required`가 정상입니다. 서버는 호스트 접속 경로인 `10.204.0.1/32`에서 온 단일 HTTPS 전달 헤더만 신뢰합니다. 터널을 통해 전달되는 원본 HTTP는 호스트 내부에 한정되며 호스트 접근 권한도 신뢰 경계에 포함됩니다. `cloudflared`는 이 Compose 파일이 관리하지 않습니다. Ollama를 컨테이너 서버와 함께 사용한다면 `ollama` 프로필도 켜고 임베딩 원본 주소를 `http://ollama:11434`로 설정합니다.
+로컬 상태 확인은 `200`, 터널을 통과한 HTTPS 로그인 화면도 `200`이 기대 결과입니다. 로컬 HTTP `/login`은 HTTPS 전달 헤더가 없으므로 `400 https_required`가 정상입니다. 서버는 호스트 접속 경로인 `10.204.0.1/32`에서 온 단일 HTTPS 전달 헤더만 신뢰합니다. 터널을 통해 전달되는 원본 HTTP는 호스트 내부에 한정되며 호스트 접근 권한도 신뢰 경계에 포함됩니다. `cloudflared`는 이 Compose 파일이 관리하지 않습니다.
 
 이 구성은 개발용 DB 자격 증명과 WAL 자동 정리를 사용합니다. 운영 데이터에는 별도 `compose.prod.yaml`과 [운영 매뉴얼](OPERATIONS.md)의 백업·적용 절차를 사용합니다.
 
@@ -108,13 +108,6 @@ curl --fail --show-error https://localhost:8080/readyz
 
 브라우저에서 `https://localhost:8080/register`로 계정을 생성하고 `/graphs`로 이동합니다. 직접 연결 구현 전에는 웹에서 기존 그래프를 조회·관리할 수 있지만 MCP를 통한 신규 그래프 생성과 컨텍스트 기여는 사용할 수 없습니다. 웹 화면은 조회·시각화와 권한 관리에 사용합니다.
 
-기본 개발 기동에는 Ollama가 포함되지 않습니다. 새 개발 DB에서 Ollama 구성을 시험하려면 먼저 다음 명령으로 모델을 준비하고, 환경을 `EMBEDDING_PROVIDER=ollama`, `EMBEDDING_BASE_URL=http://localhost:11434`, `EMBEDDING_MODEL=bge-m3`, `EMBEDDING_DIMENSION=1024`로 바꿉니다.
-
-```sh
-docker compose -f compose.dev.yaml --profile ollama up -d ollama
-docker compose -f compose.dev.yaml --profile ollama exec ollama ollama pull bge-m3
-```
-
 기존 DB의 벡터 타입·차원은 환경 변수만 바꿔 전환할 수 없습니다. [서버 설계](spec/service/agent-context/SDD.md)의 「전환·복귀 경계」를 따르십시오.
 
 ### 3. 현재 제공 범위
@@ -136,7 +129,7 @@ sh ./test-prod-compose.sh
 
 `TEST_DATABASE_URL`이 없고 필수 설정도 없으면 DB 통합 시험은 건너뜁니다. 이를 통합 검증 성공으로 간주하지 않습니다. `gofmt -l .`의 정상 결과는 출력이 없는 상태입니다.
 
-별도 격리 환경을 만드는 검증은 다음과 같습니다. 이미지 빌드·컨테이너 기동과 실행 시간이 필요하므로 선택하여 실행합니다. 개발 Compose 실행 검사는 Ollama 모델을 내려받지 않습니다.
+별도 격리 환경을 만드는 검증은 다음과 같습니다. 이미지 빌드·컨테이너 기동과 실행 시간이 필요하므로 선택하여 실행합니다. 개발 Compose 실행 검사는 DB만 기동하며 외부 API를 호출하지 않습니다.
 
 ```sh
 sh ./test-dev-compose.sh --runtime

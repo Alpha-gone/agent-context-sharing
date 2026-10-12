@@ -24,7 +24,7 @@ func TestStartupFailureClosesWorkersIntegration(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL이 없어 기동 실패 통합 테스트를 건너뛴다")
 	}
 	// 조립 실패 뒤 남은 색인 작업이 있어도 실제 임베딩 제공자로 보내지 않는다.
-	embeddings := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	embeddings := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
 	defer embeddings.Close()
 	embeddingURL, err := url.Parse(embeddings.URL)
 	if err != nil {
@@ -52,7 +52,7 @@ func TestStartupFailureClosesWorkersIntegration(t *testing.T) {
 				defer listener.Close()
 				cfg := config.Config{
 					DatabaseURL: databaseURL, GraphName: graphName, HTTPAddr: listener.Addr().String(),
-					EmbeddingProvider: "ollama", EmbeddingBaseURL: embeddingURL, EmbeddingModel: "startup-test", EmbeddingVectorType: "vector", EmbeddingDimension: dimension,
+					EmbeddingProvider: "gemini", GeminiAPIKey: "synthetic-key", EmbeddingBaseURL: embeddingURL, EmbeddingModel: "gemini-embedding-2", EmbeddingVectorType: "vector", EmbeddingDimension: dimension,
 					SearchExecution: config.SearchExecutionParallel, SearchCandidateLimit: 50, SearchSemanticThreshold: .5, SearchFoldThreshold: .9, SearchGraphStage: config.SearchGraphStageBaseline,
 					RelationAdjacencyWindow: time.Hour, RelationSimilarityThreshold: .8, RelationProposalLimit: 10,
 					AuthorizationServerURL: issuer, BcryptCost: 4, IndexWorkerPlacement: placement,

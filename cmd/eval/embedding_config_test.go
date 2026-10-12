@@ -10,13 +10,10 @@ func TestLoadSettingsEmbeddingProvider(t *testing.T) {
 		name, provider, address, model, key string
 		valid                               bool
 	}{
-		{"명시적 Ollama", "ollama", "http://localhost:11434", "bge-m3", "", true},
 		{"명시적 Gemini", "gemini", "https://generativelanguage.googleapis.com", "gemini-embedding-2", "synthetic-secret", true},
-		{"제공자 생략", "", "http://localhost:11434", "bge-m3", "", false},
+		{"미지원 제공자", "unsupported", "https://generativelanguage.googleapis.com", "gemini-embedding-2", "synthetic-secret", false},
 		{"Gemini 제공자 생략", "", "https://generativelanguage.googleapis.com", "gemini-embedding-2", "synthetic-secret", false},
-		{"Gemini 모델 혼합", "ollama", "http://localhost:11434", "gemini-embedding-2", "", false},
-		{"Gemini 주소 혼합", "ollama", "https://generativelanguage.googleapis.com", "bge-m3", "", false},
-		{"Gemini 모델 오류", "gemini", "https://generativelanguage.googleapis.com", "bge-m3", "synthetic-secret", false},
+		{"Gemini 모델 오류", "gemini", "https://generativelanguage.googleapis.com", "other-model", "synthetic-secret", false},
 		{"Gemini 키 생략", "gemini", "https://generativelanguage.googleapis.com", "gemini-embedding-2", "", false},
 		{"잘못된 비밀 URL", "gemini", "https://%synthetic-secret", "gemini-embedding-2", "synthetic-secret", false},
 	} {

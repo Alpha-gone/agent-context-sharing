@@ -93,12 +93,6 @@ func (worker *Worker) ModelID() string {
 	return worker.config.ModelID()
 }
 
-// ModelID는 임베딩 행의 model_id 형식을 만든다. 그래프 불변식 감사가 현재 모델과 대조할 때도
-// 같은 형식을 써야 하므로 작업자 밖에 둔다.
-func ModelID(model, vectorType string, dimension int) string {
-	return model + ":" + vectorType + ":" + fmt.Sprint(dimension)
-}
-
 // Start는 서버 요청 경로와 분리된 색인 소비 루프를 시작한다.
 func (worker *Worker) Start(parent context.Context) {
 	worker.startOnce.Do(func() {

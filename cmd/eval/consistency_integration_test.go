@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	json "encoding/json/v2"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +20,17 @@ import (
 	"agent_context_sharing/internal/store"
 	"github.com/jackc/pgx/v5"
 )
+
+// trustEvalEmbeddingServer는 별도 시험 프로세스가 로컬 TLS 대역의 인증서만 신뢰하게 한다.
+func trustEvalEmbeddingServer(t *testing.T, server *httptest.Server) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "embedding-ca.pem")
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(path, certificate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", path)
+}
 
 // evalDatabase는 현재 시험 DB의 차원에 맞는 로컬 제공자 대역만 사용한다.
 // 각 테스트는 새 평가 그래프를 만들고 다른 그래프의 색인 작업을 소비하지 않는다.
@@ -52,11 +65,11 @@ func evalDatabase(t *testing.T, onEmbed func()) (*store.Store, *index.Worker, *p
 	}
 	vector := make([]float64, dimension)
 	vector[0] = 1
-	raw, err := json.Marshal(map[string]any{"embeddings": [][]float64{vector}})
+	raw, err := json.Marshal(map[string]any{"embedding": map[string]any{"values": vector}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		if onEmbed != nil {
 			onEmbed()
 		}
@@ -68,7 +81,7 @@ func evalDatabase(t *testing.T, onEmbed func()) (*store.Store, *index.Worker, *p
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := index.New(database, index.Config{Provider: "ollama", BaseURL: baseURL, Model: "eval-regression", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
+	worker, err := index.New(database, index.Config{Provider: "gemini", APIKey: "synthetic-key", BaseURL: baseURL, Model: "gemini-embedding-2", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,7 @@
 - [기동 래퍼](../../../../docker-db-entrypoint.sh)가 볼륨 마운트 뒤 매번 보관 경로를 준비한다. root 실행에서는 `postgres:postgres` 소유와 `0700` 권한을 설정하고 postgres 직접 실행에서는 경로 생성·권한 설정을 수행한다. 준비 실패는 DB 기동 전에 중단한다.
 - DB 데이터나 기존 WAL 파일을 삭제하거나 재귀적으로 소유권을 바꾸지 않는다. 공식 PostgreSQL entrypoint에 `exec`로 위임해 초기화·권한 강하·신호 전달을 보존한다.
 - Dockerfile에서 새 entrypoint와 기존 AGE의 기본 CMD를 함께 명시한다. ENTRYPOINT 변경 시 부모 CMD가 초기화되는 Docker 동작을 고려했다.
-- [회귀 시험](../../../../test-wal-archive.sh)은 [시험 구성](../../../../compose.wal-test.yaml)으로 새 이름의 Compose 프로젝트를 만든다. 개발 `.env`·기존 프로젝트·공개 포트·Ollama·외부 API를 사용하지 않는다. 시험 종료 시 이 실행의 컨테이너·볼륨·이미지만 제거한다.
+- [회귀 시험](../../../../test-wal-archive.sh)은 [시험 구성](../../../../compose.wal-test.yaml)으로 새 이름의 Compose 프로젝트를 만든다. 개발 `.env`·기존 프로젝트·공개 포트·외부 API를 사용하지 않는다. 시험 종료 시 이 실행의 컨테이너·볼륨·이미지만 제거한다.
 
 ## 실제 검증 결과
 
@@ -35,7 +35,7 @@ sh test-wal-archive.sh
 - `wal_cleanup`: 10일 된 합성 파일은 삭제하고 최근 파일은 보존했다. 서비스가 실행 중이고 오류 로그가 없었다.
 - 시험 자원 정리: 시험 프로젝트의 컨테이너·볼륨·이미지를 제거했다. 제거된 자료는 합성 자료이며 같은 시험으로 다시 생성할 수 있다. 기존 개발 DB의 컨테이너 ID와 시작 시각은 작업 전후 같았다.
 
-Go 1.27.1로 서버·클라이언트의 `go build ./...`, `go vet ./...`와 루트 `gofmt -l .`을 확인했다. 모두 통과했다. Go 코드·의존성·SQL 마이그레이션은 변경하지 않았으며 Go 전체 테스트·과거 시점 복구·실제 운영 환경 시험은 재실행하지 않았다. ShellCheck는 로컬에 없어 실행하지 않았으며 쉘 문법과 실제 Docker 회귀로 검증했다.
+Go 1.27.1로 서버 `go build ./...`, `go vet ./...`와 루트 `gofmt -l .`을 확인했다. 모두 통과했다. Go 코드·의존성·SQL 마이그레이션은 변경하지 않았으며 Go 전체 테스트·과거 시점 복구·실제 운영 환경 시험은 재실행하지 않았다. ShellCheck는 로컬에 없어 실행하지 않았으며 쉘 문법과 실제 Docker 회귀로 검증했다.
 
 ## 기존 개발 환경 적용 절차
 
@@ -66,7 +66,7 @@ SELECT pg_size_pretty(sum(size)) FROM pg_ls_waldir();
 
 ## 기존 개발 DB 적용 결과
 
-2026-10-04 10:26~10:29 KST, 사용자가 개발 DB 재기동을 요청해 수정 이미지를 빌드하고 `db`와 `wal_cleanup`만 재생성했다. `docker compose up -d --build --wait --wait-timeout 120 db wal_cleanup`이 정상 완료됐고 DB는 healthy, 정리 서비스는 실행 중이었다. Ollama는 재기동하지 않았다.
+2026-10-04 10:26~10:29 KST, 사용자가 개발 DB 재기동을 요청해 수정 이미지를 빌드하고 `db`와 `wal_cleanup`만 재생성했다. `docker compose up -d --build --wait --wait-timeout 120 db wal_cleanup`이 정상 완료됐고 DB는 healthy, 정리 서비스는 실행 중이었다.
 
 - 재기동 직전: `archived_count=0`, `failed_count=8430`, 보관 대기 87개, `pg_wal` 1493172224바이트(1424MiB).
 - `agent_context_sharing_db_data` 볼륨과 DB 클러스터 식별자는 전후 같았다. 데이터베이스 수 6개와 현재 DB의 시스템 스키마 제외 테이블 수 30개도 유지됐고 로그에서 기존 DB 초기화 생략을 확인했다. 테이블 행 전수 비교나 백업·시점 복구를 수행한 것은 아니다.
@@ -76,3 +76,5 @@ SELECT pg_size_pretty(sum(size)) FROM pg_ls_waldir();
 - `wal_cleanup`의 새 로그에 경로·권한 오류가 없었다. 이 적용에서는 정리 시험용 파일이나 사용자 테이블을 새로 만들지 않았다.
 
 기존 볼륨 삭제·DB 초기화·마이그레이션·구성 변경·외부 API 호출은 수행하지 않았다. 개발 환경의 WAL 보관 장애는 실제 적용에서도 해결됐으며 운영 환경의 적용을 뜻하지 않는다.
+
+현재 문서에서 제외된 임베딩 제공자의 상세 설정은 2026-10-12 사용자 요청에 따라 제거했다. 남아 있는 측정 결과는 원래 시험 시점의 결과이며 현재 Gemini 구성으로 다시 검증한 결과를 뜻하지 않는다.

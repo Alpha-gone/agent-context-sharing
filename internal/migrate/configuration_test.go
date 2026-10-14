@@ -170,7 +170,7 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	vector := make([]float64, 1024)
 	vector[0] = 1
 	result, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(context.Context, store.IndexTask) store.IndexTaskResult {
-		return store.IndexTaskResult{Embedding: vector, ModelID: "bge-m3:vector:1024"}
+		return store.IndexTaskResult{Embedding: vector, ModelID: "previous-model:vector:1024"}
 	})
 	if err != nil || !result.Succeeded {
 		t.Fatalf("이전 벡터 저장: %+v, %v", result, err)
@@ -328,28 +328,28 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertState(1024, 0, 1)
-	oldProvider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/embed" || request.Header.Get("x-goog-api-key") != "" {
-			t.Error("Ollama 복귀의 endpoint·인증 분리가 다르다")
+	oldProvider := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1beta/models/gemini-embedding-2:embedContent" || request.Header.Get("x-goog-api-key") != "synthetic-key" {
+			t.Error("차원 복귀의 endpoint·인증 분리가 다르다")
 		}
 		values := make([]float64, 1024)
 		values[0] = 1
-		body, _ := json.Marshal(map[string]any{"embeddings": [][]float64{values}})
+		body, _ := json.Marshal(map[string]any{"embedding": map[string]any{"values": values}})
 		_, _ = writer.Write(body)
 	}))
 	defer oldProvider.Close()
 	oldURL, _ := url.Parse(oldProvider.URL)
-	oldWorker, err := index.New(database, index.Config{Provider: "ollama", BaseURL: oldURL, Model: "bge-m3", VectorType: "vector", Dimension: 1024}, oldProvider.Client(), nil)
+	oldWorker, err := index.New(database, index.Config{Provider: "gemini", APIKey: "synthetic-key", BaseURL: oldURL, Model: "gemini-embedding-2", VectorType: "vector", Dimension: 1024}, oldProvider.Client(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	readyTasks()
 	if processed, err := oldWorker.RunOnceInGraph(t.Context(), graphID); err != nil || !processed {
-		t.Fatalf("Ollama 복귀 재색인: %v", err)
+		t.Fatalf("차원 복귀 재색인: %v", err)
 	}
 	assertState(1024, 1, 0)
 	if count, err := database.OutdatedEmbeddingCount(t.Context(), oldWorker.ModelID()); err != nil || count != 0 {
-		t.Fatalf("Ollama 복귀 식별자: %v", err)
+		t.Fatalf("차원 복귀 식별자: %v", err)
 	}
 	// 차원 전환이 원천 제외 평가의 등록 계약을 우회하지 않아야 한다.
 	if err := database.ReindexGraph(t.Context(), graphID); err != nil {

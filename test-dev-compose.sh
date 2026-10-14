@@ -24,11 +24,11 @@ cleanup() {
     trap - EXIT INT TERM
     if [ "$runtime_started" -eq 1 ]; then
         if [ "$result" -ne 0 ]; then
-            compose --profile ollama logs --no-color db ollama >&2 || true
+            compose logs --no-color db wal_cleanup >&2 || true
         fi
-        compose --profile ollama down --volumes --rmi local || result=1
+        compose down --volumes --rmi local || result=1
     fi
-    rm -f "$test_dir/default.json" "$test_dir/ollama.json" "$test_dir/ports.json" "$test_dir/runtime.json" "$test_dir/server.json"
+    rm -f "$test_dir/default.json" "$test_dir/ports.json" "$test_dir/runtime.json" "$test_dir/server.json"
     rmdir "$test_dir" || result=1
     exit "$result"
 }
@@ -39,19 +39,15 @@ trap 'exit 143' TERM
 # 호출자의 .env와 DB 자격 증명을 사용하지 않는다. 공개 인터페이스는 구성에 고정한다.
 export POSTGRES_USER=dev_compose_test POSTGRES_PASSWORD=dev_compose_test POSTGRES_DB=dev_compose_test
 export WAL_ARCHIVE_RETENTION_DAYS=7
-unset POSTGRES_PORT OLLAMA_PORT COMPOSE_PROFILES
+unset POSTGRES_PORT COMPOSE_PROFILES
 
 check_config() {
-    if ! jq -e --arg db_port "$2" --arg ollama_port "$3" '
+    if ! jq -e --arg db_port "$2" '
         (.services.db.ports | length == 1) and
         (.services.db.ports[0] | .host_ip == "127.0.0.1" and .target == 5432 and .published == $db_port) and
-        (.services.ollama.ports | length == 1) and
-        (.services.ollama.ports[0] | .host_ip == "127.0.0.1" and .target == 11434 and .published == $ollama_port) and
-        (.services.ollama.profiles == ["ollama"]) and
-        (.services.wal_cleanup.ports // [] | length == 0) and
-        (.services.ollama.image == "ollama/ollama:0.33.3@sha256:32931b46719f673c05fdbaa81ccb26da18ea4a1c57590a754874ab28ba269eb2")
+        (.services.wal_cleanup.ports // [] | length == 0)
     ' "$1" > /dev/null; then
-        echo "개발 구성 검사 실패: 포트 바인딩 또는 Ollama 버전 고정을 확인하십시오." >&2
+        echo "개발 구성 검사 실패: DB 포트 바인딩과 서비스 구성을 확인하십시오." >&2
         return 1
     fi
 }
@@ -63,11 +59,10 @@ jq -e '
     (.volumes | keys == ["db_data"]) and
     (.services.db.ports[0] | .host_ip == "127.0.0.1" and .target == 5432 and .published == "5432")
 ' "$test_dir/default.json" > /dev/null
-compose --profile ollama config --no-env-resolution --format json > "$test_dir/ollama.json"
-check_config "$test_dir/ollama.json" 5432 11434
-export POSTGRES_PORT=15432 OLLAMA_PORT=21434
-compose --profile ollama config --no-env-resolution --format json > "$test_dir/ports.json"
-check_config "$test_dir/ports.json" 15432 21434
+check_config "$test_dir/default.json" 5432
+export POSTGRES_PORT=15432
+compose config --no-env-resolution --format json > "$test_dir/ports.json"
+check_config "$test_dir/ports.json" 15432
 
 # 실제 .env를 읽지 않고 호출자의 넓은 신뢰 설정도 고정 경로를 바꾸지 않는지 확인한다.
 export HTTP_ADDR=0.0.0.0:9999 TLS_TERMINATION=direct TRUSTED_PROXY_CIDRS='0.0.0.0/0,::/0'
@@ -110,28 +105,17 @@ if [ "$runtime" -eq 0 ]; then
 fi
 
 # Docker가 사용 가능한 임시 포트를 배정하며 기존 개발 포트·볼륨을 사용하지 않는다.
-export POSTGRES_PORT=0 OLLAMA_PORT=0
-compose --profile ollama config --no-env-resolution --format json > "$test_dir/runtime.json"
-check_config "$test_dir/runtime.json" 0 0
+export POSTGRES_PORT=0
+compose config --no-env-resolution --format json > "$test_dir/runtime.json"
+check_config "$test_dir/runtime.json" 0
 runtime_started=1
 compose build --no-cache db
 compose up -d --wait --wait-timeout 120
 db_id=$(compose ps -q db)
 test -n "$db_id"
-test -z "$(compose --profile ollama ps -q ollama)"
-test -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$test_project" --filter 'label=com.docker.compose.volume=ollama_data')"
-compose --profile ollama up -d --wait --wait-timeout 120 ollama
-ollama_id=$(compose --profile ollama ps -q ollama)
-test -n "$db_id" && test -n "$ollama_id"
-
-for binding in "$db_id:5432/tcp" "$ollama_id:11434/tcp"; do
-    container_id=${binding%%:*}
-    container_port=${binding#*:}
-    docker inspect --format '{{json .NetworkSettings.Ports}}' "$container_id" |
-        jq -e --arg port "$container_port" '
-            .[$port] | length == 1 and all(.[]; .HostIp == "127.0.0.1" and (.HostPort | tonumber) > 0)
-        ' > /dev/null
-done
+test "$(compose ps --services | sort | tr '\n' ' ')" = 'db wal_cleanup '
+docker inspect --format '{{json .NetworkSettings.Ports}}' "$db_id" |
+    jq -e '."5432/tcp" | length == 1 and all(.[]; .HostIp == "127.0.0.1" and (.HostPort | tonumber) > 0)' > /dev/null
 
 test "$(docker exec "$db_id" dpkg-query -W -f='${Version}' postgresql-18-pgvector)" = '0.8.6-1.pgdg13+1'
 db_versions=$(docker exec "$db_id" psql -X -U dev_compose_test -d dev_compose_test -qAt -v ON_ERROR_STOP=1 \
@@ -142,7 +126,4 @@ vector=0.8.6'
 test "$(docker exec "$db_id" psql -X -U dev_compose_test -d dev_compose_test -At -v ON_ERROR_STOP=1 \
     -c "SELECT '[1,0]'::vector <=> '[1,0]'::vector;")" = 0
 
-ollama_address=$(docker port "$ollama_id" 11434/tcp)
-curl --noproxy '*' --fail --silent --show-error --max-time 10 "http://$ollama_address/api/version" |
-    jq -e '.version == "0.33.3"' > /dev/null
-echo "격리 기동 검사 통과: 실제 loopback 바인딩, pgvector·AGE와 Ollama 버전·응답"
+echo "격리 기동 검사 통과: DB loopback 바인딩, pgvector·AGE 버전과 SQL 응답"

@@ -94,17 +94,6 @@ func TestPeriodicCleanupExpiresGraceAndOldRowsIntegration(t *testing.T) {
 	if deleted, err := database.CleanupRequestRateWindows(t.Context(), now); err != nil || deleted < 1 {
 		t.Fatalf("요청 빈도 창 정리 = %d, %v", deleted, err)
 	}
-	oldCode := AuthorizationCode{Hash: "old-" + accountID.String(), ClientID: "test-client", AccountID: accountID, RedirectURI: "https://test.invalid/callback", CodeChallenge: "challenge", Resource: "https://test.invalid/mcp", IssuedAt: now.Add(-2 * time.Minute), AuthenticatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(-time.Minute)}
-	currentCode := AuthorizationCode{Hash: "current-" + accountID.String(), ClientID: "test-client", AccountID: accountID, RedirectURI: "https://test.invalid/callback", CodeChallenge: "challenge", Resource: "https://test.invalid/mcp", IssuedAt: now, AuthenticatedAt: now, ExpiresAt: now.Add(time.Minute)}
-	if err := database.CreateAuthorizationCode(t.Context(), oldCode); err != nil {
-		t.Fatalf("만료 인가 코드 준비: %v", err)
-	}
-	if err := database.CreateAuthorizationCode(t.Context(), currentCode); err != nil {
-		t.Fatalf("현재 인가 코드 준비: %v", err)
-	}
-	if deleted, err := database.CleanupExpiredAuthorizationCodes(t.Context(), now); err != nil || deleted < 1 {
-		t.Fatalf("인가 코드 정리 = %d, %v", deleted, err)
-	}
 	var oldRevoked, currentRevoked, rates bool
 	if err := database.pool.QueryRow(t.Context(), `SELECT EXISTS (SELECT 1 FROM public.revoked_token WHERE token_id = $1), EXISTS (SELECT 1 FROM public.revoked_token WHERE token_id = $2)`, oldToken, currentToken).Scan(&oldRevoked, &currentRevoked); err != nil || oldRevoked || !currentRevoked {
 		t.Fatalf("폐기 목록 대상 보존 = old:%t current:%t err:%v", oldRevoked, currentRevoked, err)
@@ -112,11 +101,6 @@ func TestPeriodicCleanupExpiresGraceAndOldRowsIntegration(t *testing.T) {
 	if err := database.pool.QueryRow(t.Context(), `SELECT EXISTS (SELECT 1 FROM public.request_rate WHERE account_id = $1 AND window_started_at = $2)`, accountID.String(), now).Scan(&rates); err != nil || !rates {
 		t.Fatalf("현재 요청 빈도 창 보존 = %t, %v", rates, err)
 	}
-	var oldAuthorizationCode, currentAuthorizationCode bool
-	if err := database.pool.QueryRow(t.Context(), `SELECT EXISTS (SELECT 1 FROM public.authorization_code WHERE code_hash = $1), EXISTS (SELECT 1 FROM public.authorization_code WHERE code_hash = $2)`, oldCode.Hash, currentCode.Hash).Scan(&oldAuthorizationCode, &currentAuthorizationCode); err != nil || oldAuthorizationCode || !currentAuthorizationCode {
-		t.Fatalf("인가 코드 대상 보존 = old:%t current:%t err:%v", oldAuthorizationCode, currentAuthorizationCode, err)
-	}
-
 	oldAuditID := newTestID(t)
 	currentAuditID := newTestID(t)
 	teamID := newTestID(t)

@@ -45,15 +45,13 @@ func TestPeriodicWorkerTasksMatchDesign(t *testing.T) {
 		t.Fatalf("주기 작업자 준비: %v", err)
 	}
 	want := map[string]time.Duration{
-		"grace_expiry":               time.Hour,
-		"proposal_cleanup":           24 * time.Hour,
-		"audit_cleanup":              24 * time.Hour,
-		"revocation_cleanup":         time.Hour,
-		"authorization_code_cleanup": time.Hour,
-		"request_rate_cleanup":       time.Hour,
-		"embedding_tier_move":        24 * time.Hour,
-		"idempotency_cleanup":        time.Hour,
-		"dpop_proof_cleanup":         time.Minute,
+		"grace_expiry":         time.Hour,
+		"proposal_cleanup":     24 * time.Hour,
+		"audit_cleanup":        24 * time.Hour,
+		"revocation_cleanup":   time.Hour,
+		"request_rate_cleanup": time.Hour,
+		"embedding_tier_move":  24 * time.Hour,
+		"idempotency_cleanup":  time.Hour,
 	}
 	if len(worker.tasks) != len(want) {
 		t.Fatalf("주기 작업 수 = %d, want %d", len(worker.tasks), len(want))
@@ -145,19 +143,11 @@ func (*fakePeriodicStore) CleanupExpiredRevocations(context.Context, time.Time) 
 	return 0, nil
 }
 
-func (*fakePeriodicStore) CleanupExpiredAuthorizationCodes(context.Context, time.Time) (int, error) {
-	return 0, nil
-}
-
 func (*fakePeriodicStore) CleanupRequestRateWindows(context.Context, time.Time) (int, error) {
 	return 0, nil
 }
 
 func (*fakePeriodicStore) CleanupExpiredIdempotencyRecords(context.Context, time.Time) (int, error) {
-	return 0, nil
-}
-
-func (*fakePeriodicStore) CleanupExpiredDPoPProofs(context.Context, time.Time) (int, error) {
 	return 0, nil
 }
 

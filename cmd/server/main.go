@@ -15,18 +15,9 @@ import (
 	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/config"
 	"agent_context_sharing/internal/index"
-	"agent_context_sharing/internal/mcp"
 	"agent_context_sharing/internal/model"
-	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
 	"agent_context_sharing/internal/web"
-)
-
-const (
-	// serverName과 serverVersion은 규약이 결과의 `_meta`에 싣도록 권고한 구현 식별
-	// 정보다. 표시와 진단에만 쓰이며 어느 판정의 근거도 되지 않는다.
-	serverName    = "agent-context"
-	serverVersion = "0.1.0"
 )
 
 // shutdownTimeout은 종료 신호 뒤 진행 중인 요청을 기다리는 최대 시간이다.
@@ -111,8 +102,8 @@ func runConfigured(cfg config.Config) (resultErr error) {
 		return fmt.Errorf("임베딩 DB 구성 확인: %w", err)
 	}
 	// 색인 작업자는 「배치 조합」이 배치를 선택으로 열어 두었으므로 내장일 때만 시작한다.
-	// 분리 배치에서는 다른 배포 단위가 작업 큐를 소비한다. 시작하지 않아도 만들어 두는
-	// 이유는 질의 임베딩이 요청 경로에 있어 배치와 무관하게 필요하기 때문이다.
+	// 분리 배치에서는 다른 배포 단위가 작업 큐를 소비한다. 두 배치 모두 시작 전에
+	// 제공자 구성과 DB 임베딩 스키마의 정합성을 검사한다.
 	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
 	workers = append(workers, periodic)
 	if cfg.IndexWorkerPlacement == config.PlacementEmbedded {
@@ -124,28 +115,12 @@ func runConfigured(cfg config.Config) (resultErr error) {
 		indexer.Start(context.Background())
 	}
 	periodic.Start(context.Background())
-	searcher, err := search.New(database, indexer, search.Config{Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit, SemanticThreshold: cfg.SearchSemanticThreshold, FoldThreshold: cfg.SearchFoldThreshold, GraphStage: search.GraphStage(cfg.SearchGraphStage), GlobalFallback: cfg.SearchGlobalFallback, EvidencePathSelection: cfg.SearchEvidencePathSelection, AdaptiveRouting: cfg.SearchAdaptiveRouting, AdaptiveDirectThreshold: cfg.SearchAdaptiveDirectThreshold, AdaptiveMarginThreshold: cfg.SearchAdaptiveMarginThreshold, Consistency: search.ConsistencySnapshot}, slog.Default())
-	if err != nil {
-		return fmt.Errorf("검색 실행기 준비: %w", err)
-	}
 	authorization, err := authz.New(database, authz.Config{
 		Issuer:     cfg.AuthorizationServerURL.String(),
-		Resource:   cfg.ResourceServerURL.String(),
-		Scope:      mcp.Scope,
-		Clients:    cfg.OAuthClients,
 		BcryptCost: cfg.BcryptCost,
 	})
 	if err != nil {
 		return fmt.Errorf("인가 서버 준비: %w", err)
-	}
-	resourceServer, err := mcp.New(mcp.Config{
-		ResourceURL:            cfg.ResourceServerURL,
-		AuthorizationServerURL: cfg.AuthorizationServerURL,
-		AllowedOrigins:         cfg.MCPAllowedOrigins,
-		ServerInfo:             mcp.Implementation{Name: serverName, Version: serverVersion},
-	}, verifyWithRenewal(authorization), mcp.NewHandlerWithSearch(database, cfg.AccountPlans, searcher, slog.Default()))
-	if err != nil {
-		return fmt.Errorf("MCP 리소스 서버 준비: %w", err)
 	}
 	transport := transportSecurity{
 		directTLS:      cfg.TLSMode == config.TLSModeDirect,
@@ -159,21 +134,13 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("웹 서버 준비: %w", err)
 	}
-	// 인가 서버 경로는 로그인 화면과 세션 쿠키 판정을 웹에서 받아 쓴다. 쿠키의 이름과
-	// 수명은 web이 소유하므로 authz는 판정 결과만 주입받는다.
-	authorizationHandler, err := authz.NewHandler(authorization, webServer.SessionAccount, "/login")
+	authorizationHandler, err := authz.NewHandler(authorization)
 	if err != nil {
 		return fmt.Errorf("인가 서버 경로 준비: %w", err)
 	}
-	app := newApplication(database, slog.Default(), transport, resourceServer)
+	app := newApplication(database, slog.Default(), transport)
 	app.web = webServer
-	// 인가 서버가 분리 배치이면 발급 경로를 등록하지 않는다. 「배치 조합」이 이 인스턴스를
-	// 리소스 서버로만 두는 조합을 열어 두었고, 메타데이터가 가리키는 인가 서버 주소는
-	// 구성 값으로 이미 분리되어 있다. 이미 발급된 토큰의 검증은 JWKS와 폐기 목록이
-	// 데이터베이스에 있으므로 배치와 무관하게 계속된다.
-	if cfg.AuthorizationServerPlacement == config.PlacementEmbedded {
-		app.authz = authorizationHandler
-	}
+	app.publicKeys = authorizationHandler
 	server := newHTTPServer(cfg.HTTPAddr, app.handler())
 
 	stopSignals := make(chan os.Signal, 1)

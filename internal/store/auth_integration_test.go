@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"os"
 	"strings"
@@ -16,70 +15,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// TestReserveDPoPProofIntegration은 같은 키·proof 식별자를 동시에 한 번만 예약하고,
-// 만료 행만 정리하는지 실제 데이터베이스에서 확인한다.
-func TestReserveDPoPProofIntegration(t *testing.T) {
-	database := newIntegrationStore(t)
-	thumbprint := "jkt-" + newTestID(t).String()
-	proofIDHash := sha256.Sum256([]byte("same-dpop-proof"))
-	expiresAt := time.Now().UTC().Add(time.Minute)
-
-	type result struct {
-		reserved bool
-		err      error
-	}
-	results := make(chan result, 2)
-	var group sync.WaitGroup
-	for range 2 {
-		group.Go(func() {
-			reserved, err := database.ReserveDPoPProof(t.Context(), thumbprint, proofIDHash[:], expiresAt)
-			results <- result{reserved: reserved, err: err}
-		})
-	}
-	group.Wait()
-	close(results)
-
-	reservedCount := 0
-	for result := range results {
-		if result.err != nil {
-			t.Fatalf("DPoP proof 예약: %v", result.err)
-		}
-		if result.reserved {
-			reservedCount++
-		}
-	}
-	if reservedCount != 1 {
-		t.Fatalf("동일 DPoP proof 예약 성공 수 = %d, want 1", reservedCount)
-	}
-
-	// 허용 창만 지난 기록은 시계 차이 여유 동안 남기고, 여유까지 지난 기록만 지운다.
-	now := time.Now().UTC()
-	graceHash := sha256.Sum256([]byte("grace-dpop-proof"))
-	expiredHash := sha256.Sum256([]byte("expired-dpop-proof"))
-	for _, row := range []struct {
-		hash      [sha256.Size]byte
-		expiresAt time.Time
-	}{
-		{graceHash, now.Add(-dpopProofCleanupGrace / 2)},
-		{expiredHash, now.Add(-2 * dpopProofCleanupGrace)},
-	} {
-		if reserved, err := database.ReserveDPoPProof(t.Context(), thumbprint, row.hash[:], row.expiresAt); err != nil || !reserved {
-			t.Fatalf("만료 DPoP proof 준비 = reserved:%t err:%v", reserved, err)
-		}
-	}
-	if deleted, err := database.CleanupExpiredDPoPProofs(t.Context(), now); err != nil || deleted < 1 {
-		t.Fatalf("만료 DPoP proof 정리 = %d, %v", deleted, err)
-	}
-	var currentExists, graceExists, expiredExists bool
-	if err := database.pool.QueryRow(t.Context(), `
-		SELECT EXISTS (SELECT 1 FROM public.dpop_proof_replay WHERE jwk_thumbprint = $1 AND proof_id_hash = $2),
-		       EXISTS (SELECT 1 FROM public.dpop_proof_replay WHERE jwk_thumbprint = $1 AND proof_id_hash = $3),
-		       EXISTS (SELECT 1 FROM public.dpop_proof_replay WHERE jwk_thumbprint = $1 AND proof_id_hash = $4)
-	`, thumbprint, proofIDHash[:], graceHash[:], expiredHash[:]).Scan(&currentExists, &graceExists, &expiredExists); err != nil || !currentExists || !graceExists || expiredExists {
-		t.Fatalf("DPoP proof 정리 대상 보존 = current:%t grace:%t expired:%t err:%v", currentExists, graceExists, expiredExists, err)
-	}
-}
 
 // TestUpdatePasswordHashIfMatchesIntegration은 재해시가 읽은 기존 값과 같을 때만
 // 반영돼 동시에 성공한 로그인 요청이 이미 바뀐 해시를 덮어쓰지 않음을 확인한다.
@@ -373,69 +308,6 @@ func TestPermissionIntegration(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("소유 그래프 수 = %d, want 1", count)
-	}
-}
-
-// TestAuthorizationCodeIntegration은 인가 코드의 첫 소비와 재사용 판정을 실제
-// 데이터베이스에서 확인한다. 인가 서버 단위 테스트는 메모리 대역을 쓰므로 이 경로의
-// nullable 열 처리가 여기에서만 드러난다.
-func TestAuthorizationCodeIntegration(t *testing.T) {
-	store := newIntegrationStore(t)
-	accountID := newTestID(t)
-	createTestAccount(t, store, accountID)
-
-	now := time.Now().UTC()
-	code := AuthorizationCode{
-		Hash:            "hash-" + newTestID(t).String(),
-		ClientID:        "integration-client",
-		AccountID:       accountID,
-		RedirectURI:     "http://127.0.0.1:1234/callback",
-		CodeChallenge:   "challenge",
-		Resource:        "https://example.test/mcp",
-		IssuedAt:        now,
-		AuthenticatedAt: now.Add(-11 * time.Hour).Truncate(time.Microsecond),
-		ExpiresAt:       now.Add(time.Minute),
-	}
-	if err := store.CreateAuthorizationCode(t.Context(), code); err != nil {
-		t.Fatalf("인가 코드 저장: %v", err)
-	}
-	read, err := store.AuthorizationCodeForExchange(t.Context(), code.Hash, now)
-	if err != nil || !read.AuthenticatedAt.Equal(code.AuthenticatedAt) {
-		t.Fatalf("조회한 인증 시각 = %s, %v; want %s", read.AuthenticatedAt, err, code.AuthenticatedAt)
-	}
-
-	tokenID := "token-" + newTestID(t).String()
-	// PostgreSQL timestamptz는 마이크로초까지 보존하므로, 왕복 뒤 비교하는 기대값도
-	// 같은 정밀도로 맞춘다.
-	tokenExpiresAt := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
-	// 첫 소비는 발급 토큰 정보와 한 문장에서 기록한다.
-	consumed, err := store.ConsumeAuthorizationCode(t.Context(), code.Hash, tokenID, time.Now().UTC(), tokenExpiresAt)
-	if err != nil {
-		t.Fatalf("첫 인가 코드 소비: %v", err)
-	}
-	if consumed.ClientID != code.ClientID || consumed.AccountID != accountID || consumed.CodeChallenge != code.CodeChallenge || !consumed.AuthenticatedAt.Equal(code.AuthenticatedAt) {
-		t.Fatalf("소비한 인가 코드의 교환 정보가 다르다: %+v", consumed)
-	}
-	if consumed.IssuedTokenID != tokenID || consumed.IssuedTokenExpiresAt == nil || !consumed.IssuedTokenExpiresAt.Equal(tokenExpiresAt) {
-		t.Fatalf("첫 소비의 발급 토큰 기록 = %+v, want %q와 %s", consumed, tokenID, tokenExpiresAt)
-	}
-
-	// 재사용은 폐기할 토큰 식별자를 담아 거절한다.
-	_, err = store.ConsumeAuthorizationCode(t.Context(), code.Hash, "other-"+newTestID(t).String(), time.Now().UTC(), tokenExpiresAt)
-	used, ok := errors.AsType[CodeUsedError](err)
-	if !ok {
-		t.Fatalf("인가 코드 재사용 오류 = %v", err)
-	}
-	if used.TokenID != tokenID {
-		t.Fatalf("재사용 오류의 토큰 식별자 = %q, want %q", used.TokenID, tokenID)
-	}
-	if !used.TokenExpiresAt.Equal(tokenExpiresAt) {
-		t.Fatalf("재사용 오류의 토큰 만료 시각 = %s, want %s", used.TokenExpiresAt, tokenExpiresAt)
-	}
-
-	// 없는 코드는 재사용과 구분한다.
-	if _, err := store.ConsumeAuthorizationCode(t.Context(), "hash-"+newTestID(t).String(), "token-"+newTestID(t).String(), time.Now().UTC(), tokenExpiresAt); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("없는 인가 코드 소비 = %v, want ErrNotFound", err)
 	}
 }
 

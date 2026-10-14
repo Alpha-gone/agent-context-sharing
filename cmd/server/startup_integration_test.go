@@ -24,7 +24,7 @@ func TestStartupFailureClosesWorkersIntegration(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL이 없어 기동 실패 통합 테스트를 건너뛴다")
 	}
 	// 조립 실패 뒤 남은 색인 작업이 있어도 실제 임베딩 제공자로 보내지 않는다.
-	embeddings := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	embeddings := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
 	defer embeddings.Close()
 	embeddingURL, err := url.Parse(embeddings.URL)
 	if err != nil {
@@ -41,10 +41,9 @@ func TestStartupFailureClosesWorkersIntegration(t *testing.T) {
 	if graphName == "" {
 		graphName = "agent_context"
 	}
-	resource := &url.URL{Scheme: "https", Host: "service.test", Path: "/mcp"}
 	issuer := &url.URL{Scheme: "https", Host: "service.test"}
 	for _, placement := range []config.ComponentPlacement{config.PlacementEmbedded, config.PlacementExternal} {
-		for _, failure := range []string{"검색 실행기 준비", "인가 서버 준비", "HTTP 서버 수신"} {
+		for _, failure := range []string{"인가 서버 준비", "HTTP 서버 수신"} {
 			t.Run(string(placement)+"/"+failure, func(t *testing.T) {
 				listener, err := net.Listen("tcp", "127.0.0.1:0")
 				if err != nil {
@@ -53,16 +52,12 @@ func TestStartupFailureClosesWorkersIntegration(t *testing.T) {
 				defer listener.Close()
 				cfg := config.Config{
 					DatabaseURL: databaseURL, GraphName: graphName, HTTPAddr: listener.Addr().String(),
-					EmbeddingProvider: "ollama", EmbeddingBaseURL: embeddingURL, EmbeddingModel: "startup-test", EmbeddingVectorType: "vector", EmbeddingDimension: dimension,
+					EmbeddingProvider: "gemini", GeminiAPIKey: "synthetic-key", EmbeddingBaseURL: embeddingURL, EmbeddingModel: "gemini-embedding-2", EmbeddingVectorType: "vector", EmbeddingDimension: dimension,
 					SearchExecution: config.SearchExecutionParallel, SearchCandidateLimit: 50, SearchSemanticThreshold: .5, SearchFoldThreshold: .9, SearchGraphStage: config.SearchGraphStageBaseline,
 					RelationAdjacencyWindow: time.Hour, RelationSimilarityThreshold: .8, RelationProposalLimit: 10,
-					BcryptCost: 4, ResourceServerURL: resource, AuthorizationServerURL: issuer, MCPAllowedOrigins: []*url.URL{issuer},
-					OAuthClients:         map[string][]*url.URL{"test-client": {{Scheme: "http", Host: "127.0.0.1", Path: "/callback"}}},
-					IndexWorkerPlacement: placement, AuthorizationServerPlacement: config.PlacementEmbedded, IndexTargetLayers: config.IndexTargetLayersAll, TLSMode: config.TLSModeProxy,
+					AuthorizationServerURL: issuer, BcryptCost: 4, IndexWorkerPlacement: placement,
 				}
 				switch failure {
-				case "검색 실행기 준비":
-					cfg.SearchExecution = "invalid"
 				case "인가 서버 준비":
 					cfg.BcryptCost = 0
 				}

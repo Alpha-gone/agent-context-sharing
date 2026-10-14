@@ -25,7 +25,6 @@ Go 1.27.1과 PostgreSQL·AGE 개발 DB를 사용했다. DB 테스트에는 `TEST
 
 ```shell
 go test -race ./internal/store -run '^(TestOperatorRestore|TestWebRestore|TestRevokeGraphGrant|TestRemoveTeamMember|TestGrantGraph)' -count=10
-# 서버 루트와 client/에서 각각 실행
 go test ./...
 go build ./...
 go vet ./...
@@ -35,8 +34,6 @@ go test -json ./...
 gofmt -l .
 git diff --check
 ```
-
-신규 복구 회귀와 기존 웹 복구·등급·팀 구성원·유예 회귀가 race 검사로 10회 통과했다. 서버 전체 테스트는 DB 통합 계층을 포함해 통과했고 클라이언트 전체 테스트, 양쪽 모듈 build·vet도 통과했다. 최종 서버 JSON 결과에 실패나 테스트 항목의 건너뛰기는 없었고 테스트 파일이 없는 세 패키지만 `skip`이었다. gofmt 미정리 파일과 diff 공백 오류도 없었다. 별도 `embedding_live` 실제 제공자 시험과 운영 부하 시험은 실행하지 않았다.
 
 ## DOX와 범위
 

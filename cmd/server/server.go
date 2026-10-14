@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"agent_context_sharing/internal/mcp"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/web"
 )
@@ -35,23 +34,19 @@ type transportSecurity struct {
 	trustedProxies []netip.Prefix
 }
 
-// authorizationRoutes는 「HTTP 진입점」이 인가 서버에 배정한 세 경로의 처리기다.
-// readiness와 같은 이유로 인터페이스를 두어 조립과 경로 등록을 서로 떼어 놓는다.
-type authorizationRoutes interface {
-	Authorize(http.ResponseWriter, *http.Request)
-	Token(http.ResponseWriter, *http.Request)
+// publicKeyRoutes는 웹 세션의 서명 공개 키 처리기다.
+type publicKeyRoutes interface {
 	JWKS(http.ResponseWriter, *http.Request)
 }
 
 // application은 1단계 HTTP 상태 경로와 요청 로그를 관리한다.
 type application struct {
-	database  readiness
-	logger    *slog.Logger
-	transport transportSecurity
-	mcp       *mcp.Server
-	web       *web.Server
-	authz     authorizationRoutes
-	accepting atomic.Bool
+	database   readiness
+	logger     *slog.Logger
+	transport  transportSecurity
+	web        *web.Server
+	publicKeys publicKeyRoutes
+	accepting  atomic.Bool
 }
 
 // statusResponse는 상태 확인 경로가 반환하는 민감 정보 없는 본문이다.
@@ -60,11 +55,11 @@ type statusResponse struct {
 }
 
 // newApplication은 데이터베이스 준비 확인, 구조화 로그와 TLS 신뢰 경계를 주입해 상태 경로를 만든다.
-func newApplication(database readiness, logger *slog.Logger, transport transportSecurity, resourceServer *mcp.Server) *application {
+func newApplication(database readiness, logger *slog.Logger, transport transportSecurity) *application {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	app := &application{database: database, logger: logger, transport: transport, mcp: resourceServer}
+	app := &application{database: database, logger: logger, transport: transport}
 	app.accepting.Store(true)
 	return app
 }
@@ -79,17 +74,8 @@ func newApplication(database readiness, logger *slog.Logger, transport transport
 func (app *application) handler() http.Handler {
 	// 업무 경로는 이후 단계에서 이 mux에 등록하며 모두 TLS 판정을 지난다.
 	gated := http.NewServeMux()
-	if app.mcp != nil {
-		gated.Handle("POST /mcp", withRenewalHeader(app.mcp))
-		gated.HandleFunc("GET /.well-known/oauth-protected-resource", app.mcp.ProtectedResourceMetadata)
-		gated.HandleFunc("GET /.well-known/oauth-authorization-server", app.mcp.AuthorizationServerMetadata)
-	}
-	// 인가 서버의 세 경로를 등록한다. 등록하지 않으면 인가 서버 메타데이터가 알리는
-	// 주소가 모두 404가 되어 클라이언트가 접근 토큰을 받을 수 없다.
-	if app.authz != nil {
-		gated.HandleFunc("GET /authorize", app.authz.Authorize)
-		gated.HandleFunc("POST /token", app.authz.Token)
-		gated.HandleFunc("GET /jwks.json", app.authz.JWKS)
+	if app.publicKeys != nil {
+		gated.HandleFunc("GET /jwks.json", app.publicKeys.JWKS)
 	}
 	if app.web != nil {
 		gated.Handle("/", app.web)
@@ -105,9 +91,8 @@ func (app *application) handler() http.Handler {
 // recoverPanics는 처리기에서 빠져나온 panic을 500으로 바꾸고 원인을 로그에 남긴다.
 //
 // 차단막이 없으면 net/http이 연결을 끊어 클라이언트는 응답 대신 끊긴 연결을 받고, 구조화
-// 로그에도 요청이 남지 않는다. MCP 처리기가 스키마 검증을 믿고 타입 단언을 쓰므로, 스키마와
-// 처리기가 어긋나는 순간이 곧 이 자리다. 바깥의 logRequests가 상태를 기록할 수 있도록 이
-// 미들웨어를 그 안쪽에 둔다.
+// 로그에도 요청이 남지 않는다. 처리기 오류도 요청 상태와 함께 기록하도록
+// 이 미들웨어를 logRequests 안쪽에 둔다.
 func (app *application) recoverPanics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		defer func() {

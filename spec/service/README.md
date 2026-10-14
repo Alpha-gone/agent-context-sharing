@@ -8,20 +8,23 @@
 
 | 서비스                 | 역할                                                                                                                                 | 상태                 | 주요 문서                                                |
 |------------------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------|----------------------------------------------------------|
-| 에이전트 컨텍스트 관리 | AI 에이전트 제텔카스텐을 공유 컨텍스트 그래프로 구현하고, MCP 기반 작업 컨텍스트 흐름과 여러 작업자의 컨텍스트 공유·협업을 지원한다. | 요구사항과 설계 확정 | [SRS](agent-context/SRS.md), [SDD](agent-context/SDD.md) |
-| 에이전트 컨텍스트 MCP 클라이언트 | 에이전트 호스트에 `stdio` 도구를 제공하고 원격 에이전트 컨텍스트 관리 시스템에는 Streamable HTTP로 접속하는 로컬 클라이언트 프로세스다. 브라우저 인가와 도구 13종의 안전한 중계를 담당한다. | 요구사항과 설계 확정, 구현 진행 중 | [개발 기준](agent-context-client/CANONICAL.md), [SRS](agent-context-client/SRS.md), [SDD](agent-context-client/SDD.md), [개발 계획](agent-context-client/DEVELOPMENT_PLAN.md) |
+| 에이전트 컨텍스트 관리 | 공유 컨텍스트 그래프와 호스트 내장 MCP의 직접 연결·표준 OAuth를 제공하는 목표 서비스다. | SRS 확정 및 분야별 SDD 작성, 직접 연결·평가·로그·저장 계층화 변경의 구현·실증 대기 | [SRS](agent-context/SRS.md), [SDD 진입점](agent-context/SDD.md), [분야별 설계](agent-context/sdd/AGENTS.md) |
 
 ## 서비스 관계
 
-서비스는 두 개다. 에이전트 컨텍스트 관리 서비스가 공유 컨텍스트 그래프를 소유하는 본체이고, 에이전트 컨텍스트 MCP 클라이언트는 그 공개 계약을 소비하는 연결 서비스다. 클라이언트 프로세스는 호스트 측에서 MCP 서버, 원격 시스템 측에서 MCP 클라이언트 역할을 하며 접근 토큰을 발급받아 도구 호출을 중계한다. 서버의 공개 계약이 바뀌면 클라이언트의 요구사항도 함께 갱신된다.
-
-클라이언트의 [개발 기준](agent-context-client/CANONICAL.md)은 정본 문서의 위치와 변경 경로를 안내한다. 요구사항 정본은 [SRS](agent-context-client/SRS.md), 상세 설계 정본은 [SDD](agent-context-client/SDD.md)다. [개발 계획](agent-context-client/DEVELOPMENT_PLAN.md)은 구현 단계와 검증 진행 상태를 추적한다.
+웹 관리·계정 인증·저장·검색·색인은 하나의 서버 서비스가 소유한다. 호스트 내장 MCP 직접 연결의 요구사항과 목표 설계도 같은 서비스의 SRS·SDD에서 추적하며, 아직 제공하지 않는다.
 
 ## 공통 미정 사항
 
+직접 연결 목표의 상세 계약·이행·검증은 [서버 SDD 「호스트 직접 연결 전환 설계」](agent-context/sdd/architecture.md#호스트-직접-연결-전환-설계)가 소유한다. [SRS 「토큰 갱신」](agent-context/SRS.md#토큰-갱신)에서 최대 30일·비활동 7일과 정리 정책을 확정했고 [「직접 연결의 구현 기준과 첫 호스트 시험」](agent-context/SRS.md#직접-연결의-구현-기준과-첫-호스트-시험)에서 공식 Go SDK v1.8.0·초기 revision 2026-07-28·Codex CLI 0.160.1 기준을 선정했다. `TBD-AGENT_CONTEXT-063`은 해소되어 SDD에 동기화했고 `064`의 실제 상호운용 검증은 운영 전 수행해야 한다. 현재 직접 연결과 새 토큰 갱신·재시작·쓰기 인수는 미검증이다.
+
+Air Context와 관련 연구에서 채택한 검색 단위·외부 원본 재현성·임베딩 용도별 비교·에이전트 업무 비용 평가(`FR-AGENT_CONTEXT-160`~`163`)는 SRS에 확정하고 [평가 SDD](agent-context/sdd/evaluation.md#초기-공개-평가-실행-설계)에 반영했다. 요구사항 자체의 미정 사항과 구분하며 [SDD 추적표](agent-context/sdd/traceability.md#요구사항-추적표)에서 추적한다. 데이터 준비·평가 실행·실제 결과는 대기 중이며, 서버 외부 원본 수집·AST 분할·이진 양자화와 관찰 마스킹의 운영 채택을 뜻하지 않는다.
+
+시험 분석용 종류별 파일 저장·흐름 추적·파일 보호(`FR-AGENT_CONTEXT-173`~`175`)는 [SRS 「종류별 진단 로그」](agent-context/SRS.md#종류별-진단-로그)에서 확정했고 [관측성 SDD](agent-context/sdd/observability.md#종류별-진단-로그)가 파일 분류·상관 ID·회전·보존·상한·실패 처리와 검증 절차를 구체화했다. 실제 파일 저장·재시작·다중 인스턴스 검증과 구현은 대기 중이다.
+
 요구사항과 상세 설계가 모두 정한 뒤에도 남아 있는 항목이다.
 
-요구사항 수준은 `SRS.md`의 「미정 사항」이, 설계 선택 수준은 `SDD.md`의 「설계 미정 사항」이 소유한다.
+요구사항 수준은 `SRS.md`의 「미정 사항」이, 설계 선택 수준은 [`sdd/traceability.md`](agent-context/sdd/traceability.md#설계-미정-사항)가 소유한다.
 
 - 인증 고도화. 비밀번호 재설정, 실패 잠금, 다중 요소와 외부 IdP (`TBD-AGENT_CONTEXT-048`)
 - 계정 소멸 경로. 탈퇴와 그에 따른 등급 회수 (`TBD-AGENT_CONTEXT-049`)
@@ -29,25 +32,11 @@
 - Client ID Metadata Documents 지원 여부. 사전 등록을 확정했고 명세는 이 방식을 SHOULD로 권고한다 (`TBD-AGENT_CONTEXT-060`)
 - 한국어 형태소 분석. 키워드 채널이 `simple` 구성을 쓰며 채널 기여를 측정한 뒤 판단한다 (`TBD-AGENT_CONTEXT-061`)
 - 응답 직렬화 형식 (MCP `tools` 응답 규약을 따르며 세부는 구현에서 정한다)
-- Row Level Security 채택과 Apache AGE 정점의 파티셔닝 가능 여부 (검증 후 판단)
-- 벡터 인덱스 방식과 저장 계층의 허용 범위 (배포 구성)
-- 공개 벤치마크 선정과 반복 횟수 조정
+- Row Level Security 채택 (읽기 경로 검증 후 판단)
 - 계정 플랜의 이름과 구체 값 (명세는 항목과 기본값만 정하고 값은 운영 구성으로 둔다)
 
-상세 설계가 확정해 이 목록에서 뺀 항목은 HTTP 서버와 라우팅, 데이터베이스 드라이버와 커넥션 풀, 인가 서버 구현 방식, 색인 작업 큐 구현 방식, 색인 재시도 한계, 화면 배치와 시각 표현 규칙이다. 이후 `source_ref`의 하위 구조, 관계형 테이블의 열 정의와 스키마 적용 방식도 확정했다. 계정 개체와 최소 인증 모델(`TBD-AGENT_CONTEXT-047`), 웹 세션(`050`), 운영자 복구 경로(`051`), 클라이언트 등록과 인가 코드(`059`)도 확정해 뺐다. 인가 코드 저장, 판정의 직렬화, 주기 작업 배치와 색인 작업 확보 방식도 상세 설계가 확정했다. JWT 서명과 검증 라이브러리(`TBD-AGENT_CONTEXT-044`), 색상 값·서체와 간격(`045`), 화면 렌더링 방식과 시각화 구현(`046`)까지 확정해 상세 설계가 연 미정 사항에는 남은 항목이 없다.
+벡터 인덱스의 HNSW 고정과 그래프 정점 파티셔닝 미채택은 [SRS 「임베딩 저장」](agent-context/SRS.md#임베딩-저장)과 [「저장 계층화」](agent-context/SRS.md#저장-계층화)에서 확정했고 SDD에 동기화했다. 임베딩 테이블만 같은 PostgreSQL의 온라인 `hot`·`cold`로 계층화하며 두 계층을 직접 검색한다.
 
-MCP 클라이언트의 첫 지원 에이전트 호스트(`TBD-AGENT_CONTEXT_CLIENT-001`)는 `features.mcp_2026_07_28`을 활성화한 Codex CLI `0.156.1`로 확정해 목록에서 뺐다.
+콜드 임베딩은 같은 PostgreSQL의 온라인 영속 저장소로 제한한다. 공개 평가는 [SRS 「초기 공개 평가와 반복 정책」](agent-context/SRS.md#초기-공개-평가와-반복-정책)의 LongMemEval_S·LoCoMo·자체 보완과 조건별 10회·95% 대응 신뢰구간으로 확정했고 SDD가 실행·산출물 설계를 반영했다. 표본 부족·불명확한 결과는 판정 보류하며 실제 성능·비용은 아직 측정하지 않았다.
 
-MCP 클라이언트의 메시지·응답·동시성 자원 상한(`TBD-AGENT_CONTEXT_CLIENT-005`)은 입력 256 KiB, 응답 32 MiB, 진행 중 원격 호출 8개와 호출·인증 대기열 각 128개로 확정해 목록에서 뺐다.
-
-MCP 클라이언트의 구현 언어와 저장소 배치(`TBD-AGENT_CONTEXT_CLIENT-002`)는 Go `1.27.1`과 공식 MCP Go SDK를 사용하는 별도 `client/` Go 모듈의 독립 실행 파일로 확정해 목록에서 뺐다. 클라이언트 SDD는 `client/cmd/client`의 `agent-context-client` 실행 파일, `serve`·`doctor` 명령과 `client/internal/client/` 패키지 경계를 확정했다.
-
-MCP 클라이언트의 지원 운영체제 판(`TBD-AGENT_CONTEXT_CLIENT-004`)은 공급자의 보안 지원 기간에 있는 macOS 14 Sonoma 이상, Ubuntu LTS 22.04 이상 또는 Debian 12 이상, Windows 11 25H2 이상으로 확정해 목록에서 뺐다. Windows의 공식 실행 환경은 Canonical 표준 보안 유지 기간인 WSL2 Ubuntu LTS 22.04 이상이며 브라우저 인가와 loopback callback을 Windows 호스트와 함께 검증한다.
-
-MCP 클라이언트와 서버의 쓰기 멱등성 키 계약(`TBD-AGENT_CONTEXT_CLIENT-006`)은 `io.github.alpha-gone/write-idempotency` 확장, 호출별 UUIDv7 `Idempotency-Key`, 계정별 요청 지문과 최초 완료 결과의 24시간 보관으로 확정해 목록에서 뺐다. 같은 키·같은 요청은 최초 결과를 재생하고 같은 키·다른 요청은 `invalid_argument`로 거부한다.
-
-MCP 클라이언트와 서버의 DPoP 계약(`TBD-AGENT_CONTEXT_CLIENT-007`)은 RFC 9449, 보호 리소스·인가 서버 메타데이터의 DPoP 필수·ES256 선언, 프로세스 수명 ES256 키, `token_type=DPoP`와 `cnf.jkt`, HTTP 시도별 새 proof, 서버 시각 ±60초와 공유 `(jkt, jti)` 단일 사용 검사, 갱신 결합 유지, Bearer 하향 거부로 확정해 목록에서 뺐다. 보호 요청 오류는 `invalid_token`과 `invalid_dpop_proof`로 구분하고 최초 구현에서는 `DPoP-Nonce`를 사용하지 않는다. 이 인증은 MCP `2026-07-28` 핵심 Bearer 인증을 대체하는 서비스 전용 프로필이므로 원격 경계의 MCP 인증 적합성을 주장하지 않는다.
-
-MCP 클라이언트의 재시도 기본값(`TBD-AGENT_CONTEXT_CLIENT-003`)은 허용된 읽기, 원격 전달 전 실패가 확실한 쓰기와 멱등성 확장을 협상한 쓰기에 최초 시도 제외 최대 3회, 250ms·500ms·1초 상한의 무작위 대기를 적용하는 것으로 확정해 목록에서 뺐다. 취소와 도구 호출 제한 시간이 우선하며 재인증 뒤에도 같은 호출의 재시도 횟수를 초기화하지 않는다.
-
-MCP 클라이언트의 SRS와 SDD에는 요구사항 또는 설계 수준의 미정 사항이 없다.
+상세 설계가 확정해 이 목록에서 뺀 항목은 HTTP 서버와 라우팅, 데이터베이스 드라이버와 커넥션 풀, 인가 서버 구현 방식, 색인 작업 큐 구현 방식, 색인 재시도 한계, 화면 배치와 시각 표현 규칙이다. 이후 `source_ref`의 하위 구조, 관계형 테이블의 열 정의와 스키마 적용 방식도 확정했다. 계정·웹 세션·운영자 복구의 정본은 서버 SRS·SDD에 둔다. 표준 OAuth와 호스트 직접 연결은 구현 대기다.

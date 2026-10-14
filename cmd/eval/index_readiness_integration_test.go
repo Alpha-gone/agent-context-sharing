@@ -55,11 +55,11 @@ func failingEvalWorker(t *testing.T, database *store.Store, connection *pgx.Conn
 	}
 	vector := make([]float64, dimension+dimensionDelta)
 	vector[0] = 1
-	raw, err := json.Marshal(map[string]any{"embeddings": [][]float64{vector}})
+	raw, err := json.Marshal(map[string]any{"embedding": map[string]any{"values": vector}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = w.Write(raw)
@@ -69,7 +69,7 @@ func failingEvalWorker(t *testing.T, database *store.Store, connection *pgx.Conn
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := index.New(database, index.Config{Provider: "ollama", BaseURL: baseURL, Model: "eval-regression", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
+	worker, err := index.New(database, index.Config{Provider: "gemini", APIKey: "synthetic-key", BaseURL: baseURL, Model: "gemini-embedding-2", VectorType: "vector", Dimension: dimension}, server.Client(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,12 +205,13 @@ func TestEvaluationCommandRejectsUnreadyIndexIntegration(t *testing.T) {
 	if err := connection.QueryRow(t.Context(), `SELECT substring(format_type(atttypid,atttypmod) FROM '[0-9]+')::int FROM pg_attribute WHERE attrelid='public.context_embedding'::regclass AND attname='embedding'`).Scan(&dimension); err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(429) }))
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(429) }))
 	t.Cleanup(server.Close)
+	trustEvalEmbeddingServer(t, server)
 	for key, value := range map[string]string{
 		"DATABASE_URL": os.Getenv("TEST_DATABASE_URL"), "AGE_GRAPH_NAME": "agent_context",
-		"EMBEDDING_PROVIDER": "ollama", "EMBEDDING_BASE_URL": server.URL, "EMBEDDING_MODEL": "eval-regression",
-		"EMBEDDING_VECTOR_TYPE": "vector", "EMBEDDING_DIMENSION": strconv.Itoa(dimension), "GEMINI_API_KEY": "",
+		"EMBEDDING_PROVIDER": "gemini", "EMBEDDING_BASE_URL": server.URL, "EMBEDDING_MODEL": "gemini-embedding-2",
+		"EMBEDDING_VECTOR_TYPE": "vector", "EMBEDDING_DIMENSION": strconv.Itoa(dimension), "GEMINI_API_KEY": "synthetic-key",
 		"SEARCH_CHANNEL_CANDIDATE_LIMIT": "500", "SEARCH_FOLD_SIMILARITY_THRESHOLD": "0.95", "EVAL_TEST_COMMAND_PROCESS": "1",
 	} {
 		t.Setenv(key, value)

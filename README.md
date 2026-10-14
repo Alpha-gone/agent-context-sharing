@@ -10,17 +10,16 @@ AI 에이전트가 작업 중 얻은 지식과 맥락을 저장하고, 관계를
 - 의미 유사도·키워드·시간 필터 검색과 컨텍스트 관계 탐색
 - 그래프별 소유자·편집자·열람자 권한과 팀 관리
 - 웹 관리 화면의 컨텍스트 조회, 국소 그래프 보기와 운영자 복구
-- MCP 도구 13종과 브라우저 기반 인가, PKCE·DPoP를 사용하는 접근 토큰
+- 호스트 내장 MCP 직접 연결 설계: 표준 OAuth·Bearer·회전형 갱신 토큰 (구현 대기)
 - 비동기 임베딩 색인, 그래프 불변식 감사와 검색 품질 평가 도구
 
 현재는 검증 단계입니다. 인증된 모든 계정에 운영자 복구 자격이 있으므로 신뢰할 수 있는 시험 참여자로 접근 범위를 제한해야 합니다. 비밀번호 재설정, 계정 잠금, 2FA와 외부 인가 서버 연동은 현재 제공하지 않습니다. 공개 서비스 전환 여부는 [서비스 현황](spec/service/README.md)과 보안 요구사항을 함께 검토하십시오.
 
 ## 구성
 
-에이전트 호스트는 로컬 MCP 클라이언트와 `stdio`로 통신하고, 클라이언트는 원격 서버의 `/mcp`에 HTTPS Streamable HTTP 요청을 보냅니다. 서버는 PostgreSQL의 Apache AGE로 그래프를, pgvector로 임베딩을 저장합니다. 임베딩 제공자는 Gemini 또는 Ollama를 명시적으로 선택합니다.
+현재 서버는 웹 관리·계정 세션·그래프 저장·색인을 제공합니다. 검색과 감사·평가는 내부 패키지와 실행기로 검증합니다. 서버는 PostgreSQL의 Apache AGE로 그래프를, pgvector로 임베딩을 저장하며 임베딩 제공자는 Gemini만 지원하며 명시적으로 구성합니다.
 
 - 서버: 루트 Go 모듈의 `cmd/server`와 `internal/`
-- MCP 클라이언트: 독립 Go 모듈인 `client/`
 - 개발 환경: 호스트에서 Go 프로그램을 실행하고 `compose.dev.yaml`로 DB를 기동하거나, `server` 프로필로 애플리케이션까지 컨테이너에서 실행
 - 현재 터널 연결: 호스트의 `cloudflared`가 `http://localhost:80`으로 전달. 개발용 실행은 아래 「호스트 터널에 연결하는 컨테이너 서버」 절차를 사용
 - 운영 환경: 별도 `compose.prod.yaml`로 DB·마이그레이션·서버를 실행하고 같은 호스트 터널에 연결. 설정·적용·백업 절차는 [운영 매뉴얼](OPERATIONS.md)을 사용
@@ -29,12 +28,10 @@ AI 에이전트가 작업 중 얻은 지식과 맥락을 저장하고, 관계를
 
 `cloudflared`와 Docker는 같은 호스트에서 실행합니다. `compose.dev.yaml`의 `server` 프로필은 DB 준비와 마이그레이션 완료 뒤 서버를 기동하고 `127.0.0.1:80`을 컨테이너의 HTTP 8080에 연결합니다. 터널의 원본 주소는 `http://localhost:80`으로 지정합니다. Docker Compose 2.33.1 이상을 사용하고 호스트의 80번 포트와 `10.204.0.0/24` 네트워크가 사용 가능한지 확인합니다.
 
-개발용 `.env`에 Gemini API 키 등 기존 구성을 채우고 공개 주소 세 값을 실제 터널 도메인으로 설정합니다.
+개발용 `.env`에 Gemini API 키 등 기존 구성을 채우고 웹 세션 issuer를 실제 터널 도메인으로 설정합니다.
 
 ```dotenv
-RESOURCE_SERVER_URL=https://agent-context.example.com/mcp
 AUTHORIZATION_SERVER_URL=https://agent-context.example.com
-MCP_ALLOWED_ORIGINS=https://agent-context.example.com
 ```
 
 ```sh
@@ -44,7 +41,7 @@ curl --fail --show-error http://localhost:80/readyz
 curl --fail --show-error --output /dev/null https://agent-context.example.com/login
 ```
 
-로컬 상태 확인은 `200`, 터널을 통과한 HTTPS 로그인 화면도 `200`이 기대 결과입니다. 로컬 HTTP `/login`은 HTTPS 전달 헤더가 없으므로 `400 https_required`가 정상입니다. 서버는 호스트 접속 경로인 `10.204.0.1/32`에서 온 단일 HTTPS 전달 헤더만 신뢰합니다. 터널을 통해 전달되는 원본 HTTP는 호스트 내부에 한정되며 호스트 접근 권한도 신뢰 경계에 포함됩니다. `cloudflared`는 이 Compose 파일이 관리하지 않습니다. Ollama를 컨테이너 서버와 함께 사용한다면 `ollama` 프로필도 켜고 임베딩 원본 주소를 `http://ollama:11434`로 설정합니다.
+로컬 상태 확인은 `200`, 터널을 통과한 HTTPS 로그인 화면도 `200`이 기대 결과입니다. 로컬 HTTP `/login`은 HTTPS 전달 헤더가 없으므로 `400 https_required`가 정상입니다. 서버는 호스트 접속 경로인 `10.204.0.1/32`에서 온 단일 HTTPS 전달 헤더만 신뢰합니다. 터널을 통해 전달되는 원본 HTTP는 호스트 내부에 한정되며 호스트 접근 권한도 신뢰 경계에 포함됩니다. `cloudflared`는 이 Compose 파일이 관리하지 않습니다.
 
 이 구성은 개발용 DB 자격 증명과 WAL 자동 정리를 사용합니다. 운영 데이터에는 별도 `compose.prod.yaml`과 [운영 매뉴얼](OPERATIONS.md)의 백업·적용 절차를 사용합니다.
 
@@ -54,10 +51,10 @@ curl --fail --show-error --output /dev/null https://agent-context.example.com/lo
 
 ### 준비 사항
 
-- Go **1.27.1**: 루트와 `client/` 모두 같은 버전을 사용합니다.
+- Go **1.27.1**
 - Docker와 Docker Compose: 설치된 판이 제공된 Compose 파일의 `config --quiet` 검사를 통과해야 합니다.
 - Gemini API 키: 아래 기본 구성에 필요합니다. 본문과 검색 질의가 외부 API로 전송되므로 이용 정책과 비용을 확인하십시오.
-- 브라우저와 클라이언트가 신뢰하는 `localhost` TLS 인증서 및 개인 키
+- 브라우저가 신뢰하는 `localhost` TLS 인증서 및 개인 키
 - `curl`, 구성 검사에 사용하는 `jq`
 
 기본 셸에 Go가 없다면 IntelliJ IDEA에 등록된 Go 1.27.1 SDK의 통합 터미널이나 실행 구성을 사용합니다.
@@ -82,7 +79,7 @@ TLS_CERT_FILE=/absolute/path/localhost.pem
 TLS_KEY_FILE=/absolute/path/localhost-key.pem
 ```
 
-나머지는 `.env.example`의 개발 기본값으로 시작합니다. `RESOURCE_SERVER_URL=https://localhost:8080/mcp`, `AUTHORIZATION_SERVER_URL=https://localhost:8080`, `MCP_ALLOWED_ORIGINS=https://localhost:8080`이 인증서 및 접속 주소와 일치해야 합니다.
+나머지는 `.env.example`의 개발 기본값으로 시작합니다. `AUTHORIZATION_SERVER_URL=https://localhost:8080`을 웹 세션의 고정 issuer로 사용합니다.
 
 Go 프로그램은 `.env`를 자동으로 읽지 않습니다. 직접 작성한 신뢰할 수 있는 `.env`만 현재 셸에 내보내십시오. 이 방식은 파일을 셸 코드로 실행합니다.
 
@@ -109,53 +106,24 @@ curl --fail --show-error https://localhost:8080/healthz
 curl --fail --show-error https://localhost:8080/readyz
 ```
 
-브라우저에서 `https://localhost:8080/register`로 계정을 생성하고 `/graphs`로 이동합니다. 초기 그래프 생성과 컨텍스트 기여는 MCP 도구로 수행합니다. 웹 화면은 조회·시각화와 권한 관리에 사용합니다.
+브라우저에서 `https://localhost:8080/register`로 계정을 생성하고 `/graphs`로 이동합니다. 직접 연결 구현 전에는 웹에서 기존 그래프를 조회·관리할 수 있지만 MCP를 통한 신규 그래프 생성과 컨텍스트 기여는 사용할 수 없습니다. 웹 화면은 조회·시각화와 권한 관리에 사용합니다.
 
-기본 개발 기동에는 Ollama가 포함되지 않습니다. 새 개발 DB에서 Ollama 구성을 시험하려면 먼저 다음 명령으로 모델을 준비하고, 환경을 `EMBEDDING_PROVIDER=ollama`, `EMBEDDING_BASE_URL=http://localhost:11434`, `EMBEDDING_MODEL=bge-m3`, `EMBEDDING_DIMENSION=1024`로 바꿉니다.
+기존 DB의 벡터 타입·차원은 환경 변수만 바꿔 전환할 수 없습니다. [임베딩 전환·복귀 설계](spec/service/agent-context/sdd/indexing.md#전환복귀-경계)를 따르십시오.
 
-```sh
-docker compose -f compose.dev.yaml --profile ollama up -d ollama
-docker compose -f compose.dev.yaml --profile ollama exec ollama ollama pull bge-m3
-```
+### 3. 현재 제공 범위
 
-기존 DB의 벡터 타입·차원은 환경 변수만 바꿔 전환할 수 없습니다. [서버 설계](spec/service/agent-context/SDD.md)의 「전환·복귀 경계」를 따르십시오.
+표준 MCP·OAuth 직접 연결은 설계가 채택되었으나 아직 구현되지 않았습니다. 현재 `/mcp`, `/authorize`, `/token`과 OAuth 메타데이터 경로는 제공하지 않습니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다.
 
-### 3. MCP 클라이언트 연결
+### 개발 환경 재생성
 
-빌드는 별도 모듈에서 실행합니다.
+개발 환경을 처음부터 만들 때는 기존 개발 볼륨을 제거한 뒤 기동합니다. 이 절차는 개발 DB와 WAL 데이터를 삭제하므로 보존할 데이터가 없는 개발 환경에 적용합니다. 마이그레이션을 승인된 개발 통합 예외로 `001_init.sql`에 합쳐 checksum이 달라진 경우에도 이전 개발·시험 DB를 재생성합니다. 적용 조건은 [마이그레이션 계약](migrations/AGENTS.md)을 따릅니다.
 
 ```sh
-(cd client && go build -o ../out/agent-context-client ./cmd/client)
-./out/agent-context-client doctor
+docker compose -f compose.dev.yaml down -v
+docker compose -f compose.dev.yaml up -d --wait
 ```
 
-`doctor`는 앞서 내보낸 `.env`의 `AGENT_CONTEXT_CLIENT_*` 값을 사용합니다. 브라우저를 열 수 있는 사용자 컴퓨터에서 실행하고 로그인·인가를 완료합니다. 전체 성공의 종료 코드는 `0`이며, `1`은 실패, `2`는 사용법 오류, `3`은 실패 없이 건너뛴 검사가 있는 상태입니다.
-
-MCP 호스트에는 다음 실행 정보와 환경 변수를 등록합니다. 호스트마다 설정 파일 형식은 다르므로 해당 호스트의 MCP 설정 위치에 맞춰 적용하십시오.
-
-Codex·JetBrains의 `initialize` 기반 연결과 MCP `2026-07-28`의 `server/discover` 연결을 모두 지원합니다. 특정 Codex 기능 플래그를 필수로 설정할 필요는 없습니다. 클라이언트를 다시 빌드한 뒤 호스트의 MCP 연결을 재시작하면 변경된 실행 파일이 적용됩니다. 초기 연결에는 인증이 필요 없으며 도구 목록을 처음 조회할 때 브라우저 인가를 진행합니다.
-
-```json
-{
-  "command": "/absolute/path/agent_context_sharing/out/agent-context-client",
-  "args": ["serve"],
-  "env": {
-    "AGENT_CONTEXT_CLIENT_REMOTE_URL": "https://localhost:8080/mcp",
-    "AGENT_CONTEXT_CLIENT_ID": "agent-context-dev",
-    "AGENT_CONTEXT_CLIENT_AGENT_ID": "0198e7c0-0000-7000-8000-000000000001",
-    "AGENT_CONTEXT_CLIENT_AUTH_TIMEOUT": "5m",
-    "AGENT_CONTEXT_CLIENT_REQUEST_TIMEOUT": "30s",
-    "AGENT_CONTEXT_CLIENT_TOOL_POLICY": "all",
-    "AGENT_CONTEXT_CLIENT_TOOL_ALLOWLIST": ""
-  }
-}
-```
-
-예시 에이전트 식별자는 로컬 시험용입니다. 실제 사용에서는 에이전트별 고유 UUIDv7을 지정합니다. 클라이언트 ID는 서버의 `OAUTH_CLIENTS`에 등록된 값과 일치해야 합니다. 클라이언트 프로세스는 토큰과 DPoP 키를 메모리에만 보관하므로 재시작하면 재인증이 필요합니다.
-
-원격 서버에 연결하는 참여자는 `./client-setup.sh init <원격 /mcp 주소> [클라이언트 ID]`로 빌드와 구성 파일 생성을, `doctor`와 `host-config`로 진단과 위 실행 정보 출력을 한 번에 처리할 수 있습니다. 절차는 [운영 매뉴얼](OPERATIONS.md)의 「참여자 연결과 개방 확인」을 참고하십시오.
-
-조회 전용 호스트에는 `AGENT_CONTEXT_CLIENT_TOOL_POLICY=read_only`를 지정합니다. 도구 공개 정책은 서버의 그래프별 인가를 대체하지 않습니다. 세부 계약은 [클라이언트 설계](spec/service/agent-context-client/SDD.md)에 있습니다.
+재생성 뒤에는 위 기동 절차의 마이그레이션을 적용합니다.
 
 ## 검증
 
@@ -165,7 +133,6 @@ DB 통합 검증은 운영 데이터가 없는 전용 개발·시험 DB에서 �
 go build ./...
 go vet ./...
 go test ./...
-(cd client && go build ./... && go vet ./... && go test ./...)
 gofmt -l .
 sh ./test-dev-compose.sh
 sh ./test-prod-compose.sh
@@ -173,14 +140,14 @@ sh ./test-prod-compose.sh
 
 `TEST_DATABASE_URL`이 없고 필수 설정도 없으면 DB 통합 시험은 건너뜁니다. 이를 통합 검증 성공으로 간주하지 않습니다. `gofmt -l .`의 정상 결과는 출력이 없는 상태입니다.
 
-별도 격리 환경을 만드는 검증은 다음과 같습니다. 이미지 빌드·컨테이너 기동과 실행 시간이 필요하므로 선택하여 실행합니다. 개발 Compose 실행 검사는 Ollama 모델을 내려받지 않습니다.
+별도 격리 환경을 만드는 검증은 다음과 같습니다. 이미지 빌드·컨테이너 기동과 실행 시간이 필요하므로 선택하여 실행합니다. 개발 Compose 실행 검사는 DB만 기동하며 외부 API를 호출하지 않습니다.
 
 ```sh
 sh ./test-dev-compose.sh --runtime
 sh ./test-wal-archive.sh
 ```
 
-그래프 불변식 감사는 `go run ./cmd/audit`, 검색 품질 평가는 `cmd/eval`이 담당합니다. 평가 표본과 실행 방법은 서버 설계의 「테스트 전략」과 「검증을 가능하게 하는 설계」를 확인하십시오.
+그래프 불변식 감사는 `go run ./cmd/audit`, 검색 품질 평가는 `cmd/eval`이 담당합니다. 평가 표본과 실행 방법은 [테스트 설계](spec/service/agent-context/sdd/testing.md)와 [평가 검증 설계](spec/service/agent-context/sdd/evaluation.md#검증을-가능하게-하는-설계)를 확인하십시오.
 
 ## 문서와 저장소 구조
 
@@ -188,9 +155,8 @@ sh ./test-wal-archive.sh
 - [서비스 목록 및 현황](spec/service/README.md): 서비스별 요구사항·설계 진입점
 - [용어 정리집](spec/DICTIONARY.md): 프로젝트 용어의 기준
 - [서버 요구사항](spec/service/agent-context/SRS.md) / [설계](spec/service/agent-context/SDD.md)
-- [클라이언트 요구사항](spec/service/agent-context-client/SRS.md) / [설계](spec/service/agent-context-client/SDD.md)
 - [개발 설정 예시](.env.example) / [운영 설정 예시](.env.prod.example)
 - [마이그레이션 계약](migrations/AGENTS.md): 적용 이력과 임베딩 스키마 전환
 - [작업 계약](AGENTS.md): 변경 시 따라야 할 DOX 계층과 검증 기준
 
-`cmd/`에는 서버·마이그레이션·감사·평가 실행기가, `internal/`에는 서버 구현이, `migrations/`에는 스키마가 있습니다. `client/`는 독립 모듈이며 `spec/`은 요구사항·설계와 프로젝트 용어를 소유합니다.
+`cmd/`에는 서버·마이그레이션·감사·평가 실행기가, `internal/`에는 서버 구현이, `migrations/`에는 스키마가 있습니다. `spec/`은 요구사항·설계와 프로젝트 용어를 소유합니다.

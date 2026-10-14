@@ -52,7 +52,7 @@ func TestShutdownGivesWorkersFreshBudgetWhenRequestDrainFails(t *testing.T) {
 	cancel()
 	worker := &deadlineWorker{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	app := newApplication(&fakeReadiness{}, logger, proxyTransport(), nil)
+	app := newApplication(&fakeReadiness{}, logger, proxyTransport())
 	if err := shutdownInOrder(requestCtx, t.Context(), app, server.Config, logger, worker); err == nil {
 		t.Error("요청 종료 대기 실패가 보고되지 않았다")
 	}
@@ -92,7 +92,7 @@ func TestShutdownFailureClosesActiveConnectionsWithoutWaitingForHandler(t *testi
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	app := newApplication(&fakeReadiness{}, logger, proxyTransport(), nil)
+	app := newApplication(&fakeReadiness{}, logger, proxyTransport())
 	if err := app.shutdown(ctx, server.Config); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("종료 실패 = %v", err)
 	}
@@ -127,7 +127,7 @@ func (closing recordingWorker) Close(context.Context) error {
 // 마지막 일이기 때문이다.
 func TestShutdownFollowsDesignOrder(t *testing.T) {
 	database := &fakeReadiness{}
-	app := newApplication(database, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
+	app := newApplication(database, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
 	server := &http.Server{Handler: app.handler()}
 	events := make([]string, 0, 2)
 
@@ -154,7 +154,7 @@ func TestShutdownFollowsDesignOrder(t *testing.T) {
 // TestShutdownClosesWorkersEvenWhenRequestsDoNotDrain은 요청 대기가 실패해도 작업자를
 // 닫는지 확인한다. 건너뛰면 조립 지점의 풀 닫기가 작업자의 연결을 기다리며 막힌다.
 func TestShutdownClosesWorkersEvenWhenRequestsDoNotDrain(t *testing.T) {
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
 	// 끝나지 않는 요청을 하나 띄워 두어야 진행 요청 대기가 실제로 실패한다. 받은 요청이
 	// 없으면 Shutdown이 기다릴 것이 없어 만료된 컨텍스트로도 성공한다.
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -186,7 +186,7 @@ func TestShutdownClosesWorkersEvenWhenRequestsDoNotDrain(t *testing.T) {
 
 // TestShutdownReportsWorkerErrors는 요청 종료가 성공해도 모든 작업자 오류를 보존한다.
 func TestShutdownReportsWorkerErrors(t *testing.T) {
-	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
+	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport())
 	server := &http.Server{Handler: app.handler()}
 	events := make([]string, 0, 3)
 	firstErr, secondErr := errors.New("주기 작업자 종료 실패"), errors.New("색인 작업자 종료 실패")
@@ -200,42 +200,5 @@ func TestShutdownReportsWorkerErrors(t *testing.T) {
 	}
 	if want := []string{"주기 작업자", "색인 작업자", "마지막 작업자"}; !slices.Equal(events, want) {
 		t.Fatalf("실패 뒤 남은 작업자의 종료 시도가 누락됐다: %v", events)
-	}
-}
-
-// TestAuthorizationRoutesFollowPlacement는 인가 서버 배치가 경로 등록을 가르는지 확인한다.
-//
-// 「배치 조합」이 인가 서버를 떼어낼 수 있게 두었고, 분리 배치에서 이 인스턴스는 리소스
-// 서버로만 동작한다. 발급 경로가 남아 있으면 두 배포 단위가 같은 경로를 제공하게 된다.
-func TestAuthorizationRoutesFollowPlacement(t *testing.T) {
-	paths := []struct{ method, path string }{
-		{http.MethodGet, "/authorize"},
-		{http.MethodPost, "/token"},
-		{http.MethodGet, "/jwks.json"},
-	}
-	for _, testCase := range []struct {
-		name     string
-		embedded bool
-	}{
-		{name: "내장", embedded: true},
-		{name: "분리", embedded: false},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(io.Discard, nil)), proxyTransport(), nil)
-			if testCase.embedded {
-				app.authz = stubAuthorizationRoutes{}
-			}
-			handler := app.handler()
-			for _, route := range paths {
-				recorder := httptest.NewRecorder()
-				request := httptest.NewRequest(route.method, route.path, nil)
-				request.Header.Set("X-Forwarded-Proto", "https")
-				handler.ServeHTTP(recorder, request)
-				registered := recorder.Code != http.StatusNotFound
-				if registered != testCase.embedded {
-					t.Fatalf("%s %s 등록 = %v, want %v", route.method, route.path, registered, testCase.embedded)
-				}
-			}
-		})
 	}
 }

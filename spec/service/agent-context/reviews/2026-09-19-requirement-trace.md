@@ -6,7 +6,6 @@
 - 검사일: 2026-09-19
 - 검사 대상: `feature/phase-10-release-verification` 브랜치
 - 검사 범위: `SRS.md`의 기능 요구사항 149건 전부. 비기능 요구사항 13건은 대상이 아니다.
-- 추가 대조: `FR-AGENT_CONTEXT-150`~`155`는 12·13·15·16·17·18단계 구현 뒤 2026-09-27에 같은 방법으로 대조해 표에 더했다. `FR-AGENT_CONTEXT-156`~`159`는 같은 날 19단계 서버 구현을 대조해 표에 더했으며, 별도 MCP 클라이언트 구현과 종단 간 시험은 대기 상태다. 「결과 요약」의 건수는 최초 검사 149건 기준이다.
 - 기준 문서: [SRS](../SRS.md), [SDD](../SDD.md), [개발 계획](../DEVELOPMENT_PLAN.md)
 - 선행 검사: [출시 판정 추적성 감사](2026-09-19-release-audit.md)가 남긴 "요구사항 단위 확인" 한계를 닫기 위한 검사다.
 
@@ -40,7 +39,6 @@
 | 요구사항 ID | 요구사항명 | 구현 위치 | 상태 |
 |-------------|------------|-----------|------|
 | `FR-AGENT_CONTEXT-001` | 핵심 기능 | `cmd/server/server.go`의 `application.handler`가 MCP·웹·인가 경로를 한 프로세스 경계로 묶는다 | 구현 |
-| `FR-AGENT_CONTEXT-002` | 외부 연동 | `internal/mcp/transport.go`의 `Server.ServeHTTP`와 `ProtectedResourceMetadata` | 구현 |
 | `FR-AGENT_CONTEXT-003` | 관계 관리 | `migrations/001_init.sql`의 간선 label 일곱 종과 `internal/store/relation.go`의 `relationLabel` | 구현 |
 | `FR-AGENT_CONTEXT-004` | 정보 계층 | `internal/model/context.go`의 `Layer`와 `internal/store/agtype.go`의 `contextProperties` | 구현 |
 | `FR-AGENT_CONTEXT-005` | 관계 관리 | `internal/store/relation.go`의 `createRelation`과 `relationLabel` | 구현 |
@@ -50,25 +48,15 @@
 | `FR-AGENT_CONTEXT-009` | 관계 관리 | `internal/store/context.go`의 `replaceEventMembers`와 `internal/model/context.go`의 `EventAttributes` | 구현 |
 | `FR-AGENT_CONTEXT-010` | 수명주기 | `internal/store/operation.go`의 `HasAppliedDiscard`와 `internal/store/context.go`의 `changeContextDeletion` | 구현 |
 | `FR-AGENT_CONTEXT-011` | 정보 계층 | `internal/model/context.go`의 `SourceAttributes`·`DerivedAttributes`·`EventAttributes` | 구현 |
-| `FR-AGENT_CONTEXT-012` | 컨텍스트 조회 | `internal/mcp/handler.go`의 `contextFlow` | 구현 |
-| `FR-AGENT_CONTEXT-013` | 업무 연속성 | `internal/mcp/handler.go`의 `flowValue`가 흐름과 메타데이터를 응답에 담는다 | 구현 |
 | `FR-AGENT_CONTEXT-014` | 시각화 | `internal/web/web.go`의 `graphDetail`과 `newVisualizationData` | 구현 |
 | `FR-AGENT_CONTEXT-015` | 공동 접근 | `internal/store/permission.go`의 `EffectiveGrade` | 구현 |
 | `FR-AGENT_CONTEXT-016` | 컨텍스트 공유 | `internal/perm/perm.go`의 `Require`와 `internal/store/agtype.go`의 `parseContext` 안 `graph_id` 대조 | 구현 |
 | `FR-AGENT_CONTEXT-017` | 협업 | `internal/search/search.go`의 `Service.Flow`가 기여 계정을 가리지 않고 그래프 단위로 채널을 돌린다 | 구현 |
-| `FR-AGENT_CONTEXT-018` | 컨텍스트 흐름 | `internal/mcp/handler.go`의 `contextFlow`가 받는 `scope`와 `internal/search/search.go`의 `Input` | 구현 |
 | `FR-AGENT_CONTEXT-019` | 그래프 목록 | `internal/store/graph.go`의 `ListGraphs`와 `internal/store/cursor.go`의 `encodeGraphCursor` | 구현 |
 | `FR-AGENT_CONTEXT-020` | 그래프 생성 | `internal/store/graph.go`의 `CreateGraphWithOwner` | 구현 |
-| `FR-AGENT_CONTEXT-021` | 그래프 조회 | `internal/mcp/handler.go`의 `getGraph` | 구현 |
-| `FR-AGENT_CONTEXT-022` | 그래프 수정 | `internal/mcp/handler.go`의 `updateGraph`와 `internal/store/graph.go`의 `UpdateGraph` | 구현 |
 | `FR-AGENT_CONTEXT-023` | 노드 생성 | `internal/store/context.go`의 `createContext` | 구현 |
-| `FR-AGENT_CONTEXT-024` | 노드 조회 | `internal/mcp/handler.go`의 `getNode` | 구현 |
-| `FR-AGENT_CONTEXT-025` | 노드 수정 | `internal/mcp/handler.go`의 `updateNode`와 `internal/store/context.go`의 `UpdateContextWithOperation` | 구현 |
-| `FR-AGENT_CONTEXT-026` | 삭제 경계 | `internal/mcp/transport.go`의 `isWebOnlyTool` | 구현 |
 | `FR-AGENT_CONTEXT-027` | 토큰 발급 | `internal/authz/authz.go`의 `Exchange`와 `internal/authz/http.go`의 `Token` | 구현 |
-| `FR-AGENT_CONTEXT-028` | 요청 인증 | `internal/authz/authz.go`의 `VerifyAndRenew`와 `internal/mcp/transport.go`의 `dpopAuthentication` | 구현 |
 | `FR-AGENT_CONTEXT-029` | 토큰 만료 | `internal/authz/authz.go`의 `verifiedClaims` | 구현 |
-| `FR-AGENT_CONTEXT-030` | 토큰 자동 갱신 | `internal/authz/authz.go`의 `VerifyAndRenew`와 `cmd/server/renewal.go` | 구현 |
 | `FR-AGENT_CONTEXT-031` | 기본 보관 | `internal/store/permission.go`의 `cancelGraceForConnectedGraphs`. 활성 그래프에는 만료를 걸지 않는다 | 구현 |
 | `FR-AGENT_CONTEXT-032` | 보관 유예 | `internal/store/permission.go`의 `startGraceForDisconnectedGraphs` | 구현 |
 | `FR-AGENT_CONTEXT-033` | 소프트 삭제 | `internal/store/periodic.go`의 `ExpireGrace` | 구현 |
@@ -76,7 +64,6 @@
 | `FR-AGENT_CONTEXT-035` | 식별 | `internal/model/id.go`의 `NewID`와 `IsV7` | 구현 |
 | `FR-AGENT_CONTEXT-036` | 불변성 | `internal/model/context.go`의 `ValidateUpdate` | 구현 |
 | `FR-AGENT_CONTEXT-037` | 작업자 식별 | `internal/authz/authz.go`의 `Verify`가 푼 계정과 `created_by`·`created_by_agent` 분리 | 구현 |
-| `FR-AGENT_CONTEXT-038` | 격리 | `internal/perm/perm.go`의 `NotFoundError`와 `internal/mcp/handler.go`의 `requireActiveGraph` | 구현 |
 | `FR-AGENT_CONTEXT-039` | 권한 등급 | `internal/model/context.go`의 `GraphGrade`와 `internal/perm/perm.go`의 `rank` | 구현 |
 | `FR-AGENT_CONTEXT-040` | 권한 상속 | `internal/store/permission.go`의 `EffectiveGrade`가 직접 부여와 팀 상속을 한 질의로 계산한다 | 구현 |
 | `FR-AGENT_CONTEXT-041` | 권한 관리 | `internal/store/permission.go`의 `RevokeGraphGrant`와 `requireOwner` | 구현 |
@@ -84,26 +71,18 @@
 | `FR-AGENT_CONTEXT-043` | 팀 관리 | `internal/store/web.go`의 `CreateTeam`·`AddTeamMember`·`RemoveTeamMemberWithAudit` | 구현 |
 | `FR-AGENT_CONTEXT-044` | 동시 갱신 | `internal/store/context.go`의 `UpdateContextWithOperation`과 `contextVersionConflict` | 구현 |
 | `FR-AGENT_CONTEXT-045` | 버전 관리 | `internal/store/store.go`의 `VersionConflictError` | 구현 |
-| `FR-AGENT_CONTEXT-046` | 수명주기 | `internal/mcp/handler.go`의 다섯 관리 연산과 `operationRecord` | 구현 |
 | `FR-AGENT_CONTEXT-047` | 감사 | `internal/store/operation.go`의 `insertOperation`과 `internal/store/web.go`의 `insertWebAudit` | 구현 |
 | `FR-AGENT_CONTEXT-048` | 검색 | `internal/search/search.go`의 `Service.Flow`가 정한 채널 실행과 결합 순서 | 구현 |
 | `FR-AGENT_CONTEXT-049` | 그래프 속성 | `migrations/001_init.sql`의 `context_graph`와 `internal/store/graph.go`의 `scanGraph` | 구현 |
 | `FR-AGENT_CONTEXT-050` | 목록 조회 | `internal/store/cursor.go` | 구현 |
-| `FR-AGENT_CONTEXT-051` | 그래프 검증 | `internal/mcp/handler.go`의 `requireActiveGraph`와 `internal/perm/perm.go`의 `Require` | 구현 |
 | `FR-AGENT_CONTEXT-052` | 홉 조회 | `internal/store/hop.go`의 `HopContexts` | 구현 |
 | `FR-AGENT_CONTEXT-053` | 순환 처리 | `internal/store/hop.go`의 `hopNeighbors`가 방문 깊이로 최단 홉을 남긴다 | 구현 |
 | `FR-AGENT_CONTEXT-054` | 결과 상한 | `internal/search/search.go`의 `applyBudget`와 `internal/store/hop.go`의 `HopResult` | 구현 |
-| `FR-AGENT_CONTEXT-055` | 이용 한도 | `internal/plan/plan.go`의 `CheckRequest`·`CheckIncrease`와 `internal/mcp/handler.go`의 `writeLimits` | 구현 |
-| `FR-AGENT_CONTEXT-056` | 연산 매핑 | `internal/mcp/transport.go`의 `toolDefinitions`와 `internal/mcp/handler.go`의 `call` | 구현 |
-| `FR-AGENT_CONTEXT-057` | 오류 응답 | `internal/mcp/handler.go`의 `mapError`와 `internal/mcp/transport.go`의 `domainError` | 구현 |
-| `FR-AGENT_CONTEXT-058` | 입력 검증 | `internal/mcp/schema.go`의 `validateToolCall`와 `internal/model/context.go`의 `Validate` | 구현 |
 | `FR-AGENT_CONTEXT-059` | 연결 생성 | `internal/store/relation.go`의 `createProposedRelation`과 `ConfirmRelation` | 구현 |
 | `FR-AGENT_CONTEXT-060` | 재구성 | `internal/store/context.go`의 `CreateSupersedingContextWithOperation` | 구현 |
 | `FR-AGENT_CONTEXT-061` | 충족 기준 | 그래프 효과와 지속 평가는 통과했다. `NFR-AGENT_CONTEXT-009`의 업무 효과 본 측정이 끝나면 세 기준을 함께 판정한다 | 평가 대기 |
 | `FR-AGENT_CONTEXT-062` | 파생 생성 | `internal/store/context.go`의 `createContext`가 받는 파생 계층 경로 | 구현 |
-| `FR-AGENT_CONTEXT-063` | 요약 범위 | `internal/mcp/handler.go`의 `contextFlow`가 받는 `summary_scope`와 `internal/search/search.go`의 `globalSummaries` | 구현 |
 | `FR-AGENT_CONTEXT-064` | 근거 무효화 | `internal/store/context.go`의 `invalidateDerivedEvidence`와 `internal/model/context.go`의 `ValidateEvidenceInvalidation` | 구현 |
-| `FR-AGENT_CONTEXT-065` | 오류 매핑 | `internal/mcp/handler.go`의 `limitError`·`invalidArgument`와 `internal/mcp/transport.go`의 `domainError` | 구현 |
 | `FR-AGENT_CONTEXT-066` | 부분 상태 | `internal/search/search.go`의 `channelResult`와 `failureReason` | 구현 |
 | `FR-AGENT_CONTEXT-067` | 시간 유효성 | `internal/model/context.go`의 `DerivedAttributes`가 가진 `valid_from`·`valid_to` | 구현 |
 | `FR-AGENT_CONTEXT-068` | 만료 취급 | `internal/store/index.go`의 `TimeCandidates`와 `KeywordCandidates`의 시점 비교 | 구현 |
@@ -113,27 +92,19 @@
 | `FR-AGENT_CONTEXT-072` | 사건 경계 | `internal/model/context.go`의 `EventAttributes` | 구현 |
 | `FR-AGENT_CONTEXT-073` | 사건 관계 | `internal/model/relation.go`의 `RelationType` | 구현 |
 | `FR-AGENT_CONTEXT-074` | 관계 상태 | `internal/model/relation.go`의 `RelationState` | 구현 |
-| `FR-AGENT_CONTEXT-075` | 관계 연산 | `internal/mcp/handler.go`의 `listRelations`·`confirmRelation`·`discardRelation` | 구현 |
-| `FR-AGENT_CONTEXT-076` | 사건 재구성 | `internal/store/relation.go`의 `discardConfirmedRelationsForContext`와 `internal/mcp/handler.go`의 판단 입력 묶음 | 구현 |
 | `FR-AGENT_CONTEXT-077` | 근거 상태 | `internal/model/context.go`의 `EvidenceState` | 구현 |
 | `FR-AGENT_CONTEXT-078` | 신뢰 상태 | `internal/model/context.go`의 `ConfidenceState` | 구현 |
 | `FR-AGENT_CONTEXT-079` | 상충 처리 | `internal/model/context.go`의 `ConfidenceState`가 가진 `disputed`. 자동 판정과 자동 제외 경로가 없다 | 구현 |
 | `FR-AGENT_CONTEXT-080` | 검색 결합 | `internal/search/search.go`의 `combine`이 쓰는 순위 역수 합 | 구현 |
 | `FR-AGENT_CONTEXT-081` | 검색 색인 | `internal/store/operation.go`의 `enqueueIndexTask` | 구현 |
-| `FR-AGENT_CONTEXT-082` | 만료 조회 | `internal/mcp/handler.go`가 넘기는 `as_of`와 `internal/store/index.go`의 시점 비교 | 구현 |
 | `FR-AGENT_CONTEXT-083` | 국소와 전역 | `internal/search/search.go`의 `globalSummaries`와 `graphCandidates` | 구현 |
 | `FR-AGENT_CONTEXT-084` | 관계 제안 신호 | `internal/store/relation.go`의 `ProposeEventRelations`와 `internal/store/index.go`의 `ProposeSimilarEventRelations` | 구현 |
 | `FR-AGENT_CONTEXT-085` | 검색 예산 | `internal/search/search.go`의 `applyBudget` | 구현 |
 | `FR-AGENT_CONTEXT-086` | 예산 배분 | `internal/search/search.go`의 `applyBudget`가 채널 배분 없이 통합 절단한다 | 구현 |
 | `FR-AGENT_CONTEXT-087` | 검색 측정 | `internal/search/search.go`의 `Channel`이 후보 수·지연·기여·실패를 담고 완료 로그가 예산과 절단을 남긴다 | 구현 |
-| `FR-AGENT_CONTEXT-088` | 흐름 응답 | `internal/mcp/handler.go`의 `flowValue` | 구현 |
-| `FR-AGENT_CONTEXT-089` | 흐름 절단 | `internal/search/search.go`의 `Truncation`과 `internal/mcp/handler.go`의 `flowValue` | 구현 |
-| `FR-AGENT_CONTEXT-090` | 인증 흐름 | 발급은 `internal/authz/http.go`, 검증은 `internal/mcp/transport.go`와 `internal/authz/authz.go`의 `Verify` | 구현 |
 | `FR-AGENT_CONTEXT-091` | 계정 매핑 | `internal/perm/perm.go`의 `Require`가 요청 시점에 판정한다 | 구현 |
-| `FR-AGENT_CONTEXT-092` | 갱신 정책 | `internal/authz/authz.go`의 `renewFromClaims` | 구현 |
 | `FR-AGENT_CONTEXT-093` | 토큰 검증 | `internal/authz/cache.go`의 `publicKey`와 `internal/authz/authz.go`의 `activeKey` | 구현 |
 | `FR-AGENT_CONTEXT-094` | 다중 인스턴스 | `internal/store/auth.go`의 `SigningKeys`·`RevokedTokenIDs`와 `internal/store/periodic.go`의 `WithTryAdvisoryLock` | 구현 |
-| `FR-AGENT_CONTEXT-095` | transport | `internal/mcp/transport.go`의 `ServeHTTP`가 확인하는 protocol version | 구현 |
 | `FR-AGENT_CONTEXT-096` | 배포 단위 | `internal/config/config.go`의 `ComponentPlacement`와 `cmd/server/main.go`의 `run` | 구현 |
 | `FR-AGENT_CONTEXT-097` | 색인 처리 | `internal/store/index.go`의 `ProcessNextIndexTask`와 `indexRetryDelay` | 구현 |
 | `FR-AGENT_CONTEXT-098` | 임베딩 모델 | `internal/store/index.go`의 `ReindexOutdatedEmbeddings`와 `internal/index/index.go`의 `ModelID` | 구현 |
@@ -157,7 +128,6 @@
 | `FR-AGENT_CONTEXT-116` | 업무 효과 평가 | `cmd/eval -business`가 본문·개인 식별 정보 없이 두 조건의 네 집계 지표를 대응 비교한다. 실제 통제 과업 집계값을 넣은 본 측정은 남았다 | 평가 대기 |
 | `FR-AGENT_CONTEXT-117` | 플랜 항목 | `internal/plan/plan.go`의 `Limits`와 `Default` | 구현 |
 | `FR-AGENT_CONTEXT-118` | 플랜 변경 | `internal/plan/plan.go`의 `CheckIncrease` | 구현 |
-| `FR-AGENT_CONTEXT-119` | 한도 초과 | `internal/plan/plan.go`의 `LimitError`와 `internal/mcp/handler.go`의 `limitError` | 구현 |
 | `FR-AGENT_CONTEXT-120` | 기록 보존 하한 | `internal/store/periodic.go`의 `CleanupAuditRecords`가 종류별 보존 기간을 나눈다 | 구현 |
 | `FR-AGENT_CONTEXT-121` | 벡터 압축 | `internal/config/config.go`의 `EMBEDDING_VECTOR_TYPE`·`EMBEDDING_DIMENSION`과 `internal/store/index.go`의 `ReindexGraph` | 구현 |
 | `FR-AGENT_CONTEXT-122` | 색인 대상 비교 | `internal/config/config.go`의 `INDEX_TARGET_LAYERS`와 `internal/store/operation.go`의 `enqueueIndexTask` 계층 분기. 비교 자체는 평가에서 수행한다 | 구현 |
@@ -176,8 +146,6 @@
 | `FR-AGENT_CONTEXT-135` | 운영자 자격 | `internal/web/web.go`의 `operatorRestores`가 인증된 세션만 보고 계정에 별도 판정 값을 두지 않는다 | 구현 |
 | `FR-AGENT_CONTEXT-136` | 운영자 화면 | `internal/store/web.go`의 `PendingRestoreRequests` | 구현 |
 | `FR-AGENT_CONTEXT-137` | 복구 요청 | `internal/store/web.go`의 `RequestGraphRestore` | 구현 |
-| `FR-AGENT_CONTEXT-138` | 흐름 입력 | `internal/mcp/handler.go`의 `contextFlow`가 받는 `work_context` | 구현 |
-| `FR-AGENT_CONTEXT-139` | 본문 상한 | `internal/mcp/schema.go`의 `textRange`와 `internal/model/context.go`의 검증 | 구현 |
 | `FR-AGENT_CONTEXT-140` | 전송 보안 | `internal/config/config.go`의 `TLSMode`·`TRUSTED_PROXY_CIDRS`와 `cmd/server/server.go`의 `requireTLS` | 구현 |
 | `FR-AGENT_CONTEXT-141` | 본문 전송 | `internal/config/config.go`의 `EMBEDDING_BASE_URL`과 `internal/index/index.go`의 `Embed` | 구현 |
 | `FR-AGENT_CONTEXT-142` | 제안 정리 | `internal/store/periodic.go`의 `CleanupExpiredProposals` | 구현 |
@@ -185,19 +153,11 @@
 | `FR-AGENT_CONTEXT-144` | 팀 삭제 | `internal/store/permission.go`의 `DeleteTeam`과 `EffectiveGrade`의 삭제 팀 제외 | 구현 |
 | `FR-AGENT_CONTEXT-145` | 파생 불변 | `internal/model/context.go`의 `ValidateUpdate`가 수정 가능한 대상을 목록으로 제한한다 | 구현 |
 | `FR-AGENT_CONTEXT-146` | 원천 중복 | `internal/store/context.go`의 `findSource`와 `migrations/001_init.sql`의 `context_source_ref_idx` | 구현 |
-| `FR-AGENT_CONTEXT-147` | 클라이언트 등록 | `internal/config/config.go`의 `parseOAuthClients`와 `internal/authz/authz.go`의 `ValidateRedirectTarget` | 구현 |
-| `FR-AGENT_CONTEXT-148` | 인가 코드 | `internal/store/auth.go`의 `ConsumeAuthorizationCode`와 `CodeUsedError` | 구현 |
-| `FR-AGENT_CONTEXT-149` | 전송 계층 검증 | `internal/mcp/transport.go`의 `ServeHTTP`가 수행하는 여섯 검증 | 구현 |
 | `FR-AGENT_CONTEXT-150` | 근거 경로 선택 | `internal/search/evidence.go`의 `selectEvidenceSets`와 `SEARCH_EVIDENCE_PATH_SELECTION_ENABLED`, `cmd/eval`의 `evidence` 단계 | 구현 |
 | `FR-AGENT_CONTEXT-151` | 질의 적응형 검색 | `internal/search/route.go`의 `RouteSignals.Decide`와 `SEARCH_QUERY_ADAPTIVE_ROUTING_ENABLED`, `cmd/eval`의 `-adaptive` 비교 | 구현 |
 | `FR-AGENT_CONTEXT-152` | 일관 읽기 | `internal/store/consistency.go`의 `BeginReadSnapshot`·`enterReadScope`, `internal/search/search.go`의 `ConsistencySnapshot`, `cmd/eval`의 `-consistency` 비교 | 구현 |
 | `FR-AGENT_CONTEXT-153` | 불변식 감사 | `internal/store/invariant.go`의 `invariantRules`·`checkWriteInvariants`·`AuditGraph`, `cmd/audit` | 구현 |
 | `FR-AGENT_CONTEXT-154` | 오염 적대적 평가 | `cmd/eval/adversarial.go`의 `runAdversarial`·`diagnosePath`·`summarizeMetrics`, `cmd/eval/adversarial_dataset.go`의 `validateAttackSet`·`convertOwnAdversarialSet` | 구현 |
-| `FR-AGENT_CONTEXT-155` | 쓰기 멱등성 | `internal/mcp/transport.go`의 확장 협상·Structured Fields String 검증, `internal/mcp/handler.go`와 `internal/store/idempotency.go`의 원자적 재생, `migrations/003_idempotency_record.sql`, `cmd/server/periodic.go`의 정리 작업 | 구현 |
-| `FR-AGENT_CONTEXT-156` | DPoP 토큰 발급 | `internal/authz/dpop.go`의 ES256 proof 검증, `internal/authz/http.go`의 토큰 오류 사상, `internal/authz/authz.go`의 `cnf.jkt` 발급, `migrations/005_dpop_proof_replay.sql` | 서버 구현·클라이언트 통합 대기 |
-| `FR-AGENT_CONTEXT-157` | DPoP 보호 요청 | `internal/mcp/transport.go`의 `dpopAuthentication`·도전, `internal/authz/authz.go`의 `VerifyAndRenew`, `cmd/server/renewal.go`의 오류 사상 | 서버 구현·클라이언트 통합 대기 |
-| `FR-AGENT_CONTEXT-158` | DPoP 재생 방어 | `internal/store/auth.go`의 `ReserveDPoPProof`, `internal/store/periodic.go`의 정리, `cmd/server/periodic.go`의 1분 작업, `internal/authz/dpop.go`의 예약, `internal/store/auth_integration_test.go`의 실DB 동시 예약·정리 검사 | 서버 구현·교차 인스턴스 종단 간 시험 대기 |
-| `FR-AGENT_CONTEXT-159` | DPoP 갱신 결합 | `internal/authz/authz.go`의 `renewFromClaims`와 `internal/authz/dpop_test.go`의 `cnf.jkt` 승계 검사 | 서버 구현·클라이언트 통합 대기 |
 
 ## 발견 사항
 

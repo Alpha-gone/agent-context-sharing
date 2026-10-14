@@ -6,7 +6,7 @@
 - 검사일: 2026-09-19
 - 검사 대상: `feature/phase-10-release-verification` 브랜치. `dev`의 `3008953`(감사 수정 51건 병합)에 10단계 테스트 두 건을 더한 상태다.
 - 검사 범위: 개발 계획 10단계 「출시 완료 기준」 중 평가를 제외한 항목. 요구사항 추적성, MCP 연산과 웹 화면의 계약 일치, 문서와 구현의 일치를 본다.
-- 기준 문서: [SRS](../SRS.md), [SDD](../SDD.md), [개발 계획](../DEVELOPMENT_PLAN.md), [용어 정리집](../../DICTIONARY.md)
+- 기준 문서: [SRS](../SRS.md), [SDD](../SDD.md), [개발 계획](../DEVELOPMENT_PLAN.md), [용어 정리집](../../../DICTIONARY.md)
 
 ## 검사 방법
 
@@ -49,7 +49,6 @@
 | 계정·인증·인가 | `internal/authz`, `internal/store/auth.go` | `authz_test.go`, `http_test.go`, `cache_test.go`, `auth_integration_test.go` |
 | 권한과 유효 등급 | `internal/perm`, `internal/store/permission.go` | `permission_lifecycle_integration_test.go`, `auth_integration_test.go` |
 | 계정 플랜 한도 | `internal/plan`, `internal/store`의 한도 판정 | `plan_test.go`, `limits_integration_test.go` |
-| MCP 표면과 연산 13종 | `internal/mcp` | `transport_test.go`, `handler_integration_test.go`, `contract_integration_test.go`, `isolation_integration_test.go` |
 | 웹 화면 여섯 종 | `internal/web` | `web_test.go` |
 | 주기 작업과 기동·종료 | `internal/store/periodic.go`, `cmd/server` | `server_test.go`의 자문 잠금·종료 순서·TLS·로그 |
 | 격리 강제 | `internal/store` 전반 | `isolation_integration_test.go`가 연산 13종을 전수로 확인 |

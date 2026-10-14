@@ -5,7 +5,6 @@
 - 측정일: 2026-09-27
 - 목적: `FR-AGENT_CONTEXT-154`에 따라 여섯 공격 유형을 오프라인으로 주입하고 여섯 지표와 홉별 첫 불일치를 동일 통제 조건에서 잰다.
 - 데이터베이스: PostgreSQL 18.6, Apache AGE 1.8.0, pgvector 0.8.6, 로컬 Docker 개발 데이터베이스
-- 임베딩: `bge-m3:vector:1024`, 로컬 ollama
 - 검색 구성: 그래프 단계 `relations`, 전역 전환 켬, 동기화 스냅숏, 병렬 채널, 채널 후보 상한 5, 의미 유사도 하한 0.5, 접기 임계값 0.9, 예산 4,000자, 최대 4홉, 홉 노드 상한 200, 반복 3회
 - 통제 조건은 운영 기본값과 다르다. 운영 기본값인 `baseline` 단계는 사건 관계를 따라가지 않아 관계·경로 공격이 검색에 닿지 않으므로 관계 경로 확장이 열린 `relations`로 고정했다. 기준 세트의 컨텍스트가 74개이므로 운영 기본값인 후보 상한 50을 쓰면 직접 채널이 그래프 대부분을 반환해 경로 효과가 가려진다. 그래서 후보 상한을 5로 낮췄다.
 
@@ -105,3 +104,5 @@ SEARCH_CHANNEL_CANDIDATE_LIMIT=5 go run ./cmd/eval -adversarial \
   -contexts adv-contexts.json -queries adv-queries.json -attacks adv-attacks.json \
   -repeat 3 -max-hops 4 -max-hop-nodes 200 -out adversarial.json
 ```
+
+현재 문서에서 제외된 임베딩 제공자의 상세 설정은 2026-10-12 사용자 요청에 따라 제거했다. 남아 있는 측정 결과는 원래 시험 시점의 결과이며 현재 Gemini 구성으로 다시 검증한 결과를 뜻하지 않는다.

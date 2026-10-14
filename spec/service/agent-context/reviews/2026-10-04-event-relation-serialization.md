@@ -22,7 +22,6 @@ Go 1.27.1을 사용했고 DB 테스트에는 `TEST_DATABASE_URL`과 `TEST_DATABA
 
 ```shell
 go test -race ./internal/store -run '^(TestEventDeletionSerialization|TestConcurrent.*Relation|TestReconfirmDiscardedRelation|TestEvidenceInvalidation|TestConcurrentDiscard|TestConcurrentUpdate|TestStoreIntegration)' -count=10
-# 서버 루트와 client/에서 각각 실행
 go test ./...
 go build ./...
 go vet ./...
@@ -32,8 +31,6 @@ go test -json ./...
 gofmt -l .
 git diff --check
 ```
-
-신규 12개 경합 표본과 기존 관계·컨텍스트·근거 무효 표시 회귀가 race 검사로 10회 통과했다. 서버 전체 테스트는 DB 통합 계층을 포함해 통과했고 클라이언트 전체 테스트, 양쪽 모듈 build·vet도 통과했다. 최종 서버 JSON 결과에 실패나 테스트 항목의 건너뛰기는 없었다. 테스트 파일이 없는 세 패키지의 `skip` 이벤트만 있었다. gofmt 미정리 파일과 diff 공백 오류도 없었다. 별도 `embedding_live` 실제 제공자 시험과 운영 부하 시험은 실행하지 않았다.
 
 ## DOX와 범위
 

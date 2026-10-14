@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
+
+	"agent_context_sharing/internal/model"
 )
 
 // RetentionDays는 그래프를 만든 계정에 적용되는 보존 기간을 돌려준다. 0은 기간을 두지
@@ -215,27 +216,6 @@ func (s *Store) CleanupAuditRecords(ctx context.Context, now time.Time, auditDay
 // CleanupExpiredRevocations는 만료된 토큰 폐기 목록 행을 지운다.
 func (s *Store) CleanupExpiredRevocations(ctx context.Context, now time.Time) (int, error) {
 	return s.deleteBefore(ctx, "폐기 목록 정리", `DELETE FROM public.revoked_token WHERE expires_at <= $1`, now)
-}
-
-// CleanupExpiredAuthorizationCodes는 미소비 코드와 재사용 감지의 보존 기간이 끝난 행을 지운다.
-func (s *Store) CleanupExpiredAuthorizationCodes(ctx context.Context, now time.Time) (int, error) {
-	return s.deleteBefore(ctx, "인가 코드 정리", `DELETE FROM public.authorization_code
-		WHERE (consumed_at IS NULL AND expires_at <= $1)
-		   OR (consumed_at IS NOT NULL AND COALESCE(issued_token_expires_at, issued_at + interval '61 minutes') <= $1)`, now)
-}
-
-// dpopProofCleanupGrace는 인스턴스 사이 시계 차이를 덮는 정리 여유다. iat 허용 창은 요청을
-// 받은 인스턴스의 시계로, 정리는 작업을 맡은 인스턴스의 시계로 판정하므로 여유 없이 지우면
-// 시계가 느린 인스턴스가 기록이 사라진 proof를 아직 허용 창 안으로 보고 다시 받는다.
-const dpopProofCleanupGrace = time.Minute
-
-// CleanupExpiredDPoPProofs는 60초 허용 창과 시계 차이 여유를 모두 지난 DPoP proof 재생
-// 기록을 지운다.
-func (s *Store) CleanupExpiredDPoPProofs(ctx context.Context, now time.Time) (int, error) {
-	if now.IsZero() {
-		return 0, fmt.Errorf("DPoP proof 재생 기록 정리 기준 시각이 없다")
-	}
-	return s.deleteBefore(ctx, "DPoP proof 재생 기록 정리", `DELETE FROM public.dpop_proof_replay WHERE expires_at <= $1`, now.Add(-dpopProofCleanupGrace))
 }
 
 // CleanupRequestRateWindows는 현재 1분 창보다 오래된 요청 빈도 행을 지운다.

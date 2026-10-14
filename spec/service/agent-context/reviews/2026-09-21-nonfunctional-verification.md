@@ -25,9 +25,9 @@
 | `NFR-AGENT_CONTEXT-010` 감사 가능성 | 통과 | `TestOwnershipTransferAuditMatchesSpecIntegration`, `TestWebContextDeletionAuditSharesTransactionIntegration`과 지속 평가의 판단 기록 검사가 생성·변경 주체와 시점의 기록을 확인한다. |
 | `NFR-AGENT_CONTEXT-011` 동시 갱신 일관성 | 통과 | `TestConcurrentUpdateReportsVersionConflictIntegration`, `TestConcurrentDiscardAppliesOnceIntegration`과 관계 확정 동시성 테스트가 유실 대신 충돌 또는 단일 적용으로 끝나는지 확인한다. |
 | `NFR-AGENT_CONTEXT-012` 연결 독립성 | 통과 | Streamable HTTP의 요청별 검증·처리 계약 테스트, 프로토콜 세션 부재와 내장·분리 배치 네 조합의 구성 검사가 서버 요청 사이에 연결 상태를 요구하지 않음을 확인한다. |
-| `NFR-AGENT_CONTEXT-013` 토큰 기밀성 | 서버 범위 통과·클라이언트 범위 대기 | `TestRequestLogExcludesSensitiveValues`, TLS 강제 테스트, JWT 원문 미저장 구조가 서버의 전송·저장·로그 경계를 확인한다. MCP 클라이언트의 프로세스 메모리 전용 보관은 별도 클라이언트 구현 범위라 아직 실행 근거가 없다. |
+| `NFR-AGENT_CONTEXT-013` 토큰 기밀성 | 서버 범위 통과·호스트 범위 대기 | `TestRequestLogExcludesSensitiveValues`, TLS 강제 테스트, JWT 원문 미저장 구조가 서버의 전송·저장·로그 경계를 확인한다. 호스트의 자격 증명 저장·복원은 직접 연결 목표의 검증 범위로 남아 있다. |
 
-현재 서버 구현과 검증 범위에서는 11건이 통과했다. `NFR-AGENT_CONTEXT-009`는 실제 업무 효과 본 측정이, `NFR-AGENT_CONTEXT-013`은 별도 MCP 클라이언트의 메모리 전용 토큰 보관 검증이 남았다.
+현재 서버 구현과 검증 범위에서는 11건이 통과했다. `NFR-AGENT_CONTEXT-009`는 실제 업무 효과 본 측정이, `NFR-AGENT_CONTEXT-013`은 직접 연결 호스트의 자격 증명 저장·복원 검증이 남았다.
 
 ## 업무 효과 집계 경로
 

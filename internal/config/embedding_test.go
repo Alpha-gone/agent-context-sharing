@@ -19,7 +19,7 @@ func TestGeminiConfiguration(t *testing.T) {
 	}
 	for _, test := range []struct{ name, value string }{
 		{"GEMINI_API_KEY", ""}, {"GEMINI_API_KEY", "synthetic-key\nheader"},
-		{"EMBEDDING_PROVIDER", "unknown"}, {"EMBEDDING_PROVIDER", ""}, {"EMBEDDING_PROVIDER", "ollama"}, {"EMBEDDING_MODEL", "bge-m3"},
+		{"EMBEDDING_PROVIDER", "unknown"}, {"EMBEDDING_PROVIDER", ""}, {"EMBEDDING_MODEL", "other-model"},
 		{"EMBEDDING_DIMENSION", "127"}, {"EMBEDDING_DIMENSION", "3072"},
 		{"EMBEDDING_BASE_URL", "http://service.test"},
 		{"EMBEDDING_BASE_URL", "https://service.test?key=synthetic-key"},
@@ -40,11 +40,6 @@ func TestGeminiConfiguration(t *testing.T) {
 	if _, err := load(); err != nil {
 		t.Fatal(err)
 	}
-	legacy := validValues()
-	cfg, err := Load(func(name string) string { return legacy[name] })
-	if err != nil || cfg.EmbeddingProvider != "ollama" {
-		t.Fatalf("명시적 Ollama 복귀 구성: %v", err)
-	}
 }
 
 func TestEmbeddingProviderSelection(t *testing.T) {
@@ -53,12 +48,13 @@ func TestEmbeddingProviderSelection(t *testing.T) {
 		values map[string]string
 		valid  bool
 	}{
-		{"명시적 Ollama", nil, true},
+		{"명시적 Gemini", nil, true},
+		{"미지원 제공자", map[string]string{"EMBEDDING_PROVIDER": "unsupported"}, false},
 		{"제공자 생략", map[string]string{"EMBEDDING_PROVIDER": ""}, false},
 		{"제공자 공백", map[string]string{"EMBEDDING_PROVIDER": " "}, false},
-		{"Gemini 모델 혼합", map[string]string{"EMBEDDING_MODEL": "gemini-embedding-2"}, false},
-		{"Gemini 주소 혼합", map[string]string{"EMBEDDING_BASE_URL": "https://generativelanguage.googleapis.com"}, false},
-		{"Gemini 대문자 호스트", map[string]string{"EMBEDDING_BASE_URL": "https://GENERATIVELANGUAGE.GOOGLEAPIS.COM.:443"}, false},
+		{"잘못된 모델", map[string]string{"EMBEDDING_MODEL": "other-model"}, false},
+		{"평문 주소", map[string]string{"EMBEDDING_BASE_URL": "http://service.test"}, false},
+		{"대문자 HTTPS 호스트", map[string]string{"EMBEDDING_BASE_URL": "https://GENERATIVELANGUAGE.GOOGLEAPIS.COM.:443"}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			values := validValues()

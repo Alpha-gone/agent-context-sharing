@@ -2,14 +2,9 @@ package authz
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -22,155 +17,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-func TestAuthorizationCodeSingleUseRevokesIssuedToken(t *testing.T) {
-	backend := newMemoryStore()
-	service := testService(t, backend)
-	accountID, err := service.Register(t.Context(), "tester", "correct horse battery staple")
-	if err != nil {
-		t.Fatalf("계정 등록: %v", err)
-	}
-	verifier := "high-entropy-pkce-verifier-x-x-x-x-x-x-x-x-x"
-	code, err := service.Authorize(t.Context(), accountID, time.Now().UTC(), AuthorizeRequest{ResponseType: "code", ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
-	if err != nil {
-		t.Fatalf("인가 코드 발급: %v", err)
-	}
-	token, err := exchangeWithDPoP(t, service, code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp")
-	if err != nil {
-		t.Fatalf("첫 코드 교환: %v", err)
-	}
-	if _, err := exchangeWithDPoP(t, service, code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp"); err == nil {
-		t.Fatal("재사용 코드가 허용됐다")
-	}
-	revoked, err := backend.IsTokenRevoked(t.Context(), token.ID, time.Now())
-	if err != nil || !revoked {
-		t.Fatalf("재사용 코드 토큰 폐기 = %t, %v", revoked, err)
-	}
-}
-
-func TestExchangeRejectsAuthorizationCodeForOtherResource(t *testing.T) {
-	backend := newMemoryStore()
-	service := testService(t, backend)
-	accountID, err := model.NewID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	verifier := "resource-change-verifier-x-x-x-x-x-x-x-x-x-x"
-	code := "resource-change-code"
-	now := time.Now().UTC()
-	if err := backend.CreateAuthorizationCode(t.Context(), store.AuthorizationCode{Hash: digest(code), ClientID: "test-client", AccountID: accountID, RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), Resource: "https://other.test/mcp", IssuedAt: now, AuthenticatedAt: now, ExpiresAt: now.Add(authorizationCodeLifetime)}); err != nil {
-		t.Fatalf("인가 코드 저장: %v", err)
-	}
-	if _, err := exchangeWithDPoP(t, service, code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp"); err == nil {
-		t.Fatal("다른 resource의 인가 코드가 교환됐다")
-	}
-}
-
 func TestAuthenticateUsesPasswordMismatchForMissingLoginID(t *testing.T) {
 	service := testService(t, newMemoryStore())
 	if _, err := service.Authenticate(t.Context(), "missing", "wrong password"); !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
 		t.Fatalf("없는 로그인 아이디 인증 = %v, want bcrypt 불일치", err)
-	}
-}
-
-func TestAuthorizationCodeConcurrentExchangeAllowsOne(t *testing.T) {
-	backend := newMemoryStore()
-	service := testService(t, backend)
-	accountID, err := service.Register(t.Context(), "concurrent", "correct horse battery staple")
-	if err != nil {
-		t.Fatalf("계정 등록: %v", err)
-	}
-	verifier := "concurrent-pkce-verifier-x-x-x-x-x-x-x-x-x-x"
-	code, err := service.Authorize(t.Context(), accountID, time.Now().UTC(), AuthorizeRequest{ResponseType: "code", ClientID: "test-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: digest(verifier), CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
-	if err != nil {
-		t.Fatalf("인가 코드 발급: %v", err)
-	}
-	results := make(chan error, 2)
-	var waitGroup sync.WaitGroup
-	for range 2 {
-		waitGroup.Go(func() {
-			_, err := exchangeWithDPoP(t, service, code, "test-client", "http://127.0.0.1/callback", verifier, "https://service.test/mcp")
-			results <- err
-		})
-	}
-	waitGroup.Wait()
-	close(results)
-	successes := 0
-	for err := range results {
-		if err == nil {
-			successes++
-		}
-	}
-	if successes != 1 {
-		t.Fatalf("동시 인가 코드 교환 성공 수 = %d, want 1", successes)
-	}
-}
-
-// TestAuthorizationCodeConcurrentExchangeIntegration은 실제 PostgreSQL 조건부 갱신에서
-// 같은 인가 코드의 동시 교환 하나만 성공하고, 재사용 요청이 발급 토큰을 폐기하는지 확인한다.
-func TestAuthorizationCodeConcurrentExchangeIntegration(t *testing.T) {
-	database := newAuthorizationCodeIntegrationStore(t)
-	key, err := newSigningKey()
-	if err != nil {
-		t.Fatalf("통합 검사 서명 키 생성: %v", err)
-	}
-	if err := database.RotateSigningKey(t.Context(), key); err != nil {
-		t.Fatalf("통합 검사 활성 서명 키 준비: %v", err)
-	}
-	service := testService(t, database)
-	accountID, err := service.Register(t.Context(), "oauth_"+newIntegrationLoginSuffix(t), "correct horse battery staple")
-	if err != nil {
-		t.Fatalf("통합 검사 계정 등록: %v", err)
-	}
-	verifier := "concurrent-postgresql-pkce-verifier-x-x-x-x"
-	request := AuthorizeRequest{
-		ResponseType:        "code",
-		ClientID:            "test-client",
-		RedirectURI:         "http://127.0.0.1/callback",
-		CodeChallenge:       digest(verifier),
-		CodeChallengeMethod: "S256",
-		Resource:            service.config.Resource,
-	}
-	for range 10 {
-		code, err := service.Authorize(t.Context(), accountID, time.Now().UTC(), request)
-		if err != nil {
-			t.Fatalf("인가 코드 발급: %v", err)
-		}
-		type exchangeResult struct {
-			token Token
-			err   error
-		}
-		results := make(chan exchangeResult, 2)
-		var waitGroup sync.WaitGroup
-		for range 2 {
-			waitGroup.Go(func() {
-				token, err := exchangeWithDPoP(t, service, code, request.ClientID, request.RedirectURI, verifier, request.Resource)
-				results <- exchangeResult{token: token, err: err}
-			})
-		}
-		waitGroup.Wait()
-		close(results)
-
-		var issued Token
-		successes := 0
-		var exchangeErrors []error
-		for result := range results {
-			if result.err != nil {
-				exchangeErrors = append(exchangeErrors, result.err)
-				continue
-			}
-			successes++
-			issued = result.token
-		}
-		if successes != 1 {
-			t.Fatalf("동시 인가 코드 교환 성공 수 = %d, want 1; 오류 = %v", successes, exchangeErrors)
-		}
-		revoked, err := database.IsTokenRevoked(t.Context(), issued.ID, time.Now().UTC())
-		if err != nil {
-			t.Fatalf("동시 교환 뒤 폐기 목록 조회: %v", err)
-		}
-		if !revoked {
-			t.Fatal("동시 교환의 발급 토큰이 재사용 요청으로 폐기되지 않았다")
-		}
 	}
 }
 
@@ -180,15 +30,15 @@ func TestTokenAudienceSeparation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := service.issue(t.Context(), id, "web", time.Now().UTC(), time.Now().UTC(), "")
+	token, err := service.issue(t.Context(), id, "web", time.Now().UTC())
 	if err != nil {
 		t.Fatalf("웹 세션 발급: %v", err)
 	}
 	if _, _, err := service.Verify(t.Context(), token.Raw, "web"); err != nil {
 		t.Fatalf("웹 세션 검증: %v", err)
 	}
-	if _, _, err := service.Verify(t.Context(), token.Raw, "https://service.test/mcp"); err == nil {
-		t.Fatal("웹 세션의 MCP 교차 사용이 허용됐다")
+	if _, _, err := service.Verify(t.Context(), token.Raw, "other-channel"); err == nil {
+		t.Fatal("웹 세션의 다른 audience 사용이 허용됐다")
 	}
 }
 
@@ -212,7 +62,7 @@ func TestVerifyRejectsTokenWithUnknownKeyID(t *testing.T) {
 		t.Fatalf("JWT 서명기 생성: %v", err)
 	}
 	now := time.Now().UTC()
-	raw, err := jwt.Signed(signer).Claims(tokenClaims{Claims: jwt.Claims{Issuer: service.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{"web"}, IssuedAt: jwt.NewNumericDate(now), Expiry: jwt.NewNumericDate(now.Add(time.Hour)), ID: "unknown-key-token"}, AuthenticatedAt: now.Unix()}).Serialize()
+	raw, err := jwt.Signed(signer).Claims(jwt.Claims{Issuer: service.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{"web"}, IssuedAt: jwt.NewNumericDate(now), Expiry: jwt.NewNumericDate(now.Add(time.Hour)), ID: "unknown-key-token"}).Serialize()
 	if err != nil {
 		t.Fatalf("알 수 없는 kid 토큰 발급: %v", err)
 	}
@@ -240,11 +90,11 @@ func TestVerifyRequiresExpirationClaim(t *testing.T) {
 		t.Fatalf("JWT 서명기 생성: %v", err)
 	}
 	now := time.Now().UTC()
-	raw, err := jwt.Signed(signer).Claims(tokenClaims{Claims: jwt.Claims{Issuer: service.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{service.config.Resource}, IssuedAt: jwt.NewNumericDate(now), ID: "without-exp"}, AuthenticatedAt: now.Unix()}).Serialize()
+	raw, err := jwt.Signed(signer).Claims(jwt.Claims{Issuer: service.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{"web"}, IssuedAt: jwt.NewNumericDate(now), ID: "without-exp"}).Serialize()
 	if err != nil {
 		t.Fatalf("만료 없는 JWT 발급: %v", err)
 	}
-	if _, _, err := service.Verify(t.Context(), raw, service.config.Resource); err == nil {
+	if _, _, err := service.Verify(t.Context(), raw, "web"); err == nil {
 		t.Fatal("exp 없는 토큰이 검증됐다")
 	}
 }
@@ -263,105 +113,6 @@ func TestActiveKeyUsesExistingKeyAfterConcurrentCreation(t *testing.T) {
 	}
 	if key.ID != existing.ID {
 		t.Fatalf("경쟁 뒤 활성 서명 키 = %q, want %q", key.ID, existing.ID)
-	}
-}
-
-func TestRenewRequiresVerifiedUnexpiredToken(t *testing.T) {
-	service := testService(t, newMemoryStore())
-	accountID, err := model.NewID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherAccountID, err := model.NewID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	expiredToken := signedRenewalToken(t, service, accountID, now.Add(-time.Second), now.Add(-time.Hour), "")
-	expiredToken.ExpiresAt = now.Add(5 * time.Second)
-	tests := []struct {
-		name        string
-		accountID   model.ID
-		token       Token
-		wantRenewed bool
-	}{
-		{name: "valid near expiry", accountID: accountID, token: signedRenewalToken(t, service, accountID, now.Add(5*time.Second), now.Add(-time.Hour), ""), wantRenewed: true},
-		{name: "expired signed claim", accountID: accountID, token: expiredToken},
-		{name: "unknown kid", accountID: accountID, token: signedRenewalToken(t, service, accountID, now.Add(5*time.Second), now.Add(-time.Hour), "unknown-key")},
-		{name: "other account", accountID: otherAccountID, token: signedRenewalToken(t, service, accountID, now.Add(5*time.Second), now.Add(-time.Hour), "")},
-		{name: "future authentication", accountID: accountID, token: signedRenewalToken(t, service, accountID, now.Add(5*time.Second), now.Add(time.Hour), "")},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, renewed, err := service.Renew(t.Context(), test.accountID, test.token)
-			if err != nil {
-				t.Fatalf("토큰 갱신: %v", err)
-			}
-			if renewed != test.wantRenewed {
-				t.Fatalf("갱신 여부 = %t, want %t", renewed, test.wantRenewed)
-			}
-		})
-	}
-}
-
-func signedRenewalToken(t *testing.T, service *Service, accountID model.ID, expiresAt, authenticatedAt time.Time, keyID string) Token {
-	t.Helper()
-	key, err := service.activeKey(t.Context())
-	if err != nil {
-		t.Fatalf("서명 키 준비: %v", err)
-	}
-	var private jose.JSONWebKey
-	if err := json.Unmarshal([]byte(key.PrivateKey), &private); err != nil {
-		t.Fatalf("개인 키 해석: %v", err)
-	}
-	if keyID == "" {
-		keyID = key.ID
-	}
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: private.Key}, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", keyID))
-	if err != nil {
-		t.Fatalf("JWT 서명기 생성: %v", err)
-	}
-	issuedAt := time.Now().UTC()
-	if !expiresAt.After(issuedAt) {
-		issuedAt = expiresAt.Add(-time.Hour)
-	}
-	raw, err := jwt.Signed(signer).Claims(tokenClaims{Claims: jwt.Claims{Issuer: service.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{service.config.Resource}, IssuedAt: jwt.NewNumericDate(issuedAt), Expiry: jwt.NewNumericDate(expiresAt), ID: "renewal-token"}, AuthenticatedAt: authenticatedAt.Unix(), Confirmation: tokenConfirmation{JWKThumbprint: "renewal-jkt"}}).Serialize()
-	if err != nil {
-		t.Fatalf("갱신 검사 토큰 발급: %v", err)
-	}
-	return Token{Raw: raw, ID: "renewal-token", ExpiresAt: expiresAt}
-}
-
-func TestValidateAuthorizeRequestAllowsLoopbackDynamicPort(t *testing.T) {
-	service := testService(t, newMemoryStore())
-	err := service.ValidateAuthorizeRequest(AuthorizeRequest{ResponseType: "code", ClientID: "test-client", RedirectURI: "http://127.0.0.1:49152/callback", CodeChallenge: "challenge", CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"})
-	if err != nil {
-		t.Fatalf("루프백 동적 포트가 거부됐다: %v", err)
-	}
-}
-
-// TestValidateAuthorizeRequestScopesRedirectURIsPerClient는 한 클라이언트의 redirect_uri가
-// 다른 클라이언트의 요청에서 거부되는지 확인한다.
-func TestValidateAuthorizeRequestScopesRedirectURIsPerClient(t *testing.T) {
-	primary, err := url.Parse("http://127.0.0.1/callback")
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondary, err := url.Parse("http://localhost:8123/callback")
-	if err != nil {
-		t.Fatal(err)
-	}
-	service, err := New(newMemoryStore(), Config{Issuer: "https://service.test", Resource: "https://service.test/mcp", Scope: "agent-context", Clients: map[string][]*url.URL{"test-client": {primary}, "other-client": {secondary}}, BcryptCost: 4})
-	if err != nil {
-		t.Fatalf("인가 서비스 생성: %v", err)
-	}
-	request := AuthorizeRequest{ResponseType: "code", ClientID: "other-client", RedirectURI: "http://127.0.0.1/callback", CodeChallenge: "challenge", CodeChallengeMethod: "S256", Resource: "https://service.test/mcp"}
-	if err := service.ValidateAuthorizeRequest(request); err == nil {
-		t.Fatal("다른 클라이언트의 redirect_uri가 허용됐다")
-	}
-	request.RedirectURI = "http://localhost:8123/callback"
-	if err := service.ValidateAuthorizeRequest(request); err != nil {
-		t.Fatalf("자기 클라이언트의 redirect_uri가 거부됐다: %v", err)
 	}
 }
 
@@ -464,59 +215,23 @@ func TestAuthenticateUpgradesRawDigestHash(t *testing.T) {
 
 func testService(t *testing.T, backend authStore) *Service {
 	t.Helper()
-	redirect, err := url.Parse("http://127.0.0.1/callback")
+	service, err := New(backend, Config{Issuer: "https://service.test", BcryptCost: 4})
 	if err != nil {
-		t.Fatal(err)
-	}
-	service, err := New(backend, Config{Issuer: "https://service.test", Resource: "https://service.test/mcp", Scope: "agent-context", Clients: map[string][]*url.URL{"test-client": {redirect}}, BcryptCost: 4})
-	if err != nil {
-		t.Fatalf("인가 서비스 생성: %v", err)
+		t.Fatalf("인증 서비스 생성: %v", err)
 	}
 	return service
-}
-
-func newAuthorizationCodeIntegrationStore(t *testing.T) *store.Store {
-	t.Helper()
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
-			t.Fatal("TEST_DATABASE_REQUIRED가 설정됐지만 TEST_DATABASE_URL이 비어 있다")
-		}
-		t.Skip("TEST_DATABASE_URL이 없어 인가 코드 통합 테스트를 건너뛴다")
-	}
-	graphName := os.Getenv("AGE_GRAPH_NAME")
-	if graphName == "" {
-		graphName = "agent_context"
-	}
-	database, err := store.New(t.Context(), databaseURL, graphName, nil, nil, "")
-	if err != nil {
-		t.Fatalf("통합 검사 저장소 준비: %v", err)
-	}
-	t.Cleanup(database.Close)
-	return database
-}
-
-func newIntegrationLoginSuffix(t *testing.T) string {
-	t.Helper()
-	id, err := model.NewID()
-	if err != nil {
-		t.Fatalf("통합 검사 계정 식별자 생성: %v", err)
-	}
-	return strings.ReplaceAll(id.String(), "-", "")[:12]
 }
 
 type memoryStore struct {
 	mu                sync.Mutex
 	accounts          map[string]store.Account
-	codes             map[string]store.AuthorizationCode
 	revoked           map[string]time.Time
-	proofs            map[string]time.Time
 	keys              []store.SigningKey
 	activeKeyConflict *store.SigningKey
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{accounts: map[string]store.Account{}, codes: map[string]store.AuthorizationCode{}, revoked: map[string]time.Time{}, proofs: map[string]time.Time{}}
+	return &memoryStore{accounts: map[string]store.Account{}, revoked: map[string]time.Time{}}
 }
 func (s *memoryStore) CreateAccount(_ context.Context, account store.Account) error {
 	s.mu.Lock()
@@ -548,54 +263,6 @@ func (s *memoryStore) UpdatePasswordHashIfMatches(_ context.Context, accountID m
 		return true, nil
 	}
 	return false, nil
-}
-func (s *memoryStore) CreateAuthorizationCode(_ context.Context, code store.AuthorizationCode) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.codes[code.Hash] = code
-	return nil
-}
-func (s *memoryStore) AuthorizationCodeForExchange(_ context.Context, hash string, now time.Time) (store.AuthorizationCode, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	code, ok := s.codes[hash]
-	if !ok {
-		return store.AuthorizationCode{}, store.ErrNotFound
-	}
-	if code.ConsumedAt != nil {
-		used := store.CodeUsedError{TokenID: code.IssuedTokenID, IssuedAt: code.IssuedAt}
-		if code.IssuedTokenExpiresAt != nil {
-			used.TokenExpiresAt = code.IssuedTokenExpiresAt.UTC()
-		}
-		return store.AuthorizationCode{}, used
-	}
-	if !code.ExpiresAt.After(now) {
-		return store.AuthorizationCode{}, store.ErrNotFound
-	}
-	return code, nil
-}
-func (s *memoryStore) ConsumeAuthorizationCode(_ context.Context, hash, tokenID string, now, tokenExpiresAt time.Time) (store.AuthorizationCode, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	code, ok := s.codes[hash]
-	if !ok {
-		return store.AuthorizationCode{}, store.ErrNotFound
-	}
-	if code.ConsumedAt != nil {
-		used := store.CodeUsedError{TokenID: code.IssuedTokenID, IssuedAt: code.IssuedAt}
-		if code.IssuedTokenExpiresAt != nil {
-			used.TokenExpiresAt = code.IssuedTokenExpiresAt.UTC()
-		}
-		return store.AuthorizationCode{}, used
-	}
-	if !code.ExpiresAt.After(now) {
-		return store.AuthorizationCode{}, store.ErrNotFound
-	}
-	code.ConsumedAt = &now
-	code.IssuedTokenID = tokenID
-	code.IssuedTokenExpiresAt = &tokenExpiresAt
-	s.codes[hash] = code
-	return code, nil
 }
 func (s *memoryStore) RevokeToken(_ context.Context, tokenID string, expiresAt time.Time) error {
 	s.mu.Lock()
@@ -664,42 +331,4 @@ func (s *memoryStore) RotateSigningKey(_ context.Context, key store.SigningKey) 
 	}
 	s.keys = append([]store.SigningKey{key}, s.keys...)
 	return nil
-}
-
-func (s *memoryStore) ReserveDPoPProof(_ context.Context, thumbprint string, proofIDHash []byte, expiresAt time.Time) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := thumbprint + ":" + string(proofIDHash)
-	if _, found := s.proofs[key]; found {
-		return false, nil
-	}
-	s.proofs[key] = expiresAt
-	return true, nil
-}
-
-func exchangeWithDPoP(t *testing.T, service *Service, code, clientID, redirectURI, verifier, resource string) (Token, error) {
-	t.Helper()
-	return service.Exchange(t.Context(), code, clientID, redirectURI, verifier, resource, dpopProof(t, service.config.Issuer+"/token", ""))
-}
-
-func dpopProof(t *testing.T, target, accessToken string) string {
-	t.Helper()
-	private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("DPoP 키 생성: %v", err)
-	}
-	options := (&jose.SignerOptions{}).WithType("dpop+jwt").WithHeader("jwk", jose.JSONWebKey{Key: private.Public(), Algorithm: string(jose.ES256)})
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: private}, options)
-	if err != nil {
-		t.Fatalf("DPoP 서명기 생성: %v", err)
-	}
-	proofID, err := secret()
-	if err != nil {
-		t.Fatalf("DPoP jti 생성: %v", err)
-	}
-	proof, err := jwt.Signed(signer).Claims(dpopClaims{Claims: jwt.Claims{IssuedAt: jwt.NewNumericDate(time.Now().UTC()), ID: proofID}, Method: "POST", Target: target, AccessTokenHash: dpopAccessTokenHash(accessToken)}).Serialize()
-	if err != nil {
-		t.Fatalf("DPoP proof 발급: %v", err)
-	}
-	return proof
 }

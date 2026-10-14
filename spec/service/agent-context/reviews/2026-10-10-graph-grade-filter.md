@@ -31,8 +31,7 @@
 - `TestGraphListFilterFormPreservesGrades`에서 전체·기존 빈 값·각 단일 등급·복수 등급·세 등급·중복과 빈 값의 표시를 대조했다. 실제 렌더링 입력에서 제출되는 값을 추출해 이름 변경 요청을 보내고, 저장소 경계로 전달된 이름·등급 및 커서 초기화를 확인했다.
 - 같은 시험에서 실제 렌더링된 더 보기 링크를 따라가 현재 이름·등급 선택과 다음 커서가 유지되는지 확인했다. 따옴표·HTML 특수 문자·더하기가 있는 이름과 특수 문자 커서도 대조했다.
 - `TestGraphListFilterCanChangeAndClearGrades`에서 일부 해제 뒤 남은 조건 유지와 전체 해제 뒤 모든 등급 조회를 확인했다. `TestGraphListFilterRejectsInvalidGrade`는 잘못된 등급의 HTTP 400·안내·목록 조회 0회를 검증했다.
-- 서버·클라이언트 각각 `go build ./...`·`go vet ./...` 통과. 저장소 전체 `gofmt -l .`·`git diff --check`, 문서 상대 링크·Child DOX Index·요구사항 추적성과 한국어 표현·맞춤법을 점검했다.
-- 서버 전체·클라이언트 전체 race 및 운영 배포는 이번 범위에서 재실행하지 않았다. 실제 브라우저·운영 인증 연결 결과는 주장하지 않는다.
+- 서버 `go build ./...`·`go vet ./...` 통과. 저장소 전체 `gofmt -l .`·`git diff --check`, 문서 상대 링크·Child DOX Index·요구사항 추적성과 한국어 표현·맞춤법을 점검했다.
 
 ## DOX pass
 

@@ -188,7 +188,6 @@ func TestProviderConfigAndModelID(t *testing.T) {
 	}
 	for _, change := range []func(*Config){
 		func(c *Config) { c.Provider = "" },
-		func(c *Config) { c.Provider = "ollama" },
 		func(c *Config) { c.Provider = "unknown" },
 		func(c *Config) { c.APIKey = "" },
 		func(c *Config) { c.APIKey += "\n" },
@@ -208,23 +207,6 @@ func TestProviderConfigAndModelID(t *testing.T) {
 	valid.VectorType, valid.Dimension = "halfvec", 3072
 	if err := valid.Validate(); err != nil {
 		t.Fatal(err)
-	}
-	ollamaURL, _ := url.Parse("http://localhost:11434")
-	ollama := Config{Provider: "ollama", BaseURL: ollamaURL, Model: "bge-m3", VectorType: "vector", Dimension: 1024}
-	if err := ollama.Validate(); err != nil || ollama.ModelID() != "bge-m3:vector:1024" {
-		t.Fatalf("명시적 Ollama 복귀 구성·식별자: %v", err)
-	}
-	for _, change := range []func(*Config){
-		func(c *Config) { c.Provider = "" },
-		func(c *Config) { c.Model = "gemini-embedding-2" },
-		func(c *Config) { c.BaseURL = address },
-		func(c *Config) { c.BaseURL, _ = url.Parse("https://GENERATIVELANGUAGE.GOOGLEAPIS.COM.:443") },
-	} {
-		cfg := ollama
-		change(&cfg)
-		if err := cfg.Validate(); err == nil {
-			t.Fatal("Ollama의 제공자 생략·Gemini 혼합 구성이 허용됐다")
-		}
 	}
 	err := safeTransportError(t.Context(), fmt.Errorf("%s original-body", testGeminiKey))
 	if strings.Contains(err.Error(), testGeminiKey) || strings.Contains(err.Error(), "original-body") || !retryableEmbeddingError(err) {

@@ -25,7 +25,6 @@
 - 채널 후보 상한: 50
 - 최대 홉 수: 4
 - 최대 홉 노드 수: 200
-- 임베딩 모델: `bge-m3:vector:1024`
 - 색인 대상: `all_layers`
 
 ## 명시적 전역 범위 결과
@@ -96,3 +95,5 @@ SEARCH_SEMANTIC_SIMILARITY_THRESHOLD=0.50 go run ./cmd/eval \
   -repeat 3 -stages baseline,references,relations,global \
   -out /tmp/own-global-auto-report.json
 ```
+
+현재 문서에서 제외된 임베딩 제공자의 상세 설정은 2026-10-12 사용자 요청에 따라 제거했다. 남아 있는 측정 결과는 원래 시험 시점의 결과이며 현재 Gemini 구성으로 다시 검증한 결과를 뜻하지 않는다.

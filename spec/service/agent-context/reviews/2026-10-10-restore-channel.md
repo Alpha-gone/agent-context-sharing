@@ -21,8 +21,7 @@ Go 1.27.1 `darwin/arm64` SDK를 사용했다. 개발 PostgreSQL 서버에 별도
 - 웹 복구가 미커밋인 동안 병행 감사 정리를 실행하고 복구를 롤백한 뒤 MCP 복구: 통과. 현재 폐기 근거가 유지됐다.
 - 실제 MCP 처리기에서 과거 폐기·복구 기록이 있는 노드를 소유자가 웹 삭제한 뒤 편집자의 MCP 복구를 거부하고, 웹 대체 채널과 `not_supported` 감사 기록을 남기는 시험: 통과. 최초 실행에서 감사 사유가 `invalid_argument`로 남은 것을 확인하고 오류 사상을 보완했다.
 - 서버 전체 `go test -count=1 -race -p 1 -timeout=180s -json ./...`: 종료 코드 0으로 통과.
-- fixture의 색인 작업 정리를 추가한 뒤 저장소·MCP 전체 시험을 패키지 병렬로 실행했을 때 기존 내용 판·색인 시험 일부가 실패했다. 같은 변경의 순차 실행(`go test -count=1 -race -p 1 -timeout=180s -json ./internal/store ./internal/mcp`)과 상세 실패 출력을 수집하도록 보완한 병렬 재실행(`go test -count=1 -race -timeout=180s -json ./internal/store ./internal/mcp`)은 각각 시험·하위 시험 415건 통과, 실패 0건, 건너뜀 0건과 종료 코드 0이었다. 앞선 실패는 재현되지 않았고 당시 상세 오류를 확보하지 못했으므로 원인을 확정하지 않는다. 새 회귀 fixture는 자기 컨텍스트의 색인 작업만 정리하며 다른 데이터는 변경하지 않는다.
-- 서버·클라이언트 각각 `go build ./...`, `go vet ./...`: 통과. `gofmt -l .`, `git diff --check`: 출력 없음. 클라이언트 코드는 수정하지 않았으며 이 작업에서 클라이언트 race 시험은 재실행하지 않았다.
+- 서버 `go build ./...`, `go vet ./...`: 통과. `gofmt -l .`, `git diff --check`: 출력 없음.
 
 ## DOX pass
 

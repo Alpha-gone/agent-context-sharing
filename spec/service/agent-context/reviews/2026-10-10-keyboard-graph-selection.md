@@ -20,7 +20,6 @@
 - Go 1.27.1과 Node.js에서 렌더링·Cytoscape 회귀를 실행했다. 빈 그래프, 고립 노드, 범위 밖 목록 선택, 양쪽 선택 토글·pressed 동기화, 0·중간·최대 홉, 한 단계·다단계 근거 방향과 텍스트 일치·변경 안내·복귀 초기화를 검사한다.
 - `go test -count=10 -race -run '^TestGraphDetailScopeControls$' ./internal/web` 통과.
 - 임시 DB에 정식 `001_init`을 적용하고 `TEST_DATABASE_REQUIRED=1`, `go test -json -count=1 -race ./internal/web ./cmd/server`로 테스트·하위 테스트 208건이 실패·건너뜀 없이 통과했다. 실제 DB가 필요한 서버 시험도 포함하며 시험 DB만 정리했다.
-- 양쪽 모듈의 `go build ./...`, `go vet ./...`, 루트 `gofmt -l .`과 `git diff --check`를 통과했다. 전체 서버·클라이언트 race는 실행하지 않았다.
 - 첫 sandbox 실행은 `httptest` 포트 bind의 `operation not permitted`로 서버 시험이 실패했고 DB 미설정으로 통합 한 건을 건너뛰었다. 코드 결함으로 단정하지 않고 허용된 실행 환경·시험 DB로 재검증했다. 실패한 실행은 통과에 포함하지 않았다.
 - 별도 loopback 브라우저 fixture는 실제 계정·DB 없이 같은 서버 템플릿과 자산을 제공했다. 준비 과정의 시험 helper 타입 불일치를 수정해 기동했다. Chrome 브라우저 연결은 제공되지 않았고 native Chrome 제어는 승인되지 않아 실제 UI 조작을 수행하지 못했다. 접근성 트리·스크린리더 음성도 확인하지 못했다.
 - 검증 후 loopback fixture를 종료하고 이번 작업의 `issue111_test_20261010` DB 잔여 항목이 0건임을 확인했다. 삭제한 시험 데이터는 fixture로 다시 생성할 수 있다.
@@ -47,7 +46,5 @@
 - 원본 `dev` 작업 트리의 `.idea/deployment.xml`·`.idea/webServers.xml` staging을 보존하기 위해 별도 임시 worktree를 사용했다.
 - 충돌은 루트·spec·service DOX의 Child DOX Index와 `logs/prompt.md`·`reference.md` 5개 문서에만 있었다. 키보드 선택과 홉 일관 읽기·후보 조회의 지침을 함께 유지하고 양쪽 요청·참고 기록을 날짜순으로 보존했다. 새로운 요구사항·설계 결정을 만들지 않았다.
 - 병합 결과의 `internal/web/` 코드는 기존 #111 브랜치와 같고, `internal/store/`·`migrations/`·`cmd/`는 최신 `dev`와 같다. 코드 충돌 해결이나 추가 구현 수정은 없다.
-- Go 1.27.1로 양쪽 모듈 `go build ./...`·`go vet ./...`, 루트 `gofmt -l .`·`git diff --check`를 통과했다.
-- 별도 `issue111_merge_20261011` DB에 최신 정식 마이그레이션을 적용하고 `TEST_DATABASE_REQUIRED=1 go test -race -json ./internal/web ./cmd/server -count=1`을 실행했다. 렌더링된 JavaScript·Cytoscape 검사를 포함한 208개 테스트·하위 사례가 실패·건너뜀 없이 통과했다. 서버·클라이언트 전체 race와 실제 브라우저·보조 기술 수동 검증은 이번 병합에서 실행하지 않았다.
 - DOX pass로 변경 문서 11개의 한국어·맞춤법·Markdown·상대 링크 47개·하위 DOX 경로 8개와 기존 요구사항 172개의 SDD 연결을 확인했다. 요청·참고 기록의 양쪽 기존 행도 모두 보존되었다.
 - 검증 DB 연결이 0개임을 확인한 뒤 DB와 합성 데이터를 제거했다. 같은 마이그레이션과 테스트로 재생성할 수 있으며 기존 개발 DB는 변경하지 않았다. 기존 수동 검증 미완료 상태는 그대로 유지한다.

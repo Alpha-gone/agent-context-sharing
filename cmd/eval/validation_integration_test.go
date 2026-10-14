@@ -96,19 +96,20 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 	}
 	vector := make([]float64, dimension)
 	vector[0] = 1
-	raw, err := json.Marshal(map[string]any{"embeddings": [][]float64{vector}})
+	raw, err := json.Marshal(map[string]any{"embedding": map[string]any{"values": vector}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(raw)
 	}))
 	defer server.Close()
+	trustEvalEmbeddingServer(t, server)
 	for key, value := range map[string]string{
 		"DATABASE_URL": os.Getenv("TEST_DATABASE_URL"), "AGE_GRAPH_NAME": "agent_context",
-		"EMBEDDING_PROVIDER": "ollama", "EMBEDDING_BASE_URL": server.URL, "EMBEDDING_MODEL": "eval-regression",
-		"EMBEDDING_VECTOR_TYPE": "vector", "EMBEDDING_DIMENSION": strconv.Itoa(dimension), "GEMINI_API_KEY": "",
+		"EMBEDDING_PROVIDER": "gemini", "EMBEDDING_BASE_URL": server.URL, "EMBEDDING_MODEL": "gemini-embedding-2",
+		"EMBEDDING_VECTOR_TYPE": "vector", "EMBEDDING_DIMENSION": strconv.Itoa(dimension), "GEMINI_API_KEY": "synthetic-key",
 		"SEARCH_CHANNEL_CANDIDATE_LIMIT": "500", "SEARCH_FOLD_SIMILARITY_THRESHOLD": "0.95", "EVAL_TEST_COMMAND_PROCESS": "1",
 	} {
 		t.Setenv(key, value)

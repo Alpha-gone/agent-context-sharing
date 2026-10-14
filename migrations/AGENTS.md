@@ -2,42 +2,38 @@
 
 ## 목적
 
-- `migrations/`는 데이터베이스 스키마를 만들고 판올림하는 SQL 파일을 보관한다.
+- `migrations/`는 데이터베이스 스키마 생성·판올림 SQL을 보관한다.
 
 ## 소유권
 
-- 루트 `AGENTS.md`가 저장소 공통 계약과 구현 코드의 배치를 소유한다.
-- 무엇을 만들지는 `spec/service/agent-context/SDD.md`의 「테이블 열 정의」, 「그래프 스키마」, 「인덱스」가 소유한다.
-- 이 문서는 파일을 어떻게 쓰고 적용하는지를 소유한다.
+- 현재 열·그래프·인덱스의 정본은 [데이터 설계](../spec/service/agent-context/sdd/data.md)다. 과거 SQL은 적용 순서를 설명한다.
+- 이 문서는 파일 작성·치환·적용 이력을 소유하며 `cmd/migrate`·`internal/migrate`도 이 계약을 따른다.
 
 ## 로컬 계약
 
-- 파일 이름은 `NNN_name.sql` 형식을 쓴다. 실행기가 이 형식을 강제하며 버전이 중복되면 거부한다.
-- 이미 적용된 파일은 수정하지 않는다. 주석 한 줄도 체크섬을 바꾸므로 실행기가 `적용된 뒤 수정되었다`로 멈추고, 이미 배포된 환경의 기동이 함께 막힌다. 스키마를 바꾸려면 다음 번호로 파일을 추가한다.
-- 그래서 뒤 번호가 고친 열의 설명이 앞 번호 파일에 옛 상태로 남는다. 어떤 파일도 현재 스키마를 혼자 설명하지 않으므로, 열의 현재 계약은 `SDD.md`의 「테이블 열 정의」에서 읽고 SQL 파일은 적용 순서로만 읽는다. 앞 파일이 설명하던 것을 바꾸는 파일은 무엇을 왜 바꾸는지 자기 머리말에 적어 둔다.
-- 임베딩 전환도 기존 `001_init.sql`을 수정하지 않고 다음 번호 파일로 수행한다. 절차는 `internal/migrate/testdata/007_embedding_dimensions.sql`을 기준으로 하며, 서비스·색인 작업자 정지 후 적용하고 원본은 보존하며 호환되지 않는 벡터만 재색인 대상으로 교체한다.
-- 개발 중 생긴 파일이 새 DB에서 `001_init.sql`과 같은 결과만 만들면 제거할 수 있다. 실행기는 파일 목록에 없는 적용 이력을 무시하므로 이미 적용한 DB도 그대로 기동한다. 001에 아직 반영되지 않은 변경을 담은 파일은 그대로 제거하지 않는다.
-- 보존해야 할 운영 데이터가 생기기 전에는 사용자 승인을 받아 개발 중 파일을 `001_init.sql`에 합치고 제거할 수 있다. 위 "이미 적용된 파일은 수정하지 않는다"의 유일한 예외다. 001의 checksum이 바뀌므로 그 전에 만든 개발·시험 DB는 볼륨을 지운 뒤 다시 만든다. 운영 데이터를 보존해야 하는 뒤로는 다음 번호 파일만 추가한다.
-- 적용 순서는 `SDD.md`의 「스키마 적용」이 정한다. 확장, 그래프, label, 관계형 테이블, 인덱스 순이며 label이 인덱스보다 앞서야 한다.
-- 관계형 테이블과 인덱스는 스키마를 `public`으로 명시한다. `search_path`의 첫 항목이 `ag_catalog`라 명시하지 않으면 카탈로그 스키마에 만들어진다.
-- 파일은 `text/template` 문법으로 `GraphName`, `VectorType`, `VectorDim`, `ColdTablespaceClause`, `IndexTargetLayers`를 받으며 실행기가 검증한 뒤에만 치환한다.
-- 실행기는 이력의 `render_config`로 당시 치환 구성을 보존한다. 구형 이력은 DB 열·tablespace에서 복원한 구성으로 기존 checksum이 맞을 때만 보충하고 checksum·적용 시각은 덮어쓰지 않는다. 이미 적용한 차원 전환을 되돌리거나 다시 바꿀 때에도 기존 파일이 아니라 새 번호를 추가한다.
-- checksum은 치환된 SQL의 SHA-256이며 적용한 파일은 현재 구성 대신 당시 `render_config`로 검증한다. 구성 값 변경만으로 파일 변조로 판단하지 않지만 원본 SQL·주석 변경은 계속 거부한다. 미적용 파일에만 현재 구성을 사용하며, 구성 값을 바꿨다고 기존 스키마를 자동 변경하지 않는다.
-- 실행기는 적용 전에 자문 잠금을 잡는다. 인스턴스가 여럿이라 동시에 기동하면 같은 파일을 함께 적용하려 들고, AGE 함수 호출은 되돌리기 어렵다. 근거는 `SDD.md`의 「기동과 종료」다.
-- 같은 파일을 다시 적용해도 안전하도록 `IF NOT EXISTS`와 존재 확인을 쓴다.
+- 파일명은 `NNN_name.sql`이며 버전 중복을 거부한다. 적용된 SQL·주석은 불변이고 변경은 다음 번호 파일로 추가한다. 앞선 계약을 바꾸는 파일은 머리말에 변경 내용·이유를 기록한다.
+- 임베딩 차원 전환·복귀도 새 번호를 추가한다. [전환·복귀 경계](../spec/service/agent-context/sdd/indexing.md#전환복귀-경계)와 [절차 표본](../internal/migrate/testdata/007_embedding_dimensions.sql)을 따르며 서비스·색인 작업자를 정지하고 원본을 보존하며 호환되지 않는 벡터만 재색인 대상으로 교체한다.
+- 새 DB에서 `001_init.sql`과 같은 결과만 내는 개발 중복 파일은 제거할 수 있다. 파일이 사라진 적용 이력은 보존하고 실행기는 무시한다. 001에 통합되지 않은 효과를 담은 파일은 제거하지 않는다.
+- 보존해야 할 운영 데이터가 생기기 전에는 **사용자 승인**으로 개발 파일을 001에 통합·제거할 수 있다. 적용 SQL 불변 규칙의 유일한 예외다. checksum 변경 후 이전 개발·시험 DB는 재생성하고 이력을 덮어쓰지 않는다. 운영 데이터 보존 단계부터는 새 번호만 추가한다.
+- [스키마 적용 순서](../spec/service/agent-context/sdd/data.md#스키마-적용)는 확장→그래프→label→관계형 테이블→인덱스다. 관계형 테이블·인덱스는 `public`을 명시하여 `ag_catalog`에 생성되지 않게 한다.
+- `text/template`의 `GraphName`·`VectorType`·`VectorDim`·`ColdTablespaceClause`·`IndexTargetLayers`는 검증 후 치환한다.
+- 이력의 `render_config`는 당시 치환 구성을 보존한다. 구형 이력은 DB 열·tablespace로 복원한 구성이 기존 checksum과 일치할 때만 보충하며 checksum·적용 시각을 덮어쓰지 않는다.
+- checksum은 치환 SQL의 SHA-256이다. 적용 파일은 당시 `render_config`, 미적용 파일은 현재 구성으로 검증한다. 구성 변경만으로 기존 스키마를 변경하지 않으며 원본 SQL·주석 변경은 계속 거부한다.
+- 적용 전에 [기동 계약](../spec/service/agent-context/sdd/operations.md#기동과-종료)의 자문 잠금을 얻고 `IF NOT EXISTS`·존재 확인으로 반복 실행을 보호한다.
 
 ## 작업 지침
 
-- 파일을 고치기 전에 루트 `AGENTS.md`와 이 문서, `SDD.md`의 해당 절을 읽는다.
-- 스키마를 바꿀 때는 `SDD.md`를 먼저 갱신하고 그다음에 SQL을 쓴다.
-- AGE 함수는 인자 타입에 주의한다. `create_vlabel`과 `create_elabel`은 `cstring`을 받으므로 변수는 `format`의 `%L`로 리터럴을 만들어 넘긴다.
-- agtype property에 접근할 때는 키의 타입을 `::text`로 명시한다. 명시하지 않으면 agtype으로 해석해 실패한다.
-- 인덱스의 표현식은 그 인덱스를 쓸 질의의 표현식과 같아야 한다. SQL 질의는 `properties ->> 'key'::text`를, openCypher 질의는 AGE가 속성 접근을 번역한 `ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"key"'::ag_catalog.agtype])`를 쓴다.
-- 표현식 인덱스를 만든 파일은 같은 파일에서 대상 테이블을 `ANALYZE`한다. 통계가 모이기 전에는 플래너가 새 인덱스의 선택도를 잘못 추정해 인덱스를 쓰지 않는다.
+- 스키마 변경은 데이터·색인 설계를 먼저 갱신하고 SQL에 반영한다. 실행기 수정은 해당 코드 영역의 DOX도 적용한다.
+- AGE의 `create_vlabel`·`create_elabel`은 `cstring` 인자이므로 `format`의 `%L`로 리터럴을 만든다. agtype property 키는 `::text`를 명시한다.
+- 표현식 인덱스는 사용 질의와 같은 표현식을 쓴다. SQL은 `properties ->> 'key'::text`, openCypher는 AGE가 번역한 `ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"key"'::ag_catalog.agtype])`를 사용한다.
+- 표현식 인덱스 생성 파일 안에서 대상 테이블을 `ANALYZE`하여 통계를 확보한다.
 
 ## 검증
 
-- 빈 볼륨에서 `go run ./cmd/migrate up`이 성공하는지 확인한다.
-- 두 번째 실행이 아무것도 적용하지 않는지 확인한다.
-- 테이블이 `public`에 만들어졌고 `ag_catalog`에 새어 들어가지 않았는지 확인한다.
-- `SDD.md`의 「인덱스」가 정한 인덱스가 모두 있는지 확인한다.
+- [루트 시험 시점 계약](../AGENTS.md#검증)에 따라 마이그레이션 작업 항목의 모듈 시험·데이터 분야 통합 테스트에서 빈 전용 DB의 `go run ./cmd/migrate up` 적용과 두 번째 실행의 무변경을 확인한다.
+- 관계형 테이블·인덱스가 `public`에 있고 [인덱스 설계](../spec/service/agent-context/sdd/data.md#인덱스)의 대상이 모두 생성되었는지 확인한다.
+- 치환 구성·checksum·구형 이력 보충·적용 잠금·미통합 효과 보존을 위 시험 시점에 검증한다. 실행기 코드 변경 시 루트 공통 Go 정적 검증을 실행한다.
+
+## Child DOX Index
+
+- 현재 하위 `AGENTS.md` 문서는 없다.

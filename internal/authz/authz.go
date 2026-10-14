@@ -52,6 +52,7 @@ type Config struct {
 
 // Service는 데이터 접근 계층 위에서 인증·인가 계약을 수행한다.
 type Service struct {
+	diagnostics       Diagnostics
 	store             authStore
 	config            Config
 	dummyPasswordHash string
@@ -209,7 +210,22 @@ func (s *Service) WebSession(ctx context.Context, accountID model.ID, audience s
 }
 
 // Verify는 기대 audience, 서명, 필수 클레임, 만료와 폐기 목록을 한 경로에서 확인한다.
-func (s *Service) Verify(ctx context.Context, raw, audience string) (model.ID, Token, error) {
+func (s *Service) Verify(ctx context.Context, raw, audience string) (accountID model.ID, token Token, verifyErr error) {
+	defer func() {
+		if s.diagnostics == nil {
+			return
+		}
+		if verifyErr != nil {
+			level, reason := "WARN", "invalid_credential"
+			if errors.Is(verifyErr, ErrUnavailable) {
+				level, reason = "ERROR", "authentication_unavailable"
+			}
+			s.diagnostics.RecordDiagnostic(ctx, level, "web_session_validation", "failed", reason)
+			return
+		}
+		s.diagnostics.RecordDiagnostic(ctx, "INFO", "web_session_validation", "completed", "completed")
+	}()
+
 	claims, err := s.verifiedClaims(ctx, raw, audience)
 	if err != nil {
 		return model.ID{}, Token{}, err

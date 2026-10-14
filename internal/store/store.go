@@ -45,6 +45,7 @@ var graphNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // Store는 애플리케이션이 소유하는 단일 데이터 접근 계층이다.
 type Store struct {
+	diagnostics Diagnostics
 	// pool 필드는 패키지 밖에 노출하지 않는 pgx 연결 풀이다.
 	pool *pgxpool.Pool
 	// graphName 필드는 모든 AGE openCypher 호출이 공유하는 물리 그래프 이름이다.
@@ -186,7 +187,18 @@ func New(ctx context.Context, databaseURL, graphName string, relationProposals *
 }
 
 // Ping은 데이터베이스 연결과 AGE 준비가 현재 요청을 받을 수 있는지 확인한다.
-func (s *Store) Ping(ctx context.Context) error {
+func (s *Store) Ping(ctx context.Context) (pingErr error) {
+	defer func() {
+		if s == nil || s.diagnostics == nil {
+			return
+		}
+		if pingErr != nil {
+			s.diagnostics.RecordDiagnostic(ctx, "WARN", "database_ping", "failed", "database_unavailable")
+			return
+		}
+		s.diagnostics.RecordDiagnostic(ctx, "INFO", "database_ping", "completed", "completed")
+	}()
+
 	if s == nil || s.pool == nil {
 		return fmt.Errorf("연결 풀이 초기화되지 않았다")
 	}

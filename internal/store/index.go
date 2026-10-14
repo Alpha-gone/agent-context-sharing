@@ -58,12 +58,8 @@ type IndexProcessResult struct {
 	Task      IndexTask
 }
 
-// SearchCandidate는 검색 채널이 순위를 부여하기 전 저장소가 돌려주는 컨텍스트다.
-type SearchCandidate struct {
-	Context model.Context
-	// Similarity는 의미 유사도 채널에서만 코사인 유사도를 담는다. 다른 채널은 0이다.
-	Similarity float64
-}
+// SearchCandidate의 정본은 저장 방식에 의존하지 않는 model이다.
+type SearchCandidate = model.SearchCandidate
 
 // ProcessNextIndexTask는 대기 중인 작업 하나를 확보하고 제공자 결과를 저장한다.
 //

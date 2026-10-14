@@ -12,18 +12,8 @@ import (
 	"agent_context_sharing/internal/model"
 )
 
-// Selection은 「측정」이 요구한 근거 경로 선택 전후 후보 수와 연결 노드 수다. 선택이
-// 비활성이면 선택 단위가 후보 하나이므로 연결 노드와 단절 후보는 항상 0이다.
-type Selection struct {
-	// Candidates 필드에는 중복 파생 접기 뒤 선택에 들어간 후보 수를 둔다.
-	Candidates int
-	// Selected 필드에는 예산 적용까지 마친 뒤 남은 후보 수를 둔다.
-	Selected int
-	// Connectors 필드에는 연결 근거 집합을 완성하려고 대표 후보와 함께 담은 경로 노드 수를 둔다.
-	Connectors int
-	// Unreachable 필드에는 진입점까지 경로가 없어 선택하지 않은 대표 후보 수를 둔다.
-	Unreachable int
-}
+// Selection은 근거 경로 선택 전후의 집계다.
+type Selection = model.FlowSelection
 
 // entryChannels은 진입점으로 세는 채널 이름이다. 그래프 경로 채널은 확장이므로
 // 진입점이 아니다.

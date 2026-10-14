@@ -131,3 +131,5 @@
 | 2026-10-14 | 23:20 KST | Go 1.27.1 uuid 공식 API | https://pkg.go.dev/uuid@go1.27.1 | NewV7은 version 7을 생성하며 Parse는 표준·compact 외에도 URN·중괄호 표기를 허용한다. String은 소문자 표준 표기를 반환하고 Compare는 바이트 순서를 비교한다. | ARCH-02의 ID 구현. 프로젝트는 기존 입력 범위를 유지하도록 표준·compact만 허용한다. SDK 소스와 실제 모델 시험을 함께 확인했다. |
 | 2026-10-14 | 23:20 KST | Go 1.27.1 time.Time.Equal 공식 API | https://pkg.go.dev/time@go1.27.1#Time.Equal | Time.Equal은 시각의 같은 순간을 비교한다. | ARCH-02의 생성 시각·원천 발생 시각 불변성과 선택 시간 비교. UTC 표현 검사는 별도로 유지한다. |
 | 2026-10-14 | 23:20 KST | Go 1.27.1 utf8.ValidString 공식 API | https://pkg.go.dev/unicode/utf8@go1.27.1#ValidString | ValidString은 문자열이 올바른 UTF-8인지 확인한다. U+0000 금지는 프로젝트 저장 계약으로 별도 검사한다. | ARCH-02의 본문·출처·그래프 텍스트·관리 판단과 거부 사유 검증. |
+| 2026-10-15 | 00:05 KST | Go 1.27.1 go/parser 공식 API | https://pkg.go.dev/go/parser@go1.27.1#ParseFile | ParseFile은 Go 파일의 AST를 해석하며 권장 SkipObjectResolution 모드는 deprecated 객체 해석을 생략한다. | ARCH-03의 실제 import·공개 DB 핸들 경계 검사. SDD의 두 패키지 표와 양방향으로 대조한다. |
+| 2026-10-15 | 00:05 KST | Go 1.27.1 time.Now 공식 API | https://pkg.go.dev/time@go1.27.1#Now | Now는 현재 시각을 반환하며 이벤트 생성 시 UTC로 변환한다. | ARCH-03의 고정 코드 진단 이벤트와 UTC 모듈 시험. 실제 파일 저장·기동 외피·회전은 OBS 후속 항목에서 구현한다. |

@@ -16,12 +16,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// HopEdge는 반환한 부분 그래프 안의 참조 또는 확정 사건 관계다.
-type HopEdge struct {
-	FromID model.ID
-	ToID   model.ID
-	Kind   string
-}
+// HopEdge의 정본은 model이며 기존 저장소 이름을 유지한다.
+type HopEdge = model.HopEdge
 
 // HopResult는 시작 노드에서 지정한 범위까지의 컨텍스트와 연결을 담는다.
 //

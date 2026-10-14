@@ -159,7 +159,7 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		total.selection.Connectors += flow.Selection.Connectors
 		total.selection.Unreachable += flow.Selection.Unreachable
 		recovered[query.ID] = recoveredKeys(flow, query, graph.Keys)
-		signals[query.ID] = flow.RouteSignals
+		signals[query.ID] = search.RouteSignals(flow.RouteSignals)
 		for _, name := range slices.Sorted(maps.Keys(flow.Channels)) {
 			channel := flow.Channels[name]
 			total.channels[name] += channel.Contribution

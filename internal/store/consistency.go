@@ -17,15 +17,8 @@ import (
 // 스냅숏을 자기 읽기 전용 트랜잭션에서 가져와 같은 커밋 상태를 읽는다. 단일 홉 조회는
 // 별도의 한 연결 읽기 경계를 쓰며, 그 밖의 표식 없는 요청은 풀에서 바로 읽는다.
 
-// ReadStats는 한 요청이 읽기 경계에서 쓴 연결 자원이다.
-type ReadStats struct {
-	// Connections 필드에는 조정 연결을 포함해 경계 안에서 연 트랜잭션 수를 둔다.
-	Connections int
-	// PeakConnections 필드에는 동시에 열려 있던 트랜잭션 수의 최댓값을 둔다.
-	PeakConnections int
-	// Hold 필드에는 조정 연결이 스냅숏을 붙잡고 있던 시간을 둔다.
-	Hold time.Duration
-}
+// ReadStats는 핸들을 포함하지 않는 읽기 자원 집계다.
+type ReadStats = model.ReadStats
 
 // readScope는 요청 컨텍스트에 싣는 스냅숏 표식과 연결 사용량이다.
 type readScope struct {

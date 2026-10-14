@@ -17,11 +17,13 @@
 | `store/` | [데이터·격리·불변식](../spec/service/agent-context/sdd/data.md), [쓰기·잠금·복구](../spec/service/agent-context/sdd/context-lifecycle.md) |
 | `authz/` | [계정·세션·OAuth·키](../spec/service/agent-context/sdd/authentication.md) |
 | `index/` | [제공자·큐·세대·재색인](../spec/service/agent-context/sdd/indexing.md) |
+| `mcp/` | [전송·도구·주입 계약](../spec/service/agent-context/sdd/mcp.md), [패키지 경계](../spec/service/agent-context/sdd/architecture.md#목표-추가-패키지와-조립) |
+| `diagnostic/` | [진단 이벤트·기록기](../spec/service/agent-context/sdd/observability.md#기록기와-소유-경계) |
 | `search/` | [채널·스냅숏·홉·흐름](../spec/service/agent-context/sdd/search.md) |
 | `web/` | [웹 DOX](web/AGENTS.md) |
 | `migrate/` | [SQL 적용·치환·이력 DOX](../migrations/AGENTS.md) |
 
-`mcp`·`diagnostic`을 추가할 때의 경계는 [목표 추가 패키지](../spec/service/agent-context/sdd/architecture.md#목표-추가-패키지와-조립), 동작은 [MCP](../spec/service/agent-context/sdd/mcp.md)·[관측성](../spec/service/agent-context/sdd/observability.md)을 따른다. `migrate`는 애플리케이션 업무 패키지 밖의 도구다.
+`mcp`·`diagnostic`의 주입 계약과 목표 구현의 경계는 [목표 추가 패키지](../spec/service/agent-context/sdd/architecture.md#목표-추가-패키지와-조립), 동작은 [MCP](../spec/service/agent-context/sdd/mcp.md)·[관측성](../spec/service/agent-context/sdd/observability.md)을 따른다. `migrate`는 애플리케이션 업무 패키지 밖의 도구다.
 
 ## 로컬 계약
 

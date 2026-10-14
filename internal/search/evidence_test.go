@@ -200,7 +200,7 @@ func evidenceFlowStore(t *testing.T, graphID model.ID) (*fakeStore, model.Contex
 	near.Layer, far.Layer = model.LayerEvent, model.LayerEvent
 	database := &fakeStore{
 		time: []store.SearchCandidate{{Context: entry}},
-		hops: store.HopResult{
+		hops: model.HopResult{
 			Contexts:  []model.Context{entry, near, far},
 			Distances: map[model.ID]int{entry.ID: 0, near.ID: 1, far.ID: 2},
 			Edges: []store.HopEdge{

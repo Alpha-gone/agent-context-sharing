@@ -6,11 +6,10 @@ import (
 	"slices"
 
 	"agent_context_sharing/internal/model"
-	"agent_context_sharing/internal/store"
 )
 
 // Route는 검색 경로다.
-type Route string
+type Route = model.SearchRoute
 
 const (
 	// RouteDirect는 진입 채널 결과만 결합하고 그래프 확장과 전역 진입을 실행하지 않는다.
@@ -38,21 +37,8 @@ const (
 	ReasonExplicitScope = "explicit_scope"
 )
 
-// RouteSignals는 라우터가 보는 진입 채널 결과의 요약이다. 같은 신호와 임계값이면 항상 같은
-// 경로가 나오므로, 평가 실행기는 이 값으로 임계값 후보를 다시 실행하지 않고 견줄 수 있다.
-type RouteSignals struct {
-	// RelevantLocal 필드에는 유사도 하한을 넘은 의미 후보나 키워드 후보가 있는지를 둔다.
-	RelevantLocal bool
-	// TopIsEvent 필드에는 진입 채널 통합 순위 1위가 사건인지를 둔다.
-	TopIsEvent bool
-	// CrossChannelAgreement 필드에는 진입 채널 통합 순위 1위가 의미·키워드 양쪽 후보인지를 둔다.
-	CrossChannelAgreement bool
-	// SemanticCount 필드에는 의미 후보 수를 둔다. 채널이 실패하면 0이다.
-	SemanticCount int
-	// SemanticTop과 SemanticSecond 필드에는 의미 후보 1위와 2위의 유사도를 둔다.
-	SemanticTop    float64
-	SemanticSecond float64
-}
+// RouteSignals에 대한 경로 판정은 검색 패키지가 소유한다.
+type RouteSignals model.RouteSignals
 
 // Decide는 「질의 적응형 라우팅」의 다섯 규칙을 순서대로 적용한다. 전역 요약 부재에 따른
 // 직접 경로 되돌림은 요약을 조회한 뒤에만 알 수 있으므로 여기서 판정하지 않는다.
@@ -119,7 +105,7 @@ func relevantLocalContexts(results []channelResult, combined []combinedCandidate
 }
 
 // hasRelevantSemantic은 의미 후보 중 유사도 하한을 넘은 것이 있는지 판정한다.
-func hasRelevantSemantic(candidates []store.SearchCandidate, threshold float64) bool {
+func hasRelevantSemantic(candidates []model.SearchCandidate, threshold float64) bool {
 	for _, candidate := range candidates {
 		if candidate.Similarity >= threshold {
 			return true

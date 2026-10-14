@@ -20,10 +20,10 @@ import (
 const minPoolConns = 16
 
 // ErrNotFound는 지정한 그래프 안에서 대상을 찾지 못했음을 나타낸다.
-var ErrNotFound = errors.New("대상을 찾지 못했다")
+var ErrNotFound = model.ErrNotFound
 
 // ErrInvalidState는 현재 상태에서 허용되지 않는 전이를 요청했음을 나타낸다.
-var ErrInvalidState = errors.New("현재 상태에서 허용되지 않는 연산이다")
+var ErrInvalidState = model.ErrInvalidState
 
 // ErrRestoreChannel은 현재 삭제가 MCP 폐기의 복구 대상이 아님을 나타낸다.
 var ErrRestoreChannel = errors.New("현재 삭제는 웹에서 복구해야 한다")
@@ -38,15 +38,7 @@ var ErrActiveSigningKeyExists = errors.New("활성 서명 키가 이미 있다")
 var ErrLastOwner = errors.New("그래프에는 소유자 등급이 최소 하나 필요하다")
 
 // VersionConflictError는 낙관적 잠금 비교에 실패했을 때 현재 판 번호를 담는다.
-type VersionConflictError struct {
-	// Current 필드는 저장된 대상의 현재 판 번호다.
-	Current int64
-}
-
-// Error는 오류를 사람이 읽을 수 있는 형태로 만든다.
-func (error VersionConflictError) Error() string {
-	return fmt.Sprintf("판 번호가 일치하지 않는다: 현재 판 %d", error.Current)
-}
+type VersionConflictError = model.VersionConflictError
 
 // graphNamePattern은 AGE 그래프 이름을 SQL 식별자로 안전하게 사용할 수 있는지 확인한다.
 var graphNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)

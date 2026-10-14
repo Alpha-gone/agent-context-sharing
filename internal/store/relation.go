@@ -506,7 +506,7 @@ func (s *Store) validateRelationCycle(ctx context.Context, tx pgx.Tx, graphID mo
 	if err != nil {
 		return fmt.Errorf("관계 순환 경로 조회: %w", err)
 	}
-	if err := model.ValidateRelationCycle(relation, func(_, _ model.ID) bool { return pathExists }); err != nil {
+	if err := model.ValidateRelationCycle(relation, pathExists); err != nil {
 		return fmt.Errorf("관계 순환 검증: %w", errors.Join(ErrInvalidRelation, err))
 	}
 	return nil

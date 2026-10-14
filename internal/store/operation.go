@@ -11,19 +11,19 @@ import (
 )
 
 // OperationKind는 컨텍스트 관리 연산 기록에 보관하는 다섯 동작 중 하나다.
-type OperationKind string
+type OperationKind = model.OperationKind
 
 const (
 	// OperationAdd는 새 컨텍스트를 기록한 연산이다.
-	OperationAdd OperationKind = "add"
+	OperationAdd = model.OperationAdd
 	// OperationUpdate는 기존 컨텍스트를 갱신한 연산이다.
-	OperationUpdate OperationKind = "update"
+	OperationUpdate = model.OperationUpdate
 	// OperationSupersede는 새 파생 판으로 이전 파생을 대체한 연산이다.
-	OperationSupersede OperationKind = "supersede"
+	OperationSupersede = model.OperationSupersede
 	// OperationDiscard는 컨텍스트를 폐기한 연산이다.
-	OperationDiscard OperationKind = "discard"
+	OperationDiscard = model.OperationDiscard
 	// OperationKeep는 상태를 바꾸지 않고 유지하기로 판단한 연산이다.
-	OperationKeep OperationKind = "keep"
+	OperationKeep = model.OperationKeep
 )
 
 // OperationRecord은 적용 또는 거부한 관리 연산을 기록하는 입력이다.

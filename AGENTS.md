@@ -8,6 +8,7 @@
 ## 소유권
 
 - 루트 DOX는 저장소 구조·공통 작업 규칙·Go 기준·루트 구성 파일과 최상위 Child DOX Index를 소유한다.
+- `check-go.sh`는 공통 Go 도구 체인·의존성 빌드·정적 검사를, `.github/workflows/go.yml`은 같은 검사의 CI 실행을 소유한다.
 - 서버는 루트 `agent_context_sharing` Go 모듈이며 구현은 `cmd/`·`internal/`, SQL은 `migrations/`, Markdown 명세는 `spec/`에 둔다.
 - [README.md](README.md)는 개요·개발 시작, [OPERATIONS.md](OPERATIONS.md)는 운영 구성 기반 시험 운영 절차를 소유한다. 동작의 정본은 서비스 SRS·분야별 SDD다.
 

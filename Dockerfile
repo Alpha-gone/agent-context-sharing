@@ -4,7 +4,7 @@
 # AGE만 얹으므로 pgvector를 PGDG 패키지로 더한다. AGE는 베이스에 이미 컴파일되어 있어
 # 빌드 단계가 필요 없다.
 #
-# 태그를 release_PG18_1.8.0으로 고정하는 이유는 SDD.md의 「버전 요구」가 Apache AGE
+# 태그를 release_PG18_1.8.0으로 고정하는 이유는 아키텍처 SDD의 「버전 요구」가 Apache AGE
 # 1.8.0 이상을 요구하는데 공식 이미지가 PostgreSQL 18에만 그 판을 올려 두었기 때문이다.
 # PostgreSQL 18은 「버전 요구」가 정한 13~18 범위의 상한이다.
 #
@@ -14,7 +14,7 @@
 # 아키텍처 인덱스이며, 판을 올릴 때 태그와 digest를 함께 바꾼다.
 FROM apache/age:release_PG18_1.8.0@sha256:47a0b054c3663a3e64a25fc0c5a982f1b58348019274b326a691cdf77f78eb58
 
-# pgvector 0.8.6. SDD.md의 「버전 요구」가 요구하는 0.7.0 이상을 만족하며
+# pgvector 0.8.6. 아키텍처 SDD의 「버전 요구」가 요구하는 0.7.0 이상을 만족하며
 # halfvec과 이진 양자화를 포함한다. PGDG 패키지의 전체 버전을 고정하여 재빌드 때
 # 최신 판으로 바뀌지 않도록 하며, 이 버전이 없으면 빌드를 실패시킨다.
 RUN apt-get update \

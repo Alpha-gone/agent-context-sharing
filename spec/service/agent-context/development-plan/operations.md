@@ -14,7 +14,7 @@
 
 ### OPS-01
 
-- [ ] **고정 이미지·개발 DB·격리 실행 환경을 준비한다.**
+- [x] **고정 이미지·개발 DB·격리 실행 환경을 준비한다.**
 - 선행: [ARCH-01](architecture.md#arch-01).
 
 1. SDD의 PostgreSQL 18·AGE 1.8.0·pgvector 완전 패키지 판과 이미지 tag/digest를 고정하고 DB 이미지·기동 래퍼를 작성한다.
@@ -24,6 +24,8 @@
 
 - 산출물: 개발 이미지·Compose·환경 예시·test-dev-compose.sh와 격리 DB.
 - 완료 기준: 기본 기동에서 서버가 제외되고 캐시 없는 DB 빌드·설치 판·loopback 공개·SQL 응답을 검증한다. server 이미지·실제 Tunnel 인수는 별도다.
+
+- 완료 근거: 2026-10-15 [개발 DB 격리 환경 검토](../reviews/2026-10-15-ops-01.md). 정적 구성·합성 fixture 6건과 새 프로젝트의 두 DB 이미지 캐시 없는 빌드·기동·설치 판·loopback·WAL 경로 권한·벡터/AGE 질의·자원 정리가 통과했다. 서버 이미지·실제 Tunnel·WAL 보관 재개와 시점 복구·운영 배포는 후속 인수 범위다. 다음은 DATA-02다.
 
 ### OPS-02
 

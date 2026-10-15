@@ -190,6 +190,60 @@ AGE 그래프는 하나만 만든다. 이름은 배포 구성으로 두되 인�
 
 한도를 켠 계정만 행을 갖는다. 기본값이 무제한이므로 기본 배포에서는 이 테이블이 비어 있다.
 
+## 신규 구현의 DDL 대응
+
+[DATA-01](../development-plan/data.md#data-01)의 입력은 위 열 정의와 아래 물리 제약이다. 이 절은 구현할 목표이며 기존 SQL의 존재나 적용 여부를 완료 근거로 삼지 않는다. OAuth의 열은 [인증 저장 열](authentication.md#oauth-저장-열), 등록의 열은 [등록 저장 열](mcp.md#등록-저장-열)이 소유한다. 목표 업무 테이블은 기존 13종과 추가 4종, 총 17종이며 임베딩 자식 파티션과 마이그레이션 이력은 별도로 센다.
+
+### SQL 타입·NULL·키
+
+아래에서 명시한 선택 열만 NULL을 허용하고 나머지는 `NOT NULL`이다. PK는 NULL을 허용하지 않는다. UUIDv7의 SQL 타입은 `uuid`지만 UUID 판·유효성은 모델과 저장소가 검증한다. 시각은 `timestamptz`로 저장하고 UTC로 입출력하며, AGE의 시각 property는 UTC RFC 3339 문자열로 변환한다. `version`·`target_version`·`content_revision`·저장량은 Go `int64`와 대응하는 `bigint`로 두고 1 이상인 판과 0 이상인 누계를 구분한다. 값의 증가·합산은 저장소가 오버플로를 검사한다. 열거형은 PostgreSQL enum 타입 대신 `text`와 닫힌 값 집합의 CHECK로 표현한다.
+
+| 테이블 | 열과 SQL 타입 | NULL 허용 | 키·행 제약과 조회 |
+|---|---|---|---|
+| `account` | `account_id: uuid`, `login_id/password_hash: text`, `created_at: timestamptz` | 없음 | PK `account_id`, UNIQUE `login_id`. 로그인 형식·비어 있지 않은 해시 CHECK. 해시 생성·원문 비저장은 인증 경계 |
+| `context_graph` | `graph_id/created_by: uuid`, `name/description: text`, `created_at/last_activity_at/grace_started_at/grace_expires_at/deleted_at: timestamptz`, `stored_chars/version/content_revision: bigint` | `description`, `grace_started_at`, `grace_expires_at`, `deleted_at` | PK `graph_id`. 이름 비어 있지 않음, `stored_chars >= 0`, 두 판 `>= 1` CHECK. 기본값은 저장량 0·두 판 1. 이름은 UNIQUE가 아니다. 활성 목록은 시각·ID 커서 |
+| `graph_grant` | `graph_id/subject_id: uuid`, `subject_type/grade: text` | 없음 | PK `(graph_id, subject_type, subject_id)`. 대상 종류와 등급 CHECK. 유효 등급은 조인으로 계산하며 저장하지 않는다 |
+| `team` | `team_id/manager_account_id: uuid`, `name: text`, `created_at/deleted_at: timestamptz` | `deleted_at` | PK `team_id`, 비어 있지 않은 이름 CHECK. 이름 UNIQUE 없음. 관리 계정·구성원·활성 상태는 저장소 검사 |
+| `team_member` | `team_id/account_id: uuid` | 없음 | PK `(team_id, account_id)`, 계정별 팀 조회 인덱스 |
+| `context_embedding` | `context_id/graph_id: uuid`, `embedding: vector(n) 또는 halfvec(n)`, `model_id/storage_tier: text`, `indexed_at/last_accessed_at: timestamptz` | 없음 | `storage_tier` LIST 파티션과 값 CHECK. 두 자식에서 각각 UNIQUE `context_id`. 그래프·HNSW 조회와 전역 중복 책임은 [임베딩 스키마](#임베딩-스키마) |
+| `index_task` | `task_id/context_id/graph_id: uuid`, `attempts: integer`, `state/last_error/correlation_id: text`, `enqueued_at/next_attempt_at: timestamptz` | `last_error`, `correlation_id` | PK `task_id`, UNIQUE `context_id`, 시도 횟수 기본 0·음수 금지, 상태 CHECK. 확보는 상태·다음 시도 시각, 세대는 [큐 계약](indexing.md#색인-작업-큐) |
+| `operation_log` | `operation_id/graph_id/context_id/relation_id/actor_account_id/actor_agent_id: uuid`, `operation_kind/judgment_input/result/reject_reason: text`, `target_version: bigint`, `applied_at: timestamptz` | `context_id`, `relation_id`, `target_version`, `reject_reason` | PK `operation_id`. 연산·결과·대상 조합 CHECK는 아래 표. 컨텍스트·관계별 이력과 그래프별 감사·보존 조회 |
+| `idempotency_record` | `actor_account_id: uuid`, `idempotency_key/tool_name: text`, `request_fingerprint: bytea`, `tool_result: jsonb`, `received_at/expires_at: timestamptz` | `tool_result`는 트랜잭션 내부 예약 중에만 허용 | PK `(actor_account_id, idempotency_key)`. 키 형식과 32바이트 지문 CHECK. 결과 없는 커밋은 저장소가 금지하며 [멱등성 경계](mcp.md#멱등성-저장과-경합)에서 검증. 만료 인덱스 |
+| `web_audit_log` | `audit_id/actor_account_id/graph_id/subject_id/team_id/member_account_id/target_context_id/requester_account_id: uuid`, `target_kind/action/subject_type/before_grade/after_grade: text`, `occurred_at: timestamptz` | 공통 5개 열 `audit_id/target_kind/action/actor_account_id/occurred_at` 이외 | PK `audit_id`, 종류·행위·선택 등급 CHECK와 운영자 복구 요청자 필수 CHECK. 종류별 필수·금지 조합은 저장소 검증. 그래프 없는 팀 감사도 계정·시각으로 조회 |
+| `signing_key` | `key_id/algorithm/public_key/private_key/state: text`, `created_at: timestamptz` | 없음 | PK `key_id`, 상태 CHECK, `state = 'active'`의 단일 상수 부분 UNIQUE. 키 형식·알고리즘·공개 응답 비밀 제외는 인증 경계 |
+| `request_rate` | `account_id: uuid`, `window_started_at: timestamptz`, `count: bigint` | 없음 | PK `(account_id, window_started_at)`, 기본 0·음수 금지 CHECK. 한도·분 창 정규화는 저장소, 만료 정리는 창 인덱스 |
+| `revoked_token` | `token_id: text`, `expires_at: timestamptz` | 없음 | PK `token_id`, `expires_at` 인덱스. 만료 시각은 원 토큰의 `exp`를 보존 |
+
+`idempotency_record.tool_name`은 업무 쓰기 8종의 닫힌 값 집합으로 제한한다. 키는 16~128자 ASCII `[A-Za-z0-9_-]`, 지문 길이는 `octet_length(request_fingerprint) = 32`다. 만료 시각은 최초 접수 +24시간으로 저장소가 계산하며 재생 시 변경하지 않는다. 예약 상태를 다른 연결에 노출하거나 독립 트랜잭션으로 커밋하지 않는다. JSONB 결과의 도메인 구조와 OAuth·표준 외피 제외는 MCP 실행 경계의 책임이다.
+
+### 참조와 검증 책임
+
+기존 업무 13종의 계정·그래프·팀 참조에는 SQL 외래 키를 추가하지 않는다. `graph_grant.subject_id`는 다형 참조이고, 컨텍스트·관계는 AGE에 있으며 거부 감사는 요청이 지정한 부재 대상을 남길 수 있다. 일반 계정·팀 참조도 단일 저장 계층에서 존재와 결합을 검사한다. FK가 없다는 것은 참조 검사를 생략한다는 뜻이 아니며, 소프트 삭제·현재 권한·마지막 소유자 보호는 FK로 보장할 수 없다. 목표 OAuth의 계열 연결 두 곳은 인증 정리 순서를 강제할 수 있으므로 아래와 같이 FK를 둔다. 삭제 cascade로 기록을 조기에 지우지 않는다.
+
+| 참조·조건 | DB 책임 | 모델·저장소·인증 책임 |
+|---|---|---|
+| `context_graph.created_by`, `team.manager_account_id`, `team_member.account_id`, 감사 실행 계정, 플랜/빈도 계정 | UUID 타입·NULL·해당 키 유일성 | 계정 존재와 검증된 실행 계정 사용. 생성자·관리자·기여자 불변성과 변경 권한 |
+| `graph_grant.graph_id/subject_id`, `team_member.team_id` | 복합 PK·대상 종류/등급 CHECK | 대상 존재·활성 상태·현재 직접/상속 등급·소유자 보존, 같은 쓰기의 잠금 |
+| AGE 정점/간선·임베딩·큐·기록의 `graph_id` | UUID 또는 property 표현식 인덱스 | 입력·조회·변경·응답 모두 같은 그래프. 실제 끝점 존재·계층·기수성은 불변식 검사 |
+| OAuth 코드·갱신 토큰의 `grant_id` | `oauth_grant(grant_id)` FK, `ON DELETE NO ACTION`. 코드에서는 미소비 시 NULL | 생성·소비·계열 결합·폐기와 자식 먼저 정리하는 순서. 계정/client/resource/scope는 인증 입력과 재대조 |
+| 등록의 계정/client와 기여·확정 agent 식별자 | 등록 PK·계정/client/키 UNIQUE | 활성·동일 계정/client 검사, 계정당 활성 상한 직렬화. 폐기 후 과거 기여·감사 식별자 보존 |
+| 적용/거부 연산의 대상 조합 | 컨텍스트면 관계 NULL·양수 판 필수, 관계면 컨텍스트/판 NULL, 무대상은 거부만 허용. 관계 종류는 add/discard만. 적용이면 사유 NULL CHECK | 거부 시 사유 필수와 공개 안전성, 무대상 거부가 추가/확정에 해당하는지, 지정된 거부 대상·판의 의미 |
+| 유일성·행 사이 규칙 | 로그인·원천 자연 키·등록 키·큐·파티션별 임베딩·활성 서명 키의 UNIQUE | 사건 관계 정체성/순환/시간, 파티션 간 임베딩 하나, 동시 소유자/플랜 누적 판정은 잠금과 같은 트랜잭션 |
+
+CHECK는 같은 행의 값과 NULL 조합을 검사한다. 다른 행의 존재·현재 시각에 따른 만료·계정당 상한을 CHECK 안의 조회나 `now()`로 구현하지 않는다. 특히 PostgreSQL CHECK는 결과가 NULL이어도 허용하므로 필수 값에는 별도 `NOT NULL`이나 명시적인 `IS NOT NULL` 조건이 필요하다. [PostgreSQL 18 제약 문서](https://www.postgresql.org/docs/18/ddl-constraints.html)가 이 경계의 근거다.
+
+### 판·유예·저장량의 구분
+
+| 값 | 저장·변경 책임 | 사용하지 않는 곳 |
+|---|---|---|
+| 그래프 `version` | 그래프 정보 수정의 기대 판과 조건부 증가 | 노드·관계·임베딩 변경의 일관 읽기 비교 |
+| 컨텍스트 `version` | 원천은 항상 1. 파생·사건 변경은 모델·수명주기 계약과 기대 판 검사 | 관계 판과 임베딩 이력의 대체 |
+| `content_revision` | 검색 후보·참조·관계·임베딩을 바꾼 트랜잭션에서 내부 증가 | 공개 응답·낙관적 잠금. 이름·권한·감사만의 변경은 증가 대상 아님 |
+| `grace_started_at/grace_expires_at` | 접근 가능한 계정 소멸 시 같은 트랜잭션에서 시작과 당시 플랜 만료를 기록. 무기한이면 만료 NULL, 유예 취소면 둘 다 NULL | 플랜 변경 후 재계산·별도 삭제 채널 열 추가 |
+| `stored_chars` | 활성 컨텍스트 본문 문자 수 합. 추가·갱신·폐기·복구와 같은 트랜잭션에서 증감 | 바이트 수·벡터/파일 크기·삭제된 본문 합산 |
+
+플랜은 구성에서 계정별로 주입하며 새 `plan` 테이블·이름·운영 값을 만들지 않는다. 유예·저장량 갱신과 보존 예외의 상세는 [수명주기](context-lifecycle.md#소프트-삭제-수명주기)·[그래프 메타데이터 갱신](context-lifecycle.md#트랜잭션-경계)을 따른다.
+
 ## 스키마 적용
 
 현재 적용 순서는 `001_init.sql` 다음 `009_remove_legacy_connection.sql`이다. 적용된 001의 checksum은 유지하고 과거 002~008의 번호를 재사용하지 않는다. 009는 더 이상 사용하지 않는 연결 전용 테이블만 제거하며 계정·웹 세션·그래프·멱등성 데이터는 유지한다. 서비스·작업자 정지와 백업 후 명시적으로 적용하고, 새 OAuth 저장은 후속 마이그레이션으로 정의한다.
@@ -269,6 +323,51 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 
 시간 유효성은 파생의 `valid_from`과 `valid_to` property로만 표현한다. [SRS 관계의 버전과 시간 유효성](../SRS.md#관계의-버전과-시간-유효성)이 확정한 대로 간선에는 두지 않으며, 만료 조회는 이 두 property를 비교하는 조건으로 처리한다.
 
+### 논리 속성과 검증 위치
+
+다음 표의 필수·조건부 값은 `model`이 저장 방식과 무관하게 검사하고 `store`가 읽기·쓰기 변환에서도 재검사한다. AGE의 `id/start_id/end_id`는 내부 graphid이며 공개 UUIDv7 식별자와 같지 않다. 다른 계층의 property는 허용하지 않는다. 선택값 없음은 property 부재 또는 agtype null로 읽고, 저장할 때는 생략한다. 필수값을 null·빈 문자열로 대신하지 않는다. 문자열은 UTF-8·U+0000 제외 규칙을 지키며, API의 문자 수 상한은 MCP/웹 경계에서도 검증한다.
+
+| SRS 논리 속성 | 저장 위치·표현 | 검증 책임 |
+|---|---|---|
+| `context_id` | `Context.context_id`, UUIDv7 문자열 | 모델 형식·불변. 저장소가 전역 식별·중복 생성 방지와 조회 대상을 확인 |
+| `graph_id` | `Context.graph_id`, UUIDv7 문자열 | 모델 불변. 저장소가 그래프 존재·접근·반환 범위 확인 |
+| `layer` | `Context.layer`, 문자열 | 모델의 세 값, 생성 뒤 불변 |
+| `body` | `Context.body`, 문자열 | 모델 비어 있지 않음·텍스트 적합성. API 1~8000자, 저장소가 한도와 저장량 증감을 같은 쓰기에서 적용 |
+| `recorded_at` | `Context.recorded_at`, UTC 문자열 | 모델 필수·불변. 시스템 시각과 원천 발생 시각 구분 |
+| `created_by` | `Context.created_by`, UUIDv7 문자열 | 모델 필수·불변. 저장소가 인증 계정과 결합 |
+| `created_by_agent` | `Context.created_by_agent`, UUIDv7 문자열 | 모델 필수·불변. 저장소가 활성 등록·계정/client 결합 확인 |
+| `version` | `Context.version`, agtype 정수 | 모델 양수·원천 1 고정. 저장소 기대 판 비교와 변경 원자성 |
+| `deleted_at` | `Context.deleted_at`, 선택 UTC 문자열 | 모델 UTC. 저장소가 현재 폐기 채널을 감사와 대조 |
+| `source_ref` | 원천의 `source_ref_channel`·`source_ref_locator`, 문자열 2개 | 모델 channel 닫힌 집합·URI scheme, API locator 1~1024자. 저장소 `(graph_id, locator)` 자연 키 유일성과 기존 원천 반환 |
+| `occurred_at` | 원천의 `occurred_at`, UTC 문자열 | 모델 필수·불변. 사건 구성원 검증에서는 저장된 실제 발생 시각 사용 |
+| `origin_kind` | 원천의 `origin_kind`, 문자열 | 모델 닫힌 집합·불변 |
+| `derived_from` | 파생에서 근거로 향하는 `DERIVED_FROM` 간선 집합 | 모델 1~100·중복 금지. 저장소가 같은 그래프·원천/파생·존재·활성·불변 참조 확인 |
+| `derivation_kind` | 파생의 `derivation_kind`, 문자열 | 모델 닫힌 집합·불변 |
+| `summary_scope` | 파생의 `summary_scope`, 조건부 문자열 | 모델 summary에서만 local/global 필수·불변 |
+| `evidence_state` | 파생의 `evidence_state`, 문자열 | 모델 닫힌 집합·불변 |
+| `confidence_state` | 파생의 `confidence_state`, 조건부 문자열 | 모델 opinion에서만 필수. 갱신은 현재 권한·판 검사 |
+| `valid_from` | 파생의 `valid_from`, 선택 UTC 문자열 | 모델 UTC·유효 범위. 저장소는 시점 필터와 현재 판 적용 |
+| `valid_to` | 파생의 `valid_to`, 선택 UTC 문자열 | 모델 UTC·시작과의 순서. 대체가 이 값을 자동 변경하지 않음 |
+| `supersedes` | 새 파생에서 이전 파생으로 향하는 `SUPERSEDES`, 0~1개 | 모델 선택 식별자. 저장소가 같은 그래프·파생·불변성과 실제 대상 확인 |
+| `evidence_invalidated` | 파생의 `evidence_invalidated`, 불리언 | 모델 필수·기본 false. 저장소의 근거 폐기/대체 판정이며 자동 폐기 신호가 아님 |
+| `member_refs` | 사건에서 구성원으로 향하는 `HAS_MEMBER`, 1~1000개 | 모델 중복·기수성. 저장소가 원천/파생·같은 그래프·활성·시간 범위 확인. 사건을 구성원으로 두지 않음 |
+| `event_start` | 사건의 `event_start`, UTC 문자열 | 모델 필수·범위. 저장소가 실제 원천 구성원 시각과 대조 |
+| `event_end` | 사건의 `event_end`, 선택 UTC 문자열 | 모델 시작과의 순서·미지정이면 진행 중. 구성원과 관계 시간 제약은 저장소 |
+
+세 참조 간선은 위 `graph_id`만 property로 가지며 참조 목록·별도 관계 테이블·관계 이력을 중복 저장하지 않는다. 관계 간선의 12개 논리 속성은 다음과 같이 모두 property로 보존한다. `from_context_id/to_context_id`와 실제 `start_id/end_id`의 대조를 생략하지 않는다.
+
+| SRS 관계 속성 | AGE 표현 | 검증 책임 |
+|---|---|---|
+| `relation_id`, `graph_id` | UUIDv7 문자열 | 모델 필수·불변 식별. 저장소 graph·실제 끝점 대조 |
+| `relation_type` | 문자열과 해당 간선 label | 모델 네 값. 저장소가 label 일치 확인 |
+| `from_context_id`, `to_context_id` | UUIDv7 문자열과 AGE의 시작/끝 정점 | 모델 서로 다른 ID·정규 방향. 저장소가 같은 그래프의 사건 존재와 실제 방향 확인 |
+| `state`, `proposed_by` | 문자열 | 모델 상태/제안 출처 값 집합. 저장소 상태 전이와 탐색 시 confirmed 필터 |
+| `proposed_at` | UTC 문자열 | 모델 필수·불변 |
+| `confirmed_by`, `confirmed_by_agent`, `confirmed_at` | 조건부 UUIDv7·UTC 문자열 | 모델 confirmed에서 필수. 저장소가 검증 계정·등록 결합과 전이 시각을 적용 |
+| `deleted_at` | 선택 UTC 문자열 | 모델 discarded 상태와 일치. 저장소 폐기·재확정 경계 |
+
+`RELATES_TO`는 두 사건 UUID의 정규 문자열 오름차순으로 끝점을 정하고, 다른 세 관계는 의미상의 방향을 보존한다. 같은 정체성의 재확정은 현재 관계를 재사용한다. 관계에는 `version`·`valid_from`·`valid_to`를 추가하지 않는다. 정체성·순환·시간·상태의 실제 판정은 [그래프 불변식](#그래프-불변식-규칙과-감사)과 [관계 확정](context-lifecycle.md#관계-후보-제안과-확정)이 소유한다.
+
 ## 임베딩 스키마
 
 | 열           | 타입            | 설명                                |
@@ -316,6 +415,8 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 | `web_audit_log`                    | `graph_id`가 없는 행의 `actor_account_id`, `occurred_at` | 팀 감사 기록 정리                |
 | `request_rate`                     | `window_started_at`                                  | 지난 창의 주기 정리                        |
 | `signing_key`                      | `state = 'active'`의 부분 유일 인덱스                | 서명용 활성 키를 하나로 제한               |
+
+신규 구현은 위 인덱스에 더해 `operation_log(relation_id, applied_at)`의 관계 대상 부분 인덱스, `revoked_token(expires_at)` 정리 인덱스를 포함한다. OAuth·등록의 PK·UNIQUE·목록·정리 인덱스는 각각 [인증 저장 열](authentication.md#oauth-저장-열)·[등록 저장 열](mcp.md#등록-저장-열)을 따른다. PK·UNIQUE가 생성하는 인덱스를 같은 열의 별도 일반 인덱스로 중복 생성하지 않는다. 필수 인덱스의 생성·존재 확인과 실제 실행 계획 평가는 각각 DATA-02·DATA-05에서 수행한다.
 
 원천의 인덱스를 부분 인덱스로 두는 이유는 `source_ref`가 원천에만 있기 때문이다. `layer`가 `source`인 행만 대상으로 하면 파생과 사건은 값이 없어도 제약에 걸리지 않는다. AGE의 label 테이블이 일반 PostgreSQL 테이블이라 property 표현식에 유일 인덱스를 걸 수 있으며, `graph_id`와 `body`에 이미 표현식 인덱스를 걸고 있는 것과 같은 방식이다.
 

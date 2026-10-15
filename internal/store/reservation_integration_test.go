@@ -136,7 +136,7 @@ func TestReadSnapshotLimitsConcurrentReadsIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if stats := snapshot.Close(context.Background()); stats.PeakConnections > snapshotConnections {
+	if stats, err := snapshot.Close(context.Background()); err != nil || stats.PeakConnections > snapshotConnections {
 		t.Fatalf("스냅숏 동시 연결 최대 = %d, want %d 이하", stats.PeakConnections, snapshotConnections)
 	}
 }

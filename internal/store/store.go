@@ -137,8 +137,8 @@ func (config RelationProposalConfig) validate() error {
 // graceDays도 같은 이유로 생략할 수 없으며 nil이면 유예 만료 시각을 남기지 않는다.
 // indexTargets는 빈 값이면 모든 계층을 색인하는 기본 구성으로 읽는다.
 func New(ctx context.Context, databaseURL, graphName string, relationProposals *RelationProposalConfig, graceDays RetentionDays, indexTargets IndexTargets) (*Store, error) {
-	if !graphNamePattern.MatchString(graphName) {
-		return nil, fmt.Errorf("AGE 그래프 이름 %q가 영문 소문자, 숫자와 밑줄 형식이 아니다", graphName)
+	if len(graphName) > 63 || !graphNamePattern.MatchString(graphName) {
+		return nil, fmt.Errorf("AGE 그래프 이름 %q가 63바이트 이하의 영문 소문자, 숫자와 밑줄 형식이 아니다", graphName)
 	}
 	if indexTargets == "" {
 		indexTargets = IndexTargetsAllLayers
@@ -166,7 +166,7 @@ func New(ctx context.Context, databaseURL, graphName string, relationProposals *
 		cfg.MaxConns = max(cfg.MaxConns, minPoolConns)
 	}
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		for _, statement := range []string{"LOAD 'age'", `SET search_path = ag_catalog, "$user", public`} {
+		for _, statement := range []string{"LOAD 'age'", `SET search_path = ag_catalog, "$user", public`, "SET TIME ZONE 'UTC'"} {
 			if _, err := conn.Exec(ctx, statement); err != nil {
 				return fmt.Errorf("연결 준비 %q: %w", statement, err)
 			}

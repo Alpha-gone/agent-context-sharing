@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/sync/semaphore"
@@ -45,7 +47,7 @@ func connectionBudget(maxConns int32) int64 {
 // 연결을 쥐지 않으며 ctx가 끝나면 대기를 멈춘다. 반납 함수는 여러 번 불러도 한 번만 반납한다.
 func (s *Store) reserveConnections(ctx context.Context, count int64) (func(), error) {
 	if err := s.reservations.Acquire(ctx, count); err != nil {
-		return nil, fmt.Errorf("연결 예약: %w", err)
+		return nil, connectionError(ctx, "연결 예약", err)
 	}
 	return sync.OnceFunc(func() { s.reservations.Release(count) }), nil
 }
@@ -56,4 +58,26 @@ func newReservations(maxConns int32) (*semaphore.Weighted, error) {
 		return nil, fmt.Errorf("pool_max_conns는 동기화 스냅숏 한 요청의 점유 %d 이상이어야 한다: %d", snapshotConnections, maxConns)
 	}
 	return semaphore.NewWeighted(connectionBudget(maxConns)), nil
+}
+
+// connectionError는 드라이버 오류와 호출자가 지정한 취소 원인을 함께 보존한다.
+func connectionError(ctx context.Context, operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		err = errors.Join(err, ctx.Err(), context.Cause(ctx))
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
+// rollbackTransaction은 요청 취소와 무관한 유한 예산으로 연결을 반환한다.
+func rollbackTransaction(ctx context.Context, tx pgx.Tx) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	err := tx.Rollback(cleanup)
+	if errors.Is(err, pgx.ErrTxClosed) {
+		return nil
+	}
+	return err
 }

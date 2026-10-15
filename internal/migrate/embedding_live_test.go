@@ -5,6 +5,7 @@ package migrate_test
 import (
 	"context"
 	"fmt"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
 	"log/slog"
 	"net/http"
@@ -104,8 +105,8 @@ func TestGeminiLiveIndexSearchIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 110*time.Second)
 	defer cancel()
 	cfg := migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: 768, IndexTargetLayers: "all_layers"}
-	if err := migrate.WithLock(ctx, pool, func(ctx context.Context) error {
-		loaded, applied, err := migrate.Prepare(ctx, pool, migrations.FS, ".", cfg)
+	if err := migrate.WithLock(ctx, pool, func(ctx context.Context, locked *pgxpool.Conn) error {
+		loaded, applied, err := migrate.Prepare(ctx, locked, migrations.FS, ".", cfg)
 		if err != nil {
 			return err
 		}
@@ -114,7 +115,7 @@ func TestGeminiLiveIndexSearchIntegration(t *testing.T) {
 			return err
 		}
 		for _, migration := range pending {
-			if err := migrate.Apply(ctx, pool, migration); err != nil {
+			if err := migrate.Apply(ctx, locked, migration); err != nil {
 				return err
 			}
 		}

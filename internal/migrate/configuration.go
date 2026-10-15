@@ -7,8 +7,6 @@ import (
 	"io/fs"
 	"regexp"
 	"strconv"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // LoadRecorded는 과거 파일은 적용 당시 구성, 미적용 파일은 현재 구성으로 치환한다.
@@ -47,15 +45,16 @@ var embeddingTypePattern = regexp.MustCompile(`^(vector|halfvec)\(([0-9]+)\)$`)
 
 // Prepare는 자문 잠금 안에서 이력의 치환 구성을 복원·검증하고 적용 목록을 만든다.
 // 오래된 이력의 checksum이 실제 파일과 맞지 않으면 기록하거나 자동 수용하지 않는다.
-func Prepare(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir string, cfg Config) ([]Migration, map[int]Applied, error) {
-	if err := EnsureHistory(ctx, pool); err != nil {
-		return nil, nil, err
-	}
-	applied, err := AppliedVersions(ctx, pool)
+func Prepare(ctx context.Context, db database, fsys fs.FS, dir string, cfg Config) ([]Migration, map[int]Applied, error) {
+	current, err := Load(fsys, dir, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
-	current, err := Load(fsys, dir, cfg)
+
+	if err := EnsureHistory(ctx, db); err != nil {
+		return nil, nil, err
+	}
+	applied, err := AppliedVersions(ctx, db)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -68,7 +67,7 @@ func Prepare(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir string, cf
 	if len(missing) > 0 {
 		original := cfg
 		var actual, tablespace string
-		if err := pool.QueryRow(ctx, `SELECT format_type(atttypid, atttypmod)
+		if err := db.QueryRow(ctx, `SELECT format_type(atttypid, atttypmod)
 			FROM pg_attribute WHERE attrelid = 'public.context_embedding'::regclass
 			AND attname = 'embedding' AND NOT attisdropped`).Scan(&actual); err != nil {
 			return nil, nil, fmt.Errorf("기존 이력의 벡터 열 조회: %w", err)
@@ -82,7 +81,7 @@ func Prepare(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir string, cf
 		if err != nil {
 			return nil, nil, fmt.Errorf("이력 차원 복원 실패")
 		}
-		if err := pool.QueryRow(ctx, `SELECT COALESCE(t.spcname, '') FROM pg_class c
+		if err := db.QueryRow(ctx, `SELECT COALESCE(t.spcname, '') FROM pg_class c
 			LEFT JOIN pg_tablespace t ON t.oid = c.reltablespace
 			WHERE c.oid = 'public.context_embedding_cold'::regclass`).Scan(&tablespace); err != nil {
 			return nil, nil, fmt.Errorf("이력 tablespace 조회: %w", err)
@@ -104,7 +103,7 @@ func Prepare(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir string, cf
 		if err != nil {
 			return nil, nil, err
 		}
-		if _, err := pool.Exec(ctx, `UPDATE public.schema_migration SET render_config=$2::jsonb
+		if _, err := db.Exec(ctx, `UPDATE public.schema_migration SET render_config=$2::jsonb
 			WHERE version=$1 AND render_config IS NULL`, version, string(encoded)); err != nil {
 			return nil, nil, fmt.Errorf("이력 치환 구성 보존: %w", err)
 		}

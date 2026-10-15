@@ -116,7 +116,7 @@ func TestWithLockIsExclusive(t *testing.T) {
 	release := make(chan struct{})
 	holder := make(chan error, 1)
 	go func() {
-		holder <- migrate.WithLock(t.Context(), pool, func(context.Context) error {
+		holder <- migrate.WithLock(t.Context(), pool, func(context.Context, *pgxpool.Conn) error {
 			close(acquired)
 			<-release
 			return nil
@@ -133,7 +133,7 @@ func TestWithLockIsExclusive(t *testing.T) {
 
 	entered := make(chan error, 1)
 	go func() {
-		entered <- migrate.WithLock(t.Context(), pool, func(context.Context) error {
+		entered <- migrate.WithLock(t.Context(), pool, func(context.Context, *pgxpool.Conn) error {
 			return nil
 		})
 	}()
@@ -172,7 +172,7 @@ func TestWithLockReleasesOnError(t *testing.T) {
 	pool := newTestPool(t)
 
 	want := errors.New("적용 실패")
-	err := migrate.WithLock(t.Context(), pool, func(context.Context) error {
+	err := migrate.WithLock(t.Context(), pool, func(context.Context, *pgxpool.Conn) error {
 		return want
 	})
 	if !errors.Is(err, want) {
@@ -183,7 +183,7 @@ func TestWithLockReleasesOnError(t *testing.T) {
 	}
 
 	// 남지 않았다면 곧바로 다시 잡을 수 있어야 한다.
-	if err := migrate.WithLock(t.Context(), pool, func(context.Context) error { return nil }); err != nil {
+	if err := migrate.WithLock(t.Context(), pool, func(context.Context, *pgxpool.Conn) error { return nil }); err != nil {
 		t.Fatalf("실패 뒤 재획득: %v", err)
 	}
 }

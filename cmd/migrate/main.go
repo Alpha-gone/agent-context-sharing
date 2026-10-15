@@ -54,13 +54,13 @@ func run(ctx context.Context, command string) error {
 	// 이력 확인부터 적용까지를 자문 잠금 안에서 한다. 여러 인스턴스가 동시에 기동하면
 	// 이력을 함께 읽고 같은 파일을 함께 적용하려 들기 때문이다. 기다린 쪽은 잠금을 얻은
 	// 뒤에 이력을 읽으므로 앞선 실행기가 적용한 결과를 본다.
-	return migrate.WithLock(ctx, pool, func(ctx context.Context) error {
-		return runLocked(ctx, pool, command, cfg)
+	return migrate.WithLock(ctx, pool, func(ctx context.Context, conn *pgxpool.Conn) error {
+		return runLocked(ctx, conn, command, cfg)
 	})
 }
 
-func runLocked(ctx context.Context, pool *pgxpool.Pool, command string, cfg migrate.Config) error {
-	loaded, applied, err := migrate.Prepare(ctx, pool, migrations.FS, ".", cfg)
+func runLocked(ctx context.Context, conn *pgxpool.Conn, command string, cfg migrate.Config) error {
+	loaded, applied, err := migrate.Prepare(ctx, conn, migrations.FS, ".", cfg)
 	if err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func runLocked(ctx context.Context, pool *pgxpool.Pool, command string, cfg migr
 	}
 
 	for _, m := range pending {
-		if err := migrate.Apply(ctx, pool, m); err != nil {
+		if err := migrate.Apply(ctx, conn, m); err != nil {
 			return err
 		}
 		fmt.Printf("적용함 %03d_%s\n", m.Version, m.Name)

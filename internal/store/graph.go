@@ -36,7 +36,7 @@ func (s *Store) CreateGraph(ctx context.Context, graph model.Graph) (model.Graph
 }
 
 // CreateGraphWithOwner는 그래프 생성과 생성 계정의 소유자 등급 부여를 한 트랜잭션에 묶는다.
-func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, limits WriteLimits) (model.Graph, error) {
+func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, limits WriteLimits) (result model.Graph, err error) {
 	if err := graph.Validate(); err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 검증: %w", err)
 	}
@@ -44,7 +44,7 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 	if err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 생성 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "CreateGraphWithOwner", &err)
 	if limits.GraphsPerAccount > 0 {
 		// 아직 없는 그래프 행은 잠글 수 없으므로 계정 행으로 동시 생성을 직렬화한다.
 		// 집계는 잠금 뒤 별도 명령으로 실행해 앞선 생성의 커밋을 본다. 저장점 해제 뒤에도
@@ -217,7 +217,7 @@ func likeContains(value string) any {
 }
 
 // UpdateGraph은 같은 트랜잭션에서 그래프 판 번호를 비교하고 하나 증가시킨다.
-func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersion int64, name, description string) (model.Graph, error) {
+func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersion int64, name, description string) (result model.Graph, err error) {
 	if !graphID.IsV7() || expectedVersion < 1 || name == "" {
 		return model.Graph{}, fmt.Errorf("그래프 갱신 인자가 올바르지 않다")
 	}
@@ -225,7 +225,7 @@ func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersi
 	if err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 갱신 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "UpdateGraph", &err)
 
 	row := tx.QueryRow(ctx, `
 		UPDATE public.context_graph
@@ -252,7 +252,8 @@ func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersi
 }
 
 // scanGraph은 관계형 행을 model.Graph로 해석한다.
-func scanGraph(row pgx.Row) (model.Graph, error) {
+func scanGraph(row pgx.Row) (result model.Graph, err error) {
+	defer func() { err = storageError("graph_decode", err) }()
 	var graphID, createdBy string
 	var graph model.Graph
 	var description *string
@@ -262,7 +263,6 @@ func scanGraph(row pgx.Row) (model.Graph, error) {
 	); err != nil {
 		return model.Graph{}, err
 	}
-	var err error
 	graph.ID, err = model.ParseID(graphID)
 	if err != nil {
 		return model.Graph{}, fmt.Errorf("graph_id: %w", err)

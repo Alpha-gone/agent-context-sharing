@@ -14,7 +14,7 @@ import (
 )
 
 // CreateRelation은 같은 그래프의 사건 두 개를 잇는 사건 관계 간선을 만든다.
-func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation model.Relation) (model.Relation, error) {
+func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation model.Relation) (result model.Relation, err error) {
 	if !graphID.IsV7() || relation.GraphID != graphID {
 		return model.Relation{}, fmt.Errorf("요청 graph_id와 관계 graph_id가 일치하지 않는다")
 	}
@@ -22,7 +22,7 @@ func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation m
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 생성 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "CreateRelation", &err)
 	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
 		return model.Relation{}, err
 	}
@@ -66,7 +66,7 @@ func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation m
 
 // ConfirmRelation은 관계 정체성으로 후보를 확정하거나, 없는 관계를 에이전트 제안으로 만든다.
 // 같은 정체성의 재확정은 현재 관계를 돌려주는 멱등 연산이다.
-func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation model.Relation, operation *OperationRecord) (model.Relation, error) {
+func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation model.Relation, operation *OperationRecord) (result model.Relation, err error) {
 	if !graphID.IsV7() || relation.GraphID != graphID {
 		return model.Relation{}, fmt.Errorf("요청 graph_id와 관계 graph_id가 일치하지 않는다")
 	}
@@ -75,7 +75,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 확정 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "ConfirmRelation", &err)
 
 	// 정체성 조회와 생성 사이를 그래프 행 잠금으로 직렬화한다. AGE 간선에는 유일
 	// 인덱스가 없어 같은 (유형, from, to)의 동시 확정이 간선을 여러 개 만들고, 순환
@@ -159,7 +159,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 }
 
 // DiscardRelation은 활성 관계를 폐기 상태로 바꾸고 관리 연산 기록을 함께 남긴다.
-func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.ID, operation *OperationRecord) (model.Relation, error) {
+func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.ID, operation *OperationRecord) (result model.Relation, err error) {
 	if !graphID.IsV7() || !relationID.IsV7() {
 		return model.Relation{}, fmt.Errorf("그래프와 관계 식별자는 UUIDv7이어야 한다")
 	}
@@ -167,7 +167,7 @@ func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.I
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 폐기 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "DiscardRelation", &err)
 	// 확정과 같은 그래프 행을 잠근다. 관계에는 판 번호가 없어 낙관적 잠금으로 거를 수
 	// 없으므로, 같은 관계에 폐기가 동시에 오면 읽은 상태가 둘 다 통과해 AGE가 동시 갱신
 	// 오류를 낸다. 잠금이 조회와 갱신 사이를 직렬화해 뒤에 온 요청이 이미 폐기된 상태를
@@ -209,12 +209,25 @@ func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.I
 
 // ListRelations는 graph_id에 속한 관계를 relation_id 내림차순으로 한 페이지 읽는다.
 func (s *Store) ListRelations(ctx context.Context, graphID model.ID, cursor string, limit int) ([]model.Relation, string, error) {
-	return s.listRelations(ctx, s.pool, graphID, model.ID{}, nil, nil, cursor, limit)
+	return s.ListContextRelations(ctx, graphID, model.ID{}, nil, nil, cursor, limit)
 }
 
 // ListContextRelations는 지정 사건에 붙은 관계를 상태·유형 필터와 커서로 읽는다.
-func (s *Store) ListContextRelations(ctx context.Context, graphID, contextID model.ID, states []model.RelationState, types []model.RelationType, cursor string, limit int) ([]model.Relation, string, error) {
-	return s.listRelations(ctx, s.pool, graphID, contextID, states, types, cursor, limit)
+func (s *Store) ListContextRelations(ctx context.Context, graphID, contextID model.ID, states []model.RelationState, types []model.RelationType, cursor string, limit int) (result []model.Relation, next string, err error) {
+	if !graphID.IsV7() || limit <= 0 {
+		return nil, "", fmt.Errorf("관계 목록 인자가 올바르지 않다")
+	}
+	ctx, release, err := s.enterReadScope(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() {
+		if closeErr := release(); closeErr != nil {
+			result, next, err = nil, "", errors.Join(err, closeErr)
+		}
+		err = writeFailure(ctx, "relation_list", err)
+	}()
+	return s.listRelations(ctx, s.reader(ctx), graphID, contextID, states, types, cursor, limit)
 }
 
 // ProposeEventRelations는 저장된 사건과 같은 그래프의 사건을 비교해 시간 인접과
@@ -785,7 +798,7 @@ func joinRelationValues(values []string) string {
 func (s *Store) relationFromCypher(ctx context.Context, queryer cypherQueryer, graphID model.ID, query string) (model.Relation, error) {
 	var raw string
 	if err := queryer.QueryRow(ctx, s.cypherSQL(query, "edge agtype"), pgx.QueryExecModeExec).Scan(&raw); err != nil {
-		return model.Relation{}, err
+		return model.Relation{}, storageError("relation_query", connectionError(ctx, "AGE 조회", err))
 	}
 	return parseRelation(raw, graphID)
 }

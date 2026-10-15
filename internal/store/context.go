@@ -57,11 +57,21 @@ func (s *Store) CreateSupersedingContextWithOperation(ctx context.Context, graph
 }
 
 // Context는 graph_id 안에서 context_id에 해당하는 정점을 읽고 응답 격리를 재검사한다.
-func (s *Store) Context(ctx context.Context, graphID, contextID model.ID) (model.Context, error) {
+func (s *Store) Context(ctx context.Context, graphID, contextID model.ID) (result model.Context, err error) {
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
-	stored, err := s.context(ctx, s.pool, graphID, contextID)
+	ctx, release, err := s.enterReadScope(ctx)
+	if err != nil {
+		return model.Context{}, err
+	}
+	defer func() {
+		if closeErr := release(); closeErr != nil {
+			result, err = model.Context{}, errors.Join(err, closeErr)
+		}
+		err = writeFailure(ctx, "context_read", err)
+	}()
+	stored, err := s.context(ctx, s.reader(ctx), graphID, contextID)
 	if err != nil {
 		return model.Context{}, err
 	}
@@ -79,7 +89,7 @@ func (s *Store) UpdateContext(ctx context.Context, graphID model.ID, expectedVer
 }
 
 // UpdateContextWithOperation은 갱신과 적용 기록을 같은 트랜잭션에 남긴다.
-func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID, expectedVersion int64, value model.Context, operation *OperationRecord, limits WriteLimits) (model.Context, error) {
+func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID, expectedVersion int64, value model.Context, operation *OperationRecord, limits WriteLimits) (result model.Context, err error) {
 	if !graphID.IsV7() || value.GraphID != graphID || expectedVersion < 1 {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 인자가 올바르지 않다")
 	}
@@ -92,7 +102,7 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "UpdateContextWithOperation", &err)
 
 	if err := consumeWriteRate(ctx, tx, limits); err != nil {
 		return model.Context{}, err
@@ -193,7 +203,7 @@ func (s *Store) RestoreContext(ctx context.Context, graphID, contextID model.ID,
 }
 
 // KeepContext는 대상 판 번호를 확인하고 상태를 바꾸지 않은 유지 판단을 기록한다.
-func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, expectedVersion int64, operation *OperationRecord) (model.Context, error) {
+func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, expectedVersion int64, operation *OperationRecord) (result model.Context, err error) {
 	if !graphID.IsV7() || !contextID.IsV7() || expectedVersion < 1 {
 		return model.Context{}, fmt.Errorf("컨텍스트 유지 인자가 올바르지 않다")
 	}
@@ -201,7 +211,7 @@ func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, ex
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 유지 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "KeepContext", &err)
 	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
 		return model.Context{}, err
 	}
@@ -229,7 +239,7 @@ func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, ex
 //
 // webAudit이 있으면 상태 변경과 같은 트랜잭션에 웹 감사 기록을 남긴다. 따로 커밋하면
 // 그 사이의 취소나 오류로 변경만 남고 기록이 사라진다.
-func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord, webAudit *webAuditRecord, limits WriteLimits, discard bool) (model.Context, error) {
+func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord, webAudit *webAuditRecord, limits WriteLimits, discard bool) (result model.Context, err error) {
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
@@ -242,7 +252,7 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "changeContextDeletion", &err)
 
 	if err := consumeWriteRate(ctx, tx, limits); err != nil {
 		return model.Context{}, err
@@ -387,26 +397,32 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 	query := "MATCH (derived:Context)-[edge:DERIVED_FROM]->(evidence:Context) WHERE evidence.context_id = " + cypherString(evidenceID.String()) +
 		" AND evidence.graph_id = " + cypherString(graphID.String()) +
 		" AND derived.graph_id = " + cypherString(graphID.String()) +
-		" AND edge.graph_id = " + cypherString(graphID.String()) + " RETURN derived"
+		" AND edge.graph_id = " + cypherString(graphID.String()) + " RETURN derived.context_id"
 	rows, err := tx.Query(ctx, s.cypherSQL(query, "derived agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return fmt.Errorf("근거 무효 전파 대상 조회: %w", err)
 	}
 	defer rows.Close()
-	derived := make([]model.Context, 0)
+	derivedIDs := make([]model.ID, 0)
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
 			return fmt.Errorf("근거 무효 전파 대상 행 해석: %w", err)
 		}
-		value, err := parseContext(raw, graphID)
+		id, err := parseAnchorID(raw)
 		if err != nil {
 			return err
 		}
-		derived = append(derived, value)
+		derivedIDs = append(derivedIDs, id)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("근거 무효 전파 대상 행 읽기: %w", err)
+	}
+	rows.Close()
+	// 상태 전이 검증에는 속성과 참조가 모두 필요하므로 공통 조립 경계를 거친다.
+	derived, err := s.contextsByIDs(ctx, tx, graphID, derivedIDs)
+	if err != nil {
+		return err
 	}
 	for _, previous := range derived {
 		if previous.Derived == nil || previous.Derived.EvidenceInvalidated {
@@ -441,7 +457,7 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 }
 
 // createContext은 원천 중복 확인과 그래프 활동 갱신을 포함한 실제 쓰기 트랜잭션이다.
-func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits) (model.Context, error) {
+func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits) (result model.Context, err error) {
 	release, err := s.reserveContextWriteConnections(ctx)
 	if err != nil {
 		return model.Context{}, err
@@ -451,7 +467,7 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 생성 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "createContext", &err)
 
 	if err := consumeWriteRate(ctx, tx, limits); err != nil {
 		return model.Context{}, err
@@ -527,17 +543,32 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 // withReferences는 커밋한 정점에 같은 트랜잭션이 쓴 참조 목록을 붙인다.
 // 정점 속성에는 참조를 두지 않으므로 간선에서 조립하는 대신 쓴 값을 그대로 옮긴다.
 func withReferences(stored model.Context, derivedFrom []model.ID, written model.Context) model.Context {
-	switch stored.Layer {
-	case model.LayerDerived:
-		if stored.Derived != nil {
-			stored.Derived.DerivedFrom = slices.Clone(derivedFrom)
-		}
-	case model.LayerEvent:
-		if stored.Event != nil && written.Event != nil {
-			stored.Event.MemberIDs = slices.Clone(written.Event.MemberIDs)
-		}
+	var members []model.ID
+	if written.Event != nil {
+		members = written.Event.MemberIDs
 	}
-	return stored
+	return attachReferences(stored, derivedFrom, members)
+}
+
+// attachReferences는 단건·묶음·쓰기 응답이 공통으로 쓰는 참조 조립 경계다.
+// 인자와 응답의 속성·slice를 공유하지 않아 호출자의 수정이 원본을 바꾸지 않는다.
+func attachReferences(value model.Context, derivedFrom, members []model.ID) model.Context {
+	if value.Derived != nil {
+		value.Derived = new(*value.Derived)
+		value.Derived.DerivedFrom = slices.Clone(derivedFrom)
+	}
+	if value.Event != nil {
+		value.Event = new(*value.Event)
+		value.Event.MemberIDs = slices.Clone(members)
+	}
+	return value
+}
+
+func validateStoredContext(value model.Context) (model.Context, error) {
+	if err := value.Validate(); err != nil {
+		return model.Context{}, storageError("context_references", err)
+	}
+	return value, nil
 }
 
 // createSupersedesEdge는 새 파생에서 이전 파생으로 향하는 단일 참조를 만든다.
@@ -689,27 +720,17 @@ func (s *Store) context(ctx context.Context, queryer cypherQueryer, graphID, con
 	if err != nil {
 		return stored, err
 	}
+	var references, members []model.ID
 	switch stored.Layer {
 	case model.LayerDerived:
-		referenceIDs, err := s.derivedFromIDs(ctx, queryer, graphID, contextID)
-		if err != nil {
-			return model.Context{}, err
-		}
-		stored.Derived.DerivedFrom = referenceIDs
-		if err := stored.Validate(); err != nil {
-			return model.Context{}, fmt.Errorf("저장된 파생 컨텍스트 검증: %w", err)
-		}
+		references, err = s.derivedFromIDs(ctx, queryer, graphID, contextID)
 	case model.LayerEvent:
-		memberIDs, err := s.eventMemberIDs(ctx, queryer, graphID, contextID)
-		if err != nil {
-			return model.Context{}, err
-		}
-		stored.Event.MemberIDs = memberIDs
-		if err := stored.Validate(); err != nil {
-			return model.Context{}, fmt.Errorf("저장된 사건 컨텍스트 검증: %w", err)
-		}
+		members, err = s.eventMemberIDs(ctx, queryer, graphID, contextID)
 	}
-	return stored, nil
+	if err != nil {
+		return model.Context{}, err
+	}
+	return validateStoredContext(attachReferences(stored, references, members))
 }
 
 // derivedFromIDs는 DERIVED_FROM 간선에서 파생의 근거 식별자를 다시 조립한다.
@@ -781,7 +802,7 @@ func (s *Store) contextFromCypher(ctx context.Context, queryer cypherQueryer, gr
 		if errors.Is(err, pgx.ErrNoRows) {
 			return model.Context{}, ErrNotFound
 		}
-		return model.Context{}, err
+		return model.Context{}, storageError("context_query", connectionError(ctx, "AGE 조회", err))
 	}
 	return parseContext(raw, graphID)
 }
@@ -1010,7 +1031,20 @@ func (s *Store) contextVerticesByIDs(ctx context.Context, queryer cypherQueryer,
 //
 // 후보마다 Context를 부르면 식별자 수만큼 왕복이 늘고, 결과 행을 연 채 부르면 같은 풀에서
 // 연결을 하나 더 잡아 동시 요청이 서로의 연결을 기다린다. 검색 채널은 이 함수를 쓴다.
-func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs []model.ID) ([]model.Context, error) {
+func (s *Store) ContextsByIDs(ctx context.Context, graphID model.ID, contextIDs []model.ID) (result []model.Context, err error) {
+	if !graphID.IsV7() {
+		return nil, fmt.Errorf("그래프 식별자는 UUIDv7이어야 한다")
+	}
+	ctx, release, err := s.enterReadScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := release(); closeErr != nil {
+			result, err = nil, errors.Join(err, closeErr)
+		}
+		err = writeFailure(ctx, "context_batch", err)
+	}()
 	values, err := s.contextsByIDs(ctx, s.reader(ctx), graphID, contextIDs)
 	if err != nil {
 		return nil, err
@@ -1058,17 +1092,9 @@ func (s *Store) contextsByIDs(ctx context.Context, queryer cypherQueryer, graphI
 		if !found {
 			return nil, missingContextError{ID: contextID}
 		}
-		switch value.Layer {
-		case model.LayerDerived:
-			value.Derived.DerivedFrom = references[contextID]
-			if err := value.Validate(); err != nil {
-				return nil, fmt.Errorf("저장된 파생 컨텍스트 검증: %w", err)
-			}
-		case model.LayerEvent:
-			value.Event.MemberIDs = members[contextID]
-			if err := value.Validate(); err != nil {
-				return nil, fmt.Errorf("저장된 사건 컨텍스트 검증: %w", err)
-			}
+		value, err = validateStoredContext(attachReferences(value, references[contextID], members[contextID]))
+		if err != nil {
+			return nil, err
 		}
 		ordered = append(ordered, value)
 	}

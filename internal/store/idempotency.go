@@ -134,9 +134,11 @@ func deferAfterWriteCommit(ctx context.Context, callback func()) bool {
 // 한다. 저장점의 Commit은 해제일 뿐이고 실제 커밋은 멱등성 트랜잭션이 한다.
 func (s *Store) writeTransaction(ctx context.Context) (pgx.Tx, error) {
 	if tx, ok := ctx.Value(writeTransactionContextKey{}).(pgx.Tx); ok {
-		return tx.Begin(ctx)
+		nested, err := tx.Begin(ctx)
+		return nested, storageError("write_savepoint", connectionError(ctx, "저장점 시작", err))
 	}
-	return s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	return tx, storageError("write_begin", connectionError(ctx, "쓰기 트랜잭션 시작", err))
 }
 
 // CleanupExpiredIdempotencyRecords는 보관 기간이 끝난 재시도 결과를 지운다.

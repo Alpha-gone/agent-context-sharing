@@ -3,7 +3,7 @@ package config
 
 import (
 	"fmt"
-	"net"
+	"math"
 	"net/netip"
 	"net/url"
 	"regexp"
@@ -137,17 +137,22 @@ type Config struct {
 	TLSCertFile string
 	// TLSKeyFile 필드에는 애플리케이션이 직접 TLS를 종단할 때 쓸 개인 키 파일 경로를 둔다.
 	TLSKeyFile string
+	// EmbeddingColdTablespace는 마이그레이션에 전달할 선택 SQL 식별자다.
+	EmbeddingColdTablespace string
+	// MCPResourceURL은 issuer와 독립된 고정 /mcp 리소스다.
+	MCPResourceURL *url.URL
+	// MCPAllowedOrigins는 요청 헤더와 완전 일치시킬 원문 origin이다.
+	MCPAllowedOrigins []string
+	// OAuthClients는 공개 client별 callback·resource·loopback 포트 정책이다.
+	OAuthClients map[string]OAuthClient
+	// Diagnostic은 파일 준비 전에 검증할 진단 구성이다.
+	Diagnostic DiagnosticConfig
 }
 
 // graphNamePattern은 SQL 식별자 자리에 치환되는 AGE 그래프 이름을 제한한다.
 var graphNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
-// Load는 환경 변수에서 현재 단계에 필요한 SDD 배포 구성만 읽고 검증한다.
-func Load(env Environment) (Config, error) {
-	if env == nil {
-		return Config{}, fmt.Errorf("환경 변수 읽기 함수가 없다")
-	}
-
+func load(env Environment) (Config, error) {
 	cfg := Config{
 		HTTPAddr:             strings.TrimSpace(env("HTTP_ADDR")),
 		DatabaseURL:          strings.TrimSpace(env("DATABASE_URL")),
@@ -165,26 +170,30 @@ func Load(env Environment) (Config, error) {
 		TLSKeyFile:           strings.TrimSpace(env("TLS_KEY_FILE")),
 	}
 
-	if err := validateAddress(cfg.HTTPAddr); err != nil {
-		return Config{}, fmt.Errorf("HTTP_ADDR: %w", err)
+	if err := validateAddress(env("HTTP_ADDR")); err != nil {
+		return Config{}, err
 	}
 	if err := validateDatabaseURL(cfg.DatabaseURL); err != nil {
-		return Config{}, fmt.Errorf("DATABASE_URL: %w", err)
+		return Config{}, err
 	}
 	if !graphNamePattern.MatchString(cfg.GraphName) {
-		return Config{}, fmt.Errorf("AGE_GRAPH_NAME %q가 영문 소문자, 숫자와 밑줄 형식이 아니다", cfg.GraphName)
+		return Config{}, fmt.Errorf("AGE_GRAPH_NAME이 영문 소문자, 숫자와 밑줄 형식이 아니다")
 	}
 
+	cfg.EmbeddingColdTablespace = strings.TrimSpace(env("EMBEDDING_COLD_TABLESPACE"))
+	if cfg.EmbeddingColdTablespace != "" && !graphNamePattern.MatchString(cfg.EmbeddingColdTablespace) {
+		return Config{}, fmt.Errorf("EMBEDDING_COLD_TABLESPACE가 SQL 식별자 형식이 아니다")
+	}
 	baseURL, err := parseHTTPURL("EMBEDDING_BASE_URL", env("EMBEDDING_BASE_URL"))
 	if err != nil {
-		return Config{}, fmt.Errorf("EMBEDDING_BASE_URL이 올바른 HTTP 주소가 아니다")
+		return Config{}, err
 	}
 	cfg.EmbeddingBaseURL = baseURL
 	if cfg.EmbeddingModel == "" {
 		return Config{}, fmt.Errorf("EMBEDDING_MODEL이 비어 있다")
 	}
 	if !slices.Contains([]string{"vector", "halfvec", "bit"}, cfg.EmbeddingVectorType) {
-		return Config{}, fmt.Errorf("EMBEDDING_VECTOR_TYPE %q가 허용된 값이 아니다", cfg.EmbeddingVectorType)
+		return Config{}, fmt.Errorf("EMBEDDING_VECTOR_TYPE이 허용된 값이 아니다")
 	}
 	// 「임베딩 스키마」가 bit를 열어 두었지만 이진 양자화는 원본 벡터 재순위화가 함께 있어야
 	// 재현율이 성립하고 그 경로가 아직 없다. 코사인 연산자도 bit에는 정의되지 않으므로
@@ -200,17 +209,17 @@ func Load(env Environment) (Config, error) {
 	if cfg.EmbeddingProvider != "gemini" {
 		return Config{}, fmt.Errorf("EMBEDDING_PROVIDER는 gemini로 명시해야 한다")
 	}
-	if baseURL.User != nil || baseURL.RawQuery != "" || baseURL.ForceQuery || baseURL.Fragment != "" {
+	if baseURL.User != nil || baseURL.RawQuery != "" || baseURL.ForceQuery || strings.Contains(env("EMBEDDING_BASE_URL"), "#") {
 		return Config{}, fmt.Errorf("EMBEDDING_BASE_URL에 사용자 정보·질의·fragment를 넣을 수 없다")
 	}
 	if (cfg.EmbeddingVectorType == "vector" && dimension > 2000) || (cfg.EmbeddingVectorType == "halfvec" && dimension > 4000) {
 		return Config{}, fmt.Errorf("EMBEDDING_DIMENSION이 HNSW의 저장 타입별 상한을 넘었다")
 	}
-	if baseURL.Scheme != "https" || cfg.EmbeddingModel != "gemini-embedding-2" || dimension < 128 || dimension > 3072 || cfg.GeminiAPIKey == "" || strings.ContainsAny(cfg.GeminiAPIKey, "\r\n") {
+	if baseURL.Scheme != "https" || cfg.EmbeddingModel != "gemini-embedding-2" || dimension < 128 || dimension > 3072 || cfg.GeminiAPIKey == "" || hasControl(env("GEMINI_API_KEY")) {
 		return Config{}, fmt.Errorf("Gemini의 HTTPS·모델·차원·GEMINI_API_KEY 구성이 올바르지 않다")
 	}
 	if !slices.Contains([]SearchExecution{SearchExecutionParallel, SearchExecutionSequential}, cfg.SearchExecution) {
-		return Config{}, fmt.Errorf("SEARCH_CHANNEL_EXECUTION %q가 parallel 또는 sequential이 아니다", cfg.SearchExecution)
+		return Config{}, fmt.Errorf("SEARCH_CHANNEL_EXECUTION이 parallel 또는 sequential이 아니다")
 	}
 	candidateLimit, err := strconv.Atoi(strings.TrimSpace(env("SEARCH_CHANNEL_CANDIDATE_LIMIT")))
 	if err != nil || candidateLimit <= 0 {
@@ -218,17 +227,17 @@ func Load(env Environment) (Config, error) {
 	}
 	cfg.SearchCandidateLimit = candidateLimit
 	semanticThreshold, err := strconv.ParseFloat(strings.TrimSpace(env("SEARCH_SEMANTIC_SIMILARITY_THRESHOLD")), 64)
-	if err != nil || semanticThreshold < 0 || semanticThreshold > 1 {
+	if err != nil || !finite(semanticThreshold) || semanticThreshold < 0 || semanticThreshold > 1 {
 		return Config{}, fmt.Errorf("SEARCH_SEMANTIC_SIMILARITY_THRESHOLD가 0 이상 1 이하의 수가 아니다")
 	}
 	cfg.SearchSemanticThreshold = semanticThreshold
 	foldThreshold, err := strconv.ParseFloat(strings.TrimSpace(env("SEARCH_FOLD_SIMILARITY_THRESHOLD")), 64)
-	if err != nil || foldThreshold <= 0 || foldThreshold > 1 {
+	if err != nil || !finite(foldThreshold) || foldThreshold <= 0 || foldThreshold > 1 {
 		return Config{}, fmt.Errorf("SEARCH_FOLD_SIMILARITY_THRESHOLD가 0 초과 1 이하의 수가 아니다")
 	}
 	cfg.SearchFoldThreshold = foldThreshold
 	if !slices.Contains([]SearchGraphStage{SearchGraphStageBaseline, SearchGraphStageReferences, SearchGraphStageRelations, SearchGraphStageGlobal}, cfg.SearchGraphStage) {
-		return Config{}, fmt.Errorf("SEARCH_GRAPH_STAGE %q가 baseline, references, relations, global 중 하나가 아니다", cfg.SearchGraphStage)
+		return Config{}, fmt.Errorf("SEARCH_GRAPH_STAGE가 baseline, references, relations, global 중 하나가 아니다")
 	}
 	globalFallback, err := strconv.ParseBool(strings.TrimSpace(env("SEARCH_GLOBAL_FALLBACK_ENABLED")))
 	if err != nil {
@@ -252,10 +261,10 @@ func Load(env Environment) (Config, error) {
 		if cfg.SearchGraphStage == SearchGraphStageBaseline {
 			return Config{}, fmt.Errorf("SEARCH_QUERY_ADAPTIVE_ROUTING_ENABLED는 SEARCH_GRAPH_STAGE=baseline과 함께 켤 수 없다")
 		}
-		if cfg.SearchAdaptiveDirectThreshold, err = strconv.ParseFloat(strings.TrimSpace(env("SEARCH_ADAPTIVE_DIRECT_SIMILARITY_THRESHOLD")), 64); err != nil || cfg.SearchAdaptiveDirectThreshold < 0 || cfg.SearchAdaptiveDirectThreshold > 1 {
+		if cfg.SearchAdaptiveDirectThreshold, err = strconv.ParseFloat(strings.TrimSpace(env("SEARCH_ADAPTIVE_DIRECT_SIMILARITY_THRESHOLD")), 64); err != nil || !finite(cfg.SearchAdaptiveDirectThreshold) || cfg.SearchAdaptiveDirectThreshold < 0 || cfg.SearchAdaptiveDirectThreshold > 1 {
 			return Config{}, fmt.Errorf("SEARCH_ADAPTIVE_DIRECT_SIMILARITY_THRESHOLD가 0 이상 1 이하의 수가 아니다")
 		}
-		if cfg.SearchAdaptiveMarginThreshold, err = strconv.ParseFloat(strings.TrimSpace(env("SEARCH_ADAPTIVE_DIRECT_MARGIN_THRESHOLD")), 64); err != nil || cfg.SearchAdaptiveMarginThreshold < 0 || cfg.SearchAdaptiveMarginThreshold > 1 {
+		if cfg.SearchAdaptiveMarginThreshold, err = strconv.ParseFloat(strings.TrimSpace(env("SEARCH_ADAPTIVE_DIRECT_MARGIN_THRESHOLD")), 64); err != nil || !finite(cfg.SearchAdaptiveMarginThreshold) || cfg.SearchAdaptiveMarginThreshold < 0 || cfg.SearchAdaptiveMarginThreshold > 1 {
 			return Config{}, fmt.Errorf("SEARCH_ADAPTIVE_DIRECT_MARGIN_THRESHOLD가 0 이상 1 이하의 수가 아니다")
 		}
 	}
@@ -265,7 +274,7 @@ func Load(env Environment) (Config, error) {
 		cfg.IndexTargetLayers = IndexTargetLayersAll
 	}
 	if !slices.Contains([]IndexTargetLayers{IndexTargetLayersAll, IndexTargetLayersWithoutSource}, cfg.IndexTargetLayers) {
-		return Config{}, fmt.Errorf("INDEX_TARGET_LAYERS %q가 all_layers 또는 without_source가 아니다", cfg.IndexTargetLayers)
+		return Config{}, fmt.Errorf("INDEX_TARGET_LAYERS가 all_layers 또는 without_source가 아니다")
 	}
 	// 색인 작업자의 배치가 비어 있으면 내장으로 읽는다.
 	placements := map[string]*ComponentPlacement{
@@ -276,7 +285,7 @@ func Load(env Environment) (Config, error) {
 			*placement = PlacementEmbedded
 		}
 		if !slices.Contains([]ComponentPlacement{PlacementEmbedded, PlacementExternal}, *placement) {
-			return Config{}, fmt.Errorf("%s %q가 embedded 또는 external이 아니다", name, *placement)
+			return Config{}, fmt.Errorf("%s가 embedded 또는 external이 아니다", name)
 		}
 	}
 
@@ -296,7 +305,7 @@ func Load(env Environment) (Config, error) {
 	}
 	cfg.RelationAdjacencyWindow = adjacencyWindow
 	similarityThreshold, err := strconv.ParseFloat(strings.TrimSpace(env("RELATION_SIMILARITY_THRESHOLD")), 64)
-	if err != nil || similarityThreshold < -1 || similarityThreshold > 1 {
+	if err != nil || !finite(similarityThreshold) || similarityThreshold < -1 || similarityThreshold > 1 {
 		return Config{}, fmt.Errorf("RELATION_SIMILARITY_THRESHOLD가 -1에서 1 사이의 수가 아니다")
 	}
 	cfg.RelationSimilarityThreshold = similarityThreshold
@@ -332,121 +341,16 @@ func Load(env Environment) (Config, error) {
 			return Config{}, fmt.Errorf("TLS_TERMINATION이 proxy일 때 TLS_CERT_FILE과 TLS_KEY_FILE은 비어 있어야 한다")
 		}
 	default:
-		return Config{}, fmt.Errorf("TLS_TERMINATION %q가 direct 또는 proxy가 아니다", cfg.TLSMode)
+		return Config{}, fmt.Errorf("TLS_TERMINATION이 direct 또는 proxy가 아니다")
 	}
 
+	if err := loadConnections(&cfg, env); err != nil {
+		return Config{}, err
+	}
+	if err := loadDiagnostic(&cfg, env); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
-// validateAddress는 서버 수신 주소가 포트를 포함한 TCP 주소인지 확인한다.
-func validateAddress(address string) error {
-	if address == "" {
-		return fmt.Errorf("값이 비어 있다")
-	}
-	_, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return fmt.Errorf("TCP 주소 형식이 아니다: %w", err)
-	}
-	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
-		return fmt.Errorf("포트 %q가 유효하지 않다", port)
-	}
-	return nil
-}
-
-// validateDatabaseURL은 PostgreSQL 연결에 필요한 scheme과 host를 확인한다.
-func validateDatabaseURL(raw string) error {
-	if raw == "" {
-		return fmt.Errorf("값이 비어 있다")
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("URL 해석: %w", err)
-	}
-	if (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Host == "" {
-		return fmt.Errorf("postgres 또는 postgresql scheme과 host가 필요하다")
-	}
-	return nil
-}
-
-// parseHTTPURL은 HTTP 또는 HTTPS URL 하나를 해석한다.
-func parseHTTPURL(name, raw string) (*url.URL, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return nil, fmt.Errorf("%s 해석: %w", name, err)
-	}
-	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return nil, fmt.Errorf("%s는 host가 있는 HTTP URL이어야 한다", name)
-	}
-	return parsed, nil
-}
-
-func parseOriginURL(name, raw string) (*url.URL, error) {
-	parsed, err := parseHTTPURL(name, raw)
-	if err != nil {
-		return nil, err
-	}
-	if parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
-		return nil, fmt.Errorf("%s는 경로, query, fragment, 사용자 정보 없는 origin이어야 한다", name)
-	}
-	return parsed, nil
-}
-
-// parseList는 쉼표로 나눈 중복 없는 구성 값을 해석한다.
-func parseList(name, raw string) ([]string, error) {
-	var values []string
-	for value := range strings.SplitSeq(raw, ",") {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return nil, fmt.Errorf("%s에 빈 값이 있다", name)
-		}
-		if slices.Contains(values, value) {
-			return nil, fmt.Errorf("%s에 중복 값 %q가 있다", name, value)
-		}
-		values = append(values, value)
-	}
-	if len(values) == 0 {
-		return nil, fmt.Errorf("%s가 비어 있다", name)
-	}
-	return values, nil
-}
-
-// parsePrefixes는 전달 헤더를 신뢰할 주소 대역 목록을 해석한다. 빈 값은 신뢰할 상대가
-// 없다는 뜻이므로 오류가 아니라 빈 목록으로 다룬다.
-func parsePrefixes(name, raw string) ([]netip.Prefix, error) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, nil
-	}
-	values, err := parseList(name, raw)
-	if err != nil {
-		return nil, err
-	}
-	prefixes := make([]netip.Prefix, 0, len(values))
-	for _, value := range values {
-		prefix, err := parsePrefix(name, value)
-		if err != nil {
-			return nil, err
-		}
-		prefixes = append(prefixes, prefix)
-	}
-	return prefixes, nil
-}
-
-// parsePrefix는 대역 또는 단일 주소 하나를 정규화된 접두로 해석한다. 호스트 비트가 남은
-// 대역은 거부한다. 조용히 정규화하면 운영자가 의도한 범위와 실제 신뢰 범위가 달라진다.
-func parsePrefix(name, value string) (netip.Prefix, error) {
-	if address, err := netip.ParseAddr(value); err == nil {
-		unmapped := address.Unmap()
-		return netip.PrefixFrom(unmapped, unmapped.BitLen()), nil
-	}
-	prefix, err := netip.ParsePrefix(value)
-	if err != nil {
-		return netip.Prefix{}, fmt.Errorf("%s의 %q가 주소 또는 CIDR 대역이 아니다", name, value)
-	}
-	if prefix.Addr().Is4In6() {
-		return netip.Prefix{}, fmt.Errorf("%s의 %q는 IPv4 대역으로 적어야 한다", name, value)
-	}
-	if prefix.Masked() != prefix {
-		return netip.Prefix{}, fmt.Errorf("%s의 %q에 호스트 비트가 남아 있다. %s로 적는다", name, value, prefix.Masked())
-	}
-	return prefix, nil
-}
+func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }

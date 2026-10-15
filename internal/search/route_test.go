@@ -65,7 +65,7 @@ func newRouteFixture(t *testing.T, second float64) routeFixture {
 		keyword:  []store.SearchCandidate{{Context: fixture.keywordOnly}},
 		time:     []store.SearchCandidate{{Context: fixture.timeOnly}},
 		global:   []store.SearchCandidate{{Context: fixture.globalDigest}},
-		hops: store.HopResult{
+		hops: model.HopResult{
 			Contexts:  []model.Context{fixture.semanticTop, fixture.neighbor},
 			Distances: map[model.ID]int{fixture.semanticTop.ID: 0, fixture.neighbor.ID: 1},
 			Edges:     []store.HopEdge{{FromID: fixture.semanticTop.ID, ToID: fixture.neighbor.ID, Kind: "relates_to"}},
@@ -185,7 +185,7 @@ func TestFlowLegacyAutoLabelsExecutedRoute(t *testing.T) {
 		t.Fatalf("검색기 생성: %v", err)
 	}
 	flow := routeFlow(t, service, fixture.graphID, "auto")
-	if flow.Route != RouteLocal || flow.RouteReason != ReasonLegacyAuto || fixture.database.hopDepth != 4 || flow.RouteSignals != (RouteSignals{}) {
+	if flow.Route != RouteLocal || flow.RouteReason != ReasonLegacyAuto || fixture.database.hopDepth != 4 || flow.RouteSignals != (model.RouteSignals{}) {
 		t.Fatalf("기존 auto = %s/%s, 깊이 %d, 신호 %+v", flow.Route, flow.RouteReason, fixture.database.hopDepth, flow.RouteSignals)
 	}
 }

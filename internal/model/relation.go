@@ -70,8 +70,8 @@ type Relation struct {
 	DeletedAt *time.Time
 }
 
-// ValidateRelation은 사건 양 끝과 관계 속성의 공통·유형별 제약을 확인한다.
-func ValidateRelation(relation Relation, from, to Context) error {
+// Validate는 조회 없이 관계 자체의 식별자·상태·시간 표현을 확인한다.
+func (relation Relation) Validate() error {
 	if !relation.ID.IsV7() || !relation.GraphID.IsV7() || !relation.FromContextID.IsV7() || !relation.ToContextID.IsV7() {
 		return fieldErrorf("relation_id", "관계 식별자는 UUIDv7이어야 한다")
 	}
@@ -90,11 +90,12 @@ func ValidateRelation(relation Relation, from, to Context) error {
 	if !slices.Contains([]ProposalSource{ProposalSourceSystem, ProposalSourceAgent}, relation.ProposedBy) {
 		return fieldErrorf("proposed_by", "관계 후보 출처 %q가 허용된 값이 아니다", relation.ProposedBy)
 	}
-	if relation.State == RelationStateConfirmed {
+	hasConfirmation := !relation.ConfirmedBy.IsZero() || !relation.ConfirmedByAgent.IsZero() || relation.ConfirmedAt != nil
+	if relation.State == RelationStateConfirmed || relation.State == RelationStateDiscarded && hasConfirmation {
 		if !relation.ConfirmedBy.IsV7() || !relation.ConfirmedByAgent.IsV7() || relation.ConfirmedAt == nil || !isUTC(*relation.ConfirmedAt) {
 			return fieldErrorf("created_by_agent", "확정 관계에는 계정, 에이전트와 UTC 확정 시각이 필요하다")
 		}
-	} else if !relation.ConfirmedBy.IsZero() || !relation.ConfirmedByAgent.IsZero() || relation.ConfirmedAt != nil {
+	} else if hasConfirmation {
 		return fieldErrorf("state", "확정되지 않은 관계에는 확정 정보를 둘 수 없다")
 	}
 	if relation.State == RelationStateDiscarded && (relation.DeletedAt == nil || !isUTC(*relation.DeletedAt)) {
@@ -103,7 +104,29 @@ func ValidateRelation(relation Relation, from, to Context) error {
 	if relation.State != RelationStateDiscarded && relation.DeletedAt != nil {
 		return fieldErrorf("state", "폐기되지 않은 관계에는 폐기 시각을 둘 수 없다")
 	}
+	if !optionalUTC(relation.ConfirmedAt) || !optionalUTC(relation.DeletedAt) {
+		return fieldErrorf("confirmed_at", "관계의 선택 시각은 UTC여야 한다")
+	}
+	if !relation.ConfirmedBy.IsZero() && !relation.ConfirmedBy.IsV7() || !relation.ConfirmedByAgent.IsZero() && !relation.ConfirmedByAgent.IsV7() {
+		return fieldErrorf("confirmed_by", "관계 확정 주체는 UUIDv7이어야 한다")
+	}
+	if relation.Type == RelationTypeRelatesTo && relation.FromContextID.Compare(relation.ToContextID) > 0 {
+		return fieldErrorf("from_context_id", "relates_to는 식별자 순서로 양 끝을 정규화해야 한다")
+	}
+	return nil
+}
 
+// ValidateRelation은 저장소가 조회한 사건 양 끝의 소속·활성 상태와 시간을 확인한다.
+func ValidateRelation(relation Relation, from, to Context) error {
+	if err := relation.Validate(); err != nil {
+		return err
+	}
+	if err := from.Validate(); err != nil {
+		return fmt.Errorf("관계 시작 사건: %w", err)
+	}
+	if err := to.Validate(); err != nil {
+		return fmt.Errorf("관계 대상 사건: %w", err)
+	}
 	if from.Layer != LayerEvent || to.Layer != LayerEvent || from.Event == nil || to.Event == nil {
 		return fieldErrorf("from_context_id", "관계 양 끝은 사건 컨텍스트여야 한다")
 	}
@@ -119,9 +142,6 @@ func ValidateRelation(relation Relation, from, to Context) error {
 	if from.ID != relation.FromContextID || to.ID != relation.ToContextID || from.GraphID != relation.GraphID || to.GraphID != relation.GraphID {
 		return fieldErrorf("from_context_id", "관계와 사건의 식별자 또는 그래프가 맞지 않는다")
 	}
-	if relation.Type == RelationTypeRelatesTo && relation.FromContextID.String() > relation.ToContextID.String() {
-		return fieldErrorf("from_context_id", "relates_to는 식별자 순서로 양 끝을 정규화해야 한다")
-	}
 	if err := ValidateRelationTime(relation.Type, *from.Event, *to.Event); err != nil {
 		return err
 	}
@@ -129,15 +149,15 @@ func ValidateRelation(relation Relation, from, to Context) error {
 }
 
 // ValidateRelationCycle은 순환을 허용하지 않는 관계가 기존 경로를 닫는지 확인한다.
-// pathExists는 관계 저장소가 대상 사건에서 시작 사건으로 이미 닿을 수 있는지 알려준다.
-func ValidateRelationCycle(relation Relation, pathExists func(ID, ID) bool) error {
-	if pathExists == nil {
-		return fmt.Errorf("관계 경로 확인 함수가 없다")
+// pathExists는 저장소가 대상에서 시작 사건까지 조회한 경로의 존재 여부다.
+func ValidateRelationCycle(relation Relation, pathExists bool) error {
+	if err := relation.Validate(); err != nil {
+		return err
 	}
 	if relation.Type == RelationTypeRelatesTo {
 		return nil
 	}
-	if pathExists(relation.ToContextID, relation.FromContextID) {
+	if pathExists {
 		return fieldErrorf("relation_type", "%s 관계가 사건 관계 순환을 만든다", relation.Type)
 	}
 	return nil
@@ -146,6 +166,12 @@ func ValidateRelationCycle(relation Relation, pathExists func(ID, ID) bool) erro
 // ValidateRelationTime은 사건 시간 범위로 관계별 순서와 포함 제약을 확인한다. 저장소의
 // 그래프 불변식 감사가 저장된 관계에 같은 판정을 다시 적용하므로 공개한다.
 func ValidateRelationTime(kind RelationType, from, to EventAttributes) error {
+	if err := from.validateTimes(); err != nil {
+		return err
+	}
+	if err := to.validateTimes(); err != nil {
+		return err
+	}
 	switch kind {
 	case RelationTypePrecedes, RelationTypeCauses:
 		if from.Start.After(to.Start) {
@@ -158,6 +184,9 @@ func ValidateRelationTime(kind RelationType, from, to EventAttributes) error {
 		if to.End != nil && (from.End == nil || from.End.After(*to.End)) {
 			return fieldErrorf("to_context_id", "part_of 관계의 전체 사건 종료 시각이 부분을 포함하지 않는다")
 		}
+	case RelationTypeRelatesTo:
+	default:
+		return fieldErrorf("relation_type", "허용된 사건 관계 유형이 아니다")
 	}
 	return nil
 }

@@ -574,6 +574,10 @@ func validateContextInput(graphID model.ID, value model.Context, derivedFrom []m
 	if !graphID.IsV7() || value.GraphID != graphID {
 		return fmt.Errorf("요청 graph_id와 컨텍스트 graph_id가 일치하지 않는다")
 	}
+	if value.Layer == model.LayerDerived && value.Derived != nil {
+		value.Derived = new(*value.Derived)
+		value.Derived.DerivedFrom = slices.Clone(derivedFrom)
+	}
 	if err := value.Validate(); err != nil {
 		return fmt.Errorf("컨텍스트 검증: %w", err)
 	}
@@ -692,6 +696,9 @@ func (s *Store) context(ctx context.Context, queryer cypherQueryer, graphID, con
 			return model.Context{}, err
 		}
 		stored.Derived.DerivedFrom = referenceIDs
+		if err := stored.Validate(); err != nil {
+			return model.Context{}, fmt.Errorf("저장된 파생 컨텍스트 검증: %w", err)
+		}
 	case model.LayerEvent:
 		memberIDs, err := s.eventMemberIDs(ctx, queryer, graphID, contextID)
 		if err != nil {
@@ -1054,6 +1061,9 @@ func (s *Store) contextsByIDs(ctx context.Context, queryer cypherQueryer, graphI
 		switch value.Layer {
 		case model.LayerDerived:
 			value.Derived.DerivedFrom = references[contextID]
+			if err := value.Validate(); err != nil {
+				return nil, fmt.Errorf("저장된 파생 컨텍스트 검증: %w", err)
+			}
 		case model.LayerEvent:
 			value.Event.MemberIDs = members[contextID]
 			if err := value.Validate(); err != nil {

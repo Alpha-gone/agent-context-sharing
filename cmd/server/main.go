@@ -62,11 +62,16 @@ func main() {
 
 // run 함수는 종료 신호를 기다렸다가 준비 상태를 내리고 받은 요청을 마친 뒤 풀을 닫는다.
 func run() error {
-	cfg, err := config.Load(os.Getenv)
+	return configureAndRun(os.Getenv, runConfigured)
+}
+
+// configureAndRun은 검증이 모두 끝난 구성만 자원을 여는 조립 함수에 넘긴다.
+func configureAndRun(env config.Environment, start func(config.Config) error) error {
+	cfg, err := config.Load(env)
 	if err != nil {
 		return fmt.Errorf("배포 구성 검증: %w", err)
 	}
-	return runConfigured(cfg)
+	return start(cfg)
 }
 
 func runConfigured(cfg config.Config) (resultErr error) {

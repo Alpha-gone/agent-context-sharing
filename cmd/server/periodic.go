@@ -70,7 +70,8 @@ func newPeriodicWorker(database *store.Store, plans plan.AccountPlans, logger *s
 			return database.CleanupExpiredProposals(ctx, worker.now().UTC(), func(accountID model.ID) int { return limits(accountID).ProposalRetentionDays })
 		}},
 		{name: "audit_cleanup", interval: 24 * time.Hour, lockKey: auditCleanupLockKey, run: func(ctx context.Context) (int, error) {
-			return database.CleanupAuditRecords(ctx, worker.now().UTC(), func(accountID model.ID) int { return limits(accountID).AuditRetentionDays }, func(accountID model.ID) int { return limits(accountID).RejectedOperationDays })
+			now := worker.now().UTC()
+			return worker.store.CleanupAuditRecords(ctx, now, func(accountID model.ID) int { return limits(accountID).AuditRetentionDays }, func(accountID model.ID) int { return limits(accountID).RejectedOperationRetention.DaysAt(now) })
 		}},
 		{name: "revocation_cleanup", interval: time.Hour, lockKey: revocationCleanupLockKey, run: func(ctx context.Context) (int, error) {
 			return database.CleanupExpiredRevocations(ctx, worker.now().UTC())

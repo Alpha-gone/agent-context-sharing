@@ -1,7 +1,6 @@
 package model
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -9,8 +8,8 @@ import (
 
 // TestNewIDCreatesUUIDv7은 생성한 식별자가 UUIDv7 형식과 UTC 시각을 보존하는지 확인한다.
 func TestNewIDCreatesUUIDv7(t *testing.T) {
-	at := time.Date(2026, time.September, 5, 14, 0, 0, 0, time.UTC)
-	id, err := newIDAt(at, bytes.NewReader(make([]byte, 16)))
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	id, err := NewID()
 	if err != nil {
 		t.Fatalf("식별자 생성: %v", err)
 	}
@@ -21,8 +20,8 @@ func TestNewIDCreatesUUIDv7(t *testing.T) {
 	if err != nil {
 		t.Fatalf("식별자 시각: %v", err)
 	}
-	if !got.Equal(at) {
-		t.Fatalf("식별자 시각 = %s, want %s", got, at)
+	if got.Before(at) || got.After(time.Now().UTC().Add(time.Second)) {
+		t.Fatalf("식별자 시각이 생성 시간 범위를 벗어났다: %s", got)
 	}
 	if _, err := ParseID(id.String()); err != nil {
 		t.Fatalf("식별자 문자열 해석: %v", err)
@@ -48,6 +47,7 @@ func TestContextValidate(t *testing.T) {
 		SummaryScope:    SummaryScopeLocal,
 		EvidenceState:   EvidenceStateOpinion,
 		ConfidenceState: ConfidenceStateSupported,
+		DerivedFrom:     []ID{newTestID(t, now)},
 	})
 	if err := derived.Validate(); err != nil {
 		t.Fatalf("유효한 파생 검증: %v", err)
@@ -96,7 +96,7 @@ func TestValidateUpdate(t *testing.T) {
 
 	derived := baseContext(t, now)
 	derived.Layer = LayerDerived
-	derived.Derived = new(DerivedAttributes{Kind: DerivationKindProposition, EvidenceState: EvidenceStateObservation})
+	derived.Derived = new(DerivedAttributes{Kind: DerivationKindProposition, EvidenceState: EvidenceStateObservation, DerivedFrom: []ID{newTestID(t, now)}})
 	updatedDerived := derived
 	updatedDerived.Body = "새 본문"
 	updatedDerived.Version = 2
@@ -192,7 +192,7 @@ func TestValidateRelation(t *testing.T) {
 	if err := ValidateRelation(relation, to, from); err == nil {
 		t.Fatal("시간 순서가 뒤집힌 precedes가 허용됐다")
 	}
-	if err := ValidateRelationCycle(relation, func(ID, ID) bool { return true }); err == nil {
+	if err := ValidateRelationCycle(relation, true); err == nil {
 		t.Fatal("순환 관계가 허용됐다")
 	}
 }

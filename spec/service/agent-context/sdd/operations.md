@@ -114,7 +114,7 @@ DB를 사용하는 주기 작업은 [데이터베이스 연결](architecture.md#
 
 적응형 라우팅이 켜진 `scope=auto`에서는 라우터가 전역 진입 여부를 직접 정하므로 `SEARCH_GLOBAL_FALLBACK_ENABLED`를 보지 않는다. 적응형 라우팅이 꺼진 `auto`에서만 이 값이 기존 전역 전환을 제어한다. 명시적 `scope=global`은 두 구성 값과 무관하게 항상 전역 진입을 실행한다.
 
-`AUTHORIZATION_SERVER_URL`은 웹 세션 JWT의 고정 issuer로 쓰는 origin이다. 요청의 `Host`·전달 헤더에서 유도하지 않는다. 직접 연결의 공개 리소스·callback·허용 Origin은 아래 목표 추가 구성으로 정의하며 현재 실행 구성에는 아직 열지 않는다.
+`AUTHORIZATION_SERVER_URL`은 웹 세션과 목표 OAuth의 고정 issuer로 쓰는 HTTPS origin이다. 요청의 `Host`·전달 헤더에서 유도하지 않는다. 직접 연결의 공개 리소스·callback·허용 Origin은 아래 목표 추가 구성으로 정의한다. 구성 검증과 실제 OAuth·MCP 경로의 구현·인수는 구분한다.
 
 종단 위치가 구성 값이므로 평문 거부 판정도 그에 맞춰 갈린다. 애플리케이션이 직접 종단하면 `TLS_TERMINATION=direct`와 `TLS_CERT_FILE`·`TLS_KEY_FILE`을 받아 TLS 수신기를 열고 연결 자체가 TLS인지로 판정한다. 앞에 역방향 프록시를 두면 애플리케이션에 닿는 연결은 평문이므로 그것으로 판정할 수 없다. 이 배치는 `TLS_TERMINATION=proxy`와 비어 있지 않은 `TRUSTED_PROXY_CIDRS`를 함께 요구하고, 요청의 상대 주소가 그 대역에 속하면서 `X-Forwarded-Proto`가 `https`인지로 판정한다. 두 배치 모두 상태 확인 외의 평문 클라이언트 요청을 거부하며 애플리케이션 TLS 판정 실패는 HTTP `400`으로 응답한다. 프록시 배치의 헤더 검증은 프록시→원본 구간의 암호화를 보장하지 않으며 Cloudflare HTTP 원본의 시험 운영 제약은 [개발·운영 환경 경계](operations.md#개발운영-환경-경계)에 명시한다.
 
@@ -238,7 +238,7 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 
 ## 목표 추가 구성
 
-이 표는 후속 구현이 받아야 할 설계 계약이다. 이번 문서 작업은 `.env.example`, `.env.prod.example`, Compose나 사용자 설정에 키를 실제로 추가하지 않는다. 구현 시 두 환경 예시·구성 검사·운영 안내를 함께 갱신한다.
+이 표는 직접 연결과 진단의 구성 계약이다. 구성 검증과 두 환경 예시·운영 안내를 함께 유지한다. 실제 MCP·OAuth 조립, 진단 볼륨·파일 준비와 배포 인수는 각 후속 개발 작업의 책임이다.
 
 | 키 | 값·검증 | 상태 |
 |---|---|---|
@@ -251,7 +251,65 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 
 토큰 수명·소비 상태 보존·로그 회전 크기·기간·저장량·대기 상한은 SRS의 확정값이며 배포 선택으로 열지 않는다. 첫 Codex 시험 등록은 `http://127.0.0.1:49152/callback`을 정확히 일치시키고 다른 loopback 포트 예외를 그 등록에 적용하지 않는다. 기존 일반 loopback 등록에만 같은 IP의 가변 포트 정책을 사용할 수 있다.
 
+`MCP_RESOURCE_URL`·`MCP_ALLOWED_ORIGINS`·`OAUTH_CLIENT_REGISTRATIONS`·`DIAGNOSTIC_INSTANCE_ID`는 필수다. 리소스 URI는 query·fragment·userinfo 없이 정확한 `/mcp` 경로를 사용한다. Origin은 경로가 없는 원문을 보존하며 빈 항목·중복·와일드카드를 거부한다. issuer와 리소스의 호스트가 같아야 한다는 제약은 두지 않는다.
+
+등록 JSON은 `client_id`를 키로 하는 비어 있지 않은 객체다. 각 값은 `redirect_uris`와 `resources`의 비어 있지 않은 문자열 배열, 선택 `loopback_port_policy`만 받는다. ID는 비어 있거나 공백·제어 문자를 포함할 수 없고 원문을 보존한다. 중복 JSON 이름·알 수 없는 필드·`null`·중복 배열 원소를 거부한다. callback은 fragment·userinfo 없는 절대 HTTPS URI 또는 명시적 유효 포트를 가진 literal loopback IP의 HTTP URI다. `localhost`·비루프백 HTTP·zone 주소는 허용하지 않는다. `resources`의 모든 URI는 이 서버의 `MCP_RESOURCE_URL`과 정확히 같아야 한다.
+
+`loopback_port_policy`는 생략 시 `same_ip`이며 명시 값은 `same_ip`·`exact`만 허용한다. `same_ip`는 등록한 HTTP loopback callback의 IP·경로·query를 유지하고 포트만 달라질 수 있다는 조립 입력이다. HTTPS callback은 항상 완전 일치다. 첫 Codex 시험 등록에는 `exact`를 명시한다. 이 정책은 등록 데이터로 전달하며 호스트 이름에 따른 코드 분기를 만들지 않는다. 예시는 합성 client ID이며 실제 호스트에서 확인한 ID로 교체한다.
+
+```json
+{"codex-cli-first-test":{"redirect_uris":["http://127.0.0.1:49152/callback"],"resources":["https://agent-context.example.com/mcp"],"loopback_port_policy":"exact"}}
+```
+
+진단 루트는 절대 경로이고 `.`·`..`·중복 구분자·제어 문자·역슬래시를 포함하지 않는다. 임시 루트(`/tmp`, `/var/tmp`, `/private/tmp`, `/private/var/tmp`, `/var/folders`, `/private/var/folders`, `/dev/shm`)와 공개 자산용 `assets`·`public`·`static` 경로 구성 요소를 거부한다. 슬롯은 `[A-Za-z0-9_-]{1,64}`만 받는다. 이 검사는 파일 시스템에 접근하지 않는다. 심볼릭 링크·실제 소유권·영속성·권한·중복 슬롯 잠금은 [기록기 기동](observability.md#경로권한다중-인스턴스)에서 확인한다.
+
+검색 임계값은 해당 범위의 유한 수만 허용한다. 적응형 라우팅을 끈 경우 두 전용 임계값은 읽되 해석하지 않는다. 구성 검사는 허용된 키만 한 번씩 읽고 DB 연결·제공자 호출·수신에 앞서 끝낸다. 오류는 고정 필드명·사유만 표시하며 URL·자격 증명·등록 JSON·계정 표기를 출력하지 않는다.
+
 목표 진단 기록기는 DB·요청 수신 전에 여섯 파일·권한·인스턴스 잠금을 준비한다. 준비에 실패하면 수신을 시작하지 않는다. 기동 실패·정상 종료의 공통 정리 경계에서 요청·업무 작업자 정리 뒤 최대 5초 로그 flush를 수행하고 누락을 알린다. 요청 30초·업무 작업자 10초·진단 flush 5초의 경계는 독립적으로 측정하며 기존 강제 종료 50초와 함께 확인한다. 미반환 DB 연결이 남으면 기존 풀 종료 생략 조건을 유지한다.
+
+
+서버가 읽는 허용 키의 전체 목록은 다음과 같다. Compose·시험·마이그레이션 CLI 전용 구성은 각 실행 경계가 따로 읽는다.
+
+```text
+HTTP_ADDR
+DATABASE_URL
+AGE_GRAPH_NAME
+EMBEDDING_PROVIDER
+GEMINI_API_KEY
+EMBEDDING_BASE_URL
+EMBEDDING_MODEL
+EMBEDDING_VECTOR_TYPE
+EMBEDDING_DIMENSION
+EMBEDDING_COLD_TABLESPACE
+SEARCH_CHANNEL_EXECUTION
+SEARCH_CHANNEL_CANDIDATE_LIMIT
+SEARCH_SEMANTIC_SIMILARITY_THRESHOLD
+SEARCH_FOLD_SIMILARITY_THRESHOLD
+SEARCH_GRAPH_STAGE
+SEARCH_GLOBAL_FALLBACK_ENABLED
+SEARCH_EVIDENCE_PATH_SELECTION_ENABLED
+SEARCH_QUERY_ADAPTIVE_ROUTING_ENABLED
+SEARCH_ADAPTIVE_DIRECT_SIMILARITY_THRESHOLD
+SEARCH_ADAPTIVE_DIRECT_MARGIN_THRESHOLD
+INDEX_TARGET_LAYERS
+INDEX_WORKER_PLACEMENT
+AUTHORIZATION_SERVER_URL
+BCRYPT_COST
+RELATION_ADJACENCY_WINDOW
+RELATION_SIMILARITY_THRESHOLD
+RELATION_PROPOSAL_LIMIT
+ACCOUNT_PLAN_LIMITS
+TLS_TERMINATION
+TRUSTED_PROXY_CIDRS
+TLS_CERT_FILE
+TLS_KEY_FILE
+MCP_RESOURCE_URL
+MCP_ALLOWED_ORIGINS
+OAUTH_CLIENT_REGISTRATIONS
+DIAGNOSTIC_LOG_DIR
+DIAGNOSTIC_INSTANCE_ID
+DIAGNOSTIC_LOG_LEVEL
+```
 
 ## 진단 정리의 실행 범위
 

@@ -16,7 +16,6 @@ import (
 	"unicode/utf8"
 
 	"agent_context_sharing/internal/model"
-	"agent_context_sharing/internal/store"
 )
 
 // Execution은 서로 독립인 진입 채널을 실행하는 방식이다.
@@ -77,7 +76,7 @@ const (
 // ConsistentStore는 동기화 스냅숏이 추가로 쓰는 저장소 기능이다. Read Committed 검색은 쓰지
 // 않으므로 Store와 나눠 두고 스냅숏을 고른 구성에서만 요구한다.
 type ConsistentStore interface {
-	BeginReadSnapshot(context.Context) (*store.ReadSnapshot, error)
+	WithReadSnapshot(context.Context, func(context.Context) error) (model.ReadStats, error)
 }
 
 // Embedder는 질의 텍스트를 현재 색인 모델의 벡터로 바꾸는 index 경계다.
@@ -88,83 +87,30 @@ type Embedder interface {
 
 // Store는 search가 필요한 데이터 접근 기능만 노출한다.
 type Store interface {
-	KeywordCandidates(context.Context, model.ID, string, time.Time, int) ([]store.SearchCandidate, error)
-	TimeCandidates(context.Context, model.ID, time.Time, int) ([]store.SearchCandidate, error)
-	SemanticCandidates(context.Context, model.ID, string, []float64, time.Time, int) ([]store.SearchCandidate, error)
-	GlobalSummaryCandidates(context.Context, model.ID, time.Time, int) ([]store.SearchCandidate, error)
-	HopContextsFrom(context.Context, model.ID, []model.Context, int, string, []string, int) (store.HopResult, error)
+	KeywordCandidates(context.Context, model.ID, string, time.Time, int) ([]model.SearchCandidate, error)
+	TimeCandidates(context.Context, model.ID, time.Time, int) ([]model.SearchCandidate, error)
+	SemanticCandidates(context.Context, model.ID, string, []float64, time.Time, int) ([]model.SearchCandidate, error)
+	GlobalSummaryCandidates(context.Context, model.ID, time.Time, int) ([]model.SearchCandidate, error)
+	SearchHopContextsFrom(context.Context, model.ID, []model.Context, int, string, []string, int) (model.HopResult, error)
 	ContextOriginKinds(context.Context, model.ID, []model.ID) (map[model.ID][]model.OriginKind, error)
 }
 
 // Service는 비그래프 기준선의 세 진입 채널을 실행한다.
 type Service struct {
-	store      Store
-	consistent ConsistentStore
-	embedder   Embedder
-	config     Config
-	logger     *slog.Logger
+	diagnostics Diagnostics
+	store       Store
+	consistent  ConsistentStore
+	embedder    Embedder
+	config      Config
+	logger      *slog.Logger
 }
 
-// Input은 context_flow_get이 내부 검색기에 넘기는 확정된 입력이다.
-type Input struct {
-	GraphID     model.ID
-	WorkContext string
-	AsOf        time.Time
-	Budget      int
-	Scope       string
-	MaxHops     int
-	MaxHopNodes int
-}
-
-// Context는 흐름 응답을 만들기 위해 컨텍스트에 검색 메타데이터를 붙인 값이다.
-type Context struct {
-	Value           model.Context
-	OriginKinds     []model.OriginKind
-	MatchedChannels []string
-	Rank            int
-	FoldedCount     int
-	EntryDistance   int
-	// CandidateDegree 필드에는 후보 부분 그래프에서의 차수를 둔다. 응답에는 싣지 않으며
-	// 「검색 품질 평가」의 허브 편중을 계산하는 원자료다.
-	CandidateDegree int
-}
-
-// Channel은 채널별 후보 수·지연·실패와 응답 기여를 담는다.
-type Channel struct {
-	Candidates   int
-	Latency      time.Duration
-	Contribution int
-	Failure      string
-}
-
-// Truncation은 예산으로 제외된 항목의 수를 나타낸다.
-type Truncation struct {
-	Reason   string
-	Excluded int
-}
-
-// Flow는 MCP가 그대로 직렬화할 수 있는 비그래프 검색 결과다.
-type Flow struct {
-	Contexts    []Context
-	Edges       []store.HopEdge
-	EntryPoints []model.ID
-	BudgetUsed  int
-	Budget      int
-	Channels    map[string]Channel
-	Truncation  *Truncation
-	// HopBoundary 필드에는 그래프 확장이 결과 상한으로 잘린 홉 경계를 둔다. 예산 절단과
-	// 다른 원인이므로 따로 싣고, 경계 0과 절단 없음을 구분하려고 포인터로 둔다.
-	HopBoundary *int
-	Selection   Selection
-	// Route와 RouteReason 필드에는 실제 실행한 검색 경로와 그 이유 코드를 둔다.
-	Route       Route
-	RouteReason string
-	// RouteSignals 필드에는 적응형 라우팅이 판정에 쓴 진입 채널 요약을 둔다. 라우터를
-	// 실행하지 않았으면 0 값이다.
-	RouteSignals RouteSignals
-	// Read 필드에는 동기화 스냅숏이 쓴 연결 자원을 둔다. Read Committed 검색이면 0 값이다.
-	Read store.ReadStats
-}
+// 검색 입력·결과의 정본은 model에 두어 전송 계층도 같은 타입을 사용한다.
+type Input = model.FlowInput
+type Context = model.FlowContext
+type Channel = model.FlowChannel
+type Truncation = model.FlowTruncation
+type Flow = model.ContextFlow
 
 // ErrAllChannelsFailed는 부분 상태로 복구할 채널도 남지 않았음을 나타낸다.
 var ErrAllChannelsFailed = errors.New("모든 검색 채널이 실패했다")
@@ -222,7 +168,18 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 }
 
 // Flow는 진입 채널을 결합하고 구성에 따라 그래프 경로와 전역 요약을 추가한다.
-func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
+func (service *Service) Flow(ctx context.Context, input Input) (flowResult Flow, flowErr error) {
+	defer func() {
+		if service.diagnostics == nil {
+			return
+		}
+		if flowErr != nil {
+			service.diagnostics.RecordDiagnostic(ctx, "WARN", "flow", "failed", "search_failed")
+			return
+		}
+		service.diagnostics.RecordDiagnostic(ctx, "INFO", "flow", "completed", "completed")
+	}()
+
 	// Budget 0은 「계정 플랜」이 선언한 대로 한도 없음이다.
 	if !input.GraphID.IsV7() || input.WorkContext == "" || input.Budget < 0 || input.MaxHops < 0 || input.MaxHopNodes < 0 {
 		return Flow{}, fmt.Errorf("검색 입력이 올바르지 않다")
@@ -249,12 +206,13 @@ func (service *Service) Flow(ctx context.Context, input Input) (Flow, error) {
 	if input.Scope != "global" {
 		embedding, embedErr = service.embedder.Embed(ctx, input.WorkContext)
 	}
-	snapshot, err := service.consistent.BeginReadSnapshot(ctx)
-	if err != nil {
-		return Flow{}, err
-	}
-	flow, err := service.flow(snapshot.Context(ctx), input, func() ([]float64, error) { return embedding, embedErr })
-	flow.Read = snapshot.Close(ctx)
+	var flow Flow
+	stats, err := service.consistent.WithReadSnapshot(ctx, func(readContext context.Context) error {
+		var err error
+		flow, err = service.flow(readContext, input, func() ([]float64, error) { return embedding, embedErr })
+		return err
+	})
+	flow.Read = stats
 	return flow, err
 }
 
@@ -263,7 +221,7 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 	current := time.Now().UTC()
 	channels := map[string]Channel{}
 	results := make([]channelResult, 3)
-	run := func(index int, name string, execute func() ([]store.SearchCandidate, error)) {
+	run := func(index int, name string, execute func() ([]model.SearchCandidate, error)) {
 		started := time.Now()
 		candidates, err := execute()
 		metric := Channel{Latency: time.Since(started)}
@@ -277,17 +235,17 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 		}
 		results[index] = channelResult{name: name, candidates: candidates, metric: metric}
 	}
-	semantic := func() ([]store.SearchCandidate, error) {
+	semantic := func() ([]model.SearchCandidate, error) {
 		embedding, err := embed()
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrEmbeddingUnavailable, err)
 		}
 		return service.store.SemanticCandidates(ctx, input.GraphID, service.embedder.ModelID(), embedding, current, service.config.CandidateLimit)
 	}
-	keyword := func() ([]store.SearchCandidate, error) {
+	keyword := func() ([]model.SearchCandidate, error) {
 		return service.store.KeywordCandidates(ctx, input.GraphID, input.WorkContext, current, service.config.CandidateLimit)
 	}
-	timeFilter := func() ([]store.SearchCandidate, error) {
+	timeFilter := func() ([]model.SearchCandidate, error) {
 		return service.store.TimeCandidates(ctx, input.GraphID, input.AsOf, service.config.CandidateLimit)
 	}
 	if input.Scope != "global" && service.config.Execution == ExecutionParallel {
@@ -423,7 +381,7 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 		}
 	}
 	edges := filterEdges(selected, results)
-	flow := Flow{Contexts: contexts, Edges: edges, EntryPoints: contextIDs(entryPoints), BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation, HopBoundary: graph.boundary, Selection: selection, Route: route, RouteReason: reason, RouteSignals: signals}
+	flow := Flow{Contexts: contexts, Edges: edges, EntryPoints: contextIDs(entryPoints), BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation, HopBoundary: graph.boundary, Selection: selection, Route: route, RouteReason: reason, RouteSignals: model.RouteSignals(signals)}
 	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "global_fallback_triggered", globalFallbackTriggered, "global_fallback_applied", globalFallbackApplied, "selected_route", route, "route_reason", reason, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil, "evidence_path_selection", service.config.EvidencePathSelection, "selection_candidates", selection.Candidates, "selection_selected", selection.Selected, "selection_connectors", selection.Connectors, "selection_unreachable", selection.Unreachable)
 	return flow, nil
 }
@@ -458,10 +416,10 @@ type combinedCandidate struct {
 
 type channelResult struct {
 	name       string
-	candidates []store.SearchCandidate
+	candidates []model.SearchCandidate
 	metric     Channel
 	distances  map[model.ID]int
-	edges      []store.HopEdge
+	edges      []model.HopEdge
 	boundary   *int
 }
 
@@ -513,7 +471,7 @@ func (service *Service) graphCandidates(ctx context.Context, input Input, entryP
 	}
 	// 시작 노드를 한 번에 넘긴다. 진입점마다 따로 물으면 왕복이 진입점 수만큼 늘고
 	// 「채널 구현」이 하나로 두기로 한 결과 상한이 진입점마다 겹친다.
-	hops, err := service.store.HopContextsFrom(ctx, input.GraphID, entryPoints, depth, "both", filters, input.MaxHopNodes)
+	hops, err := service.store.SearchHopContextsFrom(ctx, input.GraphID, entryPoints, depth, "both", filters, input.MaxHopNodes)
 	result.metric.Latency = time.Since(started)
 	if err != nil {
 		result.metric.Failure = failureReason(err)
@@ -521,14 +479,14 @@ func (service *Service) graphCandidates(ctx context.Context, input Input, entryP
 		return result
 	}
 	// 거리 0은 진입 채널이 이미 낸 시작 노드이므로 확장분만 이 채널의 후보로 둔다.
-	values := make([]store.SearchCandidate, 0, len(hops.Contexts))
+	values := make([]model.SearchCandidate, 0, len(hops.Contexts))
 	for _, value := range hops.Contexts {
 		if hops.Distances[value.ID] == 0 {
 			continue
 		}
-		values = append(values, store.SearchCandidate{Context: value})
+		values = append(values, model.SearchCandidate{Context: value})
 	}
-	slices.SortFunc(values, func(left, right store.SearchCandidate) int {
+	slices.SortFunc(values, func(left, right model.SearchCandidate) int {
 		if order := cmp.Compare(hops.Distances[left.Context.ID], hops.Distances[right.Context.ID]); order != 0 {
 			return order
 		}
@@ -589,12 +547,12 @@ func contextIDs(values []model.Context) []model.ID {
 	return ids
 }
 
-func filterEdges(selected []combinedCandidate, results []channelResult) []store.HopEdge {
+func filterEdges(selected []combinedCandidate, results []channelResult) []model.HopEdge {
 	included := make(map[model.ID]struct{}, len(selected))
 	for _, candidate := range selected {
 		included[candidate.value.ID] = struct{}{}
 	}
-	edges := make(map[string]store.HopEdge, len(selected))
+	edges := make(map[string]model.HopEdge, len(selected))
 	for _, result := range results {
 		for _, edge := range result.edges {
 			if _, found := included[edge.FromID]; !found {
@@ -609,8 +567,8 @@ func filterEdges(selected []combinedCandidate, results []channelResult) []store.
 	return slices.SortedFunc(edgesValues(edges), compareEdges)
 }
 
-func edgesValues(edges map[string]store.HopEdge) func(func(store.HopEdge) bool) {
-	return func(yield func(store.HopEdge) bool) {
+func edgesValues(edges map[string]model.HopEdge) func(func(model.HopEdge) bool) {
+	return func(yield func(model.HopEdge) bool) {
 		for _, edge := range edges {
 			if !yield(edge) {
 				return
@@ -619,7 +577,7 @@ func edgesValues(edges map[string]store.HopEdge) func(func(store.HopEdge) bool) 
 	}
 }
 
-func compareEdges(left, right store.HopEdge) int {
+func compareEdges(left, right model.HopEdge) int {
 	if order := cmp.Compare(left.FromID.String(), right.FromID.String()); order != 0 {
 		return order
 	}

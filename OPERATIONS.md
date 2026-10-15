@@ -41,6 +41,9 @@ chmod 600 .env
 - `POSTGRES_USER`, `POSTGRES_DB`, `AGE_GRAPH_NAME`: 최초 생성 후 임의로 바꾸지 않습니다. 초기화된 DB의 사용자 비밀번호는 `.env`만 바꿔도 변경되지 않습니다.
 - `GEMINI_API_KEY`: 실제 키를 지정합니다. `EMBEDDING_PROVIDER=gemini`, 모델·타입·차원은 우선 운영 예시를 유지합니다.
 - `AUTHORIZATION_SERVER_URL=https://agent-context.example.com`
+- `MCP_RESOURCE_URL=https://agent-context.example.com/mcp`, `MCP_ALLOWED_ORIGINS=https://agent-context.example.com`: 실제 공개 주소를 사용합니다. 리소스와 issuer는 독립된 HTTPS 식별자입니다.
+- `OAUTH_CLIENT_REGISTRATIONS`: 예시의 합성 client ID를 실제 호스트에서 확인한 공개 ID로 바꾸고 callback·resource를 [등록 계약](spec/service/agent-context/sdd/operations.md#목표-추가-구성)에 맞춥니다. 첫 Codex 시험은 고정 `49152` callback과 `loopback_port_policy=exact`를 사용합니다.
+- `DIAGNOSTIC_INSTANCE_ID`: 재시작에도 유지하는 슬롯별 고유 ID입니다. `DIAGNOSTIC_LOG_DIR` 기본값은 `/var/log/agent-context`, 수준은 `INFO`입니다. 실제 영속 볼륨·파일 권한·잠금 준비는 후속 OPS-02·OBS-02에서 인수하며, 구성 검증만으로 파일 저장·직접 연결 지원이 완료되지는 않습니다.
 - `HTTP_PORT=80`: 커넥터의 원본 URL `http://localhost:80`과 맞춥니다. 기존 설정의 `8080` 또는 `443`을 그대로 두지 않습니다. 포트를 재정의하면 커넥터의 원본 URL도 함께 바꿉니다.
 
 Compose는 `.env`를 읽으며 서버 컨테이너의 `DATABASE_URL`, HTTP 수신 주소와 TLS 배치는 운영 구성에 맞게 덮어씁니다. `TLS_TERMINATION=proxy`, `TRUSTED_PROXY_CIDRS=10.203.0.1/32`를 고정합니다. 서버의 `TLS_CERT_FILE`·`TLS_KEY_FILE`은 빈 값이며 인증서·키를 마운트하지 않습니다. 이전 설정에 이 값이 남아 있어도 서버에서는 사용하지 않습니다. 개발용 `DATABASE_URL`을 복사하여 호스트 DB에 연결하려고 하지 마십시오. 이 절차에서는 `.env`를 셸에 내보낼 필요가 없습니다.

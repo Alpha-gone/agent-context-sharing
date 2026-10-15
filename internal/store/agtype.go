@@ -187,12 +187,8 @@ func parseContext(raw string, graphID model.ID) (model.Context, error) {
 	default:
 		return model.Context{}, fmt.Errorf("저장된 컨텍스트 계층 %q가 올바르지 않다", context.Layer)
 	}
-	// 사건의 member_refs는 property가 아니라 HAS_MEMBER 간선에 있으므로 호출자가 간선을
-	// 조립한 뒤 검증한다.
-	if context.Layer == model.LayerEvent {
-		return context, nil
-	}
-	if err := context.Validate(); err != nil {
+	// 참조는 간선에서 조립하므로 여기서는 속성만 검증한다.
+	if err := context.ValidateProperties(); err != nil {
 		return model.Context{}, fmt.Errorf("저장된 컨텍스트 검증: %w", err)
 	}
 	return context, nil

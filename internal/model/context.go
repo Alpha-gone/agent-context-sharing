@@ -122,6 +122,8 @@ type DerivedAttributes struct {
 	// DerivedFrom 필드는 근거가 된 원천 또는 파생 컨텍스트 식별자다.
 	// DERIVED_FROM 간선에서 다시 조립한 응답용 값이다.
 	DerivedFrom []ID
+	// Supersedes는 대체한 이전 파생을 가리키는 선택 참조다.
+	Supersedes *ID
 	// EvidenceState 필드는 생성 뒤 바꿀 수 없는 근거 성격이다.
 	EvidenceState EvidenceState
 	// ConfidenceState 필드는 의견 파생일 때만 지정하는 신뢰 상태다.
@@ -242,6 +244,31 @@ type GraphListItem struct {
 
 // Validate는 계층별 필수 속성, 시간 표현과 상태 조합을 저장 방식과 무관하게 검증한다.
 func (c Context) Validate() error {
+	if err := c.ValidateProperties(); err != nil {
+		return err
+	}
+	if c.Derived != nil {
+		if err := ValidateDerivedReferences(c.Derived.DerivedFrom); err != nil {
+			return err
+		}
+		for _, id := range c.Derived.DerivedFrom {
+			if id == c.ID {
+				return fieldErrorf("derived_from", "파생은 자신을 근거로 삼을 수 없다")
+			}
+		}
+		if c.Derived.Supersedes != nil && *c.Derived.Supersedes == c.ID {
+			return fieldErrorf("supersedes", "파생은 자신을 대체할 수 없다")
+		}
+	}
+	if c.Event != nil {
+		return c.Event.validate()
+	}
+	return nil
+}
+
+// ValidateProperties는 참조 조립 전의 속성을 검증한다. 저장소는 참조를 조립한 뒤
+// Validate를 호출하고 실제 존재·그래프 소속은 조회한 상태로 판정한다.
+func (c Context) ValidateProperties() error {
 	if err := validateCommon(c); err != nil {
 		return err
 	}
@@ -260,7 +287,7 @@ func (c Context) Validate() error {
 		if c.Event == nil || c.Source != nil || c.Derived != nil {
 			return fieldErrorf("layer", "사건은 event 속성만 가져야 한다")
 		}
-		return c.Event.validate()
+		return c.Event.validateTimes()
 	default:
 		return fieldErrorf("layer", "알 수 없는 컨텍스트 계층 %q", c.Layer)
 	}
@@ -274,15 +301,18 @@ func ValidateUpdate(previous, next Context) error {
 	if err := next.Validate(); err != nil {
 		return fmt.Errorf("다음 컨텍스트: %w", err)
 	}
-	if previous.ID != next.ID || previous.GraphID != next.GraphID || previous.Layer != next.Layer || previous.RecordedAt != next.RecordedAt || previous.CreatedBy != next.CreatedBy || previous.CreatedByAgent != next.CreatedByAgent {
+	if previous.ID != next.ID || previous.GraphID != next.GraphID || previous.Layer != next.Layer || !previous.RecordedAt.Equal(next.RecordedAt) || previous.CreatedBy != next.CreatedBy || previous.CreatedByAgent != next.CreatedByAgent {
 		return fieldErrorf("context_id", "공통 식별자와 생성 메타데이터는 바꿀 수 없다")
 	}
 	switch previous.Layer {
 	case LayerSource:
-		if previous.Body != next.Body || *previous.Source != *next.Source || next.Version != 1 {
+		if previous.Body != next.Body || previous.Source.Reference != next.Source.Reference || !previous.Source.OccurredAt.Equal(next.Source.OccurredAt) || previous.Source.OriginKind != next.Source.OriginKind || next.Version != 1 {
 			return fieldErrorf("layer", "원천은 deleted_at 표시 외에 바꿀 수 없고 판 번호는 1이다")
 		}
 	case LayerDerived:
+		if !sameIDSet(previous.Derived.DerivedFrom, next.Derived.DerivedFrom) || !sameOptionalID(previous.Derived.Supersedes, next.Derived.Supersedes) {
+			return fieldErrorf("derived_from", "파생의 근거와 대체 참조는 바꿀 수 없다")
+		}
 		if previous.Derived.Kind != next.Derived.Kind || previous.Derived.SummaryScope != next.Derived.SummaryScope || previous.Derived.EvidenceState != next.Derived.EvidenceState || previous.Derived.EvidenceInvalidated != next.Derived.EvidenceInvalidated {
 			return fieldErrorf("derivation_kind", "파생의 종류, 요약 범위와 근거 상태는 바꿀 수 없다")
 		}
@@ -308,7 +338,7 @@ func ValidateEvidenceInvalidation(previous, next Context) error {
 	if previous.Layer != LayerDerived || next.Layer != LayerDerived {
 		return fieldErrorf("layer", "근거 무효 표시는 파생 컨텍스트에만 적용한다")
 	}
-	if previous.ID != next.ID || previous.GraphID != next.GraphID || previous.RecordedAt != next.RecordedAt || previous.CreatedBy != next.CreatedBy || previous.CreatedByAgent != next.CreatedByAgent || previous.Body != next.Body || !sameOptionalTime(previous.DeletedAt, next.DeletedAt) {
+	if previous.ID != next.ID || previous.GraphID != next.GraphID || !previous.RecordedAt.Equal(next.RecordedAt) || previous.CreatedBy != next.CreatedBy || previous.CreatedByAgent != next.CreatedByAgent || previous.Body != next.Body || !sameOptionalTime(previous.DeletedAt, next.DeletedAt) {
 		return fieldErrorf("context_id", "근거 무효 표시는 공통 속성을 바꿀 수 없다")
 	}
 	if previous.Derived.Kind != next.Derived.Kind || previous.Derived.SummaryScope != next.Derived.SummaryScope || previous.Derived.EvidenceState != next.Derived.EvidenceState || previous.Derived.ConfidenceState != next.Derived.ConfidenceState || !sameOptionalTime(previous.Derived.ValidFrom, next.Derived.ValidFrom) || !sameOptionalTime(previous.Derived.ValidTo, next.Derived.ValidTo) {
@@ -316,6 +346,9 @@ func ValidateEvidenceInvalidation(previous, next Context) error {
 	}
 	if previous.Derived.EvidenceInvalidated || !next.Derived.EvidenceInvalidated {
 		return fieldErrorf("evidence_invalidated", "근거 무효 표시는 false에서 true로만 바꿀 수 있다")
+	}
+	if !sameIDSet(previous.Derived.DerivedFrom, next.Derived.DerivedFrom) || !sameOptionalID(previous.Derived.Supersedes, next.Derived.Supersedes) {
+		return fieldErrorf("derived_from", "근거 무효 표시는 참조를 바꿀 수 없다")
 	}
 	if next.Version != previous.Version+1 {
 		return fieldErrorf("version", "근거 무효 표시는 판 번호를 하나 증가시켜야 한다")
@@ -369,7 +402,13 @@ func (g Graph) Validate() error {
 	if !g.ID.IsV7() || !g.CreatedBy.IsV7() {
 		return fieldErrorf("graph_id", "그래프와 생성 계정은 UUIDv7이어야 한다")
 	}
-	if g.Name == "" {
+	if err := validateText("name", g.Name); err != nil {
+		return err
+	}
+	if err := validateText("description", g.Description); err != nil {
+		return err
+	}
+	if strings.TrimSpace(g.Name) == "" {
 		return fieldErrorf("name", "그래프 이름이 비어 있다")
 	}
 	if !isUTC(g.CreatedAt) || !isUTC(g.LastActivityAt) {
@@ -389,6 +428,9 @@ func (g Graph) Validate() error {
 
 // validateCommon은 모든 계층이 공유하는 필수 속성과 불변 원천의 초기 판 번호를 확인한다.
 func validateCommon(context Context) error {
+	if context.Body == "" {
+		return fieldErrorf("body", "컨텍스트 본문이 비어 있다")
+	}
 	if err := validateText("body", context.Body); err != nil {
 		return err
 	}
@@ -397,8 +439,13 @@ func validateCommon(context Context) error {
 			return err
 		}
 	}
-	if !context.ID.IsV7() || !context.GraphID.IsV7() || !context.CreatedBy.IsV7() || !context.CreatedByAgent.IsV7() {
-		return fieldErrorf("context_id", "컨텍스트, 그래프, 계정과 에이전트 식별자는 UUIDv7이어야 한다")
+	for _, item := range []struct {
+		field string
+		id    ID
+	}{{"context_id", context.ID}, {"graph_id", context.GraphID}, {"created_by", context.CreatedBy}, {"created_by_agent", context.CreatedByAgent}} {
+		if err := validateID(item.field, item.id); err != nil {
+			return err
+		}
 	}
 	if !isUTC(context.RecordedAt) {
 		return fieldErrorf("recorded_at", "기록 시각은 UTC여야 한다")
@@ -429,7 +476,10 @@ func (attributes SourceAttributes) validate() error {
 		return fieldErrorf("source_channel", "원천 수집 경로 %q가 허용된 값이 아니다", attributes.Reference.Channel)
 	}
 	locator, err := url.Parse(attributes.Reference.Locator)
-	if err != nil || locator.Scheme == "" {
+	if err != nil {
+		return FieldError{Field: "locator", Message: "원천 위치 URI가 올바르지 않다", Cause: err}
+	}
+	if locator.Scheme == "" {
 		return fieldErrorf("locator", "원천 위치가 scheme을 가진 URI가 아니다")
 	}
 	if !isUTC(attributes.OccurredAt) {
@@ -443,6 +493,9 @@ func (attributes SourceAttributes) validate() error {
 
 // validate는 파생의 정체성, 의견의 신뢰 상태와 유효 시간 범위를 확인한다.
 func (attributes DerivedAttributes) validate() error {
+	if err := validateOptionalID("supersedes", attributes.Supersedes); err != nil {
+		return err
+	}
 	if !slices.Contains([]DerivationKind{DerivationKindProposition, DerivationKindSummary, DerivationKindReflection}, attributes.Kind) {
 		return fieldErrorf("derivation_kind", "파생 종류 %q가 허용된 값이 아니다", attributes.Kind)
 	}
@@ -476,6 +529,9 @@ func (attributes DerivedAttributes) validate() error {
 //
 // 구성원 수의 상한은 「입력 검증」이 `mcp`에 맡겼으므로 여기에서는 보지 않는다.
 func (attributes EventAttributes) validate() error {
+	if err := attributes.validateTimes(); err != nil {
+		return err
+	}
 	if len(attributes.MemberIDs) == 0 {
 		return fieldErrorf("member_refs", "사건 구성원은 1개 이상이어야 한다")
 	}
@@ -484,6 +540,10 @@ func (attributes EventAttributes) validate() error {
 			return fieldErrorf("member_refs", "사건 구성원 식별자는 UUIDv7이어야 한다")
 		}
 	}
+	return nil
+}
+
+func (attributes EventAttributes) validateTimes() error {
 	if !isUTC(attributes.Start) || attributes.End != nil && !isUTC(*attributes.End) {
 		return fieldErrorf("start", "사건 시간 범위는 UTC여야 한다")
 	}

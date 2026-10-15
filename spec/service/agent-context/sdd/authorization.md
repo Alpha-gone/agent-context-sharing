@@ -31,7 +31,7 @@
 
 계정 키는 `model.ID`로 해석한 식별자를 기준으로 유일해야 한다. 대소문자나 하이픈 유무만 다른 키가 같은 계정을 가리키면 값이 같아도 구성을 거부하며, JSON 멤버 순서나 맵 반복 순서로 적용 값을 선택하지 않는다.
 
-배포 구성 `ACCOUNT_PLAN_LIMITS`는 계정 UUIDv7를 키로 하고 플랜 값을 값으로 하는 JSON 객체다. 계정 값은 아래 구성 키의 부분 객체이며, 없는 키는 `Default()`의 값을 유지한다. `0`은 한도가 없거나 기간을 적용하지 않음을 명시하는 값으로 쓸 수 있다. 페이지 크기 기본값은 양수여야 하고, 상한이 `0`이 아닐 때 기본값보다 작을 수 없다. 계정 식별자는 `model`의 UUIDv7 판정을 그대로 쓴다. [SRS 플랜이 정하는 항목](../SRS.md#플랜이-정하는-항목)이 기록 보존을 대상 보관 기간 이상으로 정했으므로 `audit_retention_days`는 `retention_days`보다 작을 수 없고, 대상 보관이 무기한이면 기록 보존도 무기한이어야 한다. `config`가 이 값을 읽어 `plan`의 계정별 값 집합으로 해석하므로 잘못된 UUID, JSON, 음수 값, 잘못된 페이지 크기, 기록 보존 하한 위반과 목록 밖 키는 기동 전에 거부한다.
+배포 구성 `ACCOUNT_PLAN_LIMITS`는 계정 UUIDv7를 키로 하고 플랜 값을 값으로 하는 JSON 객체다. 계정 값은 아래 구성 키의 부분 객체이며, 없는 키는 `Default()`의 값을 유지한다. 계정 값·페이지 값은 객체, 수치 값은 정수로 제한하며 `null`을 생략이나 `0`으로 해석하지 않는다. 동일한 JSON 멤버 이름과 목록 밖 키도 거부한다. `0`은 한도가 없거나 기간을 적용하지 않음을 명시하는 값으로 쓸 수 있다. 페이지 크기 기본값은 양수여야 하고, 상한이 `0`이 아닐 때 기본값보다 작을 수 없다. 계정 식별자는 `model`의 UUIDv7 판정을 그대로 쓴다. [SRS 플랜이 정하는 항목](../SRS.md#플랜이-정하는-항목)이 기록 보존을 대상 보관 기간 이상으로 정했으므로 `audit_retention_days`는 `retention_days`보다 작을 수 없고, 대상 보관이 무기한이면 기록 보존도 무기한이어야 한다. `config`가 이 값을 읽어 `plan`의 계정별 값 집합으로 해석하므로 잘못된 UUID, JSON, 음수 값, 잘못된 페이지 크기, 기록 보존 하한 위반과 목록 밖 키는 기동 전에 거부한다.
 
 | 구성 키                      | `Limits` 필드                   |
 |------------------------------|---------------------------------|
@@ -45,10 +45,14 @@
 | `grace_days`                 | `GraceDays`                     |
 | `audit_retention_days`       | `AuditRetentionDays`            |
 | `tier_move_after_days`       | `TierMoveAfterDays`             |
-| `rejected_operation_days`    | `RejectedOperationDays`         |
+| `rejected_operation_days`    | `RejectedOperationRetention`         |
 | `writes_per_minute`          | `WritesPerMinute`               |
 | `proposal_retention_days`    | `ProposalRetentionDays`         |
 | `relation_page`              | `RelationPage`                  |
+
+`FR-AGENT_CONTEXT-120`의 기본 거부 기록 보존은 달력 기준 6개월로 표현한다. 기본값을 고정 183일로 근사하지 않는다. `rejected_operation_days`를 명시한 계정은 해당 일수를 사용하고 `0`은 무기한이다. 기본 월 단위와 명시한 일 단위는 같은 플랜 항목의 내부 기간 타입으로 구분하며 월 단위 구성 키를 추가하지 않는다.
+
+기간 판정은 회차의 같은 UTC 기준 시각을 쓴다. 기본 6개월의 기준점은 해당 시각에서 6개월 전의 같은 일·시각이며, 해당 달에 그 일이 없으면 그 달의 마지막 날을 사용한다. 기간 타입이 그 기준점까지의 실제 UTC 일수를 계산하여 기존 일 단위 정리 경계에 전달한다. 예를 들어 10월 31일의 기준점은 4월 30일이며 5월 1일로 넘기지 않는다. 월말 차이로 기록을 정책보다 먼저 지우지 않으며 실제 삭제·감사 원자성과 보존 예외는 [주기 작업](operations.md#주기-작업)이 소유한다.
 
 한도 검사는 두 단계로 나눈다.
 

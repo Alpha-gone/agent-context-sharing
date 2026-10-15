@@ -100,7 +100,7 @@ type fakeStore struct {
 	keyword     []store.SearchCandidate
 	time        []store.SearchCandidate
 	global      []store.SearchCandidate
-	hops        store.HopResult
+	hops        model.HopResult
 	hopCalls    int
 	globalCalls int
 	hopStarts   []model.ID
@@ -135,7 +135,7 @@ func (fake *fakeStore) GlobalSummaryCandidates(context.Context, model.ID, time.T
 	return append([]store.SearchCandidate(nil), fake.global...), nil
 }
 
-func (fake *fakeStore) HopContextsFrom(_ context.Context, _ model.ID, starts []model.Context, hops int, _ string, filters []string, _ int) (store.HopResult, error) {
+func (fake *fakeStore) SearchHopContextsFrom(_ context.Context, _ model.ID, starts []model.Context, hops int, _ string, filters []string, _ int) (model.HopResult, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.hopCalls++
@@ -171,8 +171,8 @@ func (failingStore) GlobalSummaryCandidates(context.Context, model.ID, time.Time
 	return nil, context.DeadlineExceeded
 }
 
-func (failingStore) HopContextsFrom(context.Context, model.ID, []model.Context, int, string, []string, int) (store.HopResult, error) {
-	return store.HopResult{}, context.DeadlineExceeded
+func (failingStore) SearchHopContextsFrom(context.Context, model.ID, []model.Context, int, string, []string, int) (model.HopResult, error) {
+	return model.HopResult{}, context.DeadlineExceeded
 }
 
 func (failingStore) ContextOriginKinds(context.Context, model.ID, []model.ID) (map[model.ID][]model.OriginKind, error) {
@@ -353,7 +353,7 @@ func TestFlowAddsGraphCandidatesAndKeepsOnlyIncludedEdges(t *testing.T) {
 	dropped := testContext(t, graphID, "019a0000-0000-7000-8000-000000000046", "응답 밖", 5)
 	database := &fakeStore{
 		time: []store.SearchCandidate{{Context: entry}},
-		hops: store.HopResult{
+		hops: model.HopResult{
 			Contexts:  []model.Context{entry, near, alsoNear, far},
 			Distances: map[model.ID]int{entry.ID: 0, near.ID: 1, alsoNear.ID: 1, far.ID: 2},
 			Edges: []store.HopEdge{
@@ -445,7 +445,7 @@ func TestFlowKeepsExplicitGlobalScopeAtBaseline(t *testing.T) {
 	evidence := testContext(t, graphID, "019a0000-0000-7000-8000-000000000076", "근거", 0)
 	database := &fakeStore{
 		global: []store.SearchCandidate{{Context: summary}},
-		hops:   store.HopResult{Contexts: []model.Context{summary, evidence}, Distances: map[model.ID]int{summary.ID: 0, evidence.ID: 1}},
+		hops:   model.HopResult{Contexts: []model.Context{summary, evidence}, Distances: map[model.ID]int{summary.ID: 0, evidence.ID: 1}},
 	}
 	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, FoldThreshold: 0.9, GraphStage: GraphStageBaseline}, nil)
 	if err != nil {
@@ -610,7 +610,7 @@ func TestFlowExpandsAllEntryPointsInOneQuery(t *testing.T) {
 	database := &fakeStore{
 		keyword: []store.SearchCandidate{{Context: first}},
 		time:    []store.SearchCandidate{{Context: second}},
-		hops: store.HopResult{
+		hops: model.HopResult{
 			Contexts:  []model.Context{first, second, reached},
 			Distances: map[model.ID]int{first.ID: 0, second.ID: 0, reached.ID: 1},
 			Edges:     []store.HopEdge{{FromID: second.ID, ToID: reached.ID, Kind: "derived_from"}},
@@ -657,7 +657,7 @@ func TestUnlimitedMaxHopsExpandsGraph(t *testing.T) {
 	reached := testContext(t, graphID, "019a0000-0000-7000-8000-000000000013", "확장", 2)
 	database := &fakeStore{
 		keyword: []store.SearchCandidate{{Context: entry}},
-		hops: store.HopResult{
+		hops: model.HopResult{
 			Contexts:  []model.Context{entry, reached},
 			Distances: map[model.ID]int{entry.ID: 0, reached.ID: 1},
 		},
@@ -687,7 +687,7 @@ func TestBoundedMaxHopsPassesDepthThrough(t *testing.T) {
 	entry := testContext(t, graphID, "019a0000-0000-7000-8000-000000000022", "진입", 1)
 	database := &fakeStore{
 		keyword: []store.SearchCandidate{{Context: entry}},
-		hops:    store.HopResult{Contexts: []model.Context{entry}, Distances: map[model.ID]int{entry.ID: 0}},
+		hops:    model.HopResult{Contexts: []model.Context{entry}, Distances: map[model.ID]int{entry.ID: 0}},
 	}
 	service, err := New(database, fakeEmbedder{}, Config{Execution: ExecutionSequential, CandidateLimit: 5, FoldThreshold: 0.9, GraphStage: GraphStageRelations}, nil)
 	if err != nil {

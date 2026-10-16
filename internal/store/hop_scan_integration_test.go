@@ -124,10 +124,10 @@ type hopPlan struct {
 	Execution float64     `json:"Execution Time"`
 }
 
-func explainHop(t *testing.T, s *Store, query string) hopPlan {
+func explainHop(t *testing.T, s *Store, query string, arguments ...any) hopPlan {
 	t.Helper()
 	var raw []byte
-	if err := s.pool.QueryRow(t.Context(), "EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) "+query, pgx.QueryExecModeExec).Scan(&raw); err != nil {
+	if err := s.pool.QueryRow(t.Context(), "EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) "+query, append([]any{pgx.QueryExecModeExec}, arguments...)...).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
 	var plans []hopPlan

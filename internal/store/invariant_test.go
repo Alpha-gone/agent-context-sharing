@@ -1,10 +1,65 @@
 package store
 
 import (
+	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
+
+func TestInvariantReferenceCardinalityBounds(t *testing.T) {
+	for _, test := range []struct {
+		layer, label string
+		count        int
+		broken       bool
+	}{
+		{"derived", "DERIVED_FROM", 0, true}, {"derived", "DERIVED_FROM", 1, false},
+		{"derived", "DERIVED_FROM", 100, false}, {"derived", "DERIVED_FROM", 101, true},
+		{"event", "HAS_MEMBER", 0, true}, {"event", "HAS_MEMBER", 1, false},
+		{"event", "HAS_MEMBER", 1000, false}, {"event", "HAS_MEMBER", 1001, true},
+	} {
+		t.Run(fmt.Sprintf("%s/%d", test.layer, test.count), func(t *testing.T) {
+			snapshot := auditSnapshot{graphID: "g", contexts: map[string]auditContext{"owner": {graphID: "g", layer: test.layer}}}
+			for index := range test.count {
+				snapshot.edges = append(snapshot.edges, auditEdge{label: test.label, from: "owner", to: fmt.Sprint(index)})
+			}
+			got, err := checkReferenceCardinality(snapshot)
+			if err != nil || (len(got) == 1) != test.broken || len(got) > 1 {
+				t.Fatalf("기수성 판정=%+v: %v", got, err)
+			}
+		})
+	}
+}
+
+func TestInvariantDuplicateEmbeddingAndScopedMembership(t *testing.T) {
+	t.Run("양쪽 계층의 중복 임베딩", func(t *testing.T) {
+		snapshot := invariantFixture()
+		snapshot.embeddings = append(snapshot.embeddings, snapshot.embeddings[0])
+		got, err := runInvariantRules(snapshot)
+		want := []InvariantViolation{{Rule: RuleEmbeddingLink, GraphID: "g", Target: TargetEmbedding, IDs: []string{"s1"}}}
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("중복 임베딩=%+v: %v", got, err)
+		}
+	})
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("범위 정점 누락=%t", missing), func(t *testing.T) {
+			snapshot := invariantFixture()
+			snapshot.scope = map[string]struct{}{"s1": {}}
+			value := snapshot.contexts["s1"]
+			value.graphID = "other"
+			snapshot.contexts["s1"] = value
+			if missing {
+				delete(snapshot.contexts, "s1")
+			}
+			got, err := checkGraphMembership(snapshot)
+			want := InvariantViolation{Rule: RuleGraphMembership, GraphID: "g", Target: TargetContext, IDs: []string{"s1"}}
+			if err != nil || !slices.ContainsFunc(got, func(value InvariantViolation) bool { return reflect.DeepEqual(value, want) }) {
+				t.Fatalf("범위 정점 검사=%+v: %v", got, err)
+			}
+		})
+	}
+}
 
 // invariantFixture는 규칙을 모두 만족하는 작은 그래프다. 원천 둘, 둘을 근거로 한 파생,
 // 파생을 대체한 파생, 원천을 구성원으로 한 사건 둘과 확정 precedes 하나다.

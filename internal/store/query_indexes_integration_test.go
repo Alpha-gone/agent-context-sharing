@@ -88,11 +88,13 @@ func TestQueryIndexCatalogIntegration(t *testing.T) {
 // 실제 쓰기 검사의 질의를 그대로 관찰해 EXPLAIN한다. 운영 코드에 시험용 선택기를 두지 않는다.
 type indexPlanQueryer struct {
 	cypherQueryer
-	queries []string
+	queries   []string
+	arguments [][]any
 }
 
 func (q *indexPlanQueryer) Query(ctx context.Context, sql string, arguments ...any) (pgx.Rows, error) {
 	q.queries = append(q.queries, sql)
+	q.arguments = append(q.arguments, arguments)
 	return q.cypherQueryer.Query(ctx, sql, arguments...)
 }
 
@@ -125,7 +127,7 @@ func TestQueryIndexPlansIntegration(t *testing.T) {
 			}
 			recorder := &indexPlanQueryer{cypherQueryer: database.pool}
 			snapshot, err := database.loadAuditSnapshot(t.Context(), recorder, graph, leaves[:1], EmbeddingExpectation{})
-			if err != nil || len(snapshot.edges) != 1 || len(recorder.queries) != 4 {
+			if err != nil || len(snapshot.edges) != 1 || len(recorder.queries) != 5 {
 				t.Fatalf("실제 주변부 조회=%d/%d: %v", len(snapshot.edges), len(recorder.queries), err)
 			}
 			for index, name := range []string{"outgoing", "incoming", "contexts"} {
@@ -139,6 +141,11 @@ func TestQueryIndexPlansIntegration(t *testing.T) {
 				if plan.Root.scanned("Context") >= float64(size) || (size >= 10000 && plan.Root.scanned("DERIVED_FROM") >= float64(size)) {
 					t.Errorf("%s: 주변부 밖 전체 스캔", name)
 				}
+			}
+			dangling := explainHop(t, database, recorder.queries[4], recorder.arguments[4]...)
+			logQueryIndexPlan(t, "dangling", dangling)
+			if size >= 10000 && dangling.Root.scanned("DERIVED_FROM") >= float64(size) {
+				t.Error("고아 간선 보충 조회가 주변부 밖 전체 간선을 스캔함")
 			}
 			query, err := database.hopCandidateSQL(graph, []model.ID{hub.ID}, []model.ID{hub.ID}, traversalLabel{label: "DERIVED_FROM"}, "in", 9)
 			if err != nil {

@@ -417,7 +417,7 @@ func (s *Store) OutdatedEmbeddingCount(ctx context.Context, modelID string) (int
 // 임베딩과 대기 작업을 지운다. 지우지 않으면 「색인 대상 비교」의 원천 제외 구성으로
 // 바꿔도 예전 구성이 남긴 원천 임베딩이 의미 유사도 채널에 계속 올라와 두 구성이
 // 등록 조건 말고도 달라진다.
-func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
+func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) {
 	if !graphID.IsV7() {
 		return fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
 	}
@@ -454,7 +454,7 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 	if err != nil {
 		return fmt.Errorf("재색인 등록 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "ReindexGraph", &err)
 	for _, target := range targets {
 		if err := s.enqueueIndexTask(ctx, tx, graphID, target.id, target.layer); err != nil {
 			return err

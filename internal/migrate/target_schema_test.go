@@ -73,7 +73,7 @@ func TestTargetSchemaFreshAndRepeatIntegration(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 			defer cancel()
-			for _, want := range []int{3, 0} {
+			for _, want := range []int{4, 0} {
 				if got, err := applyTarget(ctx, pool, migrations.FS, cfg); err != nil || got != want {
 					t.Fatalf("적용=%d want=%d: %v", got, want, err)
 				}
@@ -202,7 +202,7 @@ func TestTargetSchemaUpgradePreservesHistoryIntegration(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), history).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || got != 1 {
+	if got, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || got != 2 {
 		t.Fatalf("upgrade=%d: %v", got, err)
 	}
 	if err := pool.QueryRow(t.Context(), history).Scan(&after); err != nil || before != after {
@@ -240,7 +240,7 @@ func TestMigrationRollbackAndInvalidPreparationIntegration(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM public.schema_migration`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("실패 이력 잔류: %v", err)
 	}
-	if got, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || got != 3 {
+	if got, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || got != 4 {
 		t.Fatalf("실패 후 재실행=%d: %v", got, err)
 	}
 	// 원본 checksum 불일치가 후속 DDL을 실행하지 못하게 한다.
@@ -275,7 +275,7 @@ func TestConcurrentMigrationSingleConnectionIntegration(t *testing.T) {
 		}
 		total += r.count
 	}
-	if total != 3 {
+	if total != 4 {
 		t.Fatalf("동시 적용 총수=%d", total)
 	}
 	for _, pool := range pools {

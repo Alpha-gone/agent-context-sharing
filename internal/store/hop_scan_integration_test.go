@@ -383,6 +383,23 @@ FROM pg_indexes WHERE schemaname = $1 AND (indexname = 'context_active_graph_con
 	}
 }
 
+func encodedHopRelation(t *testing.T, graph model.ID, kind model.RelationType, from, to model.ID, state model.RelationState) string {
+	t.Helper()
+	relation := confirmable(t, graph, kind, from, to)
+	if state == model.RelationStateProposed {
+		relation.State = state
+		relation.ConfirmedBy, relation.ConfirmedByAgent, relation.ConfirmedAt = model.ID{}, model.ID{}, nil
+	}
+	if err := relation.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	properties, err := encodeProperties(relationProperties(relation))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return properties
+}
+
 func TestHopSelectiveMultiAnchorAndDenseEdgesIntegration(t *testing.T) {
 	database := newIntegrationStore(t)
 	graph, source := createHopHub(t, database, 0)
@@ -405,16 +422,21 @@ func TestHopSelectiveMultiAnchorAndDenseEdgesIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		properties = append(properties, encoded)
+		properties = append(properties, "{node: "+encoded+
+			", first: "+encodedHopRelation(t, graph, model.RelationTypePrecedes, starts[0].ID, value.ID, model.RelationStateConfirmed)+
+			", second: "+encodedHopRelation(t, graph, model.RelationTypePrecedes, starts[1].ID, value.ID, model.RelationStateConfirmed)+
+			", proposed: "+encodedHopRelation(t, graph, model.RelationTypeCauses, starts[1].ID, value.ID, model.RelationStateProposed)+"}")
 	}
 	// 같은 이웃을 두 시작 노드가 발견하며 삭제·제안 간선도 함께 둔다.
 	query := "MATCH (a:Context), (b:Context), (s:Context) WHERE a.context_id = " + cypherString(starts[0].ID.String()) +
 		" AND b.context_id = " + cypherString(starts[1].ID.String()) + " AND s.context_id = " + cypherString(source.ID.String()) +
-		" WITH a,b,s UNWIND [" + strings.Join(properties, ",") + "] AS props CREATE (leaf:Context) SET leaf = props" +
+		" WITH a,b,s UNWIND [" + strings.Join(properties, ",") + "] AS props" +
+		" WITH a,b,s,props.node AS node,props.first AS first_props,props.second AS second_props,props.proposed AS proposed_props" +
+		" CREATE (leaf:Context) SET leaf = node" +
 		" CREATE (leaf)-[:HAS_MEMBER {graph_id: " + cypherString(graph.String()) + "}]->(s)" +
-		" CREATE (a)-[:PRECEDES {graph_id: " + cypherString(graph.String()) + ", state:'confirmed'}]->(leaf)" +
-		" CREATE (b)-[:PRECEDES {graph_id: " + cypherString(graph.String()) + ", state:'confirmed'}]->(leaf)" +
-		" CREATE (b)-[:CAUSES {graph_id: " + cypherString(graph.String()) + ", state:'proposed'}]->(leaf) RETURN count(leaf)"
+		" CREATE (a)-[first:PRECEDES]->(leaf) SET first = first_props" +
+		" CREATE (b)-[second:PRECEDES]->(leaf) SET second = second_props" +
+		" CREATE (b)-[proposed:CAUSES]->(leaf) SET proposed = proposed_props RETURN count(leaf)"
 	var count string
 	if err := database.pool.QueryRow(t.Context(), database.cypherSQL(query, "count agtype"), pgx.QueryExecModeExec).Scan(&count); err != nil {
 		t.Fatal(err)
@@ -423,7 +445,33 @@ func TestHopSelectiveMultiAnchorAndDenseEdgesIntegration(t *testing.T) {
 	// 절단 여부와 무관하게 최종 부분 그래프에서 빠짐없이 반환되어야 한다.
 	query = "MATCH (a:Context), (b:Context) WHERE a.graph_id = " + cypherString(graph.String()) + " AND b.graph_id = " + cypherString(graph.String()) +
 		" AND a.layer = 'event' AND b.layer = 'event' AND a.context_id < b.context_id AND a.deleted_at IS NULL AND b.deleted_at IS NULL" +
-		" WITH a,b ORDER BY a.context_id,b.context_id LIMIT 300 CREATE (a)-[:RELATES_TO {graph_id: " + cypherString(graph.String()) + ", state:'confirmed'}]->(b) RETURN count(a)"
+		" RETURN a.context_id,b.context_id ORDER BY a.context_id,b.context_id LIMIT 300"
+	rows, err := database.pool.Query(t.Context(), database.cypherSQL(query, "source agtype, target agtype"), pgx.QueryExecModeExec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var relations []string
+	for rows.Next() {
+		var fromRaw, toRaw string
+		if err := rows.Scan(&fromRaw, &toRaw); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		from, fromErr := parseAnchorID(fromRaw)
+		to, toErr := parseAnchorID(toRaw)
+		if fromErr != nil || toErr != nil {
+			rows.Close()
+			t.Fatalf("조밀한 간선 끝점: %v %v", fromErr, toErr)
+		}
+		relations = append(relations, encodedHopRelation(t, graph, model.RelationTypeRelatesTo, from, to, model.RelationStateConfirmed))
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	query = "UNWIND [" + strings.Join(relations, ",") + "] AS props MATCH (a:Context), (b:Context)" +
+		" WHERE a.context_id = props.from_context_id AND b.context_id = props.to_context_id" +
+		" CREATE (a)-[edge:RELATES_TO]->(b) SET edge = props RETURN count(edge)"
 	if err := database.pool.QueryRow(t.Context(), database.cypherSQL(query, "count agtype"), pgx.QueryExecModeExec).Scan(&count); err != nil {
 		t.Fatal(err)
 	}

@@ -47,15 +47,23 @@ func (s *Store) touchEmbeddings(ctx context.Context, graphID model.ID, contextID
 	// 컨텍스트 전부를 기록하므로 동시 요청은 겹치는 행을 서로 다른 순서로 잠그게 되고, 한
 	// 문장으로 갱신하면 교착과 교착 감지 대기가 연결 풀을 고갈시킨다. 건너뛴 행은 잠근 요청이
 	// 같은 시각으로 기록하므로 접근 기록으로서 잃는 것이 없다.
+	// 스냅숏 읽기 뒤 폐기된 대상은 현재 문장의 활성 상태를 다시 확인해 승격하지 않는다.
 	err := retryEmbeddingAccess(func() error {
 		_, err := s.pool.Exec(ctx, `
 		UPDATE public.context_embedding AS embedding
 		SET last_accessed_at = $3, storage_tier = $4
 		FROM (
-			SELECT context_id FROM public.context_embedding
-			WHERE graph_id = $1 AND context_id = ANY($2::uuid[])
-			ORDER BY context_id
-			FOR UPDATE SKIP LOCKED
+			SELECT candidate.context_id FROM public.context_embedding AS candidate
+			WHERE candidate.graph_id = $1 AND candidate.context_id = ANY($2::uuid[])
+			  AND EXISTS (
+				SELECT 1 FROM `+s.contextTable()+` AS node
+				WHERE (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
+				  AND node.properties ->> 'graph_id'::text = $1::text
+				  AND node.properties ->> 'deleted_at'::text IS NULL
+			  )
+			  AND EXISTS (SELECT 1 FROM public.context_graph WHERE graph_id = $1 AND deleted_at IS NULL)
+			ORDER BY candidate.context_id
+			FOR UPDATE OF candidate SKIP LOCKED
 		) AS target
 		WHERE embedding.graph_id = $1 AND embedding.context_id = target.context_id
 	`, graphID.String(), ids, at.UTC(), embeddingTierHot)
@@ -117,9 +125,17 @@ func (s *Store) MoveColdEmbeddings(ctx context.Context, now time.Time, daysFor R
 }
 
 func (s *Store) moveGraphEmbeddingsCold(ctx context.Context, graphID model.ID) (int, error) {
+	// 주기 작업도 접근 기록과 같은 순서로 잠그며 사용 중인 행은 다음 회차로 넘긴다.
+	// retentionGraphs 이후 복구됐을 수 있으므로 접근 차단 상태도 문장 안에서 대조한다.
 	result, err := s.pool.Exec(ctx, `
-		UPDATE public.context_embedding SET storage_tier = $2
-		WHERE graph_id = $1 AND storage_tier = $3
+		UPDATE public.context_embedding AS embedding SET storage_tier = $2
+		FROM (
+			SELECT context_id FROM public.context_embedding
+			WHERE graph_id = $1 AND storage_tier = $3
+			  AND EXISTS (SELECT 1 FROM public.context_graph WHERE graph_id = $1 AND deleted_at IS NOT NULL)
+			ORDER BY context_id FOR UPDATE SKIP LOCKED
+		) AS target
+		WHERE embedding.graph_id = $1 AND embedding.context_id = target.context_id AND embedding.storage_tier = $3
 	`, graphID.String(), embeddingTierCold, embeddingTierHot)
 	if err != nil {
 		return 0, fmt.Errorf("접근 차단 그래프 임베딩 계층 이동: %w", err)
@@ -131,11 +147,18 @@ func (s *Store) moveDeletedContextEmbeddingsCold(ctx context.Context, graphID mo
 	result, err := s.pool.Exec(ctx, `
 		UPDATE public.context_embedding AS embedding
 		SET storage_tier = $2
-		FROM `+s.contextTable()+` AS node
-		WHERE embedding.graph_id = $1 AND embedding.storage_tier = $3
-		  AND (node.properties ->> 'context_id'::text)::uuid = embedding.context_id
-		  AND node.properties ->> 'graph_id'::text = $1::text
-		  AND node.properties ->> 'deleted_at'::text IS NOT NULL
+		FROM (
+			SELECT candidate.context_id FROM public.context_embedding AS candidate
+			WHERE candidate.graph_id = $1 AND candidate.storage_tier = $3
+			  AND EXISTS (
+				SELECT 1 FROM `+s.contextTable()+` AS node
+				WHERE (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
+				  AND node.properties ->> 'graph_id'::text = $1::text
+				  AND node.properties ->> 'deleted_at'::text IS NOT NULL
+			  )
+			ORDER BY candidate.context_id FOR UPDATE OF candidate SKIP LOCKED
+		) AS target
+		WHERE embedding.graph_id = $1 AND embedding.context_id = target.context_id AND embedding.storage_tier = $3
 	`, graphID.String(), embeddingTierCold, embeddingTierHot)
 	if err != nil {
 		return 0, fmt.Errorf("폐기 컨텍스트 임베딩 계층 이동: %w", err)
@@ -147,12 +170,21 @@ func (s *Store) moveInactiveEmbeddingsCold(ctx context.Context, graphID model.ID
 	result, err := s.pool.Exec(ctx, `
 		UPDATE public.context_embedding AS embedding
 		SET storage_tier = $3
-		FROM `+s.contextTable()+` AS node
-		WHERE embedding.graph_id = $1 AND embedding.storage_tier = $4
-		  AND embedding.last_accessed_at <= $2
-		  AND (node.properties ->> 'context_id'::text)::uuid = embedding.context_id
-		  AND node.properties ->> 'graph_id'::text = $1::text
-		  AND node.properties ->> 'deleted_at'::text IS NULL
+		FROM (
+			SELECT candidate.context_id FROM public.context_embedding AS candidate
+			WHERE candidate.graph_id = $1 AND candidate.storage_tier = $4
+			  AND candidate.last_accessed_at < $2
+			  AND EXISTS (
+				SELECT 1 FROM `+s.contextTable()+` AS node
+				WHERE (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
+				  AND node.properties ->> 'graph_id'::text = $1::text
+				  AND node.properties ->> 'deleted_at'::text IS NULL
+			  )
+			  AND EXISTS (SELECT 1 FROM public.context_graph WHERE graph_id = $1 AND deleted_at IS NULL)
+			ORDER BY candidate.context_id FOR UPDATE OF candidate SKIP LOCKED
+		) AS target
+		WHERE embedding.graph_id = $1 AND embedding.context_id = target.context_id
+		  AND embedding.storage_tier = $4 AND embedding.last_accessed_at < $2
 	`, graphID.String(), cutoff.UTC(), embeddingTierCold, embeddingTierHot)
 	if err != nil {
 		return 0, fmt.Errorf("미사용 활성 임베딩 계층 이동: %w", err)

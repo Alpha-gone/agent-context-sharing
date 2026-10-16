@@ -577,7 +577,7 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT candidate.context_id::text, 1 - (candidate.embedding <=> $3::vector) AS similarity
+		SELECT candidate.context_id::text, candidate.graph_id::text, node.properties ->> 'graph_id'::text, 1 - (candidate.embedding <=> $3::vector) AS similarity
 		FROM public.context_embedding AS candidate
 		JOIN `+s.contextTable()+` AS node ON (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
 		WHERE candidate.graph_id = $1 AND candidate.model_id = $2
@@ -597,9 +597,9 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	ids := make([]model.ID, 0)
 	similarities := make(map[model.ID]float64)
 	for rows.Next() {
-		var rawID string
+		var rawID, embeddingGraph, nodeGraph string
 		var similarity float64
-		if err := rows.Scan(&rawID, &similarity); err != nil {
+		if err := rows.Scan(&rawID, &embeddingGraph, &nodeGraph, &similarity); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("의미 유사도 후보 행 해석: %w", err)
 		}
@@ -607,6 +607,10 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 		if err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("의미 유사도 후보 식별자 해석: %w", err)
+		}
+		if embeddingGraph != graphID.String() || nodeGraph != graphID.String() {
+			rows.Close()
+			return nil, storageError("embedding_membership", ErrInvariantViolation)
 		}
 		ids = append(ids, contextID)
 		similarities[contextID] = similarity
@@ -794,6 +798,7 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 		WHERE candidate.graph_id = $2 AND candidate.model_id = $3
 			AND candidate.context_id <> $1::uuid
 			AND candidate.embedding <=> $4 <= $5
+			AND node.properties ->> 'graph_id'::text = $2::text
 			AND node.properties ->> 'layer'::text = 'event' AND node.properties ->> 'deleted_at'::text IS NULL
 		ORDER BY candidate.embedding <=> $4, candidate.context_id
 		LIMIT $6`,

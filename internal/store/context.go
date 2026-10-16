@@ -28,6 +28,9 @@ func (s *Store) CreateContextWithOperation(ctx context.Context, graphID model.ID
 	if err := validateContextInput(graphID, value, derivedFrom); err != nil {
 		return model.Context{}, err
 	}
+	if value.Derived != nil && value.Derived.Supersedes != nil {
+		return model.Context{}, model.FieldError{Field: "supersedes", Message: "대체 참조는 대체 생성 경로를 사용해야 한다"}
+	}
 	created, err := s.createContext(ctx, graphID, value, derivedFrom, model.ID{}, operation, limits)
 	if err == nil {
 		s.proposeEventRelationsAfterSave(ctx, graphID, created)
@@ -52,6 +55,9 @@ func (s *Store) CreateSupersedingContextWithOperation(ctx context.Context, graph
 	}
 	if value.Layer != model.LayerDerived || !supersededID.IsV7() {
 		return model.Context{}, fmt.Errorf("대체는 UUIDv7 이전 파생을 지정한 파생에만 적용할 수 있다")
+	}
+	if value.Derived.Supersedes != nil && *value.Derived.Supersedes != supersededID {
+		return model.Context{}, model.FieldError{Field: "supersedes", Message: "대체 대상 식별자가 일치하지 않는다"}
 	}
 	return s.createContext(ctx, graphID, value, derivedFrom, supersededID, operation, limits)
 }
@@ -490,8 +496,10 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 			if err != nil {
 				return model.Context{}, fmt.Errorf("대체 대상 파생 조회: %w", err)
 			}
-			if superseded.Layer != model.LayerDerived || superseded.DeletedAt != nil {
-				return model.Context{}, fmt.Errorf("대체 대상은 활성 파생이어야 한다")
+			candidate := attachReferences(value, derivedFrom, nil)
+			candidate.Derived.Supersedes = new(supersededID)
+			if err := model.ValidateSupersedes(candidate, superseded); err != nil {
+				return model.Context{}, err
 			}
 		}
 	}
@@ -537,7 +545,11 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	// 참조 목록은 방금 같은 트랜잭션에서 만든 값이므로 커밋 뒤 다시 읽지 않는다. 재조회가
 	// 실패하면 이미 적용된 연산이 실패로 응답되어 적용 기록과 거부 기록이 모순되고,
 	// 호출자가 재시도하면 판 번호 충돌이 난다.
-	return withReferences(stored, derivedFrom, value), nil
+	stored = withReferences(stored, derivedFrom, value)
+	if supersededID.IsV7() {
+		stored.Derived.Supersedes = new(supersededID)
+	}
+	return stored, nil
 }
 
 // withReferences는 커밋한 정점에 같은 트랜잭션이 쓴 참조 목록을 붙인다.
@@ -547,7 +559,11 @@ func withReferences(stored model.Context, derivedFrom []model.ID, written model.
 	if written.Event != nil {
 		members = written.Event.MemberIDs
 	}
-	return attachReferences(stored, derivedFrom, members)
+	stored = attachReferences(stored, derivedFrom, members)
+	if stored.Derived != nil && written.Derived != nil && written.Derived.Supersedes != nil {
+		stored.Derived.Supersedes = new(*written.Derived.Supersedes)
+	}
+	return stored
 }
 
 // attachReferences는 단건·묶음·쓰기 응답이 공통으로 쓰는 참조 조립 경계다.
@@ -562,6 +578,20 @@ func attachReferences(value model.Context, derivedFrom, members []model.ID) mode
 		value.Event.MemberIDs = slices.Clone(members)
 	}
 	return value
+}
+
+func assembleStoredContext(value model.Context, references, members, supersedes []model.ID) (model.Context, error) {
+	value = attachReferences(value, references, members)
+	if value.Derived != nil {
+		if len(supersedes) > 1 {
+			return model.Context{}, storageError("supersedes_cardinality", ErrInvariantViolation)
+		}
+		value.Derived.Supersedes = nil
+		if len(supersedes) == 1 {
+			value.Derived.Supersedes = new(supersedes[0])
+		}
+	}
+	return validateStoredContext(value)
 }
 
 func validateStoredContext(value model.Context) (model.Context, error) {
@@ -632,8 +662,12 @@ func (s *Store) validateReferences(ctx context.Context, tx pgx.Tx, graphID model
 		return err
 	}
 	for _, referenceID := range referenceIDs {
-		if _, found := vertices[referenceID]; !found {
+		value, found := vertices[referenceID]
+		if !found {
 			return fmt.Errorf("파생 근거 %s 조회: %w", referenceID, ErrNotFound)
+		}
+		if value.Layer == model.LayerEvent || value.DeletedAt != nil {
+			return model.FieldError{Field: "derived_from", Message: "근거는 활성 원천 또는 파생이어야 한다"}
 		}
 	}
 	return nil
@@ -646,11 +680,15 @@ func (s *Store) validateReferences(ctx context.Context, tx pgx.Tx, graphID model
 func (s *Store) validateEventMembers(ctx context.Context, tx pgx.Tx, graphID model.ID, event model.Context) error {
 	members, err := s.contextsByIDs(ctx, tx, graphID, event.Event.MemberIDs)
 	if err != nil {
-		var missing missingContextError
-		if errors.As(err, &missing) {
+		if missing, ok := errors.AsType[missingContextError](err); ok {
 			return fmt.Errorf("사건 구성원 %s 조회: %w", missing.ID, ErrNotFound)
 		}
 		return err
+	}
+	for _, member := range members {
+		if member.DeletedAt != nil {
+			return fmt.Errorf("사건 구성원은 활성 상태여야 한다")
+		}
 	}
 	if err := model.ValidateEventMembers(event, members); err != nil {
 		return fmt.Errorf("사건 구성원 검증: %w", err)
@@ -714,33 +752,18 @@ func eventProposalInputChanged(previous, next model.Context) bool {
 
 // context는 AGE 조회 결과를 한곳에서 model.Context로 조립해 graph_id를 재검사한다.
 func (s *Store) context(ctx context.Context, queryer cypherQueryer, graphID, contextID model.ID) (model.Context, error) {
-	query := "MATCH (node:Context) WHERE node.context_id = " + cypherString(contextID.String()) +
-		" AND node.graph_id = " + cypherString(graphID.String()) + " RETURN node"
-	stored, err := s.contextFromCypher(ctx, queryer, graphID, query)
-	if err != nil {
-		return stored, err
-	}
-	var references, members []model.ID
-	switch stored.Layer {
-	case model.LayerDerived:
-		references, err = s.derivedFromIDs(ctx, queryer, graphID, contextID)
-	case model.LayerEvent:
-		members, err = s.eventMemberIDs(ctx, queryer, graphID, contextID)
-	}
+	values, err := s.contextsByIDs(ctx, queryer, graphID, []model.ID{contextID})
 	if err != nil {
 		return model.Context{}, err
 	}
-	return validateStoredContext(attachReferences(stored, references, members))
+	return values[0], nil
 }
 
 // derivedFromIDs는 DERIVED_FROM 간선에서 파생의 근거 식별자를 다시 조립한다.
 func (s *Store) derivedFromIDs(ctx context.Context, queryer cypherQueryer, graphID, derivedID model.ID) ([]model.ID, error) {
 	return s.edgeTargetIDs(ctx, queryer, graphID, edgeTargetQuery{
 		label:    "DERIVED_FROM",
-		source:   "derived",
-		target:   "evidence",
 		sourceID: derivedID,
-		name:     "파생 근거",
 	})
 }
 
@@ -748,51 +771,24 @@ func (s *Store) derivedFromIDs(ctx context.Context, queryer cypherQueryer, graph
 func (s *Store) eventMemberIDs(ctx context.Context, queryer cypherQueryer, graphID, eventID model.ID) ([]model.ID, error) {
 	return s.edgeTargetIDs(ctx, queryer, graphID, edgeTargetQuery{
 		label:    "HAS_MEMBER",
-		source:   "event",
-		target:   "member",
 		sourceID: eventID,
-		name:     "사건 구성원",
 	})
 }
 
 // edgeTargetQuery는 정점 하나에서 나가는 한 label의 간선을 읽는 데 필요한 값이다.
-// name은 오류 메시지에 쓰는 대상 이름이다.
 type edgeTargetQuery struct {
-	label, source, target string
-	sourceID              model.ID
-	name                  string
+	label    string
+	sourceID model.ID
 }
 
-// edgeTargetIDs는 시작 정점에서 나가는 간선의 도착 정점 식별자만 읽는다.
-//
-// 도착 정점 전체를 받아 parseContext로 조립한 뒤 식별자만 쓰면 본문까지 전송·해석하는
-// 비용이 간선 수에 비례해 든다. 호출자가 쓰는 값이 식별자뿐이므로 속성 하나만 받는다.
+// edgeTargetIDs는 묶음 참조 경계와 같은 검증으로 단건의 참조를 읽는다.
 func (s *Store) edgeTargetIDs(ctx context.Context, queryer cypherQueryer, graphID model.ID, spec edgeTargetQuery) ([]model.ID, error) {
-	query := "MATCH (" + spec.source + ":Context)-[edge:" + spec.label + "]->(" + spec.target + ":Context) WHERE " + spec.source + ".context_id = " + cypherString(spec.sourceID.String()) +
-		" AND " + spec.source + ".graph_id = " + cypherString(graphID.String()) +
-		" AND edge.graph_id = " + cypherString(graphID.String()) +
-		" AND " + spec.target + ".graph_id = " + cypherString(graphID.String()) + " RETURN " + spec.target + ".context_id"
-	rows, err := queryer.Query(ctx, s.cypherSQL(query, spec.target+" agtype"), pgx.QueryExecModeExec)
+	list, err := cypherIDList([]model.ID{spec.sourceID})
 	if err != nil {
-		return nil, fmt.Errorf("%s 조회: %w", spec.name, err)
+		return nil, err
 	}
-	defer rows.Close()
-	targetIDs := make([]model.ID, 0)
-	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
-			return nil, fmt.Errorf("%s 행 해석: %w", spec.name, err)
-		}
-		targetID, err := parseAnchorID(raw)
-		if err != nil {
-			return nil, err
-		}
-		targetIDs = append(targetIDs, targetID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%s 행 읽기: %w", spec.name, err)
-	}
-	return targetIDs, nil
+	targets, err := s.edgeTargetsBySource(ctx, queryer, graphID, spec.label, list)
+	return targets[spec.sourceID], err
 }
 
 // contextFromCypher는 정점 하나를 받는 모든 AGE 질의의 응답 조립 지점이다.
@@ -1027,7 +1023,7 @@ func (s *Store) contextVerticesByIDs(ctx context.Context, queryer cypherQueryer,
 	return byID, nil
 }
 
-// ContextsByIDs는 여러 컨텍스트를 세 질의로 조립해 요청 순서대로 돌려준다.
+// ContextsByIDs는 정점과 세 참조 label을 묶음으로 조립해 요청 순서대로 돌려준다.
 //
 // 후보마다 Context를 부르면 식별자 수만큼 왕복이 늘고, 결과 행을 연 채 부르면 같은 풀에서
 // 연결을 하나 더 잡아 동시 요청이 서로의 연결을 기다린다. 검색 채널은 이 함수를 쓴다.
@@ -1086,13 +1082,17 @@ func (s *Store) contextsByIDs(ctx context.Context, queryer cypherQueryer, graphI
 	if err != nil {
 		return nil, err
 	}
+	supersedes, err := s.edgeTargetsBySource(ctx, queryer, graphID, "SUPERSEDES", list)
+	if err != nil {
+		return nil, err
+	}
 	ordered := make([]model.Context, 0, len(contextIDs))
 	for _, contextID := range contextIDs {
 		value, found := byID[contextID]
 		if !found {
 			return nil, missingContextError{ID: contextID}
 		}
-		value, err = validateStoredContext(attachReferences(value, references[contextID], members[contextID]))
+		value, err = assembleStoredContext(value, references[contextID], members[contextID], supersedes[contextID])
 		if err != nil {
 			return nil, err
 		}
@@ -1103,34 +1103,31 @@ func (s *Store) contextsByIDs(ctx context.Context, queryer cypherQueryer, graphI
 
 // edgeTargetsBySource는 지정한 label의 간선을 시작 정점별로 모은다.
 func (s *Store) edgeTargetsBySource(ctx context.Context, queryer cypherQueryer, graphID model.ID, label, sourceList string) (map[model.ID][]model.ID, error) {
-	query := "MATCH (source:Context)-[edge:" + label + "]->(target:Context) WHERE source.graph_id = " + cypherString(graphID.String()) +
+	query := "MATCH (source:Context)-[edge:" + label + "]->(target) WHERE source.graph_id = " + cypherString(graphID.String()) +
 		" AND source.context_id IN " + sourceList +
-		" AND edge.graph_id = " + cypherString(graphID.String()) +
-		" AND target.graph_id = " + cypherString(graphID.String()) +
-		" RETURN source.context_id, target.context_id ORDER BY source.context_id, target.context_id"
-	rows, err := queryer.Query(ctx, s.cypherSQL(query, "source agtype, target agtype"), pgx.QueryExecModeExec)
+		" RETURN " + endpointProjection("source") + ", " + endpointProjection("target") + ", edge ORDER BY source.context_id, target.context_id"
+	rows, err := queryer.Query(ctx, s.cypherSQL(query, "source agtype, target agtype, edge agtype"), pgx.QueryExecModeExec)
 	if err != nil {
-		return nil, fmt.Errorf("%s 간선 묶음 조회: %w", label, err)
+		return nil, storageError("reference_query", err)
 	}
 	defer rows.Close()
 	targets := make(map[model.ID][]model.ID)
 	for rows.Next() {
-		var rawSource, rawTarget string
-		if err := rows.Scan(&rawSource, &rawTarget); err != nil {
-			return nil, fmt.Errorf("%s 간선 행 해석: %w", label, err)
+		var rawSource, rawTarget, rawEdge string
+		if err := rows.Scan(&rawSource, &rawTarget, &rawEdge); err != nil {
+			return nil, storageError("reference_scan", err)
 		}
-		sourceID, err := parseAnchorID(rawSource)
+		source, target, err := parseStoredEndpoints(rawEdge, rawSource, rawTarget, graphID)
 		if err != nil {
 			return nil, err
 		}
-		targetID, err := parseAnchorID(rawTarget)
-		if err != nil {
-			return nil, err
+		if slices.Contains(targets[source.ID], target.ID) {
+			return nil, storageError("reference_duplicate", ErrInvariantViolation)
 		}
-		targets[sourceID] = append(targets[sourceID], targetID)
+		targets[source.ID] = append(targets[source.ID], target.ID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%s 간선 행 읽기: %w", label, err)
+		return nil, storageError("reference_rows", err)
 	}
 	return targets, nil
 }

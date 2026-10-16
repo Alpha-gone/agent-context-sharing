@@ -110,6 +110,9 @@ func parseContext(raw string, graphID model.ID) (result model.Context, err error
 	if vertex.Label != "Context" {
 		return model.Context{}, fmt.Errorf("정점 label이 Context가 아니다")
 	}
+	if err := validateStoredProperties(raw, "vertex", string(vertex.Properties.Layer)); err != nil {
+		return model.Context{}, err
+	}
 	properties := vertex.Properties
 	contextID, err := model.ParseID(properties.ContextID)
 	if err != nil {
@@ -205,6 +208,9 @@ func parseRelation(raw string, graphID model.ID) (result model.Relation, err err
 	var edge agEdge
 	if err := json.Unmarshal(trimAGType(raw, "edge"), &edge); err != nil {
 		return model.Relation{}, fmt.Errorf("AGE 간선 agtype 해석: %w", err)
+	}
+	if err := validateStoredProperties(raw, "edge", "relation"); err != nil {
+		return model.Relation{}, err
 	}
 	properties := edge.Properties
 	storedGraphID, err := model.ParseID(properties.GraphID)

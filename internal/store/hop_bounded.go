@@ -232,19 +232,24 @@ func (s *Store) hopIncludedEdges(ctx context.Context, graphID model.ID, ids []mo
 	defer rows.Close()
 	var edges []HopEdge
 	for rows.Next() {
-		var fromRaw, toRaw string
-		if err := rows.Scan(&fromRaw, &toRaw); err != nil {
+		var fromRaw, toRaw, rawEdge string
+		if err := rows.Scan(&fromRaw, &toRaw, &rawEdge); err != nil {
 			return nil, fmt.Errorf("홉 내부 간선 행 해석: %w", err)
 		}
-		from, err := parseAnchorID(fromRaw)
+		from, to, err := parseStoredEndpoints(rawEdge, fromRaw, toRaw, graphID)
 		if err != nil {
 			return nil, err
 		}
-		to, err := parseAnchorID(toRaw)
-		if err != nil {
-			return nil, err
+		if label.confirmed {
+			relation, err := parseRelation(rawEdge, graphID)
+			if err != nil {
+				return nil, err
+			}
+			if relation.FromContextID != from.ID || relation.ToContextID != to.ID {
+				return nil, storageError("hop_relation_identity", ErrInvariantViolation)
+			}
 		}
-		edges = append(edges, HopEdge{FromID: from, ToID: to, Kind: label.kind})
+		edges = append(edges, HopEdge{FromID: from.ID, ToID: to.ID, Kind: label.kind})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("홉 내부 간선 행 읽기: %w", err)
@@ -263,5 +268,5 @@ func (s *Store) hopIncludedEdgeSQL(graphID model.ID, ids []model.ID, label trave
 	if label.confirmed {
 		query += " AND edge.state = 'confirmed'"
 	}
-	return s.cypherSQL(query+" RETURN DISTINCT a.context_id, b.context_id", "source agtype, target agtype"), nil
+	return s.cypherSQL(query+" RETURN DISTINCT "+endpointProjection("a")+", "+endpointProjection("b")+", edge", "source agtype, target agtype, edge agtype"), nil
 }

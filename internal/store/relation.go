@@ -50,7 +50,7 @@ func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation m
 		" AND from.graph_id = " + cypherString(graphID.String()) +
 		" AND to.context_id = " + cypherString(relation.ToContextID.String()) +
 		" AND to.graph_id = " + cypherString(graphID.String()) +
-		" CREATE (from)-[edge:" + label + " " + properties + "]->(to) RETURN edge"
+		" CREATE (from)-[edge:" + label + " " + properties + "]->(to) RETURN edge, startNode(edge), endNode(edge)"
 	stored, err := s.relationFromCypher(ctx, tx, graphID, query)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("사건 관계 생성: %w", err)
@@ -339,74 +339,7 @@ func (s *Store) validateEventRelationTimes(ctx context.Context, tx pgx.Tx, graph
 }
 
 func (s *Store) activeEventContexts(ctx context.Context, graphID model.ID) ([]model.Context, error) {
-	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) +
-		" AND node.layer = 'event' AND node.deleted_at IS NULL RETURN node ORDER BY node.context_id ASC"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecModeExec)
-	if err != nil {
-		return nil, fmt.Errorf("활성 사건 조회: %w", err)
-	}
-	defer rows.Close()
-
-	events := make([]model.Context, 0)
-	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
-			return nil, fmt.Errorf("활성 사건 행 해석: %w", err)
-		}
-		event, err := parseContext(raw, graphID)
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, event)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("활성 사건 행 읽기: %w", err)
-	}
-	// 구성원은 HAS_MEMBER 간선에 있으므로 정점 질의만으로는 채워지지 않는다. 사건마다
-	// 다시 조회하면 사건 수만큼 왕복이 늘어나므로 한 질의로 모아 붙인다.
-	members, err := s.eventMembersByEvent(ctx, graphID)
-	if err != nil {
-		return nil, err
-	}
-	for index := range events {
-		events[index].Event.MemberIDs = members[events[index].ID]
-	}
-	return events, nil
-}
-
-// eventMembersByEvent는 그래프의 모든 활성 사건 구성원을 사건별로 모아 돌려준다.
-func (s *Store) eventMembersByEvent(ctx context.Context, graphID model.ID) (map[model.ID][]model.ID, error) {
-	query := "MATCH (event:Context)-[edge:HAS_MEMBER]->(member:Context) WHERE event.graph_id = " + cypherString(graphID.String()) +
-		" AND event.layer = 'event' AND event.deleted_at IS NULL" +
-		" AND edge.graph_id = " + cypherString(graphID.String()) +
-		" AND member.graph_id = " + cypherString(graphID.String()) +
-		" RETURN event.context_id, member.context_id ORDER BY event.context_id, member.context_id"
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "event agtype, member agtype"), pgx.QueryExecModeExec)
-	if err != nil {
-		return nil, fmt.Errorf("활성 사건 구성원 조회: %w", err)
-	}
-	defer rows.Close()
-
-	members := make(map[model.ID][]model.ID)
-	for rows.Next() {
-		var rawEvent, rawMember string
-		if err := rows.Scan(&rawEvent, &rawMember); err != nil {
-			return nil, fmt.Errorf("활성 사건 구성원 행 해석: %w", err)
-		}
-		eventID, err := parseAnchorID(rawEvent)
-		if err != nil {
-			return nil, err
-		}
-		memberID, err := parseAnchorID(rawMember)
-		if err != nil {
-			return nil, err
-		}
-		members[eventID] = append(members[eventID], memberID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("활성 사건 구성원 행 읽기: %w", err)
-	}
-	return members, nil
+	return s.graphContexts(ctx, graphID, "node.layer = 'event' AND node.deleted_at IS NULL", 0)
 }
 
 // adjacentPrecedesCandidate는 시간 범위가 겹치지 않고 간격이 임계값 안인 두 사건에서
@@ -573,6 +506,19 @@ func (s *Store) listRelations(ctx context.Context, queryer cypherQueryer, graphI
 	if !graphID.IsV7() || limit <= 0 {
 		return nil, "", fmt.Errorf("관계 목록 인자가 올바르지 않다")
 	}
+	if contextID != (model.ID{}) && !contextID.IsV7() {
+		return nil, "", fmt.Errorf("컨텍스트 식별자는 UUIDv7이어야 한다")
+	}
+	for _, state := range states {
+		if state != model.RelationStateProposed && state != model.RelationStateConfirmed && state != model.RelationStateDiscarded {
+			return nil, "", fmt.Errorf("관계 상태 필터가 올바르지 않다")
+		}
+	}
+	for _, kind := range types {
+		if _, err := relationLabel(kind); err != nil {
+			return nil, "", err
+		}
+	}
 	// Apache AGE 1.8은 label 대안(`:A|B`) 문법을 지원하지 않으므로, 네 사건 관계에만
 	// 공통으로 있는 relation_type property로 참조 간선을 제외한다.
 	query := "MATCH ()-[edge]->() WHERE edge.graph_id = " + cypherString(graphID.String()) + " AND edge.relation_type IS NOT NULL"
@@ -593,8 +539,12 @@ func (s *Store) listRelations(ctx context.Context, queryer cypherQueryer, graphI
 		}
 		query += " AND edge.relation_id < " + cypherString(relationID.String())
 	}
-	query += " RETURN edge ORDER BY edge.relation_id DESC LIMIT " + fmt.Sprint(limit+1)
-	rows, err := queryer.Query(ctx, s.cypherSQL(query, "edge agtype"), pgx.QueryExecModeExec)
+	fetch := limit
+	if limit < int(^uint(0)>>1) {
+		fetch++
+	}
+	query += " RETURN edge, startNode(edge), endNode(edge) ORDER BY edge.relation_id DESC LIMIT " + fmt.Sprint(fetch)
+	rows, err := queryer.Query(ctx, s.cypherSQL(query, "edge agtype, source agtype, target agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, "", fmt.Errorf("관계 목록 조회: %w", err)
 	}
@@ -602,11 +552,11 @@ func (s *Store) listRelations(ctx context.Context, queryer cypherQueryer, graphI
 
 	relations := make([]model.Relation, 0, limit)
 	for rows.Next() {
-		var raw string
-		if err := rows.Scan(&raw); err != nil {
+		var raw, rawSource, rawTarget string
+		if err := rows.Scan(&raw, &rawSource, &rawTarget); err != nil {
 			return nil, "", fmt.Errorf("관계 목록 행 해석: %w", err)
 		}
-		relation, err := parseRelation(raw, graphID)
+		relation, err := parseStoredRelation(raw, rawSource, rawTarget, graphID)
 		if err != nil {
 			return nil, "", err
 		}
@@ -635,7 +585,7 @@ func (s *Store) createRelation(ctx context.Context, tx pgx.Tx, graphID model.ID,
 		" AND from.graph_id = " + cypherString(graphID.String()) +
 		" AND to.context_id = " + cypherString(relation.ToContextID.String()) +
 		" AND to.graph_id = " + cypherString(graphID.String()) +
-		" CREATE (from)-[edge:" + label + " " + properties + "]->(to) RETURN edge"
+		" CREATE (from)-[edge:" + label + " " + properties + "]->(to) RETURN edge, startNode(edge), endNode(edge)"
 	stored, err := s.relationFromCypher(ctx, tx, graphID, query)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("사건 관계 생성: %w", err)
@@ -649,7 +599,7 @@ func (s *Store) updateRelation(ctx context.Context, tx pgx.Tx, graphID model.ID,
 		return model.Relation{}, err
 	}
 	query := "MATCH ()-[edge]->() WHERE edge.relation_id = " + cypherString(relation.ID.String()) +
-		" AND edge.graph_id = " + cypherString(graphID.String()) + " SET edge = " + properties + " RETURN edge"
+		" AND edge.graph_id = " + cypherString(graphID.String()) + " SET edge = " + properties + " RETURN edge, startNode(edge), endNode(edge)"
 	stored, err := s.relationFromCypher(ctx, tx, graphID, query)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("사건 관계 갱신: %w", err)
@@ -659,7 +609,7 @@ func (s *Store) updateRelation(ctx context.Context, tx pgx.Tx, graphID model.ID,
 
 func (s *Store) relationByID(ctx context.Context, queryer cypherQueryer, graphID, relationID model.ID) (model.Relation, error) {
 	query := "MATCH ()-[edge]->() WHERE edge.relation_id = " + cypherString(relationID.String()) +
-		" AND edge.graph_id = " + cypherString(graphID.String()) + " RETURN edge"
+		" AND edge.graph_id = " + cypherString(graphID.String()) + " RETURN edge, startNode(edge), endNode(edge)"
 	stored, err := s.relationFromCypher(ctx, queryer, graphID, query)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Relation{}, ErrNotFound
@@ -671,7 +621,7 @@ func (s *Store) relationByIdentity(ctx context.Context, queryer cypherQueryer, g
 	query := "MATCH ()-[edge]->() WHERE edge.graph_id = " + cypherString(graphID.String()) +
 		" AND edge.relation_type = " + cypherString(string(relationType)) +
 		" AND edge.from_context_id = " + cypherString(fromID.String()) +
-		" AND edge.to_context_id = " + cypherString(toID.String()) + " RETURN edge"
+		" AND edge.to_context_id = " + cypherString(toID.String()) + " RETURN edge, startNode(edge), endNode(edge)"
 	stored, err := s.relationFromCypher(ctx, queryer, graphID, query)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Relation{}, ErrNotFound
@@ -796,11 +746,11 @@ func joinRelationValues(values []string) string {
 
 // relationFromCypher는 사건 관계 간선을 받는 모든 AGE 질의의 응답 조립 지점이다.
 func (s *Store) relationFromCypher(ctx context.Context, queryer cypherQueryer, graphID model.ID, query string) (model.Relation, error) {
-	var raw string
-	if err := queryer.QueryRow(ctx, s.cypherSQL(query, "edge agtype"), pgx.QueryExecModeExec).Scan(&raw); err != nil {
+	var raw, rawSource, rawTarget string
+	if err := queryer.QueryRow(ctx, s.cypherSQL(query, "edge agtype, source agtype, target agtype"), pgx.QueryExecModeExec).Scan(&raw, &rawSource, &rawTarget); err != nil {
 		return model.Relation{}, storageError("relation_query", connectionError(ctx, "AGE 조회", err))
 	}
-	return parseRelation(raw, graphID)
+	return parseStoredRelation(raw, rawSource, rawTarget, graphID)
 }
 
 // relationLabel은 모델의 관계 유형을 AGE edge label로 고정 변환한다.

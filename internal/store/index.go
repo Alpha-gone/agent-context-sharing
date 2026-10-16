@@ -120,66 +120,74 @@ func (s *Store) CheckGraphIndexReady(ctx context.Context, graphID model.ID, mode
 	return nil
 }
 
-// processNextIndexTask는 확보 범위만 다른 두 진입점의 공통 구현이다. scope가 비어
-// 있으면 그래프를 가리지 않는다.
-func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, processor IndexTaskProcessor) (IndexProcessResult, error) {
-	if processor == nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 처리기가 없다")
-	}
+// claimIndexTask는 리스를 커밋하고 연결을 반환한다. 제공자 호출은 이 함수 밖에서 한다.
+func (s *Store) claimIndexTask(ctx context.Context, scope model.ID) (task IndexTask, claim indexTaskClaim, found bool, err error) {
 	scopeValue := any(nil)
 	if scope.IsV7() {
 		scopeValue = scope.String()
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 트랜잭션 시작: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 작업 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "claimIndexTask", &err)
 
 	var rawID, rawContextID, rawGraphID, correlationID string
 	var attempts int
-	var claim indexTaskClaim
 	err = tx.QueryRow(ctx, `
 		SELECT task_id::text, context_id::text, graph_id::text, attempts, COALESCE(correlation_id, ''), enqueued_at
 		FROM public.index_task
-		WHERE state = 'pending' AND next_attempt_at <= now()
+		WHERE state = 'pending' AND next_attempt_at <= statement_timestamp()
 		  AND ($1::uuid IS NULL OR graph_id = $1::uuid)
 		ORDER BY enqueued_at, task_id
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED`, scopeValue).Scan(&rawID, &rawContextID, &rawGraphID, &attempts, &correlationID, &claim.enqueuedAt)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return IndexProcessResult{}, tx.Commit(ctx)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return IndexTask{}, indexTaskClaim{}, false, tx.Commit(ctx)
 		}
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 확보: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 작업 확보: %w", err)
 	}
 	taskID, err := model.ParseID(rawID)
 	if err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 식별자 해석: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 작업 식별자 해석: %w", err)
 	}
 	contextID, err := model.ParseID(rawContextID)
 	if err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 대상 식별자 해석: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 대상 식별자 해석: %w", err)
 	}
 	graphID, err := model.ParseID(rawGraphID)
 	if err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 그래프 식별자 해석: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 그래프 식별자 해석: %w", err)
 	}
-	task := IndexTask{ID: taskID, ContextID: contextID, GraphID: graphID, Attempts: attempts, CorrelationID: correlationID}
+	task = IndexTask{ID: taskID, ContextID: contextID, GraphID: graphID, Attempts: attempts, CorrelationID: correlationID}
 	// 확보를 커밋하면서 대기 시각을 미뤄 다른 작업자가 같은 작업을 집지 않게 한다.
-	// 데이터베이스가 저장한 정밀도의 시각을 받아 결과 대조에 그대로 사용한다.
-	if err := tx.QueryRow(ctx, `UPDATE public.index_task SET next_attempt_at = $2 WHERE task_id = $1
-		RETURNING next_attempt_at`, rawID, time.Now().UTC().Add(indexTaskLease)).Scan(&claim.leasedUntil); err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 확보 표시: %w", err)
+	// 등록·만료 판정과 같은 DB 시계를 사용해 작업자 호스트의 시계 차이를 배제하고,
+	// 데이터베이스가 저장한 정밀도의 시각을 결과 대조에 그대로 사용한다.
+	if err := tx.QueryRow(ctx, `UPDATE public.index_task SET next_attempt_at = statement_timestamp() + $2::bigint * interval '1 second' WHERE task_id = $1
+		RETURNING next_attempt_at`, rawID, int64(indexTaskLease/time.Second)).Scan(&claim.leasedUntil); err != nil {
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 작업 확보 표시: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 확보 커밋: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 작업 확보 커밋: %w", err)
 	}
-	value, err := s.context(ctx, s.pool, graphID, contextID)
+	return task, claim, true, nil
+}
+
+// processNextIndexTask는 전체·그래프 한정 확보의 공통 처리 경로다.
+func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, processor IndexTaskProcessor) (IndexProcessResult, error) {
+	if processor == nil {
+		return IndexProcessResult{}, fmt.Errorf("색인 작업 처리기가 없다")
+	}
+	task, claim, found, err := s.claimIndexTask(ctx, scope)
+	if err != nil || !found {
+		return IndexProcessResult{}, err
+	}
+	value, err := s.context(ctx, s.pool, task.GraphID, task.ContextID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			_, deleteErr := s.pool.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1
-				AND enqueued_at = $2 AND next_attempt_at = $3 AND state = 'pending'`, rawID, claim.enqueuedAt, claim.leasedUntil)
+				AND enqueued_at = $2 AND next_attempt_at = $3 AND state = 'pending'`, task.ID.String(), claim.enqueuedAt, claim.leasedUntil)
 			return IndexProcessResult{Found: true, Task: task}, deleteErr
 		}
 		return s.failIndexTask(ctx, task, claim, "색인 대상 조회 실패", true, err)

@@ -133,7 +133,7 @@ func indexPlacementDatabase(t *testing.T, count int) (*pgx.Conn, string) {
 	}
 	defer pool.Close()
 	cfg := migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: 128, IndexTargetLayers: "all_layers"}
-	for _, want := range []int{4, 0} {
+	for _, want := range []int{5, 0} {
 		appliedCount := 0
 		err := migrate.WithLock(t.Context(), pool, func(ctx context.Context, conn *pgxpool.Conn) error {
 			loaded, applied, err := migrate.Prepare(ctx, conn, migrations.FS, ".", cfg)

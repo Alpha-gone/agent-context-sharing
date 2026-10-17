@@ -98,15 +98,34 @@ func Prepare(ctx context.Context, db database, fsys fs.FS, dir string, cfg Confi
 		return nil, nil, err
 	}
 	// 모든 파일이 검증된 뒤에만 당시 구성을 기록한다. checksum·적용 시각은 바꾸지 않는다.
+	if err := recordConfigurations(ctx, db, missing, applied); err != nil {
+		return nil, nil, err
+	}
+	return loaded, applied, nil
+}
+
+// 여러 구형 이력 중 하나라도 기록에 실패하면 보충한 구성 전체를 되돌린다.
+func recordConfigurations(ctx context.Context, db database, missing []int, applied map[int]Applied) (err error) {
+	if len(missing) == 0 {
+		return nil
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("이력 구성 트랜잭션 시작: %w", err)
+	}
+	defer rollbackMigration(ctx, tx, &err)
 	for _, version := range missing {
 		encoded, err := json.Marshal(applied[version].Config)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
-		if _, err := db.Exec(ctx, `UPDATE public.schema_migration SET render_config=$2::jsonb
+		if _, err := tx.Exec(ctx, `UPDATE public.schema_migration SET render_config=$2::jsonb
 			WHERE version=$1 AND render_config IS NULL`, version, string(encoded)); err != nil {
-			return nil, nil, fmt.Errorf("이력 치환 구성 보존: %w", err)
+			return fmt.Errorf("이력 치환 구성 보존: %w", err)
 		}
 	}
-	return loaded, applied, nil
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("이력 구성 커밋: %w", err)
+	}
+	return nil
 }

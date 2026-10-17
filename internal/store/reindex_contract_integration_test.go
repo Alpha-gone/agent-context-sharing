@@ -276,11 +276,11 @@ func TestReindexShapeTransitionIntegration(t *testing.T) {
 				if err := database.pool.QueryRow(t.Context(), originalSQL).Scan(&originals); err != nil {
 					t.Fatal(err)
 				}
-				data, err := os.ReadFile("../migrate/testdata/007_embedding_dimensions.sql")
+				data, err := os.ReadFile("../../migrations/012_embedding_configuration.sql")
 				if err != nil {
 					t.Fatal(err)
 				}
-				files := fstest.MapFS{"012_idx07_transition.sql": {Data: data}}
+				files := fstest.MapFS{"013_data09_transition.sql": {Data: data}}
 				target := migrate.Config{GraphName: "agent_context", VectorType: cfg.to, VectorDim: cfg.dimension, IndexTargetLayers: string(targets)}
 				loaded, err := migrate.Load(files, ".", target)
 				if err != nil {

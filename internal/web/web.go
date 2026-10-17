@@ -813,8 +813,10 @@ func (server *Server) requireGrade(writer http.ResponseWriter, request *http.Req
 	if err := perm.Require(request.Context(), server.graphs, graphID, accountID, required); err != nil {
 		if _, found := errors.AsType[perm.NotFoundError](err); found {
 			server.render(writer, http.StatusNotFound, "message", pageData{Title: "그래프", Error: "그래프를 찾을 수 없습니다."})
-		} else {
+		} else if _, found := errors.AsType[perm.DeniedError](err); found {
 			server.render(writer, http.StatusForbidden, "message", pageData{Title: "접근 제한", Error: "이 화면에 접근할 권한이 없습니다."})
+		} else {
+			server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "그래프", Error: "등급을 확인할 수 없습니다."})
 		}
 		return model.ID{}, false
 	}

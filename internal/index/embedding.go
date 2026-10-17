@@ -10,7 +10,9 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -19,7 +21,7 @@ func (cfg Config) Validate() error {
 	if err := cfg.ValidateMetadata(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" || strings.ContainsAny(cfg.APIKey, "\r\n") {
+	if strings.TrimSpace(cfg.APIKey) == "" || strings.ContainsFunc(cfg.APIKey, unicode.IsControl) {
 		return fmt.Errorf("Gemini 임베딩의 API 키 구성이 올바르지 않다")
 	}
 	return nil
@@ -33,6 +35,15 @@ func (cfg Config) ValidateMetadata() error {
 	}
 	if strings.TrimSpace(cfg.Model) == "" || (cfg.VectorType != "vector" && cfg.VectorType != "halfvec") || cfg.Dimension < 1 || (cfg.VectorType == "vector" && cfg.Dimension > 2000) || (cfg.VectorType == "halfvec" && cfg.Dimension > 4000) {
 		return fmt.Errorf("임베딩 모델·저장 타입·차원이 올바르지 않다")
+	}
+	if cfg.BaseURL.Hostname() == "" || strings.HasSuffix(cfg.BaseURL.Host, ":") {
+		return fmt.Errorf("임베딩 제공자 host·포트가 올바르지 않다")
+	}
+	if port := cfg.BaseURL.Port(); port != "" {
+		value, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || value == 0 {
+			return fmt.Errorf("임베딩 제공자 포트가 올바르지 않다")
+		}
 	}
 	if cfg.Provider != "gemini" {
 		return fmt.Errorf("임베딩 제공자는 gemini로 명시해야 한다")
@@ -104,42 +115,39 @@ func (worker *Worker) embed(ctx context.Context, input string, document bool) ([
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, ProviderError{Reason: fmt.Sprintf("임베딩 제공자 상태: %d", response.StatusCode), Retryable: response.StatusCode == 408 || response.StatusCode == 429 || response.StatusCode >= 500}
+		return nil, ProviderError{Reason: fmt.Sprintf("임베딩 제공자 상태: %d", response.StatusCode), Retryable: response.StatusCode == 408 || response.StatusCode == 429 || (response.StatusCode >= 500 && response.StatusCode < 600)}
 	}
-	limited := &io.LimitedReader{R: response.Body, N: maxEmbeddingResponseBytes + 1}
-	var decoded struct {
-		Embedding struct {
-			Values []float64 `json:"values"`
-		} `json:"embedding"`
-	}
-	if err := json.UnmarshalRead(limited, &decoded); err != nil {
-		if limited.N <= 0 {
-			return nil, ProviderError{Reason: "임베딩 응답이 크기 상한을 넘었다"}
-		}
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("임베딩 응답 취소: %w", ctx.Err())
-		}
-		if network, ok := errors.AsType[net.Error](err); ok && network.Timeout() {
-			return nil, fmt.Errorf("임베딩 응답 시간 초과: %w", context.DeadlineExceeded)
-		}
-		if errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, ProviderError{Reason: "임베딩 응답 전송이 중단됐다", Retryable: true}
-		}
-		return nil, ProviderError{Reason: "임베딩 응답 해석 실패"}
-	}
-	if limited.N <= 0 {
+	// 전송 실패와 완전히 수신한 JSON의 계약 위반을 분리한다.
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxEmbeddingResponseBytes+1))
+	if len(raw) > maxEmbeddingResponseBytes {
 		return nil, ProviderError{Reason: "임베딩 응답이 크기 상한을 넘었다"}
 	}
-	embedding := decoded.Embedding.Values
-	if len(embedding) != worker.config.Dimension {
-		return nil, DimensionError{Got: len(embedding), Want: worker.config.Dimension}
+	if err != nil {
+		return nil, safeTransportError(ctx, err)
 	}
+	var decoded struct {
+		Embedding struct {
+			Values []*float64 `json:"values"`
+		} `json:"embedding"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, ProviderError{Reason: "임베딩 응답 해석 실패"}
+	}
+	if len(decoded.Embedding.Values) != worker.config.Dimension {
+		return nil, DimensionError{Got: len(decoded.Embedding.Values), Want: worker.config.Dimension}
+	}
+	embedding := make([]float64, worker.config.Dimension)
 	nonzero := false
-	for _, value := range embedding {
+	for i, number := range decoded.Embedding.Values {
+		if number == nil {
+			return nil, ProviderError{Reason: "임베딩 응답에 숫자가 아닌 값이 있다"}
+		}
+		value := *number
 		if math.IsNaN(value) || math.IsInf(value, 0) {
 			return nil, ProviderError{Reason: "임베딩 응답에 유한하지 않은 값이 있다"}
 		}
 		nonzero = nonzero || value != 0
+		embedding[i] = value
 	}
 	if !nonzero {
 		return nil, ProviderError{Reason: "임베딩 응답이 영벡터다"}

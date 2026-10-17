@@ -15,6 +15,10 @@ func TestAuditEmbeddingProvider(t *testing.T) {
 		{"Gemini 모델 오류", "gemini", "https://generativelanguage.googleapis.com", "other-model", ""},
 		{"Gemini 평문 주소", "gemini", "http://service.test", "gemini-embedding-2", ""},
 		{"주소 생략", "gemini", "", "gemini-embedding-2", ""},
+		{"빈 host", "gemini", "https://:443", "gemini-embedding-2", ""},
+		{"빈 포트", "gemini", "https://service.test:", "gemini-embedding-2", ""},
+		{"포트 0", "gemini", "https://service.test:0", "gemini-embedding-2", ""},
+		{"포트 초과", "gemini", "https://service.test:65536", "gemini-embedding-2", ""},
 		{"잘못된 비밀 URL", "gemini", "https://%synthetic-secret", "gemini-embedding-2", ""},
 		{"URL 비밀 포함", "gemini", "https://service.test?key=synthetic-secret", "gemini-embedding-2", ""},
 	} {

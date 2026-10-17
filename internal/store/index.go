@@ -13,6 +13,7 @@ import (
 
 	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const maxIndexAttempts = 5
@@ -207,6 +208,11 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 	}
 	stored, err := s.storeIndexResult(ctx, task, claim, result)
 	if err != nil {
+		// pgvector의 차원·수치·형식 위반은 SQLSTATE 22(data exception)다.
+		// 오류 원문을 판별하거나 저장하지 않고 데이터 계약 위반을 즉시 실패시킨다.
+		if cause, ok := errors.AsType[*pgconn.PgError](err); ok && strings.HasPrefix(cause.Code, "22") {
+			return s.failIndexTask(ctx, task, claim, "임베딩 차원·수치·형식의 저장 계약 위반", false, err)
+		}
 		return s.failIndexTask(ctx, task, claim, "색인 결과 저장 실패", true, err)
 	}
 	return IndexProcessResult{Found: true, Succeeded: stored, Task: task}, nil

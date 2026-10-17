@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,6 +26,12 @@ func TestIndexRetryBudgetIntegration(t *testing.T) {
 			claimExec(t, database, `INSERT INTO public.context_embedding
 				(context_id,graph_id,embedding,model_id,indexed_at,last_accessed_at,storage_tier)
 				VALUES ($1,$2,$3,'previous',now(),now(),'hot')`, node.ID.String(), graph.String(), vectorText(vector))
+			if fault == "storage" {
+				claimExec(t, database, `CREATE FUNCTION public.retry_storage_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+					BEGIN RAISE EXCEPTION 'synthetic storage fault' USING ERRCODE='40001'; END $$;
+					CREATE TRIGGER retry_storage_fault BEFORE INSERT ON public.context_embedding
+					FOR EACH ROW EXECUTE FUNCTION public.retry_storage_fault()`)
+			}
 			claimExec(t, database, `CREATE TABLE public.retry_clock_sample(marked_at timestamptz);
 				CREATE FUNCTION public.retry_clock_sample() RETURNS trigger LANGUAGE plpgsql AS $$
 				BEGIN INSERT INTO public.retry_clock_sample VALUES(statement_timestamp()); RETURN NEW; END $$;
@@ -43,13 +50,18 @@ func TestIndexRetryBudgetIntegration(t *testing.T) {
 				result, err := database.ProcessNextIndexTaskInGraph(t.Context(), graph, func(context.Context, IndexTask) IndexTaskResult {
 					calls++
 					if fault == "storage" {
-						return IndexTaskResult{Embedding: make([]float64, 9), ModelID: "new-model"}
+						return IndexTaskResult{Embedding: vector, ModelID: "new-model"}
 					}
 					return IndexTaskResult{Failure: fmt.Sprintf("synthetic transient %d", attempt), Retryable: true}
 				})
 				database.graphName = originalGraph
 				if !result.Found || result.Succeeded || (fault == "provider" && err != nil) || (fault != "provider" && err == nil) || (fault == "lookup" && calls != 0) || (fault != "lookup" && calls != 1) {
 					t.Fatalf("%s/%d result=%+v, calls=%d: %v", fault, attempt, result, calls, err)
+				}
+				if fault == "storage" {
+					if cause, ok := errors.AsType[*pgconn.PgError](err); !ok || cause.Code != "40001" {
+						t.Fatalf("일시 저장 장애 주입 실패: %v", err)
+					}
 				}
 				after := registrationTaskFor(t, database, node.ID)
 				state, delay := "pending", []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 0}[attempt-1]
@@ -113,29 +125,63 @@ func retryGraphTasks(t *testing.T, database *Store, graph model.ID) string {
 }
 
 func TestIndexPermanentFailureIntegration(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		result IndexTaskResult
-	}{
-		{"provider", IndexTaskResult{Failure: "permanent response contract"}},
-		{"empty_vector", IndexTaskResult{ModelID: "model"}},
-		{"missing_model", IndexTaskResult{Embedding: []float64{1}}},
-		{"blank_model", IndexTaskResult{Embedding: []float64{1}, ModelID: " \t\n"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			database, graph, nodes := newIndexClaimFixture(t, 1)
-			result, err := database.ProcessNextIndexTaskInGraph(t.Context(), graph, func(context.Context, IndexTask) IndexTaskResult { return test.result })
-			if !result.Found || result.Succeeded || (test.name == "provider" && err != nil) || (test.name != "provider" && err == nil) {
-				t.Fatalf("영구 실패=%+v: %v", result, err)
+	for _, typ := range []string{"vector", "halfvec"} {
+		t.Run(typ, func(t *testing.T) {
+			for _, test := range []struct {
+				name, code string
+				result     IndexTaskResult
+			}{
+				{"provider", "", IndexTaskResult{Failure: "permanent response contract"}},
+				{"empty_vector", "", IndexTaskResult{ModelID: "model"}},
+				{"missing_model", "", IndexTaskResult{Embedding: []float64{1}}},
+				{"blank_model", "", IndexTaskResult{Embedding: []float64{1}, ModelID: " \t\n"}},
+				{"dimension", "22000", IndexTaskResult{Embedding: []float64{1, 0, 0, 0, 0, 0, 0, 0, 0}, ModelID: "model"}},
+				{"nonfinite", "22000", IndexTaskResult{Embedding: []float64{math.Inf(1), 0, 0, 0, 0, 0, 0, 0}, ModelID: "model"}},
+				{"numeric_range", "22003", IndexTaskResult{Embedding: []float64{1e100, 0, 0, 0, 0, 0, 0, 0}, ModelID: "model"}},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					database := newEmbeddingContractStore(t, typ, 8)
+					actor := newTestIDWithAccount(t, database)
+					graph := createTestGraph(t, database, actor)
+					node, err := database.CreateContext(t.Context(), graph, testSourceContext(t, graph, actor, "api://permanent/"+graph.String()), nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					claimExec(t, database, `INSERT INTO public.context_embedding
+						(context_id,graph_id,embedding,model_id,indexed_at,last_accessed_at,storage_tier)
+						VALUES ($1,$2,'[1,0,0,0,0,0,0,0]','previous',now(),now(),'cold')`, node.ID.String(), graph.String())
+					before := embeddingStateFingerprint(t, database, graph)
+					result, err := database.ProcessNextIndexTaskInGraph(t.Context(), graph, func(context.Context, IndexTask) IndexTaskResult { return test.result })
+					if !result.Found || result.Succeeded || (test.name == "provider" && err != nil) || (test.name != "provider" && err == nil) {
+						t.Fatalf("영구 실패=%+v: %v", result, err)
+					}
+					if test.code != "" {
+						if cause, ok := errors.AsType[*pgconn.PgError](err); !ok || cause.Code != test.code {
+							t.Fatalf("저장 계약 위반 원인=%v, want SQLSTATE %s", err, test.code)
+						}
+					}
+					after := registrationTaskFor(t, database, node.ID)
+					if after.attempts != 1 || after.state != "failed" || after.lastError == nil || *after.lastError == "" {
+						t.Fatalf("즉시 failed=%+v", after)
+					}
+					if test.code != "" && *after.lastError != "임베딩 차원·수치·형식의 저장 계약 위반" {
+						t.Fatalf("안전한 저장 실패 사유=%q", *after.lastError)
+					}
+					if embeddingStateFingerprint(t, database, graph) != before {
+						t.Fatal("영구 실패가 기존 벡터·모델·계층·내용 판을 바꿨다")
+					}
+					if skipped, err := database.ProcessNextIndexTaskInGraph(t.Context(), graph, func(context.Context, IndexTask) IndexTaskResult {
+						t.Fatal("영구 실패를 다시 호출했다")
+						return IndexTaskResult{}
+					}); err != nil || skipped.Found {
+						t.Fatalf("failed 건너뛰기=%+v: %v", skipped, err)
+					}
+					if err := database.CheckGraphIndexReady(t.Context(), graph, "model"); err == nil || !strings.Contains(err.Error(), "failed=1") {
+						t.Fatalf("실패 집계=%v", err)
+					}
+					assertConnectionRecovery(t, database, nil, 0)
+				})
 			}
-			after := registrationTaskFor(t, database, nodes[0].ID)
-			if after.attempts != 1 || after.state != "failed" || after.lastError == nil || *after.lastError == "" {
-				t.Fatalf("즉시 failed=%+v", after)
-			}
-			if err := database.CheckGraphIndexReady(t.Context(), graph, "model"); err == nil || !strings.Contains(err.Error(), "failed=1") {
-				t.Fatalf("실패 집계=%v", err)
-			}
-			assertConnectionRecovery(t, database, nil, 0)
 		})
 	}
 }

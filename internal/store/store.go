@@ -107,6 +107,22 @@ type WriteLimits struct {
 	ActorID model.ID
 }
 
+func (limits WriteLimits) validate() error {
+	for _, limit := range []struct {
+		name  string
+		value int64
+	}{
+		{"stored_characters_per_graph", limits.StoredCharsPerGraph},
+		{"graphs_per_account", limits.GraphsPerAccount},
+		{"writes_per_minute", limits.WritesPerMinute},
+	} {
+		if limit.value < 0 {
+			return model.FieldError{Field: limit.name, Message: "쓰기 한도는 음수일 수 없다"}
+		}
+	}
+	return nil
+}
+
 // RelationProposalConfig는 사건 관계 후보 제안에 쓰는 검증된 배포 구성이다.
 type RelationProposalConfig struct {
 	// AdjacencyWindow는 precedes 후보로 허용할 두 사건 사이 최대 간격이다.

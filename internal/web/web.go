@@ -354,7 +354,12 @@ func (server *Server) graphList(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	limits := server.config.Plans.For(accountID)
-	graphs, cursor, err := server.graphs.ListGraphs(request.Context(), accountID, filter, request.URL.Query().Get("cursor"), limits.GraphPage.Default)
+	pageSize, err := limits.GraphPage.Resolve("graph_page", nil)
+	if err != nil {
+		server.render(writer, http.StatusInternalServerError, "graphs", pageData{Title: "그래프", Error: "목록 한도를 적용할 수 없습니다."})
+		return
+	}
+	graphs, cursor, err := server.graphs.ListGraphs(request.Context(), accountID, filter, request.URL.Query().Get("cursor"), pageSize)
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "graphs", pageData{Title: "그래프", Error: "그래프 목록을 읽을 수 없습니다."})
 		return
@@ -394,7 +399,12 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 		// 플랜의 0은 한도 없음이지만 홉 조회의 0은 시작점만 반환한다.
 		depth = math.MaxInt
 	}
-	hops, err := server.graphs.GraphVisualization(request.Context(), graphID, depth, limits.MaxHopNodes)
+	maxNodes, err := limits.CheckHop(depth)
+	if err != nil {
+		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "그래프", Error: "조회 한도를 적용할 수 없습니다."})
+		return
+	}
+	hops, err := server.graphs.GraphVisualization(request.Context(), graphID, depth, maxNodes)
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "그래프", Error: "시각화 데이터를 읽을 수 없습니다."})
 		return
@@ -641,7 +651,11 @@ func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Re
 				return
 			}
 			if _, err := server.graphs.SetContextDeleted(request.Context(), graphID, contextID, accountID, action == "delete_context", server.config.Plans.For(accountID).StoredCharactersPerGraph); err != nil {
-				server.render(writer, http.StatusConflict, "message", pageData{Title: "삭제와 복구", Error: "현재 상태에서는 처리할 수 없습니다."})
+				message := "현재 상태에서는 처리할 수 없습니다."
+				if limit, ok := errors.AsType[plan.LimitError](err); ok && limit.Name == "stored_characters_per_graph" {
+					message = fmt.Sprintf("그래프 저장량 한도를 초과합니다. 현재 %d자, 허용 %d자입니다.", limit.Current, limit.Allowed)
+				}
+				server.render(writer, http.StatusConflict, "message", pageData{Title: "삭제와 복구", Error: message})
 				return
 			}
 			http.Redirect(writer, request, "/graphs/"+graphID.String()+"/deletion", http.StatusSeeOther)

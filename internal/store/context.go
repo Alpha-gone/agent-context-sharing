@@ -36,7 +36,8 @@ func (s *Store) CreateContextWithOperation(ctx context.Context, graphID model.ID
 		s.proposeEventRelationsAfterSave(ctx, graphID, created)
 		return created, nil
 	}
-	if value.Layer != model.LayerSource || !isUniqueViolation(err) {
+	duplicate, ok := errors.AsType[*pgconn.PgError](err)
+	if value.Layer != model.LayerSource || !ok || duplicate.Code != "23505" || duplicate.ConstraintName != "context_source_ref_idx" || duplicate.SchemaName != s.graphName {
 		return model.Context{}, err
 	}
 	// 동시 요청이 부분 유일 인덱스에 먼저 도달한 경우에는 새 트랜잭션으로 기존 원천을 읽는다.
@@ -490,6 +491,18 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	if err := limits.validateContextWrite(); err != nil {
 		return model.Context{}, err
 	}
+	if operation != nil {
+		kind := OperationAdd
+		if supersededID.IsV7() {
+			kind = OperationSupersede
+		}
+		if operation.Kind != kind || operation.GraphID != graphID || operation.ContextID != value.ID || !operation.RelationID.IsZero() {
+			return model.Context{}, model.FieldError{Field: "context_id", Message: "생성 대상과 적용 기록의 그래프·대상·연산 종류가 일치해야 한다"}
+		}
+		if operation.AccountID != value.CreatedBy || operation.AgentID != value.CreatedByAgent {
+			return model.Context{}, model.FieldError{Field: "created_by_agent", Message: "기여 주체와 검증된 적용 기록의 실행 주체가 일치해야 한다"}
+		}
+	}
 	release, err := s.reserveContextWriteConnections(ctx)
 	if err != nil {
 		return model.Context{}, err
@@ -500,10 +513,16 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 		return model.Context{}, fmt.Errorf("컨텍스트 생성 트랜잭션 시작: %w", err)
 	}
 	defer finishWrite(ctx, tx, "createContext", &err)
+	if err := requireAccount(ctx, tx, value.CreatedBy); err != nil {
+		return model.Context{}, err
+	}
 
 	if value.Layer == model.LayerSource {
 		existing, err := s.findSourceWith(ctx, tx, graphID, value.Source.Reference.Locator)
 		if err == nil {
+			if err := requireActiveGraph(ctx, tx, graphID); err != nil {
+				return model.Context{}, err
+			}
 			return existing, nil
 		}
 		if !errors.Is(err, ErrNotFound) {
@@ -666,6 +685,12 @@ func validateContextInput(graphID model.ID, value model.Context, derivedFrom []m
 	}
 	if value.DeletedAt != nil {
 		return model.FieldError{Field: "deleted_at", Message: "컨텍스트는 활성 상태로 생성해야 한다"}
+	}
+	if value.Version != 1 {
+		return model.FieldError{Field: "version", Message: "새 컨텍스트의 판 번호는 1이어야 한다"}
+	}
+	if value.Derived != nil && value.Derived.EvidenceInvalidated {
+		return model.FieldError{Field: "evidence_invalidated", Message: "새 파생의 근거 무효 표시는 시스템 전이가 관리한다"}
 	}
 	if value.Layer == model.LayerDerived && value.Derived != nil {
 		value.Derived = new(*value.Derived)
@@ -836,8 +861,23 @@ func (s *Store) contextFromCypher(ctx context.Context, queryer cypherQueryer, gr
 }
 
 // findSource는 원천 중복 재시도 경로가 새 트랜잭션에서 기존 정점을 읽게 한다.
-func (s *Store) findSource(ctx context.Context, graphID model.ID, locator string) (model.Context, error) {
-	return s.findSourceWith(ctx, s.pool, graphID, locator)
+func (s *Store) findSource(ctx context.Context, graphID model.ID, locator string) (result model.Context, err error) {
+	tx, err := s.writeTransaction(ctx)
+	if err != nil {
+		return model.Context{}, err
+	}
+	defer finishWrite(ctx, tx, "findSource", &err)
+	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
+		return model.Context{}, err
+	}
+	existing, err := s.findSourceWith(ctx, tx, graphID, locator)
+	if err != nil {
+		return model.Context{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.Context{}, fmt.Errorf("원천 중복 조회 커밋: %w", err)
+	}
+	return existing, nil
 }
 
 // findSourceWith는 같은 그래프와 locator를 모두 대조해 원천 중복을 찾는다.

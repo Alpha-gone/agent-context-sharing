@@ -198,12 +198,10 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 	result := processor(ctx, task)
 
 	if result.Failure != "" {
-		if err := s.storeIndexFailure(ctx, task, claim, result); err != nil {
-			return IndexProcessResult{}, err
-		}
-		return IndexProcessResult{Found: true, Task: task}, nil
+		err := s.storeIndexFailure(ctx, task, claim, result)
+		return IndexProcessResult{Found: true, Task: task}, err
 	}
-	if len(result.Embedding) == 0 || result.ModelID == "" {
+	if len(result.Embedding) == 0 || strings.TrimSpace(result.ModelID) == "" {
 		return s.failIndexTask(ctx, task, claim, "빈 임베딩 또는 모델 식별자", false,
 			fmt.Errorf("색인 처리기가 빈 임베딩 또는 모델 식별자를 반환했다"))
 	}
@@ -266,12 +264,12 @@ func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, claim inde
 }
 
 // storeIndexFailure는 제공자 실패를 작업 행에 기록한다.
-func (s *Store) storeIndexFailure(ctx context.Context, task IndexTask, claim indexTaskClaim, result IndexTaskResult) error {
+func (s *Store) storeIndexFailure(ctx context.Context, task IndexTask, claim indexTaskClaim, result IndexTaskResult) (err error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("색인 실패 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "storeIndexFailure", &err)
 	if err := s.recordIndexFailure(ctx, tx, task, claim, result); err != nil {
 		return err
 	}
@@ -284,16 +282,19 @@ func (s *Store) storeIndexFailure(ctx context.Context, task IndexTask, claim ind
 func (s *Store) recordIndexFailure(ctx context.Context, tx pgx.Tx, task IndexTask, claim indexTaskClaim, result IndexTaskResult) error {
 	attempts := task.Attempts + 1
 	state := "pending"
-	next := time.Now().UTC().Add(indexRetryDelay(attempts))
+	delay := indexRetryDelay(attempts)
 	if !result.Retryable || attempts >= maxIndexAttempts {
 		state = "failed"
-		next = time.Now().UTC()
+		delay = 0
 	}
+	// 확보·기한 판정과 같은 DB 시계로 예약한다. 호스트 시계 차이 때문에
+	// 백오프가 사라지거나 과도하게 늘지 않게 한다.
 	if _, err := tx.Exec(ctx, `
 		UPDATE public.index_task
-		SET attempts = $2, state = $3, last_error = $4, next_attempt_at = $5
+		SET attempts = $2, state = $3, last_error = $4,
+		    next_attempt_at = statement_timestamp() + $5::bigint * interval '1 second'
 		WHERE task_id = $1 AND enqueued_at = $6 AND next_attempt_at = $7 AND state = 'pending'`,
-		task.ID.String(), attempts, state, result.Failure, next, claim.enqueuedAt, claim.leasedUntil); err != nil {
+		task.ID.String(), attempts, state, result.Failure, int64(delay/time.Second), claim.enqueuedAt, claim.leasedUntil); err != nil {
 		return fmt.Errorf("색인 작업 실패 기록: %w", err)
 	}
 	return nil
@@ -301,7 +302,7 @@ func (s *Store) recordIndexFailure(ctx context.Context, tx pgx.Tx, task IndexTas
 
 func indexRetryDelay(attempt int) time.Duration {
 	// 1, 2, 4, 8분으로 늘리고 마지막 다섯 번째 실패는 failed로 남긴다.
-	return time.Minute * time.Duration(1<<min(attempt-1, 3))
+	return time.Minute * time.Duration(1<<min(max(attempt, 1)-1, 3))
 }
 
 // CheckEmbeddingSchema는 기동 전에 벡터 열·양쪽 파티션·유일성·HNSW가 현재 구성과

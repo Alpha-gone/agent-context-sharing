@@ -19,12 +19,15 @@ func TestGeminiConfiguration(t *testing.T) {
 	}
 	for _, test := range []struct{ name, value string }{
 		{"GEMINI_API_KEY", ""}, {"GEMINI_API_KEY", "synthetic-key\nheader"},
+		{"GEMINI_API_KEY", "\nsynthetic-key"}, {"GEMINI_API_KEY", "synthetic-key\t"}, {"GEMINI_API_KEY", "synthetic-key\x00"},
 		{"EMBEDDING_PROVIDER", "unknown"}, {"EMBEDDING_PROVIDER", ""}, {"EMBEDDING_MODEL", "other-model"},
 		{"EMBEDDING_DIMENSION", "127"}, {"EMBEDDING_DIMENSION", "3072"},
 		{"EMBEDDING_BASE_URL", "http://service.test"},
 		{"EMBEDDING_BASE_URL", "https://service.test?key=synthetic-key"},
 		{"EMBEDDING_BASE_URL", "https://synthetic-key@service.test"},
 		{"EMBEDDING_BASE_URL", "https://%synthetic-key"},
+		{"EMBEDDING_BASE_URL", "https://:443"}, {"EMBEDDING_BASE_URL", "https://service.test:"},
+		{"EMBEDDING_BASE_URL", "https://service.test:0"}, {"EMBEDDING_BASE_URL", "https://service.test:65536"},
 	} {
 		t.Run(test.name+test.value, func(t *testing.T) {
 			old := values[test.name]

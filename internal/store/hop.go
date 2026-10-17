@@ -81,6 +81,20 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 	if err := ctx.Err(); err != nil {
 		return HopResult{}, err
 	}
+	if direction == "" {
+		direction = "both"
+	}
+	if !graphID.IsV7() || hops < 0 || limit < 0 || (direction != "in" && direction != "out" && direction != "both") {
+		return HopResult{}, fmt.Errorf("홉 탐색 인자가 올바르지 않다")
+	}
+	if _, err := traversalLabels(filter); err != nil {
+		return HopResult{}, err
+	}
+	for _, start := range starts {
+		if start.GraphID != graphID || !start.ID.IsV7() {
+			return HopResult{}, fmt.Errorf("홉 시작 정점의 그래프가 일치하지 않는다")
+		}
+	}
 	standalone := ctx.Value(readScopeKey{}) == nil && ctx.Value(readTxKey{}) == nil
 	ctx, release, err := s.enterHopReadScope(ctx)
 	if err != nil {
@@ -256,6 +270,10 @@ func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, context
 	if err != nil {
 		return 0, err
 	}
+	supersedes, err := s.edgeTargetsBySource(ctx, s.reader(ctx), graphID, "SUPERSEDES", list)
+	if err != nil {
+		return 0, err
+	}
 	rows := 0
 	for _, targets := range references {
 		rows += len(targets)
@@ -263,17 +281,15 @@ func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, context
 	for _, targets := range members {
 		rows += len(targets)
 	}
+	for _, targets := range supersedes {
+		rows += len(targets)
+	}
 	for index, value := range contexts {
-		switch value.Layer {
-		case model.LayerDerived:
-			if value.Derived != nil {
-				contexts[index].Derived.DerivedFrom = references[value.ID]
-			}
-		case model.LayerEvent:
-			if value.Event != nil {
-				contexts[index].Event.MemberIDs = members[value.ID]
-			}
+		value, err = assembleStoredContext(value, references[value.ID], members[value.ID], supersedes[value.ID])
+		if err != nil {
+			return 0, err
 		}
+		contexts[index] = value
 	}
 	return rows, nil
 }
@@ -340,17 +356,17 @@ func (s *Store) hopNeighbors(ctx context.Context, graphID model.ID, anchorIDs []
 	if label.confirmed {
 		query += " AND edge.state = 'confirmed'"
 	}
-	query += " RETURN " + anchor + ".context_id, " + neighbor + ", id(" + anchor + ") = id(startNode(edge))" +
+	query += " RETURN " + anchor + ".context_id, " + neighbor + ", id(" + anchor + ") = id(startNode(edge)), edge, " + endpointProjection(anchor) +
 		" ORDER BY " + anchor + ".context_id, " + neighbor + ".context_id"
-	rows, err := s.reader(ctx).Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype, forward agtype"), pgx.QueryExecModeExec)
+	rows, err := s.reader(ctx).Query(ctx, s.cypherSQL(query, "anchor agtype, node agtype, forward agtype, edge agtype, endpoint agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("홉 이웃 조회: %w", err)
 	}
 	defer rows.Close()
 	neighbors := make([]hopNeighbor, 0)
 	for rows.Next() {
-		var rawAnchor, raw, rawForward string
-		if err := rows.Scan(&rawAnchor, &raw, &rawForward); err != nil {
+		var rawAnchor, raw, rawForward, rawEdge, rawEndpoint string
+		if err := rows.Scan(&rawAnchor, &raw, &rawForward, &rawEdge, &rawEndpoint); err != nil {
 			return nil, fmt.Errorf("홉 이웃 행 해석: %w", err)
 		}
 		anchorID, err := parseAnchorID(rawAnchor)
@@ -368,6 +384,26 @@ func (s *Store) hopNeighbors(ctx context.Context, graphID model.ID, anchorIDs []
 		fromID, toID := anchorID, value.ID
 		if !forward {
 			fromID, toID = value.ID, anchorID
+		}
+		sourceRaw, targetRaw := rawEndpoint, raw
+		if !forward {
+			sourceRaw, targetRaw = raw, rawEndpoint
+		}
+		source, target, err := parseStoredEndpoints(rawEdge, sourceRaw, targetRaw, graphID)
+		if err != nil {
+			return nil, err
+		}
+		if source.ID != fromID || target.ID != toID {
+			return nil, storageError("hop_endpoints", ErrInvariantViolation)
+		}
+		if label.confirmed {
+			relation, err := parseRelation(rawEdge, graphID)
+			if err != nil {
+				return nil, err
+			}
+			if relation.FromContextID != fromID || relation.ToContextID != toID {
+				return nil, storageError("hop_relation_identity", ErrInvariantViolation)
+			}
 		}
 		neighbors = append(neighbors, hopNeighbor{context: value, fromID: fromID, toID: toID})
 	}

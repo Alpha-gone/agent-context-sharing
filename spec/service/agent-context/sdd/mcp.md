@@ -34,6 +34,21 @@
 
 표준 도구 annotations의 읽기·변경 특성과 각 입력 `description`에 필수 조건, 예외, 등록·멱등성·재조회 규칙을 넣는다. JSON에는 주석 문법을 넣지 않으며 #131의 스키마 설명 보강과 연결한다. `instructions`는 등록 후 도구 사용, 그래프 선택, 결과 불명확 시 재조회와 반복 인가 금지를 안내하되 서버의 검증을 대체하지 않는다.
 
+### 등록 저장 열
+
+`agent_registration`은 아래 열을 사용한다. 선택 열 이외에는 `NOT NULL`이며 시각은 UTC로 입출력한다. OAuth grant와 수명이 다르므로 계열 폐기·만료로 등록이나 과거 기여 식별자를 삭제하지 않는다.
+
+| 열 | SQL 타입·NULL | 키·검증 |
+|---|---|---|
+| `agent_id` | `uuid`, PK | 서버 발급 UUIDv7. 판 검증은 모델·저장소 |
+| `account_id` | `uuid` | 검증한 등록 계정. 저장소가 계정 존재를 확인 |
+| `client_id` | `text` | 접근 토큰에서 검증한 사전 등록 client |
+| `registration_key` | `text` | 16~128자 ASCII `[A-Za-z0-9_-]` CHECK |
+| `created_at` | `timestamptz` | 최초 등록 시각, 재등록으로 변경하지 않음 |
+| `revoked_at` | `timestamptz`, 선택 | 본인 관리 폐기 시각. NULL이면 활성 |
+
+UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용한다. 활성 행만의 부분 UNIQUE로 만들면 폐기 키를 새 활성 ID로 암묵 복구할 수 있으므로 사용하지 않는다. 계정·client별 목록과 활성 128개 한도 판정에는 `(account_id, client_id, created_at, agent_id)`와 `account_id WHERE revoked_at IS NULL` 인덱스를 둔다. 상한은 CHECK로 세지 않고 계정 범위 잠금 아래 재검사하며, UUID 타입·유일 제약만으로 활성·계정/client 결합이 검증되었다고 간주하지 않는다.
+
 ## 요청 처리 순서
 
 MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 검증, Bearer 검증·현재 권한 검사·행위자 결합, 도메인 연산·멱등성 트랜잭션, 출력 격리 확인과 표준 결과 매핑 순으로 수행한다. HTTP 오류와 도메인 오류를 구분하고 내부 장애를 재인증 신호로 바꾸지 않는다. 세부 정본은 [표준 MCP 경계](mcp.md#표준-mcp-경계)·[공통 행위자·도구·쓰기 안전성](mcp.md#공통-행위자도구쓰기-안전성)이다.

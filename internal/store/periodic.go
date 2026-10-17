@@ -28,18 +28,27 @@ func (s *Store) WithTryAdvisoryLock(ctx context.Context, key int64, run func(con
 	defer release()
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
-		return 0, false, fmt.Errorf("주기 작업 잠금 연결 획득: %w", err)
+		return 0, false, connectionError(ctx, "주기 작업 잠금 연결 획득", err)
 	}
 	defer conn.Release()
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&acquired); err != nil {
-		return 0, false, fmt.Errorf("주기 작업 자문 잠금 시도: %w", err)
+		// 응답을 받지 못했어도 서버가 잠금을 얻었을 수 있으므로 세션을 폐기한다.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return 0, false, errors.Join(connectionError(ctx, "주기 작업 자문 잠금 시도", err), conn.Conn().Close(cleanup))
 	}
 	if !acquired {
 		return 0, false, nil
 	}
 	defer func() {
-		unlockCtx := context.WithoutCancel(ctx)
-		if _, unlockErr := conn.Exec(unlockCtx, `SELECT pg_advisory_unlock($1)`, key); unlockErr != nil {
+		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		var unlocked bool
+		unlockErr := conn.QueryRow(unlockCtx, `SELECT pg_advisory_unlock($1)`, key).Scan(&unlocked)
+		if unlockErr == nil && !unlocked {
+			unlockErr = fmt.Errorf("잠금 소유권을 확인할 수 없다")
+		}
+		if unlockErr != nil {
 			// 세션 잠금은 연결이 살아 있는 동안 남는다. 풀에 돌려주면 그 연결이 잠금을 쥔 채
 			// 재사용되어 다른 인스턴스가 이 작업을 계속 건너뛰므로, 연결을 닫아 풀이 폐기하게 한다.
 			closeErr := conn.Conn().Close(unlockCtx)
@@ -47,7 +56,7 @@ func (s *Store) WithTryAdvisoryLock(ctx context.Context, key int64, run func(con
 		}
 	}()
 	count, err = run(ctx)
-	return count, true, err
+	return count, true, connectionError(ctx, "주기 작업 실행", err)
 }
 
 // ExpireGrace는 유예 시작 시점에 고정한 만료 시각이 지난 활성 그래프를 자동 소프트 삭제한다.

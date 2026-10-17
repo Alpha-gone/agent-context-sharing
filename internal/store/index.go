@@ -120,66 +120,74 @@ func (s *Store) CheckGraphIndexReady(ctx context.Context, graphID model.ID, mode
 	return nil
 }
 
-// processNextIndexTask는 확보 범위만 다른 두 진입점의 공통 구현이다. scope가 비어
-// 있으면 그래프를 가리지 않는다.
-func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, processor IndexTaskProcessor) (IndexProcessResult, error) {
-	if processor == nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 처리기가 없다")
-	}
+// claimIndexTask는 리스를 커밋하고 연결을 반환한다. 제공자 호출은 이 함수 밖에서 한다.
+func (s *Store) claimIndexTask(ctx context.Context, scope model.ID) (task IndexTask, claim indexTaskClaim, found bool, err error) {
 	scopeValue := any(nil)
 	if scope.IsV7() {
 		scopeValue = scope.String()
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 트랜잭션 시작: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 작업 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "claimIndexTask", &err)
 
 	var rawID, rawContextID, rawGraphID, correlationID string
 	var attempts int
-	var claim indexTaskClaim
 	err = tx.QueryRow(ctx, `
 		SELECT task_id::text, context_id::text, graph_id::text, attempts, COALESCE(correlation_id, ''), enqueued_at
 		FROM public.index_task
-		WHERE state = 'pending' AND next_attempt_at <= now()
+		WHERE state = 'pending' AND next_attempt_at <= statement_timestamp()
 		  AND ($1::uuid IS NULL OR graph_id = $1::uuid)
 		ORDER BY enqueued_at, task_id
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED`, scopeValue).Scan(&rawID, &rawContextID, &rawGraphID, &attempts, &correlationID, &claim.enqueuedAt)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return IndexProcessResult{}, tx.Commit(ctx)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return IndexTask{}, indexTaskClaim{}, false, tx.Commit(ctx)
 		}
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 확보: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 작업 확보: %w", err)
 	}
 	taskID, err := model.ParseID(rawID)
 	if err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 식별자 해석: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 작업 식별자 해석: %w", err)
 	}
 	contextID, err := model.ParseID(rawContextID)
 	if err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 대상 식별자 해석: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 대상 식별자 해석: %w", err)
 	}
 	graphID, err := model.ParseID(rawGraphID)
 	if err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 그래프 식별자 해석: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 그래프 식별자 해석: %w", err)
 	}
-	task := IndexTask{ID: taskID, ContextID: contextID, GraphID: graphID, Attempts: attempts, CorrelationID: correlationID}
+	task = IndexTask{ID: taskID, ContextID: contextID, GraphID: graphID, Attempts: attempts, CorrelationID: correlationID}
 	// 확보를 커밋하면서 대기 시각을 미뤄 다른 작업자가 같은 작업을 집지 않게 한다.
-	// 데이터베이스가 저장한 정밀도의 시각을 받아 결과 대조에 그대로 사용한다.
-	if err := tx.QueryRow(ctx, `UPDATE public.index_task SET next_attempt_at = $2 WHERE task_id = $1
-		RETURNING next_attempt_at`, rawID, time.Now().UTC().Add(indexTaskLease)).Scan(&claim.leasedUntil); err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 확보 표시: %w", err)
+	// 등록·만료 판정과 같은 DB 시계를 사용해 작업자 호스트의 시계 차이를 배제하고,
+	// 데이터베이스가 저장한 정밀도의 시각을 결과 대조에 그대로 사용한다.
+	if err := tx.QueryRow(ctx, `UPDATE public.index_task SET next_attempt_at = statement_timestamp() + $2::bigint * interval '1 second' WHERE task_id = $1
+		RETURNING next_attempt_at`, rawID, int64(indexTaskLease/time.Second)).Scan(&claim.leasedUntil); err != nil {
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 작업 확보 표시: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return IndexProcessResult{}, fmt.Errorf("색인 작업 확보 커밋: %w", err)
+		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 작업 확보 커밋: %w", err)
 	}
-	value, err := s.context(ctx, s.pool, graphID, contextID)
+	return task, claim, true, nil
+}
+
+// processNextIndexTask는 전체·그래프 한정 확보의 공통 처리 경로다.
+func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, processor IndexTaskProcessor) (IndexProcessResult, error) {
+	if processor == nil {
+		return IndexProcessResult{}, fmt.Errorf("색인 작업 처리기가 없다")
+	}
+	task, claim, found, err := s.claimIndexTask(ctx, scope)
+	if err != nil || !found {
+		return IndexProcessResult{}, err
+	}
+	value, err := s.context(ctx, s.pool, task.GraphID, task.ContextID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			_, deleteErr := s.pool.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1
-				AND enqueued_at = $2 AND next_attempt_at = $3 AND state = 'pending'`, rawID, claim.enqueuedAt, claim.leasedUntil)
+				AND enqueued_at = $2 AND next_attempt_at = $3 AND state = 'pending'`, task.ID.String(), claim.enqueuedAt, claim.leasedUntil)
 			return IndexProcessResult{Found: true, Task: task}, deleteErr
 		}
 		return s.failIndexTask(ctx, task, claim, "색인 대상 조회 실패", true, err)
@@ -216,12 +224,12 @@ func (s *Store) failIndexTask(ctx context.Context, task IndexTask, claim indexTa
 //
 // 작업 삭제를 먼저 조건부로 수행해 재등록·재확보와 결과 공개를 직렬화한다.
 // 무효 확보분이면 임베딩을 건드리지 않고, 뒤의 저장이 실패하면 삭제도 롤백한다.
-func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, claim indexTaskClaim, result IndexTaskResult) (bool, error) {
+func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, claim indexTaskClaim, result IndexTaskResult) (stored bool, err error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return false, fmt.Errorf("색인 결과 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "storeIndexResult", &err)
 	deleted, err := tx.Exec(ctx, `DELETE FROM public.index_task
 		WHERE task_id = $1 AND enqueued_at = $2 AND next_attempt_at = $3 AND state = 'pending'`,
 		task.ID.String(), claim.enqueuedAt, claim.leasedUntil)
@@ -296,8 +304,13 @@ func indexRetryDelay(attempt int) time.Duration {
 	return time.Minute * time.Duration(1<<min(attempt-1, 3))
 }
 
-// CheckEmbeddingSchema는 기동 전에 벡터 열과 현재 배포 구성이 일치하는지 확인한다.
+// CheckEmbeddingSchema는 기동 전에 벡터 열·양쪽 파티션·유일성·HNSW가 현재 구성과
+// 일치하는지 확인한다. 인덱스가 손상되거나 파티션이 빠진 상태를 정상 기동으로 숨기지 않는다.
 func (s *Store) CheckEmbeddingSchema(ctx context.Context, vectorType string, dimension int) error {
+	if (vectorType != "vector" && vectorType != "halfvec") || dimension < 1 ||
+		(vectorType == "vector" && dimension > 2000) || (vectorType == "halfvec" && dimension > 4000) {
+		return fmt.Errorf("임베딩 구성은 HNSW를 지원하는 vector(1~2000) 또는 halfvec(1~4000)이어야 한다")
+	}
 	var actual string
 	if err := s.pool.QueryRow(ctx, `SELECT format_type(atttypid, atttypmod)
 		FROM pg_attribute WHERE attrelid = 'public.context_embedding'::regclass
@@ -306,6 +319,55 @@ func (s *Store) CheckEmbeddingSchema(ctx context.Context, vectorType string, dim
 	}
 	if actual != fmt.Sprintf("%s(%d)", vectorType, dimension) {
 		return fmt.Errorf("임베딩 DB 열 %s가 구성 %s(%d)와 다르다. 마이그레이션을 먼저 적용해야 한다", actual, vectorType, dimension)
+	}
+	var partitioned bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_partitioned_table p JOIN pg_class c ON c.oid=p.partrelid
+		WHERE p.partrelid='public.context_embedding'::regclass AND p.partstrat='l'
+		AND pg_get_partkeydef(c.oid)='LIST (storage_tier)' AND c.relpersistence='p'
+		AND (SELECT count(*) FROM pg_attribute a WHERE a.attrelid=c.oid AND NOT a.attisdropped
+			AND a.attnotnull AND a.attname IN ('context_id','graph_id','embedding','model_id','indexed_at','last_accessed_at','storage_tier'))=7
+	)`).Scan(&partitioned); err != nil {
+		return fmt.Errorf("임베딩 파티션 부모 확인: %w", err)
+	}
+	if !partitioned {
+		return fmt.Errorf("임베딩 부모의 영속 LIST 파티션·필수 열 구성이 다르다")
+	}
+	rows, err := s.pool.Query(ctx, `SELECT child.relname, pg_get_expr(child.relpartbound,child.oid),
+		format_type(embedding.atttypid,embedding.atttypmod), child.relpersistence='p',
+		EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid=child.oid AND i.indisunique
+			AND i.indisvalid AND i.indisready AND i.indnkeyatts=1 AND i.indkey[0]=context_id.attnum
+			AND i.indpred IS NULL),
+		EXISTS (SELECT 1 FROM pg_index i JOIN pg_class idx ON idx.oid=i.indexrelid
+			JOIN pg_am am ON am.oid=idx.relam JOIN pg_opclass op ON op.oid=i.indclass[0]
+			WHERE i.indrelid=child.oid AND i.indisvalid AND i.indisready AND i.indnkeyatts=1
+			AND i.indkey[0]=embedding.attnum AND i.indpred IS NULL AND am.amname='hnsw'
+			AND op.opcnamespace='public'::regnamespace AND op.opcname=$1)
+		FROM pg_inherits inh JOIN pg_class child ON child.oid=inh.inhrelid
+		JOIN pg_attribute embedding ON embedding.attrelid=child.oid AND embedding.attname='embedding' AND NOT embedding.attisdropped
+		JOIN pg_attribute context_id ON context_id.attrelid=child.oid AND context_id.attname='context_id' AND NOT context_id.attisdropped
+		WHERE inh.inhparent='public.context_embedding'::regclass`, vectorType+"_cosine_ops")
+	if err != nil {
+		return fmt.Errorf("임베딩 자식 파티션 확인: %w", err)
+	}
+	defer rows.Close()
+	partitions := map[string]string{"context_embedding_hot": "FOR VALUES IN ('hot')", "context_embedding_cold": "FOR VALUES IN ('cold')"}
+	for rows.Next() {
+		var name, bound, typ string
+		var persistent, unique, hnsw bool
+		if err := rows.Scan(&name, &bound, &typ, &persistent, &unique, &hnsw); err != nil {
+			return fmt.Errorf("임베딩 자식 파티션 해석: %w", err)
+		}
+		if expected, ok := partitions[name]; !ok || bound != expected || typ != actual || !persistent || !unique || !hnsw {
+			return fmt.Errorf("임베딩 파티션 %s의 범위·타입·유일성·HNSW 구성이 다르다", name)
+		}
+		delete(partitions, name)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("임베딩 자식 파티션 읽기: %w", err)
+	}
+	if len(partitions) != 0 {
+		return fmt.Errorf("임베딩 hot/cold 파티션이 모두 필요하다")
 	}
 	return nil
 }
@@ -363,7 +425,7 @@ func (s *Store) OutdatedEmbeddingCount(ctx context.Context, modelID string) (int
 // 임베딩과 대기 작업을 지운다. 지우지 않으면 「색인 대상 비교」의 원천 제외 구성으로
 // 바꿔도 예전 구성이 남긴 원천 임베딩이 의미 유사도 채널에 계속 올라와 두 구성이
 // 등록 조건 말고도 달라진다.
-func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
+func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) {
 	if !graphID.IsV7() {
 		return fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
 	}
@@ -400,7 +462,7 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) error {
 	if err != nil {
 		return fmt.Errorf("재색인 등록 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "ReindexGraph", &err)
 	for _, target := range targets {
 		if err := s.enqueueIndexTask(ctx, tx, graphID, target.id, target.layer); err != nil {
 			return err
@@ -576,8 +638,10 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	if err := enableIterativeScan(ctx, tx); err != nil {
 		return nil, err
 	}
+	// 오른쪽 매개변수의 타입은 열이 결정하게 둔다. vector로 고정하면 halfvec 열에
+	// 형 변환이 생겨 그 열의 HNSW 인덱스와 거리 정렬이 일치하지 않는다.
 	rows, err := tx.Query(ctx, `
-		SELECT candidate.context_id::text, 1 - (candidate.embedding <=> $3::vector) AS similarity
+		SELECT candidate.context_id::text, candidate.graph_id::text, node.properties ->> 'graph_id'::text, 1 - (candidate.embedding <=> $3) AS similarity
 		FROM public.context_embedding AS candidate
 		JOIN `+s.contextTable()+` AS node ON (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
 		WHERE candidate.graph_id = $1 AND candidate.model_id = $2
@@ -589,7 +653,7 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 			AND ((node.properties ->> 'layer'::text) <> 'derived'
 				OR NULLIF(node.properties ->> 'valid_to'::text, '') IS NULL
 				OR (node.properties ->> 'valid_to'::text)::timestamptz >= $4)
-		ORDER BY candidate.embedding <=> $3::vector, candidate.context_id
+		ORDER BY candidate.embedding <=> $3, candidate.context_id
 		LIMIT $5`, graphID.String(), modelID, vectorText(embedding), current, limit)
 	if err != nil {
 		return nil, fmt.Errorf("의미 유사도 검색: %w", err)
@@ -597,9 +661,9 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 	ids := make([]model.ID, 0)
 	similarities := make(map[model.ID]float64)
 	for rows.Next() {
-		var rawID string
+		var rawID, embeddingGraph, nodeGraph string
 		var similarity float64
-		if err := rows.Scan(&rawID, &similarity); err != nil {
+		if err := rows.Scan(&rawID, &embeddingGraph, &nodeGraph, &similarity); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("의미 유사도 후보 행 해석: %w", err)
 		}
@@ -607,6 +671,10 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 		if err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("의미 유사도 후보 식별자 해석: %w", err)
+		}
+		if embeddingGraph != graphID.String() || nodeGraph != graphID.String() {
+			rows.Close()
+			return nil, storageError("embedding_membership", ErrInvariantViolation)
 		}
 		ids = append(ids, contextID)
 		similarities[contextID] = similarity
@@ -794,6 +862,7 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 		WHERE candidate.graph_id = $2 AND candidate.model_id = $3
 			AND candidate.context_id <> $1::uuid
 			AND candidate.embedding <=> $4 <= $5
+			AND node.properties ->> 'graph_id'::text = $2::text
 			AND node.properties ->> 'layer'::text = 'event' AND node.properties ->> 'deleted_at'::text IS NULL
 		ORDER BY candidate.embedding <=> $4, candidate.context_id
 		LIMIT $6`,

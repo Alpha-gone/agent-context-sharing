@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func TestParseContextVerifiesGraphIsolation(t *testing.T) {
 	raw := `{"id":1,"label":"Context","properties":{"context_id":"` + contextID.String() + `","graph_id":"` + foreignGraphID.String() + `","layer":"source","body":"본문","recorded_at":"2026-09-06T10:20:30Z","created_by":"` + createdBy.String() + `","created_by_agent":"` + createdByAgent.String() + `","version":1,"source_ref_channel":"api","source_ref_locator":"https://example.test/source","occurred_at":"2026-09-06T10:20:30Z","origin_kind":"external_content"}}::vertex`
 
 	_, err := parseContext(raw, requestedGraphID)
-	if err == nil || !strings.Contains(err.Error(), "그래프 격리 위반") {
+	if err == nil || !strings.Contains(errors.Unwrap(err).Error(), "그래프 격리 위반") {
 		t.Fatalf("다른 그래프 정점이 격리 위반으로 거부되지 않았다: %v", err)
 	}
 }

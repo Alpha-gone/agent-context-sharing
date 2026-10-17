@@ -118,6 +118,37 @@ JWT 서명·공통 클레임 검증을 공유하고 `aud`와 폐기 책임을 �
 
 소비 토큰 재사용은 계열 폐기를 커밋하고 `400 invalid_grant`를 반환한다. 코드 재사용도 연결한 계열을 폐기한다. 이미 폐기·만료한 계열과 잘못된 결합은 재인가 대상이며 내부 저장·서명 장애는 `500`으로 구분한다. 정리와 웹 명시적 폐기도 같은 계열 잠금 순서를 따른다. 단일 토큰 소비와 계열 폐기가 다른 인스턴스에서도 즉시 판정되어야 한다.
 
+### OAuth 저장 열
+
+다음은 위 저장 모델을 DDL로 옮길 열 이름·타입·NULL 계약이다. 표에서 선택으로 표시하지 않은 열은 `NOT NULL`이다. UUIDv7은 SQL `uuid`, 시각은 `timestamptz`로 저장한다. 사전 등록 client·redirect·resource 목록은 배포 구성이므로 별도 client 테이블을 만들지 않는다. 아래 결합 값은 인가 시점의 검증 결과를 보존하며 이후 요청에서 현재 등록과도 대조한다.
+
+| 테이블 | 열 | SQL 타입·NULL | 의미 |
+|---|---|---|---|
+| `oauth_authorization_code` | `code_hash` | `bytea`, PK | 원문 코드의 SHA-256, 정확히 32바이트 CHECK |
+| `oauth_authorization_code` | `account_id` | `uuid` | 인가한 계정 |
+| `oauth_authorization_code` | `client_id`, `redirect_uri`, `resource`, `scope`, `code_challenge` | `text` | 검증한 client·실제 callback URI·대상 리소스·scope·S256 challenge. verifier 원문 미저장 |
+| `oauth_authorization_code` | `issued_at`, `expires_at` | `timestamptz` | 발급 시각과 발급 +60초 만료 |
+| `oauth_authorization_code` | `consumed_at` | `timestamptz`, 선택 | 성공 교환 시각 |
+| `oauth_authorization_code` | `grant_id` | `uuid`, 선택·FK | 성공 교환으로 만든 계열. 소비 시각과 함께 채우며 둘 다 NULL이거나 둘 다 값이 있는 CHECK |
+| `oauth_grant` | `grant_id` | `uuid`, PK | 최초 인가 계열 UUIDv7 |
+| `oauth_grant` | `account_id` | `uuid` | 계열 소유 계정. 생성 뒤 불변 |
+| `oauth_grant` | `client_id`, `resource`, `scope` | `text` | 생성 뒤 불변인 인가 결합 |
+| `oauth_grant` | `authorized_at`, `last_rotated_at` | `timestamptz` | 최초 인가와 최근 성공 회전 시각. 최초에는 두 값이 같다 |
+| `oauth_grant` | `absolute_expires_at`, `idle_expires_at`, `retain_until` | `timestamptz` | 절대·비활동 만료와 인증 상태 보존 종료. 계산식은 [갱신 수명](#갱신-자격의-수명과-정리) |
+| `oauth_grant` | `revoked_at` | `timestamptz`, 선택 | 명시적 폐기·재사용 탐지에 따른 계열 폐기 |
+| `oauth_grant` | `revocation_reason` | `text`, 선택 | 폐기 시각과 함께 채우는 내부 고정 사유 코드. 임의 error·자격 원문 미저장 |
+| `oauth_refresh_token` | `token_hash` | `bytea`, PK | 원문 갱신 토큰 SHA-256, 정확히 32바이트 CHECK |
+| `oauth_refresh_token` | `grant_id` | `uuid`, FK | 소속 계열 |
+| `oauth_refresh_token` | `issued_at`, `expires_at` | `timestamptz` | 발급 시각과 해당 토큰의 유효 만료. 발급 시 계열의 두 만료 중 이른 시각을 기록 |
+| `oauth_refresh_token` | `consumed_at` | `timestamptz`, 선택 | 성공 회전 시각. 이 값이 있으면 재사용으로 판정 |
+| `oauth_refresh_token` | `successor_token_hash` | `bytea`, 선택 | 같은 회전에서 삽입한 후속 토큰의 32바이트 해시. 소비 시각과 함께 채우는 CHECK |
+
+코드·갱신 토큰의 `grant_id`는 `oauth_grant(grant_id)`를 참조하는 외래 키로 두며 삭제 cascade를 사용하지 않는다. 후속 토큰 해시의 존재·동일 계열·선행 토큰의 단일 소비는 회전 트랜잭션에서 검사하고, 해시 체인에 자기 참조 FK를 두지 않는다. 보존 종료 후에는 연결된 코드·갱신 토큰을 먼저 정리한 뒤 계열을 지운다. 미소비 코드는 만료 뒤 독립 정리하며 소비 코드는 자체 60초 만료만으로 지우지 않는다.
+
+`oauth_grant(account_id, client_id, authorized_at DESC, grant_id DESC)`는 본인 연결 목록, `oauth_grant(retain_until)`은 보존 정리, 코드·갱신 토큰의 `grant_id` 인덱스는 계열별 조회와 자식 정리에 쓴다. 미소비 코드 정리에는 `expires_at WHERE consumed_at IS NULL` 부분 인덱스를 둔다. 해시 PK는 동시 동일 자격 삽입을 막지만 회전·재사용 폐기의 원자성을 대신하지 않는다.
+
+DB는 해시 길이·소비 쌍의 NULL 조합·FK와 키 유일성을 검사한다. 60초·1시간·7일·30일 계산, `retain_until` 하한, 현재 시각의 만료, S256 검증, 계정/client/resource/scope 결합과 폐기 상태는 인증 저장 연산이 같은 계열 잠금 아래 판정한다. `expires_at`이 지났다는 이유로 조회 단계에서 소비 기록을 숨기면 재사용 탐지를 잃으므로 유효성 판정과 물리 정리를 구분한다.
+
 ## 목표 OAuth HTTP 경로
 
 | 경로 | 메서드 | 계약 |

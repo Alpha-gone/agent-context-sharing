@@ -15,11 +15,14 @@ package main
 import (
 	"context"
 	json "encoding/json/v2"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +33,9 @@ import (
 )
 
 func main() {
-	found, err := run()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	found, err := run(ctx, os.Args[1:], os.Stdout)
 	if err != nil {
 		slog.Error("감사 종료", "error", err)
 		os.Exit(2)
@@ -41,9 +46,28 @@ func main() {
 }
 
 // run은 감사를 실행하고 위반이 있었는지 돌려준다.
-func run() (bool, error) {
-	graphFlag := flag.String("graph-id", "", "감사할 그래프 하나. 비우면 모든 활성·삭제 그래프를 감사한다")
-	flag.Parse()
+func run(ctx context.Context, args []string, output io.Writer) (bool, error) {
+	flags := flag.NewFlagSet("audit", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	graphFlag := flags.String("graph-id", "", "감사할 그래프 하나. 비우면 모든 활성·삭제 그래프를 감사한다")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			_, err = fmt.Fprintln(output, "사용법: audit [-graph-id UUIDv7]")
+			return false, err
+		}
+		return false, err
+	}
+	if flags.NArg() != 0 {
+		return false, fmt.Errorf("사용법: audit [-graph-id UUIDv7]")
+	}
+	var selected model.ID
+	if *graphFlag != "" {
+		var err error
+		selected, err = model.ParseID(*graphFlag)
+		if err != nil || !selected.IsV7() {
+			return false, fmt.Errorf("-graph-id가 UUIDv7이 아니다")
+		}
+	}
 	databaseURL, graphName := os.Getenv("DATABASE_URL"), os.Getenv("AGE_GRAPH_NAME")
 	if databaseURL == "" || graphName == "" {
 		return false, fmt.Errorf("DATABASE_URL과 AGE_GRAPH_NAME이 필요하다")
@@ -54,15 +78,17 @@ func run() (bool, error) {
 	}
 	expect := store.EmbeddingExpectation{ModelID: embedding.ModelID(), Dimension: embedding.Dimension}
 
-	ctx := context.Background()
 	database, err := store.New(ctx, databaseURL, graphName, nil, nil, "")
 	if err != nil {
 		return false, fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
 	defer database.Close()
-	graphIDs, err := graphScope(ctx, database, *graphFlag)
-	if err != nil {
-		return false, err
+	graphIDs := []model.ID{selected}
+	if selected.IsZero() {
+		graphIDs, err = database.AuditGraphIDs(ctx)
+		if err != nil {
+			return false, err
+		}
 	}
 	started := time.Now()
 	found := 0
@@ -76,7 +102,9 @@ func run() (bool, error) {
 			if err != nil {
 				return false, fmt.Errorf("위반 직렬화: %w", err)
 			}
-			fmt.Println(string(line))
+			if _, err := fmt.Fprintln(output, string(line)); err != nil {
+				return false, fmt.Errorf("위반 출력: %w", err)
+			}
 		}
 		found += len(violations)
 	}
@@ -102,15 +130,4 @@ func loadEmbeddingConfig() (index.Config, error) {
 		return index.Config{}, err
 	}
 	return cfg, nil
-}
-
-func graphScope(ctx context.Context, database *store.Store, raw string) ([]model.ID, error) {
-	if raw == "" {
-		return database.AuditGraphIDs(ctx)
-	}
-	graphID, err := model.ParseID(raw)
-	if err != nil || !graphID.IsV7() {
-		return nil, fmt.Errorf("-graph-id %q가 UUIDv7이 아니다", raw)
-	}
-	return []model.ID{graphID}, nil
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,7 +82,14 @@ func New(database *store.Store, config Config, client *http.Client, logger *slog
 		copy.Timeout = 30 * time.Second
 	}
 	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if transport, ok := copy.Transport.(*http.Transport); ok {
+		if transport.TLSClientConfig != nil && transport.TLSClientConfig.InsecureSkipVerify {
+			return nil, fmt.Errorf("임베딩 제공자의 TLS 인증서 검증을 비활성화할 수 없다")
+		}
+		copy.Transport = transport.Clone()
+	}
 	config.BaseURL = config.BaseURL.Clone()
+	config.APIKey = strings.TrimSpace(config.APIKey)
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -116,6 +124,11 @@ func (worker *Worker) Close(ctx context.Context) error {
 	})
 	select {
 	case <-worker.done:
+		// New가 복제한 표준 transport만 정리한다. 기본 전역 transport나
+		// 호출자가 주입한 다른 RoundTripper의 수명은 변경하지 않는다.
+		if transport, ok := worker.httpClient.Transport.(*http.Transport); ok {
+			transport.CloseIdleConnections()
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

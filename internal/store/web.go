@@ -859,7 +859,7 @@ func (s *Store) graphContextsOrdered(ctx context.Context, graphID model.ID, pred
 	if limit > 0 {
 		query += " LIMIT " + strconv.Itoa(limit)
 	}
-	rows, err := s.pool.Query(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecModeExec)
+	rows, err := s.reader(ctx).Query(ctx, s.cypherSQL(query, "node agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return nil, fmt.Errorf("그래프 정점 목록 조회: %w", err)
 	}
@@ -879,7 +879,12 @@ func (s *Store) graphContextsOrdered(ctx context.Context, graphID model.ID, pred
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("그래프 정점 행 읽기: %w", err)
 	}
-	return contexts, nil
+	rows.Close()
+	ids := make([]model.ID, len(contexts))
+	for i, value := range contexts {
+		ids[i] = value.ID
+	}
+	return s.contextsByIDs(ctx, s.reader(ctx), graphID, ids)
 }
 
 // ListAuditEntries는 컨텍스트 관리 기록과 웹 관리 기록을 최신순으로 합쳐 읽는다.

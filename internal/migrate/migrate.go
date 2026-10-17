@@ -1,11 +1,12 @@
 // Package migrate는 번호를 붙인 마이그레이션 파일을 순서대로 적용한다.
 //
-// SDD.md의 「스키마 적용」이 정한 대로 이 패키지는 「패키지 경계」의 열 개 패키지 밖에
+// SDD.md의 「스키마 적용」이 정한 대로 이 패키지는 「패키지 경계」의 열한 업무 패키지 밖에
 // 있으며 store를 거치지 않는다. store가 데이터베이스 핸들을 밖으로 내보내지 않기로 한
 // 계약을 지키기 위해서다.
 package migrate
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,8 +20,10 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -42,12 +45,12 @@ var (
 	// 표기도 bit 열에 맞지 않는다. 배포 구성 검증이 같은 이유로 이미 거부하지만, 이 실행기는
 	// 그 검증을 지나지 않고 환경 변수를 직접 읽으므로 여기에도 둔다.
 	vectorTypes     = []string{"vector", "halfvec"}
-	fileNamePattern = regexp.MustCompile(`^(\d+)_([a-z0-9_]+)\.sql$`)
+	fileNamePattern = regexp.MustCompile(`^(\d{3})_([a-z0-9_]+)\.sql$`)
 )
 
 // Validate는 구성 값이 치환해도 안전한 형태인지 확인한다.
 func (c Config) Validate() error {
-	if !graphNamePattern.MatchString(c.GraphName) {
+	if len(c.GraphName) > 63 || !graphNamePattern.MatchString(c.GraphName) {
 		return fmt.Errorf("그래프 이름 %q가 형식 %s에 맞지 않는다", c.GraphName, graphNamePattern)
 	}
 	if !slices.Contains(vectorTypes, c.VectorType) {
@@ -59,7 +62,7 @@ func (c Config) Validate() error {
 	if (c.VectorType == "vector" && c.VectorDim > 2000) || (c.VectorType == "halfvec" && c.VectorDim > 4000) {
 		return fmt.Errorf("벡터 차원이 HNSW 저장 타입별 상한을 넘었다")
 	}
-	if c.ColdTablespace != "" && !tablespacePattern.MatchString(c.ColdTablespace) {
+	if c.ColdTablespace != "" && (len(c.ColdTablespace) > 63 || !tablespacePattern.MatchString(c.ColdTablespace)) {
 		return fmt.Errorf("콜드 tablespace 이름 %q가 형식 %s에 맞지 않는다", c.ColdTablespace, tablespacePattern)
 	}
 	if c.IndexTargetLayers != "" && c.IndexTargetLayers != "all_layers" && c.IndexTargetLayers != "without_source" {
@@ -100,6 +103,7 @@ type Applied struct {
 var AfterConnectSQL = []string{
 	"LOAD 'age'",
 	`SET search_path = ag_catalog, "$user", public`,
+	"SET TIME ZONE 'UTC'",
 }
 
 // NewPool은 AGE 준비를 마친 연결만 내주는 풀을 만든다.
@@ -138,24 +142,41 @@ const AdvisoryLockKey int64 = 4182026001
 // 자문 잠금은 세션 단위라 잡은 연결에서 놓아야 한다. pgxpool은 반납한 연결의 세션
 // 상태를 초기화하지 않으므로 놓지 않으면 잠금이 풀에 남는다. fn이 오류를 돌려주거나
 // ctx가 취소되어도 놓으며, 해제에 실패하면 그 오류를 fn의 오류와 함께 돌려준다.
-func WithLock(ctx context.Context, pool *pgxpool.Pool, fn func(context.Context) error) (err error) {
+func WithLock(ctx context.Context, pool *pgxpool.Pool, fn func(context.Context, *pgxpool.Conn) error) (err error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("잠금용 연결 획득: %w", err)
 	}
 	defer conn.Release()
-
+	// 잠금 획득 중 취소되면 서버가 잠금을 얻었는지 불명확하므로 그 세션을 폐기한다.
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, AdvisoryLockKey); err != nil {
-		return fmt.Errorf("자문 잠금 획득: %w", err)
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return errors.Join(fmt.Errorf("자문 잠금 획득: %w", err), conn.Conn().Close(closeCtx))
 	}
 	defer func() {
-		// 취소된 뒤에도 놓아야 하므로 취소를 떼어낸 컨텍스트를 쓴다.
-		if _, unlockErr := conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, AdvisoryLockKey); unlockErr != nil {
-			err = errors.Join(err, fmt.Errorf("자문 잠금 해제: %w", unlockErr))
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		var unlocked bool
+		unlockErr := conn.QueryRow(cleanupCtx, `SELECT pg_advisory_unlock($1)`, AdvisoryLockKey).Scan(&unlocked)
+		if unlockErr == nil && !unlocked {
+			unlockErr = errors.New("잠금 소유권이 없다")
+		}
+		if unlockErr != nil {
+			err = errors.Join(err, fmt.Errorf("자문 잠금 해제: %w", unlockErr), conn.Conn().Close(cleanupCtx))
 		}
 	}()
+	// 이력 조회와 DDL도 같은 연결을 사용하여 잠금 대기자가 풀을 고갈시키지 않게 한다.
+	return fn(ctx, conn)
+}
 
-	return fn(ctx)
+// database는 풀과 잠금 연결에서 공통으로 쓰는 마이그레이션 전용 경계다.
+// 애플리케이션 store의 핸들과 공유하지 않는다.
+type database interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Begin(context.Context) (pgx.Tx, error)
 }
 
 // Load는 파일 시스템에서 마이그레이션을 읽어 구성 값을 치환하고 버전 순으로 돌려준다.
@@ -179,6 +200,9 @@ func Load(fsys fs.FS, dir string, cfg Config) ([]Migration, error) {
 			return nil, fmt.Errorf("파일 이름 %q가 NNN_name.sql 형식이 아니다", entry.Name())
 		}
 		version, err := strconv.Atoi(match[1])
+		if version == 0 {
+			return nil, fmt.Errorf("파일 %q의 버전은 양수여야 한다", entry.Name())
+		}
 		if err != nil {
 			return nil, fmt.Errorf("파일 %q의 버전 해석: %w", entry.Name(), err)
 		}
@@ -210,7 +234,7 @@ func Load(fsys fs.FS, dir string, cfg Config) ([]Migration, error) {
 		})
 	}
 
-	slices.SortFunc(migrations, func(a, b Migration) int { return a.Version - b.Version })
+	slices.SortFunc(migrations, func(a, b Migration) int { return cmp.Compare(a.Version, b.Version) })
 	return migrations, nil
 }
 
@@ -226,19 +250,19 @@ CREATE TABLE IF NOT EXISTS public.schema_migration (
 )`
 
 // EnsureHistory는 적용 이력 테이블을 없으면 만든다.
-func EnsureHistory(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, createHistoryTable); err != nil {
+func EnsureHistory(ctx context.Context, db database) error {
+	if _, err := db.Exec(ctx, createHistoryTable); err != nil {
 		return fmt.Errorf("이력 테이블 생성: %w", err)
 	}
-	if _, err := pool.Exec(ctx, `ALTER TABLE public.schema_migration ADD COLUMN IF NOT EXISTS render_config jsonb`); err != nil {
+	if _, err := db.Exec(ctx, `ALTER TABLE public.schema_migration ADD COLUMN IF NOT EXISTS render_config jsonb`); err != nil {
 		return fmt.Errorf("이력 구성 열 준비: %w", err)
 	}
 	return nil
 }
 
 // AppliedVersions는 이미 적용된 기록을 버전으로 색인해 돌려준다.
-func AppliedVersions(ctx context.Context, pool *pgxpool.Pool) (map[int]Applied, error) {
-	rows, err := pool.Query(ctx, `SELECT version, name, checksum, render_config FROM public.schema_migration`)
+func AppliedVersions(ctx context.Context, db database) (map[int]Applied, error) {
+	rows, err := db.Query(ctx, `SELECT version, name, checksum, render_config FROM public.schema_migration`)
 	if err != nil {
 		return nil, fmt.Errorf("이력 조회: %w", err)
 	}
@@ -262,13 +286,20 @@ func AppliedVersions(ctx context.Context, pool *pgxpool.Pool) (map[int]Applied, 
 // 이미 적용된 파일이 뒤에 수정되었으면 오류로 알린다.
 func Pending(migrations []Migration, applied map[int]Applied) ([]Migration, error) {
 	var pending []Migration
+	latest := 0
+	for version := range applied {
+		latest = max(latest, version)
+	}
 	for _, m := range migrations {
 		a, ok := applied[m.Version]
 		if !ok {
+			if m.Version <= latest {
+				return nil, fmt.Errorf("버전 %d는 마지막 적용 판 %d보다 뒤의 새 번호여야 한다", m.Version, latest)
+			}
 			pending = append(pending, m)
 			continue
 		}
-		if a.Checksum != m.Checksum {
+		if a.Name != m.Name || a.Checksum != m.Checksum {
 			return nil, fmt.Errorf("버전 %d(%s)가 적용된 뒤 수정되었다", m.Version, m.Name)
 		}
 	}
@@ -276,12 +307,16 @@ func Pending(migrations []Migration, applied map[int]Applied) ([]Migration, erro
 }
 
 // Apply는 마이그레이션 하나를 이력 기록과 같은 트랜잭션에서 적용한다.
-func Apply(ctx context.Context, pool *pgxpool.Pool, m Migration) error {
-	tx, err := pool.Begin(ctx)
+func Apply(ctx context.Context, db database, m Migration) error {
+	tx, err := db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(cleanupCtx)
+	}()
 
 	if _, err := tx.Exec(ctx, m.Rendered); err != nil {
 		return fmt.Errorf("버전 %d(%s) 적용: %w", m.Version, m.Name, err)

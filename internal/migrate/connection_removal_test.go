@@ -3,6 +3,7 @@ package migrate_test
 import (
 	"context"
 	"fmt"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"strings"
 	"testing"
 
@@ -70,8 +71,8 @@ func TestConnectionRemovalMigrationIntegration(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), string(data)); err != nil {
 		t.Fatalf("제거 SQL 재적용: %v", err)
 	}
-	if err := migrate.WithLock(t.Context(), pool, func(ctx context.Context) error {
-		loaded, applied, err := migrate.Prepare(ctx, pool, migrations.FS, ".", cfg)
+	if err := migrate.WithLock(t.Context(), pool, func(ctx context.Context, locked *pgxpool.Conn) error {
+		loaded, applied, err := migrate.Prepare(ctx, locked, migrations.FS, ".", cfg)
 		if err != nil {
 			return err
 		}

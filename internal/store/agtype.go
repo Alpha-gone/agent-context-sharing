@@ -11,6 +11,7 @@ import (
 
 // agVertex는 AGE가 정점 agtype에 넣는 외곽 구조다.
 type agVertex struct {
+	Label string `json:"label"`
 	// Properties 필드는 AGE 정점의 사용자 정의 property 묶음이다.
 	Properties agContextProperties `json:"properties"`
 }
@@ -100,10 +101,17 @@ type agRelationProperties struct {
 }
 
 // parseContext는 AGE 정점 값을 요청한 그래프의 model.Context로 조립한다.
-func parseContext(raw string, graphID model.ID) (model.Context, error) {
+func parseContext(raw string, graphID model.ID) (result model.Context, err error) {
+	defer func() { err = storageError("context_decode", err) }()
 	var vertex agVertex
 	if err := json.Unmarshal(trimAGType(raw, "vertex"), &vertex); err != nil {
 		return model.Context{}, fmt.Errorf("AGE 정점 agtype 해석: %w", err)
+	}
+	if vertex.Label != "Context" {
+		return model.Context{}, fmt.Errorf("정점 label이 Context가 아니다")
+	}
+	if err := validateStoredProperties(raw, "vertex", string(vertex.Properties.Layer)); err != nil {
+		return model.Context{}, err
 	}
 	properties := vertex.Properties
 	contextID, err := model.ParseID(properties.ContextID)
@@ -195,10 +203,14 @@ func parseContext(raw string, graphID model.ID) (model.Context, error) {
 }
 
 // parseRelation은 AGE 간선 값을 요청한 그래프의 model.Relation으로 조립한다.
-func parseRelation(raw string, graphID model.ID) (model.Relation, error) {
+func parseRelation(raw string, graphID model.ID) (result model.Relation, err error) {
+	defer func() { err = storageError("relation_decode", err) }()
 	var edge agEdge
 	if err := json.Unmarshal(trimAGType(raw, "edge"), &edge); err != nil {
 		return model.Relation{}, fmt.Errorf("AGE 간선 agtype 해석: %w", err)
+	}
+	if err := validateStoredProperties(raw, "edge", "relation"); err != nil {
+		return model.Relation{}, err
 	}
 	properties := edge.Properties
 	storedGraphID, err := model.ParseID(properties.GraphID)
@@ -258,6 +270,9 @@ func parseRelation(raw string, graphID model.ID) (model.Relation, error) {
 		if err != nil {
 			return model.Relation{}, fmt.Errorf("confirmed_by_agent: %w", err)
 		}
+	}
+	if err := relation.Validate(); err != nil {
+		return model.Relation{}, err
 	}
 	return relation, nil
 }

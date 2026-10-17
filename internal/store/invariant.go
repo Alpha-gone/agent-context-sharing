@@ -138,6 +138,11 @@ var invariantRules = []invariantRule{
 // checkGraphMembership은 간선과 두 끝, 임베딩과 그 컨텍스트가 같은 그래프에 속하는지 본다.
 func checkGraphMembership(snapshot auditSnapshot) ([]InvariantViolation, error) {
 	var violations []InvariantViolation
+	for id := range snapshot.scope {
+		if value, ok := snapshot.contexts[id]; !ok || value.graphID != snapshot.graphID {
+			violations = append(violations, InvariantViolation{Rule: RuleGraphMembership, GraphID: snapshot.graphID, Target: TargetContext, IDs: []string{id}})
+		}
+	}
 	for _, edge := range snapshot.edges {
 		from, to := snapshot.contexts[edge.from], snapshot.contexts[edge.to]
 		if edge.graphID != snapshot.graphID || from.graphID != snapshot.graphID || to.graphID != snapshot.graphID {
@@ -176,8 +181,8 @@ func checkEndpointLayer(snapshot auditSnapshot) ([]InvariantViolation, error) {
 	return violations, nil
 }
 
-// checkReferenceCardinality는 파생의 근거가 하나 이상이고 대체 대상이 하나 이하이며 사건의
-// 구성원이 하나 이상인지, 같은 참조가 같은 끝점을 두 번 잇지 않는지 본다.
+// checkReferenceCardinality는 파생 근거 1~100개·대체 대상 0~1개와 사건 구성원
+// 1~1000개 및 같은 참조 끝점의 중복을 검사한다.
 func checkReferenceCardinality(snapshot auditSnapshot) ([]InvariantViolation, error) {
 	outgoing := map[string]map[string]int{}
 	duplicates := map[[3]string]int{}
@@ -201,9 +206,9 @@ func checkReferenceCardinality(snapshot auditSnapshot) ([]InvariantViolation, er
 		broken := false
 		switch value.layer {
 		case "derived":
-			broken = counts["DERIVED_FROM"] < 1 || counts["SUPERSEDES"] > 1
+			broken = counts["DERIVED_FROM"] < 1 || counts["DERIVED_FROM"] > 100 || counts["SUPERSEDES"] > 1
 		case "event":
-			broken = counts["HAS_MEMBER"] < 1
+			broken = counts["HAS_MEMBER"] < 1 || counts["HAS_MEMBER"] > 1000
 		}
 		if broken {
 			violations = append(violations, InvariantViolation{Rule: RuleReferenceCardinality, GraphID: snapshot.graphID, Target: TargetContext, IDs: []string{id}})
@@ -289,9 +294,13 @@ func checkRelationTime(snapshot auditSnapshot) ([]InvariantViolation, error) {
 // 일치하는지 본다.
 func checkEmbeddingLink(snapshot auditSnapshot) ([]InvariantViolation, error) {
 	var violations []InvariantViolation
+	counts := map[string]int{}
+	for _, embedding := range snapshot.embeddings {
+		counts[embedding.contextID]++
+	}
 	for _, embedding := range snapshot.embeddings {
 		owner, ok := snapshot.contexts[embedding.contextID]
-		broken := !ok || owner.graphID != snapshot.graphID
+		broken := !ok || owner.graphID != snapshot.graphID || counts[embedding.contextID] > 1
 		if snapshot.expect.ModelID != "" && embedding.modelID != snapshot.expect.ModelID {
 			broken = true
 		}
@@ -443,20 +452,82 @@ func (s *Store) loadAuditSnapshot(ctx context.Context, queryer cypherQueryer, gr
 	if err := embeddingRows.Err(); err != nil {
 		return auditSnapshot{}, fmt.Errorf("불변식 임베딩 행 읽기: %w", err)
 	}
+	embeddingRows.Close()
+	if err := s.loadDanglingAuditEdges(ctx, queryer, &snapshot); err != nil {
+		return auditSnapshot{}, err
+	}
 	return snapshot, nil
+}
+
+// openCypher의 양 끝점 MATCH는 직접 SQL 삭제로 끝점이 사라진 간선을 반환하지 않는다.
+// 같은 스냅숏에 그 간선도 보충하여 쓰기와 전체 감사 모두 조용히 누락하지 않게 한다.
+func (s *Store) loadDanglingAuditEdges(ctx context.Context, queryer cypherQueryer, snapshot *auditSnapshot) error {
+	contexts := pgx.Identifier{s.graphName, "Context"}.Sanitize()
+	var queries []string
+	var arguments []any
+	filter := `(e.properties ->> 'graph_id'::text = $1 OR a.properties ->> 'graph_id'::text = $1 OR b.properties ->> 'graph_id'::text = $1)`
+	arguments = []any{snapshot.graphID}
+	if snapshot.scope != nil {
+		// 실제 끝점 id를 먼저 구해 start_id/end_id 인덱스로 좁힌다.
+		anchor := `SELECT id FROM ` + contexts + ` WHERE ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"context_id"'::ag_catalog.agtype]) IN (SELECT value::ag_catalog.agtype FROM unnest($1::text[]) value)`
+		filter = `(e.start_id = ANY(ARRAY(` + anchor + `)) OR e.end_id = ANY(ARRAY(` + anchor + `)))`
+		ids := make([]string, 0, len(snapshot.scope))
+		for id := range snapshot.scope {
+			encoded, err := json.Marshal(id)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, string(encoded))
+		}
+		arguments = []any{ids}
+	}
+	for _, label := range []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"} {
+		queries = append(queries, `SELECT '`+label+`', coalesce(e.properties ->> 'graph_id'::text, ''),
+			coalesce(e.properties ->> 'relation_id'::text, ''), coalesce(e.properties ->> 'state'::text, ''),
+			coalesce(a.properties ->> 'context_id'::text, 'age:' || e.start_id::text),
+			coalesce(b.properties ->> 'context_id'::text, 'age:' || e.end_id::text)
+			FROM `+pgx.Identifier{s.graphName, label}.Sanitize()+` e
+			LEFT JOIN `+contexts+` a ON a.id=e.start_id LEFT JOIN `+contexts+` b ON b.id=e.end_id
+			WHERE (a.id IS NULL OR b.id IS NULL) AND `+filter)
+	}
+	rows, err := queryer.Query(ctx, strings.Join(queries, " UNION ALL "), arguments...)
+	if err != nil {
+		return fmt.Errorf("불변식 고아 간선 조회: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var edge auditEdge
+		if err := rows.Scan(&edge.label, &edge.graphID, &edge.relationID, &edge.state, &edge.from, &edge.to); err != nil {
+			return fmt.Errorf("불변식 고아 간선 행 해석: %w", err)
+		}
+		snapshot.edges = append(snapshot.edges, edge)
+	}
+	return rows.Err()
 }
 
 // AuditGraph는 그래프 하나를 읽기 전용 트랜잭션에서 전체 감사한다. 쓰기 검사와 같은 규칙
 // 목록을 쓰고 저장 상태를 바꾸지 않는다.
-func (s *Store) AuditGraph(ctx context.Context, graphID model.ID, expect EmbeddingExpectation) ([]InvariantViolation, error) {
+func (s *Store) AuditGraph(ctx context.Context, graphID model.ID, expect EmbeddingExpectation) (violations []InvariantViolation, err error) {
 	if !graphID.IsV7() {
 		return nil, fmt.Errorf("그래프 식별자는 UUIDv7이어야 한다")
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return nil, fmt.Errorf("감사 트랜잭션 시작: %w", err)
+		return nil, connectionError(ctx, "감사 트랜잭션 시작", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		err = errors.Join(connectionError(ctx, "그래프 감사", err), storageError("audit_rollback", rollbackTransaction(ctx, tx)))
+		if err != nil {
+			violations = nil
+		}
+	}()
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.context_graph WHERE graph_id=$1)`, graphID.String()).Scan(&exists); err != nil {
+		return nil, connectionError(ctx, "감사 그래프 확인", err)
+	}
+	if !exists {
+		return nil, ErrNotFound
+	}
 	snapshot, err := s.loadAuditSnapshot(ctx, tx, graphID, nil, expect)
 	if err != nil {
 		return nil, err

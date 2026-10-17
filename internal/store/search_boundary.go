@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"agent_context_sharing/internal/model"
@@ -30,7 +31,11 @@ func (s *Store) WithReadSnapshot(ctx context.Context, read func(context.Context)
 	if err != nil {
 		return stats, err
 	}
-	defer func() { stats = snapshot.Close(ctx) }()
+	defer func() {
+		var closeErr error
+		stats, closeErr = snapshot.Close(ctx)
+		err = errors.Join(connectionError(ctx, "스냅숏 읽기", err), closeErr)
+	}()
 	err = read(snapshot.Context(ctx))
 	return stats, err
 }

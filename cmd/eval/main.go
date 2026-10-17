@@ -492,11 +492,11 @@ func loadSettings() (settings, error) {
 	}
 	dimension, err := strconv.Atoi(strings.TrimSpace(os.Getenv("EMBEDDING_DIMENSION")))
 	if err != nil {
-		return settings{}, fmt.Errorf("EMBEDDING_DIMENSION 해석: %w", err)
+		return settings{}, fmt.Errorf("EMBEDDING_DIMENSION이 양의 정수가 아니다")
 	}
 	loaded.index = index.Config{
 		Provider:   strings.TrimSpace(os.Getenv("EMBEDDING_PROVIDER")),
-		APIKey:     strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		APIKey:     os.Getenv("GEMINI_API_KEY"),
 		BaseURL:    baseURL,
 		Model:      strings.TrimSpace(os.Getenv("EMBEDDING_MODEL")),
 		VectorType: strings.TrimSpace(os.Getenv("EMBEDDING_VECTOR_TYPE")),
@@ -505,6 +505,7 @@ func loadSettings() (settings, error) {
 	if err := loaded.index.Validate(); err != nil {
 		return settings{}, err
 	}
+	loaded.index.APIKey = strings.TrimSpace(loaded.index.APIKey)
 	if loaded.candidateLimit, err = strconv.Atoi(strings.TrimSpace(envOr("SEARCH_CHANNEL_CANDIDATE_LIMIT", "50"))); err != nil {
 		return settings{}, fmt.Errorf("SEARCH_CHANNEL_CANDIDATE_LIMIT 해석: %w", err)
 	}

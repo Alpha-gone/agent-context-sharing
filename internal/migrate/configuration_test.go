@@ -197,8 +197,8 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	assertState(1024, 1, 0)
 	target := original
 	target.VectorDim = 768
-	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context) error {
-		prepared, applied, err := migrate.Prepare(ctx, pool, files, ".", target)
+	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context, locked *pgxpool.Conn) error {
+		prepared, applied, err := migrate.Prepare(ctx, locked, files, ".", target)
 		if err != nil {
 			return err
 		}
@@ -208,14 +208,14 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 		}
 		failed := pending[0]
 		failed.Rendered += "; SELECT 1/0;"
-		if err := migrate.Apply(ctx, pool, failed); err == nil {
+		if err := migrate.Apply(ctx, locked, failed); err == nil {
 			return fmt.Errorf("실패 주입이 성공했다")
 		}
 		assertState(1024, 1, 0)
-		if err := migrate.Apply(ctx, pool, pending[0]); err != nil {
+		if err := migrate.Apply(ctx, locked, pending[0]); err != nil {
 			return err
 		}
-		prepared, applied, err = migrate.Prepare(ctx, pool, files, ".", target)
+		prepared, applied, err = migrate.Prepare(ctx, locked, files, ".", target)
 		if err != nil {
 			return err
 		}
@@ -313,8 +313,8 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 		rollbackFiles[name] = &fstest.MapFile{Data: data}
 	}
 	rollbackFiles["008_restore_embedding_dimensions.sql"] = rollbackFiles["007_embedding_dimensions.sql"]
-	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context) error {
-		loaded, applied, err := migrate.Prepare(ctx, pool, rollbackFiles, ".", original)
+	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context, locked *pgxpool.Conn) error {
+		loaded, applied, err := migrate.Prepare(ctx, locked, rollbackFiles, ".", original)
 		if err != nil {
 			return err
 		}
@@ -322,7 +322,7 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 		if err != nil || len(pending) != 1 || pending[0].Version != 8 {
 			return fmt.Errorf("다음 번호 마이그레이션 복귀 목록이 다르다: %v", err)
 		}
-		return migrate.Apply(ctx, pool, pending[0])
+		return migrate.Apply(ctx, locked, pending[0])
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -357,8 +357,8 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	}
 	rollbackFiles["009_without_source_dimensions.sql"] = rollbackFiles["007_embedding_dimensions.sql"]
 	target.IndexTargetLayers = "without_source"
-	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context) error {
-		loaded, applied, err := migrate.Prepare(ctx, pool, rollbackFiles, ".", target)
+	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context, locked *pgxpool.Conn) error {
+		loaded, applied, err := migrate.Prepare(ctx, locked, rollbackFiles, ".", target)
 		if err != nil {
 			return err
 		}
@@ -366,7 +366,7 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 		if err != nil || len(pending) != 1 || pending[0].Version != 9 {
 			return fmt.Errorf("원천 제외 전환 목록이 다르다: %v", err)
 		}
-		return migrate.Apply(ctx, pool, pending[0])
+		return migrate.Apply(ctx, locked, pending[0])
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -38,7 +38,7 @@ var ErrIdempotencyConflict = errors.New("멱등성 키가 다른 요청에 쓰�
 // 저장소는 계정·키 자문 잠금을 보유한 채 업무 함수를 실행해 동시 재시도를 직렬화한다.
 // 업무 쓰기가 자체 트랜잭션을 소유하는 기존 공개 계약을 보존하면서도, 완료 결과를 쓰기
 // 뒤 응답 전 보관해 응답 전달 실패를 같은 키로 회수할 수 있게 한다.
-func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest, run func(context.Context) ([]byte, error)) ([]byte, error) {
+func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest, run func(context.Context) ([]byte, error)) (result []byte, err error) {
 	if !request.AccountID.IsV7() || !request.Key.IsV7() || request.ToolName == "" || run == nil {
 		return nil, fmt.Errorf("멱등성 요청 인자가 올바르지 않다")
 	}
@@ -51,9 +51,9 @@ func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest
 	defer release()
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return nil, fmt.Errorf("멱등성 트랜잭션 시작: %w", err)
+		return nil, connectionError(ctx, "멱등성 트랜잭션 시작", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { err = errors.Join(connectionError(ctx, "멱등성 처리", err), rollbackTransaction(ctx, tx)) }()
 
 	// 계정과 키를 함께 두 int64 잠금으로 나눠, 다른 계정의 같은 키가 서로 기다리지 않게 한다.
 	lockInput := make([]byte, 0, len(request.AccountID)+len(request.Key))
@@ -99,7 +99,7 @@ func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest
 	afterCommit := &afterWriteCommit{}
 	transactionContext := context.WithValue(ctx, writeTransactionContextKey{}, tx)
 	transactionContext = context.WithValue(transactionContext, afterWriteCommitContextKey{}, afterCommit)
-	result, err := run(transactionContext)
+	result, err = run(transactionContext)
 	if err != nil {
 		return nil, err
 	}
@@ -134,9 +134,11 @@ func deferAfterWriteCommit(ctx context.Context, callback func()) bool {
 // 한다. 저장점의 Commit은 해제일 뿐이고 실제 커밋은 멱등성 트랜잭션이 한다.
 func (s *Store) writeTransaction(ctx context.Context) (pgx.Tx, error) {
 	if tx, ok := ctx.Value(writeTransactionContextKey{}).(pgx.Tx); ok {
-		return tx.Begin(ctx)
+		nested, err := tx.Begin(ctx)
+		return nested, storageError("write_savepoint", connectionError(ctx, "저장점 시작", err))
 	}
-	return s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	return tx, storageError("write_begin", connectionError(ctx, "쓰기 트랜잭션 시작", err))
 }
 
 // CleanupExpiredIdempotencyRecords는 보관 기간이 끝난 재시도 결과를 지운다.

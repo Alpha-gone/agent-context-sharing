@@ -58,11 +58,8 @@ var snapshotPattern = regexp.MustCompile(`^[0-9A-F]+-[0-9A-F]+(-[0-9]+)?$`)
 
 // ReadSnapshot은 한 요청의 조정 트랜잭션이다. Close 전까지 스냅숏이 유효하다.
 type ReadSnapshot struct {
-	tx      pgx.Tx
-	scope   *readScope
-	started time.Time
-	// release는 BeginReadSnapshot이 받은 연결 예약을 반납한다.
-	release func()
+	scope *readScope
+	close func() (ReadStats, error)
 }
 
 // BeginReadSnapshot은 연결을 예약한 뒤 조정 연결에서 읽기 전용 REPEATABLE READ 트랜잭션을
@@ -79,22 +76,36 @@ func (s *Store) BeginReadSnapshot(ctx context.Context) (*ReadSnapshot, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		release()
-		return nil, fmt.Errorf("스냅숏 조정 트랜잭션 시작: %w", err)
+		return nil, connectionError(ctx, "스냅숏 조정 트랜잭션 시작", err)
 	}
 	var snapshot string
 	if err := tx.QueryRow(ctx, `SELECT pg_export_snapshot()`).Scan(&snapshot); err != nil {
-		_ = tx.Rollback(ctx)
+		cleanupErr := rollbackTransaction(ctx, tx)
 		release()
-		return nil, fmt.Errorf("스냅숏 내보내기: %w", err)
+		return nil, errors.Join(connectionError(ctx, "스냅숏 내보내기", err), cleanupErr)
 	}
 	if !snapshotPattern.MatchString(snapshot) {
-		_ = tx.Rollback(ctx)
+		cleanupErr := rollbackTransaction(ctx, tx)
 		release()
-		return nil, fmt.Errorf("스냅숏 식별자 %q의 모양이 예상과 다르다", snapshot)
+		return nil, errors.Join(fmt.Errorf("스냅숏 식별자 모양이 예상과 다르다"), cleanupErr)
 	}
 	scope := &readScope{snapshot: snapshot, reads: make(chan struct{}, snapshotConnections-1)}
 	scope.acquire()
-	return &ReadSnapshot{tx: tx, scope: scope, started: time.Now(), release: release}, nil
+	started := time.Now()
+	boundary := &ReadSnapshot{scope: scope}
+	boundary.close = sync.OnceValues(func() (ReadStats, error) {
+		err := rollbackTransaction(ctx, tx)
+		release()
+		scope.release()
+		scope.mu.Lock()
+		defer scope.mu.Unlock()
+		stats := ReadStats{Connections: scope.opened, PeakConnections: scope.peak, Hold: time.Since(started)}
+		if err != nil {
+			return stats, fmt.Errorf("스냅숏 조정 트랜잭션 종료: %w", err)
+		}
+		return stats, nil
+	})
+	return boundary, nil
 }
 
 // Context는 이 스냅숏을 읽기 메서드에 전달하는 요청 컨텍스트를 만든다.
@@ -102,14 +113,10 @@ func (snapshot *ReadSnapshot) Context(ctx context.Context) context.Context {
 	return context.WithValue(ctx, readScopeKey{}, snapshot.scope)
 }
 
-// Close는 조정 트랜잭션을 끝내고 요청이 쓴 연결 자원을 돌려준다.
-func (snapshot *ReadSnapshot) Close(ctx context.Context) ReadStats {
-	_ = snapshot.tx.Rollback(ctx)
-	snapshot.release()
-	snapshot.scope.release()
-	snapshot.scope.mu.Lock()
-	defer snapshot.scope.mu.Unlock()
-	return ReadStats{Connections: snapshot.scope.opened, PeakConnections: snapshot.scope.peak, Hold: time.Since(snapshot.started)}
+// Close는 모든 읽기가 끝난 뒤 조정 연결과 예약을 반환하며 종료 오류를 전달한다.
+// 반복 호출은 같은 결과를 반환하고 취소된 요청에도 독립된 정리 예산을 사용한다.
+func (snapshot *ReadSnapshot) Close(_ context.Context) (ReadStats, error) {
+	return snapshot.close()
 }
 
 // enterReadScope는 요청 컨텍스트에 스냅숏이 있으면 읽기 전용 REPEATABLE READ 트랜잭션을
@@ -127,17 +134,17 @@ func (s *Store) enterReadScope(ctx context.Context) (context.Context, func() err
 	select {
 	case scope.reads <- struct{}{}:
 	case <-ctx.Done():
-		return ctx, func() error { return nil }, fmt.Errorf("스냅숏 읽기 자리 대기: %w", context.Cause(ctx))
+		return ctx, func() error { return nil }, connectionError(ctx, "스냅숏 읽기 자리 대기", ctx.Err())
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		<-scope.reads
-		return ctx, func() error { return nil }, fmt.Errorf("스냅숏 읽기 트랜잭션 시작: %w", err)
+		return ctx, func() error { return nil }, connectionError(ctx, "스냅숏 읽기 트랜잭션 시작", err)
 	}
 	if _, err := tx.Exec(ctx, "SET TRANSACTION SNAPSHOT '"+scope.snapshot+"'"); err != nil {
-		_ = tx.Rollback(ctx)
+		cleanupErr := rollbackTransaction(ctx, tx)
 		<-scope.reads
-		return ctx, func() error { return nil }, fmt.Errorf("스냅숏 가져오기: %w", err)
+		return ctx, func() error { return nil }, errors.Join(connectionError(ctx, "스냅숏 가져오기", err), cleanupErr)
 	}
 	scope.acquire()
 	accesses := new([]embeddingAccess)
@@ -145,15 +152,15 @@ func (s *Store) enterReadScope(ctx context.Context) (context.Context, func() err
 	return readContext, sync.OnceValue(func() error {
 		// 먼저 읽기 연결을 반환해 접근 기록 연결을 위한 몫을 확보한다. 자리를 먼저
 		// 반납하면 새 읽기가 그 연결을 차지해 같은 풀에서 다시 대기할 수 있다.
-		err := tx.Rollback(context.WithoutCancel(ctx))
+		err := rollbackTransaction(ctx, tx)
 		scope.release()
 		defer func() { <-scope.reads }()
-		if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		if err != nil {
 			return fmt.Errorf("스냅숏 읽기 트랜잭션 종료: %w", err)
 		}
 		for _, access := range *accesses {
 			if err := s.touchEmbeddings(ctx, access.graphID, access.contextIDs, access.at); err != nil {
-				return err
+				return connectionError(ctx, "스냅숏 접근 기록", err)
 			}
 		}
 		return nil
@@ -168,17 +175,17 @@ func (s *Store) enterHopReadScope(ctx context.Context) (context.Context, func() 
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return ctx, func() error { return nil }, fmt.Errorf("홉 읽기 트랜잭션 시작: %w", err)
+		return ctx, func() error { return nil }, connectionError(ctx, "홉 읽기 트랜잭션 시작", err)
 	}
 	accesses := new([]embeddingAccess)
 	readContext := context.WithValue(context.WithValue(ctx, readTxKey{}, tx), readAccessKey{}, accesses)
 	return readContext, sync.OnceValue(func() error {
-		if err := tx.Rollback(context.WithoutCancel(ctx)); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		if err := rollbackTransaction(ctx, tx); err != nil {
 			return fmt.Errorf("홉 읽기 트랜잭션 종료: %w", err)
 		}
 		for _, access := range *accesses {
 			if err := s.touchEmbeddings(ctx, access.graphID, access.contextIDs, access.at); err != nil {
-				return err
+				return connectionError(ctx, "홉 접근 기록", err)
 			}
 		}
 		return nil

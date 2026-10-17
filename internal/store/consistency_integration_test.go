@@ -164,7 +164,10 @@ func TestReadSnapshotHidesLaterCommitsIntegration(t *testing.T) {
 	if err != nil || len(origins[before.ID]) != 1 {
 		t.Fatalf("스냅숏 안 출처 조립 = %v, %v", origins, err)
 	}
-	stats := snapshot.Close(t.Context())
+	stats, err := snapshot.Close(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
 	closed = true
 	// 조정 연결 하나와 스냅숏 안 읽기 넷이다. 스냅숏 밖 시간 후보는 세지 않는다.
 	if stats.Connections != 5 || stats.PeakConnections != 2 || stats.Hold <= 0 {

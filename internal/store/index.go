@@ -37,6 +37,7 @@ type IndexTask struct {
 	ContextID     model.ID
 	GraphID       model.ID
 	Body          string
+	Layer         model.Layer
 	Attempts      int
 	CorrelationID string
 }
@@ -194,6 +195,7 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 		return s.failIndexTask(ctx, task, claim, "색인 대상 조회 실패", true, err)
 	}
 	task.Body = value.Body
+	task.Layer = value.Layer
 
 	// 트랜잭션 밖에서 제공자를 부른다. 이 구간에는 어떤 행 잠금도 쥐고 있지 않다.
 	result := processor(ctx, task)

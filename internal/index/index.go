@@ -55,6 +55,7 @@ const maxEmbeddingResponseBytes = 8 << 20
 // Worker는 짧은 확보·저장 트랜잭션 사이에서 제공자를 호출하는 비동기 소비자다.
 type Worker struct {
 	store      *store.Store
+	proposer   RelationProposer
 	config     Config
 	httpClient *http.Client
 	logger     *slog.Logger
@@ -64,10 +65,24 @@ type Worker struct {
 	stopOnce   sync.Once
 }
 
+// RelationProposer는 사건의 색인 공개 커밋 뒤 관계 후보 생성을 알리는 경계다.
+// 오류는 이미 커밋한 색인을 되돌리거나 색인 작업을 다시 등록하지 않는다.
+type RelationProposer interface {
+	ProposeSimilarEventRelations(context.Context, model.ID, model.ID, string) error
+}
+
 // New는 제공자 호출 경계와 작업 큐 소비자를 만든다.
 func New(database *store.Store, config Config, client *http.Client, logger *slog.Logger) (*Worker, error) {
+	return NewWithRelationProposer(database, config, client, logger, database)
+}
+
+// NewWithRelationProposer는 공개된 사건 색인의 관계 후보 신호를 조립 지점에서 주입한다.
+func NewWithRelationProposer(database *store.Store, config Config, client *http.Client, logger *slog.Logger, proposer RelationProposer) (*Worker, error) {
 	if database == nil {
 		return nil, fmt.Errorf("색인 저장소가 없다")
+	}
+	if proposer == nil {
+		return nil, fmt.Errorf("관계 후보 신호 수신기가 없다")
 	}
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -93,7 +108,7 @@ func New(database *store.Store, config Config, client *http.Client, logger *slog
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Worker{store: database, config: config, httpClient: &copy, logger: logger, done: make(chan struct{})}, nil
+	return &Worker{store: database, proposer: proposer, config: config, httpClient: &copy, logger: logger, done: make(chan struct{})}, nil
 }
 
 // ModelID는 모델과 벡터 표현이 같은지 비교할 수 있는 현재 색인 식별자다.
@@ -214,18 +229,34 @@ func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error)
 			}
 			worker.logger.ErrorContext(ctx, "임베딩 제공자 호출 실패",
 				"context_id", task.ContextID.String(), "graph_id", task.GraphID.String(),
+				"job_id", task.ID.String(),
 				"correlation_id", task.CorrelationID, "attempts", task.Attempts,
 				"dimension_mismatch", dimensionMismatch, "error", err.Error())
 			return store.IndexTaskResult{Failure: failure, Retryable: retryableEmbeddingError(err)}
 		}
 		return store.IndexTaskResult{Embedding: embedding, ModelID: worker.ModelID()}
 	})
+	if result.Found {
+		outcome := "not_published"
+		if err != nil {
+			outcome = "unknown"
+		} else if result.Succeeded {
+			outcome = "committed"
+		}
+		worker.logger.InfoContext(ctx, "색인 결과 공개 회차",
+			"job_id", result.Task.ID.String(), "correlation_id", result.Task.CorrelationID,
+			"graph_id", result.Task.GraphID.String(), "context_id", result.Task.ContextID.String(),
+			"stage", "result_publication", "result", outcome)
+	}
 	if err != nil {
 		return result.Found, err
 	}
-	if result.Succeeded {
-		if err := worker.store.ProposeSimilarEventRelations(ctx, result.Task.GraphID, result.Task.ContextID, worker.ModelID()); err != nil {
-			worker.logger.ErrorContext(ctx, "의미 관계 후보 제안 실패", "graph_id", result.Task.GraphID.String(), "context_id", result.Task.ContextID.String(), "error", err)
+	if result.Succeeded && result.Task.Layer == model.LayerEvent {
+		if err := worker.proposer.ProposeSimilarEventRelations(ctx, result.Task.GraphID, result.Task.ContextID, worker.ModelID()); err != nil {
+			worker.logger.ErrorContext(ctx, "의미 관계 후보 제안 실패",
+				"job_id", result.Task.ID.String(), "correlation_id", result.Task.CorrelationID,
+				"graph_id", result.Task.GraphID.String(), "context_id", result.Task.ContextID.String(),
+				"stage", "relation_proposal", "result", "failed", "reason_code", "proposal_failed")
 		}
 	}
 	return result.Found, nil

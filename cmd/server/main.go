@@ -103,6 +103,8 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("색인 작업자 준비: %w", err)
 	}
+	// external도 질의용 제공자 transport를 소유하므로 시작 여부와 별개로 정리한다.
+	workers = append(workers, periodic, indexer)
 	if err := database.CheckEmbeddingSchema(context.Background(), cfg.EmbeddingVectorType, cfg.EmbeddingDimension); err != nil {
 		return fmt.Errorf("임베딩 DB 구성 확인: %w", err)
 	}
@@ -110,10 +112,6 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	// 분리 배치에서는 다른 배포 단위가 작업 큐를 소비한다. 두 배치 모두 시작 전에
 	// 제공자 구성과 DB 임베딩 스키마의 정합성을 검사한다.
 	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
-	workers = append(workers, periodic)
-	if cfg.IndexWorkerPlacement == config.PlacementEmbedded {
-		workers = append(workers, indexer)
-	}
 	// 종료 책임은 풀 준비 직후 등록했다. 시작 전에 목록에 추가하고, 정상 종료에서 이미
 	// 종료를 시도한 목록은 비워 기동 실패 정리와 같은 경계를 쓰되 중복 호출하지 않는다.
 	if cfg.IndexWorkerPlacement == config.PlacementEmbedded {

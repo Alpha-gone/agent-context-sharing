@@ -126,6 +126,22 @@ curl --fail --show-error https://localhost:8080/readyz
 
 기존 DB의 벡터 타입·차원은 환경 변수만 바꿔 전환할 수 없습니다. [임베딩 전환·복귀 설계](spec/service/agent-context/sdd/indexing.md#전환복귀-경계)를 따르십시오.
 
+### 색인 작업자 분리 실행
+
+기본 `INDEX_WORKER_PLACEMENT=embedded`에서는 서버 안의 작업자가 큐를 소비합니다. 호스트에서 분리하려면 같은 DB·제공자·대상 계층 구성과 환경 변수를 준비한 두 터미널에서 각각 실행합니다.
+
+```sh
+# 서버 터미널
+INDEX_WORKER_PLACEMENT=external go run ./cmd/server
+
+# 색인 작업자 터미널
+INDEX_WORKER_PLACEMENT=external go run ./cmd/indexer
+```
+
+`cmd/indexer`는 서버와 같은 배포 구성을 검증하고 HTTP 수신기와 주기 작업 없이 색인만 실행합니다. 별도 바이너리는 `go build -o indexer ./cmd/indexer`로 만듭니다. 서버 컨테이너 이미지의 기본 실행은 `server`이며 위 분리 실행 절차는 호스트 실행 기준입니다.
+
+처리 후에는 1초를 기다리고 빈 회차는 2·4·8·16·30초로 늘려 조회합니다. SIGINT·SIGTERM은 제공자 호출과 소비 루프를 취소하며 최대 10초의 작업자 정리 뒤 연결 풀을 닫습니다. 중단한 작업은 DB에 리스로 남아 만료 뒤 다시 확보됩니다.
+
 ### 3. 현재 제공 범위
 
 표준 MCP·OAuth 직접 연결은 설계가 채택되었으나 아직 구현되지 않았습니다. 현재 `/mcp`, `/authorize`, `/token`과 OAuth 메타데이터 경로는 제공하지 않습니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다.

@@ -80,6 +80,14 @@ func isolatedMigrationDatabase(t *testing.T) (*pgxpool.Pool, string) {
 	if _, err := admin.Exec(t.Context(), "CREATE DATABASE "+identifier); err != nil {
 		t.Fatalf("격리된 시험 DB 생성: %v", err)
 	}
+	// 주소 해석·풀 조립이 실패해도 생성한 DB를 정리한다.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+		defer cancel()
+		if _, err := admin.Exec(ctx, "DROP DATABASE "+identifier); err != nil {
+			t.Errorf("이 시험이 만든 DB 정리 실패: %v", err)
+		}
+	})
 	address, err := url.Parse(os.Getenv("TEST_DATABASE_URL"))
 	if err != nil {
 		t.Fatal("시험 DB 주소 해석 실패")
@@ -89,14 +97,7 @@ func isolatedMigrationDatabase(t *testing.T) (*pgxpool.Pool, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		pool.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if _, err := admin.Exec(ctx, "DROP DATABASE "+identifier); err != nil {
-			t.Errorf("이 시험이 만든 DB 정리 실패: %v", err)
-		}
-	})
+	t.Cleanup(pool.Close)
 	return pool, address.String()
 }
 

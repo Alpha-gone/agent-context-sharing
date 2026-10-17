@@ -181,6 +181,8 @@ sh ./test-wal-archive.sh
 
 그래프 불변식 감사는 `go run ./cmd/audit`, 검색 품질 평가는 `cmd/eval`이 담당합니다. 평가 표본과 실행 방법은 [테스트 설계](spec/service/agent-context/sdd/testing.md)와 [평가 검증 설계](spec/service/agent-context/sdd/evaluation.md#검증을-가능하게-하는-설계)를 확인하십시오.
 
+색인 시험은 기본 회귀에서 로컬 TLS 합성 제공자를 사용합니다. 실제 Gemini 전송은 `embedding_live` 태그의 별도 시험이며, 외부 전송·비용 허용과 키 주입이 필요합니다. 두 경로의 호출 상한·격리 DB·실행 조건은 [임베딩 실연결 시험 경계](spec/service/agent-context/sdd/testing.md#임베딩-제공자-실연결-테스트)를 따릅니다.
+
 ## 문서와 저장소 구조
 
 - [운영 매뉴얼](OPERATIONS.md): 시험 운영 배포, 점검, 백업·복구, 변경과 종료

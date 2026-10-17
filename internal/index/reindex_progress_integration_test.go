@@ -18,7 +18,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestWorkerReindexProgressWithoutOldVectorsIntegration(t *testing.T) {
+func newIndexContractDatabase(t *testing.T) (*store.Store, *pgxpool.Pool) {
+	t.Helper()
 	address := os.Getenv("TEST_DATABASE_URL")
 	if address == "" {
 		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
@@ -52,7 +53,7 @@ func TestWorkerReindexProgressWithoutOldVectorsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context, conn *pgxpool.Conn) error {
 		loaded, applied, err := migrate.Prepare(ctx, conn, migrations.FS, ".", migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: 128, IndexTargetLayers: "all_layers"})
 		if err != nil {
@@ -76,8 +77,13 @@ func TestWorkerReindexProgressWithoutOldVectorsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
-	_, _, _, err = createSimilarEventGraph(t, database, integrationID(t))
+	t.Cleanup(database.Close)
+	return database, pool
+}
+
+func TestWorkerReindexProgressWithoutOldVectorsIntegration(t *testing.T) {
+	database, _ := newIndexContractDatabase(t)
+	_, _, _, err := createSimilarEventGraph(t, database, integrationID(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,7 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// CreateGraph는 관계형 그래프 메타데이터 행을 만든다.
+// CreateGraph는 준비된 그래프 메타데이터 행만 저장한다.
+// 사용자 생성은 초기 소유자도 함께 저장하는 CreateGraphWithOwner를 사용한다.
 func (s *Store) CreateGraph(ctx context.Context, graph model.Graph) (model.Graph, error) {
 	if err := graph.Validate(); err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 검증: %w", err)
@@ -43,6 +44,15 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 	if err := graph.Validate(); err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 검증: %w", err)
 	}
+	if graph.Version != 1 {
+		return model.Graph{}, model.FieldError{Field: "version", Message: "새 그래프의 판 번호는 1이어야 한다"}
+	}
+	if graph.StoredChars != 0 {
+		return model.Graph{}, model.FieldError{Field: "stored_chars", Message: "새 그래프의 저장 문자 수는 0이어야 한다"}
+	}
+	if graph.DeletedAt != nil || graph.GraceStartedAt != nil {
+		return model.Graph{}, model.FieldError{Field: "graph_id", Message: "새 그래프는 삭제·보관 유예 상태일 수 없다"}
+	}
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 생성 트랜잭션 시작: %w", err)
@@ -53,7 +63,11 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 		// 집계는 잠금 뒤 별도 명령으로 실행해 앞선 생성의 커밋을 본다. 저장점 해제 뒤에도
 		// 이 잠금은 바깥 멱등성 트랜잭션의 커밋까지 유지된다.
 		var accountID model.ID
-		if err := tx.QueryRow(ctx, `SELECT account_id FROM public.account WHERE account_id = $1 FOR UPDATE`, graph.CreatedBy.String()).Scan(&accountID); err != nil {
+		err := tx.QueryRow(ctx, `SELECT account_id FROM public.account WHERE account_id = $1 FOR UPDATE`, graph.CreatedBy.String()).Scan(&accountID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Graph{}, ErrNotFound
+		}
+		if err != nil {
 			return model.Graph{}, fmt.Errorf("그래프 수 한도 계정 잠금: %w", err)
 		}
 		count, err := ownedGraphCount(ctx, tx, graph.CreatedBy)
@@ -63,6 +77,8 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 		if err := plan.CheckIncrease("graphs_per_account", count, 1, limits.GraphsPerAccount); err != nil {
 			return model.Graph{}, err
 		}
+	} else if err := requireAccount(ctx, tx, graph.CreatedBy); err != nil {
+		return model.Graph{}, err
 	}
 	row := tx.QueryRow(ctx, `
 		INSERT INTO public.context_graph (
@@ -219,16 +235,40 @@ func likeContains(value string) any {
 	return "%" + escaped + "%"
 }
 
-// UpdateGraph은 같은 트랜잭션에서 그래프 판 번호를 비교하고 하나 증가시킨다.
+// UpdateGraph는 활성 그래프를 잠근 뒤 현재 판을 비교하고 이름·설명만 갱신한다.
 func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersion int64, name, description string) (result model.Graph, err error) {
-	if !graphID.IsV7() || expectedVersion < 1 || name == "" {
-		return model.Graph{}, fmt.Errorf("그래프 갱신 인자가 올바르지 않다")
+	if !graphID.IsV7() {
+		return model.Graph{}, model.FieldError{Field: "graph_id", Message: "그래프 식별자는 UUIDv7이어야 한다"}
+	}
+	if expectedVersion < 1 {
+		return model.Graph{}, model.FieldError{Field: "expected_version", Message: "기대 판 번호는 1 이상이어야 한다"}
 	}
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 갱신 트랜잭션 시작: %w", err)
 	}
 	defer finishWrite(ctx, tx, "UpdateGraph", &err)
+
+	previous, err := scanGraph(tx.QueryRow(ctx, `
+		SELECT graph_id, name, description, created_by, created_at, last_activity_at,
+		       grace_started_at, stored_chars, version, deleted_at
+		FROM public.context_graph
+		WHERE graph_id = $1 AND deleted_at IS NULL FOR UPDATE`, graphID.String()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.Graph{}, ErrNotFound
+	}
+	if err != nil {
+		return model.Graph{}, fmt.Errorf("갱신 대상 그래프 조회: %w", err)
+	}
+	if previous.Version != expectedVersion {
+		return model.Graph{}, VersionConflictError{Current: previous.Version}
+	}
+	next := previous
+	next.Name, next.Description = name, description
+	next.Version++
+	if err := model.ValidateGraphUpdate(previous, next); err != nil {
+		return model.Graph{}, err
+	}
 
 	row := tx.QueryRow(ctx, `
 		UPDATE public.context_graph
@@ -240,12 +280,6 @@ func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersi
 	)
 	graph, err := scanGraph(row)
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return model.Graph{}, fmt.Errorf("그래프 갱신: %w", err)
-		}
-		if err := s.versionConflict(ctx, tx, graphID, expectedVersion); err != nil {
-			return model.Graph{}, err
-		}
 		return model.Graph{}, fmt.Errorf("그래프 갱신: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -320,19 +354,6 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
-}
-
-// versionConflict은 같은 트랜잭션에서 현재 판 번호를 읽어 충돌 또는 부재를 구분한다.
-func (s *Store) versionConflict(ctx context.Context, tx pgx.Tx, graphID model.ID, expectedVersion int64) error {
-	var current int64
-	err := tx.QueryRow(ctx, `SELECT version FROM public.context_graph WHERE graph_id = $1 AND deleted_at IS NULL`, graphID.String()).Scan(&current)
-	if err == nil {
-		return VersionConflictError{Current: current}
-	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	return fmt.Errorf("현재 그래프 판 번호 조회: %w", err)
 }
 
 // requireActiveGraph는 사용자 쓰기의 활성 상태 판정과 삭제 경합을 직렬화한다.

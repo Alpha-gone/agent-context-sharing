@@ -517,7 +517,11 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 		} else {
 			account, err := server.graphs.AccountByLoginID(ctx, request.PostForm.Get("login_id"))
 			if err != nil {
-				server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "대상 계정을 찾을 수 없습니다."})
+				status, message := http.StatusInternalServerError, "대상 계정을 조회할 수 없습니다."
+				if errors.Is(err, store.ErrNotFound) {
+					status, message = http.StatusBadRequest, "대상 계정을 찾을 수 없습니다."
+				}
+				server.render(writer, status, "message", pageData{Title: "권한과 팀 관리", Error: message})
 				return
 			}
 			subjectID = account.ID

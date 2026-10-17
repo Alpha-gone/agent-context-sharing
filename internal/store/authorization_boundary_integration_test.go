@@ -11,7 +11,7 @@ import (
 )
 
 func TestGradeMutationRechecksActorAfterGraphLockIntegration(t *testing.T) {
-	for _, action := range []string{"grant", "grant_team", "revoke"} {
+	for _, action := range []string{"grant", "grant_team", "transfer", "revoke"} {
 		for _, change := range []string{"직접 등급 하향", "팀 구성원 제거", "팀 삭제"} {
 			t.Run(action+"/"+change, func(t *testing.T) {
 				database := newIntegrationStore(t)
@@ -57,6 +57,8 @@ func TestGradeMutationRechecksActorAfterGraphLockIntegration(t *testing.T) {
 				worker.Go(func() {
 					if action == "grant" {
 						result <- database.GrantGraph(ctx, graphID, actorID, targetID, GrantSubjectAccount, model.GraphGradeEditor)
+					} else if action == "transfer" {
+						result <- database.GrantGraph(ctx, graphID, actorID, targetID, GrantSubjectAccount, model.GraphGradeOwner)
 					} else if action == "grant_team" {
 						result <- database.GrantGraph(ctx, graphID, actorID, targetTeamID, GrantSubjectTeam, model.GraphGradeEditor)
 					} else {

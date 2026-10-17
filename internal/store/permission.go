@@ -286,14 +286,16 @@ func sortedUniqueGraphIDs(graphIDs []model.ID) []model.ID {
 // usableOwnersSQL은 각 부여를 통해 소유자 등급을 쓸 수 있는 계정을 나열한다. 부여 식별자를
 // 함께 남겨 권한 화면이 부여 전체의 회수 결과를 같은 규칙으로 판정하게 한다.
 const usableOwnersSQL = `
-	SELECT subject_type, subject_id, subject_id AS account_id
-	FROM public.graph_grant
-	WHERE graph_id = $1 AND subject_type = 'account' AND grade = 'owner'
+	SELECT permission.subject_type, permission.subject_id, permission.subject_id AS account_id
+	FROM public.graph_grant AS permission
+	JOIN public.account AS account ON account.account_id = permission.subject_id
+	WHERE permission.graph_id = $1 AND permission.subject_type = 'account' AND permission.grade = 'owner'
 	UNION ALL
 	SELECT team_grant.subject_type, team_grant.subject_id, member.account_id
 	FROM public.graph_grant AS team_grant
 	JOIN public.team_member AS member ON member.team_id = team_grant.subject_id
 	JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL
+	JOIN public.account AS account ON account.account_id = member.account_id
 	WHERE team_grant.graph_id = $1 AND team_grant.subject_type = 'team' AND team_grant.grade = 'owner'`
 
 // requireOwner는 그래프에 소유자 등급을 쓸 수 있는 계정이 남아 있는지 본다.

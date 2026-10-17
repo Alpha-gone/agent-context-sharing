@@ -37,6 +37,15 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 	if err := requireGraphOwner(ctx, tx, graphID, actorID); err != nil {
 		return err
 	}
+	if subjectType == GrantSubjectAccount {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.account WHERE account_id = $1)`, subjectID.String()).Scan(&exists); err != nil {
+			return fmt.Errorf("그래프 등급 대상 계정 확인: %w", err)
+		}
+		if !exists {
+			return ErrNotFound
+		}
+	}
 	var before *string
 	if err := tx.QueryRow(ctx, `SELECT grade FROM public.graph_grant WHERE graph_id = $1 AND subject_type = $2 AND subject_id = $3`, graphID.String(), subjectType, subjectID.String()).Scan(&before); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("기존 그래프 등급 조회: %w", err)

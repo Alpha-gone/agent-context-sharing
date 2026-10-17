@@ -566,7 +566,7 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 		}
 	case "create_team":
 		if _, err := server.graphs.CreateTeam(ctx, actorID, strings.TrimSpace(request.PostForm.Get("team_name"))); err != nil {
-			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "팀을 만들 수 없습니다."})
+			server.render(writer, teamMutationStatus(err), "message", pageData{Title: "권한과 팀 관리", Error: "팀을 만들 수 없습니다."})
 			return
 		}
 	case "add_member", "remove_member":
@@ -577,7 +577,11 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 		}
 		account, err := server.graphs.AccountByLoginID(ctx, request.PostForm.Get("login_id"))
 		if err != nil {
-			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "대상 계정을 찾을 수 없습니다."})
+			status, message := http.StatusInternalServerError, "대상 계정을 조회할 수 없습니다."
+			if errors.Is(err, store.ErrNotFound) {
+				status, message = http.StatusBadRequest, "대상 계정을 찾을 수 없습니다."
+			}
+			server.render(writer, status, "message", pageData{Title: "권한과 팀 관리", Error: message})
 			return
 		}
 		if request.PostForm.Get("action") == "add_member" {
@@ -586,7 +590,7 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 			err = server.graphs.RemoveTeamMemberWithAudit(ctx, teamID, actorID, account.ID)
 		}
 		if err != nil {
-			server.render(writer, http.StatusConflict, "message", pageData{Title: "권한과 팀 관리", Error: "팀 구성원을 변경할 수 없습니다."})
+			server.render(writer, teamMutationStatus(err), "message", pageData{Title: "권한과 팀 관리", Error: "팀 구성원을 변경할 수 없습니다."})
 			return
 		}
 	case "delete_team", "restore_team":
@@ -596,7 +600,7 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 			return
 		}
 		if err := server.graphs.SetTeamDeleted(ctx, teamID, actorID, request.PostForm.Get("action") == "delete_team"); err != nil {
-			server.render(writer, http.StatusConflict, "message", pageData{Title: "권한과 팀 관리", Error: "팀 상태를 바꿀 수 없습니다."})
+			server.render(writer, teamMutationStatus(err), "message", pageData{Title: "권한과 팀 관리", Error: "팀 상태를 바꿀 수 없습니다."})
 			return
 		}
 	default:
@@ -604,6 +608,19 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 		return
 	}
 	http.Redirect(writer, request, accessPath(graphID), http.StatusSeeOther)
+}
+
+func teamMutationStatus(err error) int {
+	if errors.Is(err, store.ErrNotFound) {
+		return http.StatusNotFound
+	}
+	if errors.Is(err, store.ErrInvalidState) {
+		return http.StatusConflict
+	}
+	if _, ok := errors.AsType[model.FieldError](err); ok {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }
 
 // accessPath는 그래프가 있는 진입과 팀만 관리하는 진입의 되돌아갈 주소를 나눈다.

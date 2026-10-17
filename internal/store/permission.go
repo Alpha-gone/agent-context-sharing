@@ -388,14 +388,16 @@ func accessibleAccountCount(ctx context.Context, tx pgx.Tx, graphID model.ID) (i
 	var accounts int
 	err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM (
-			SELECT subject_id AS account_id
-			FROM public.graph_grant
-			WHERE graph_id = $1 AND subject_type = 'account'
+			SELECT permission.subject_id AS account_id
+			FROM public.graph_grant AS permission
+			JOIN public.account AS account ON account.account_id = permission.subject_id
+			WHERE permission.graph_id = $1 AND permission.subject_type = 'account'
 			UNION
 			SELECT member.account_id
 			FROM public.graph_grant AS team_grant
 			JOIN public.team_member AS member ON member.team_id = team_grant.subject_id
 			JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL
+			JOIN public.account AS account ON account.account_id = member.account_id
 			WHERE team_grant.graph_id = $1 AND team_grant.subject_type = 'team'
 		) AS accessible`, graphID.String()).Scan(&accounts)
 	if err != nil {

@@ -38,12 +38,8 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 		return err
 	}
 	if subjectType == GrantSubjectAccount {
-		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.account WHERE account_id = $1)`, subjectID.String()).Scan(&exists); err != nil {
-			return fmt.Errorf("그래프 등급 대상 계정 확인: %w", err)
-		}
-		if !exists {
-			return ErrNotFound
+		if err := requireAccount(ctx, tx, subjectID); err != nil {
+			return err
 		}
 	}
 	var before *string
@@ -174,8 +170,11 @@ func (s *Store) ListGraphGrants(ctx context.Context, graphID model.ID) ([]model.
 
 // CreateTeam은 인증된 계정을 팀 관리자로 하여 팀을 만들고 감사 기록을 남긴다.
 func (s *Store) CreateTeam(ctx context.Context, actorID model.ID, name string) (model.Team, error) {
-	if !actorID.IsV7() || name == "" {
+	if !actorID.IsV7() {
 		return model.Team{}, fmt.Errorf("팀 생성 인자가 올바르지 않다")
+	}
+	if name == "" {
+		return model.Team{}, model.FieldError{Field: "name", Message: "팀 이름은 비어 있을 수 없다"}
 	}
 	teamID, err := model.NewID()
 	if err != nil {
@@ -187,6 +186,9 @@ func (s *Store) CreateTeam(ctx context.Context, actorID model.ID, name string) (
 		return model.Team{}, fmt.Errorf("팀 생성 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := requireAccount(ctx, tx, actorID); err != nil {
+		return model.Team{}, err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO public.team (team_id, name, manager_account_id, created_at) VALUES ($1, $2, $3, $4)`, teamID.String(), name, actorID.String(), now); err != nil {
 		return model.Team{}, fmt.Errorf("팀 생성: %w", err)
 	}
@@ -250,7 +252,7 @@ func (s *Store) ListManagedTeams(ctx context.Context, managerID model.ID) ([]mod
 	return teams, nil
 }
 
-// AddTeamMember는 팀 관리자만 호출하도록 전송 계층이 확인한 뒤 구성원을 추가한다.
+// AddTeamMember는 저장 트랜잭션에서 관리자와 대상 계정을 확인하고 구성원을 추가한다.
 func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID model.ID) error {
 	if !teamID.IsV7() || !actorID.IsV7() || !accountID.IsV7() {
 		return fmt.Errorf("팀 구성원 추가 인자가 올바르지 않다")
@@ -261,6 +263,9 @@ func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID mo
 	}
 	defer tx.Rollback(ctx)
 	if err := requireTeamManager(ctx, tx, teamID, actorID); err != nil {
+		return err
+	}
+	if err := requireAccount(ctx, tx, accountID); err != nil {
 		return err
 	}
 	graphIDs, err := lockTeamGraphs(ctx, tx, teamID)
@@ -410,6 +415,17 @@ func (s *Store) insertWebAudit(ctx context.Context, tx pgx.Tx, record webAuditRe
 		VALUES ($1, $2, $3, $4, clock_timestamp(), $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		auditID.String(), record.TargetKind, record.Action, record.ActorID.String(), graphID, subjectType, subjectID, before, after, teamID, memberID, contextID, requesterID); err != nil {
 		return fmt.Errorf("웹 감사 기록: %w", err)
+	}
+	return nil
+}
+
+func requireAccount(ctx context.Context, tx pgx.Tx, accountID model.ID) error {
+	var found bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.account WHERE account_id=$1)`, accountID.String()).Scan(&found); err != nil {
+		return fmt.Errorf("계정 존재 확인: %w", err)
+	}
+	if !found {
+		return ErrNotFound
 	}
 	return nil
 }

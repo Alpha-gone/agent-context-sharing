@@ -186,12 +186,12 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 		return IndexProcessResult{}, err
 	}
 	value, err := s.context(ctx, s.pool, task.GraphID, task.ContextID)
+	if errors.Is(err, ErrNotFound) || (err == nil && (value.DeletedAt != nil || !s.indexTargets.indexes(value.Layer))) {
+		_, deleteErr := s.pool.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1
+			AND enqueued_at = $2 AND next_attempt_at = $3 AND state = 'pending'`, task.ID.String(), claim.enqueuedAt, claim.leasedUntil)
+		return IndexProcessResult{Found: true, Task: task}, deleteErr
+	}
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			_, deleteErr := s.pool.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1
-				AND enqueued_at = $2 AND next_attempt_at = $3 AND state = 'pending'`, task.ID.String(), claim.enqueuedAt, claim.leasedUntil)
-			return IndexProcessResult{Found: true, Task: task}, deleteErr
-		}
 		return s.failIndexTask(ctx, task, claim, "색인 대상 조회 실패", true, err)
 	}
 	task.Body = value.Body
@@ -381,9 +381,30 @@ func (s *Store) CheckEmbeddingSchema(ctx context.Context, vectorType string, dim
 	return nil
 }
 
-// ReindexOutdatedEmbeddings는 현재 모델과 다른 벡터가 남은 그래프 전체를 다시 대기열에 넣는다.
+// ReindexOutdatedEmbeddings는 모델·대상 계층 전환이 필요한 그래프를 다시 등록한다.
 func (s *Store) ReindexOutdatedEmbeddings(ctx context.Context, modelID string) error {
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT graph_id::text FROM public.context_embedding WHERE model_id <> $1`, modelID)
+	if strings.TrimSpace(modelID) == "" {
+		return fmt.Errorf("현재 임베딩 모델 식별자가 없다")
+	}
+	// 같은 모델이어도 원천 제외 뒤 남은 벡터·작업과 원천 재포함 뒤 누락을 맞춘다.
+	// 벡터가 없더라도 작업이 이미 있으면 리스·재시도·failed를 기동만으로 초기화하지 않는다.
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT node.properties ->> 'graph_id'::text
+		FROM `+s.contextTable()+` AS node
+		LEFT JOIN public.context_embedding AS embedding
+		  ON embedding.context_id::text = node.properties ->> 'context_id'::text
+		 AND embedding.graph_id::text = node.properties ->> 'graph_id'::text
+		WHERE (node.properties ->> 'deleted_at'::text IS NULL AND embedding.model_id <> $1)
+		   OR (node.properties ->> 'deleted_at'::text IS NULL AND embedding.context_id IS NULL
+		       AND (NOT $2::boolean OR node.properties ->> 'layer'::text <> 'source')
+		       AND NOT EXISTS (SELECT 1 FROM public.index_task AS task
+		           WHERE task.context_id::text = node.properties ->> 'context_id'::text
+		             AND task.graph_id::text = node.properties ->> 'graph_id'::text))
+		   OR ($2::boolean AND node.properties ->> 'layer'::text = 'source'
+		       AND (embedding.context_id IS NOT NULL OR EXISTS (
+		           SELECT 1 FROM public.index_task AS task
+		           WHERE task.context_id::text = node.properties ->> 'context_id'::text
+		             AND task.graph_id::text = node.properties ->> 'graph_id'::text)))
+		ORDER BY 1`, modelID, s.indexTargets == IndexTargetsWithoutSource)
 	if err != nil {
 		return fmt.Errorf("재색인 그래프 조회: %w", err)
 	}
@@ -415,8 +436,8 @@ func (s *Store) ReindexOutdatedEmbeddings(ctx context.Context, modelID string) e
 	return nil
 }
 
-// OutdatedEmbeddingCount는 현재 모델과 다른 임베딩 행 수를 돌려준다. 이 수는 재색인
-// 진행 중인 행 수이므로 별도 상태 없이 재색인 진행률을 관측하는 값으로 쓴다.
+// OutdatedEmbeddingCount는 현재 모델과 다른 물리 임베딩 행 수를 돌려준다.
+// 삭제된 컨텍스트의 보존 벡터도 포함하므로 현재 대상의 진행 판정에는 ReindexProgress를 쓴다.
 func (s *Store) OutdatedEmbeddingCount(ctx context.Context, modelID string) (int, error) {
 	if strings.TrimSpace(modelID) == "" {
 		return 0, fmt.Errorf("현재 임베딩 모델 식별자가 없다")
@@ -426,6 +447,52 @@ func (s *Store) OutdatedEmbeddingCount(ctx context.Context, modelID string) (int
 		return 0, fmt.Errorf("이전 임베딩 수 조회: %w", err)
 	}
 	return count, nil
+}
+
+// IndexProgress는 같은 SQL 스냅숏에서 계산한 재색인 작업량이다. 항목은 겹칠 수 있어
+// 합계를 컨텍스트 수나 완료율로 사용하지 않는다. Missing은 현재 모델이 없는 활성 대상이다.
+type IndexProgress struct {
+	OldModelEmbeddings int
+	Missing            int
+	Pending            int
+	Failed             int
+}
+
+// ReindexProgress는 그래프별 또는 전체(영 식별자) 재색인 상태를 저장하지 않고 계산한다.
+// 삭제·제외 계층의 보존 벡터는 대상 수에서 빼고, 남은 작업의 실패·리스는 숨기지 않는다.
+func (s *Store) ReindexProgress(ctx context.Context, graphID model.ID, modelID string) (IndexProgress, error) {
+	if (!graphID.IsZero() && !graphID.IsV7()) || strings.TrimSpace(modelID) == "" {
+		return IndexProgress{}, fmt.Errorf("재색인 진행 조회의 그래프 또는 모델 식별자가 올바르지 않다")
+	}
+	var scope any
+	if !graphID.IsZero() {
+		scope = graphID.String()
+	}
+	var progress IndexProgress
+	err := s.pool.QueryRow(ctx, `WITH targets AS (
+		SELECT properties ->> 'context_id'::text AS context_id,
+		       properties ->> 'graph_id'::text AS graph_id
+		FROM `+s.contextTable()+`
+		WHERE ($1::uuid IS NULL OR properties ->> 'graph_id'::text = $1::text)
+		  AND properties ->> 'deleted_at'::text IS NULL
+		  AND ($3::boolean OR properties ->> 'layer'::text <> 'source')
+	), tasks AS (
+		SELECT state FROM public.index_task WHERE $1::uuid IS NULL OR graph_id = $1
+	)
+	SELECT (SELECT count(*) FROM public.context_embedding AS embedding JOIN targets
+	          ON embedding.context_id::text = targets.context_id AND embedding.graph_id::text = targets.graph_id
+	        WHERE embedding.model_id <> $2),
+	       (SELECT count(*) FROM targets WHERE NOT EXISTS (
+	          SELECT 1 FROM public.context_embedding AS embedding
+	          WHERE embedding.context_id::text = targets.context_id AND embedding.graph_id::text = targets.graph_id
+	            AND embedding.model_id = $2)),
+	       (SELECT count(*) FROM tasks WHERE state = 'pending'),
+	       (SELECT count(*) FROM tasks WHERE state = 'failed')`, scope, modelID,
+		s.indexTargets != IndexTargetsWithoutSource).Scan(&progress.OldModelEmbeddings, &progress.Missing, &progress.Pending, &progress.Failed)
+	if err != nil {
+		return IndexProgress{}, fmt.Errorf("재색인 진행 조회: %w", err)
+	}
+	return progress, nil
 }
 
 // ReindexGraph는 그래프의 컨텍스트를 현재 색인 대상 구성에 맞게 다시 맞춘다.
@@ -438,7 +505,15 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 	if !graphID.IsV7() {
 		return fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
 	}
-	rows, err := s.pool.Query(ctx, `SELECT properties ->> 'context_id'::text, properties ->> 'layer'::text FROM `+s.contextTable()+` WHERE properties ->> 'graph_id'::text = $1`, graphID.String())
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("재색인 등록 트랜잭션 시작: %w", err)
+	}
+	defer finishWrite(ctx, tx, "ReindexGraph", &err)
+	rows, err := tx.Query(ctx, `SELECT properties ->> 'context_id'::text, properties ->> 'layer'::text,
+		properties ->> 'deleted_at'::text IS NOT NULL
+		FROM `+s.contextTable()+` WHERE properties ->> 'graph_id'::text = $1
+		ORDER BY properties ->> 'context_id'::text`, graphID.String())
 	if err != nil {
 		return fmt.Errorf("재색인 대상 조회: %w", err)
 	}
@@ -451,7 +526,8 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 	excluded := make([]string, 0)
 	for rows.Next() {
 		var rawID, rawLayer string
-		if err := rows.Scan(&rawID, &rawLayer); err != nil {
+		var deleted bool
+		if err := rows.Scan(&rawID, &rawLayer, &deleted); err != nil {
 			return fmt.Errorf("재색인 대상 행 해석: %w", err)
 		}
 		contextID, err := model.ParseID(rawID)
@@ -459,7 +535,9 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 			return fmt.Errorf("재색인 대상 식별자 해석: %w", err)
 		}
 		if s.indexTargets.indexes(model.Layer(rawLayer)) {
-			targets = append(targets, reindexTarget{id: contextID, layer: model.Layer(rawLayer)})
+			if !deleted {
+				targets = append(targets, reindexTarget{id: contextID, layer: model.Layer(rawLayer)})
+			}
 			continue
 		}
 		excluded = append(excluded, contextID.String())
@@ -467,11 +545,6 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("재색인 대상 행 읽기: %w", err)
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("재색인 등록 트랜잭션 시작: %w", err)
-	}
-	defer finishWrite(ctx, tx, "ReindexGraph", &err)
 	for _, target := range targets {
 		if err := s.enqueueIndexTask(ctx, tx, graphID, target.id, target.layer); err != nil {
 			return err
@@ -482,12 +555,15 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 		if _, err := tx.Exec(ctx, `DELETE FROM public.index_task WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded); err != nil {
 			return fmt.Errorf("색인 대상에서 빠진 대기 작업 제거: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM public.context_embedding WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded); err != nil {
+		removed, err := tx.Exec(ctx, `DELETE FROM public.context_embedding WHERE graph_id = $1 AND context_id = ANY($2::uuid[])`, graphID.String(), excluded)
+		if err != nil {
 			return fmt.Errorf("색인 대상에서 빠진 임베딩 제거: %w", err)
 		}
 		// 임베딩을 지우면 의미 유사도 채널의 후보가 바뀌므로 공개와 같이 내용 판을 올린다.
-		if err := bumpContentRevision(ctx, tx, graphID); err != nil {
-			return err
+		if removed.RowsAffected() > 0 {
+			if err := bumpContentRevision(ctx, tx, graphID); err != nil {
+				return err
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

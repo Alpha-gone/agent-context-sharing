@@ -156,17 +156,17 @@ func (worker *Worker) run(ctx context.Context) {
 	}
 	// 오래된 모델의 벡터를 다시 등록하는 일은 기동을 막을 이유가 없다. 대상이 많으면 그만큼
 	// 기동이 늦어지고, 등록이 끝나기 전에 죽어도 upsert라 다음 기동이 같은 일을 다시 한다.
-	remaining := -1
 	if err := worker.store.ReindexOutdatedEmbeddings(ctx, worker.ModelID()); err != nil {
 		worker.logger.ErrorContext(ctx, "이전 임베딩 재색인 등록 실패", "reason_code", "reindex_registration_failed")
 	} else {
-		remaining = worker.logReindexProgress(ctx)
+		worker.logReindexProgress(ctx)
 	}
 	nextProgress := time.Now().Add(reindexProgressInterval)
 	worker.consume(ctx, func(ctx context.Context) (bool, error) {
-		// 남은 행이 0이 되면 더 늘지 않으므로 그때부터 진행률 조회를 멈춘다.
-		if remaining != 0 && !time.Now().Before(nextProgress) {
-			remaining = worker.logReindexProgress(ctx)
+		// 차원 전환은 옛 벡터를 비우며, 실행 중 재등록도 생길 수 있다.
+		// 옛 모델 행이 0이어도 미색인·대기·실패를 계속 관측한다.
+		if !time.Now().Before(nextProgress) {
+			worker.logReindexProgress(ctx)
 			nextProgress = time.Now().Add(reindexProgressInterval)
 		}
 		return worker.RunOnce(ctx)
@@ -200,16 +200,16 @@ func (worker *Worker) consume(ctx context.Context, once func(context.Context) (b
 	}
 }
 
-// logReindexProgress는 옛 model_id로 남은 임베딩 행 수를 재색인 진행률로 기록하고 그 수를
-// 돌려준다. 조회에 실패하면 -1을 돌려 다음 간격에 다시 조회하게 한다.
-func (worker *Worker) logReindexProgress(ctx context.Context) int {
-	remaining, err := worker.store.OutdatedEmbeddingCount(ctx, worker.ModelID())
+// logReindexProgress는 현재 대상의 옛 벡터·현재 모델 누락과 큐 상태를 함께 기록한다.
+func (worker *Worker) logReindexProgress(ctx context.Context) {
+	progress, err := worker.store.ReindexProgress(ctx, model.ID{}, worker.ModelID())
 	if err != nil {
 		worker.logger.ErrorContext(ctx, "이전 임베딩 진행률 조회 실패", "reason_code", "reindex_progress_failed")
-		return -1
+		return
 	}
-	worker.logger.InfoContext(ctx, "이전 임베딩 재색인 진행률", "old_model_embeddings_remaining", remaining)
-	return remaining
+	worker.logger.InfoContext(ctx, "이전 임베딩 재색인 진행률",
+		"old_model_embeddings_remaining", progress.OldModelEmbeddings,
+		"missing_current_embeddings", progress.Missing, "pending", progress.Pending, "failed", progress.Failed)
 }
 
 // RunOnce는 현재 가능한 색인 작업 하나를 처리하고, 완료된 사건의 의미 관계 후보를 제안한다.

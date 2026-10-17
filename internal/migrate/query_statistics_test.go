@@ -35,7 +35,7 @@ func TestQueryStatisticsUpgradeIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []int{1, 0} {
-		if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != want {
+		if count, err := applyTarget(t.Context(), pool, migrationFilesBefore(t, 12), cfg); err != nil || count != want {
 			t.Fatalf("추가·반복 적용=%d want=%d: %v", count, want, err)
 		}
 	}
@@ -56,7 +56,7 @@ func TestQueryStatisticsUpgradeIntegration(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), `SELECT indisvalid AND indisready FROM pg_index WHERE indexrelid='public.revoked_token_expires_idx'::regclass`).Scan(&valid); err != nil || !valid {
 		t.Fatalf("만료 인덱스 준비=%t: %v", valid, err)
 	}
-	files, err := migrate.Load(migrations.FS, ".", cfg)
+	files, err := migrate.Load(migrationFilesBefore(t, 12), ".", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

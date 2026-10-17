@@ -307,16 +307,12 @@ func Pending(migrations []Migration, applied map[int]Applied) ([]Migration, erro
 }
 
 // Apply는 마이그레이션 하나를 이력 기록과 같은 트랜잭션에서 적용한다.
-func Apply(ctx context.Context, db database, m Migration) error {
+func Apply(ctx context.Context, db database, m Migration) (err error) {
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("트랜잭션 시작: %w", err)
 	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_ = tx.Rollback(cleanupCtx)
-	}()
+	defer rollbackMigration(ctx, tx, &err)
 
 	if _, err := tx.Exec(ctx, m.Rendered); err != nil {
 		return fmt.Errorf("버전 %d(%s) 적용: %w", m.Version, m.Name, err)
@@ -333,4 +329,12 @@ func Apply(ctx context.Context, db database, m Migration) error {
 		return fmt.Errorf("버전 %d(%s) 커밋: %w", m.Version, m.Name, err)
 	}
 	return nil
+}
+
+func rollbackMigration(ctx context.Context, tx pgx.Tx, err *error) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if rollbackErr := tx.Rollback(cleanupCtx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+		*err = errors.Join(*err, fmt.Errorf("마이그레이션 롤백: %w", rollbackErr))
+	}
 }

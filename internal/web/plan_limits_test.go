@@ -29,13 +29,14 @@ func (s *planRestoreStore) SetContextDeleted(_ context.Context, _, _ model.ID, a
 
 func TestWebRestoreLimitMessage(t *testing.T) {
 	for _, sample := range []struct {
-		name string
-		err  error
-		want string
+		name   string
+		err    error
+		want   string
+		status int
 	}{
-		{"storage", plan.LimitError{Name: "stored_characters_per_graph", Current: 13, Allowed: 10}, "현재 13자, 허용 10자"},
-		{"internal", errors.New("sensitive database details"), "현재 상태에서는 처리할 수 없습니다."},
-		{"unknown_limit", plan.LimitError{Name: "sensitive database details", Current: 13, Allowed: 10}, "현재 상태에서는 처리할 수 없습니다."},
+		{"storage", plan.LimitError{Name: "stored_characters_per_graph", Current: 13, Allowed: 10}, "현재 13자, 허용 10자", http.StatusConflict},
+		{"internal", errors.New("sensitive database details"), "삭제·복구 처리 중 오류가 발생했습니다.", http.StatusInternalServerError},
+		{"unknown_limit", plan.LimitError{Name: "sensitive database details", Current: 13, Allowed: 10}, "현재 상태에서는 처리할 수 없습니다.", http.StatusConflict},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			account, graph := testID(t), testID(t)
@@ -46,7 +47,7 @@ func TestWebRestoreLimitMessage(t *testing.T) {
 			}
 			response := httptest.NewRecorder()
 			server.ServeHTTP(response, sessionRequest(http.MethodPost, "/graphs/"+graph.String()+"/deletion", url.Values{"action": {"restore_context"}, "context_id": {testID(t).String()}}))
-			if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), sample.want) || strings.Contains(response.Body.String(), "sensitive database details") {
+			if response.Code != sample.status || !strings.Contains(response.Body.String(), sample.want) || strings.Contains(response.Body.String(), "sensitive database details") {
 				t.Fatalf("복구 오류 안내=%d %s", response.Code, response.Body.String())
 			}
 		})

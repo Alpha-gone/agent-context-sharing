@@ -16,6 +16,7 @@ func TestContentRevisionIncrementsOnSearchVisibleWritesIntegration(t *testing.T)
 	actorID := newTestID(t)
 	createTestAccount(t, database, actorID)
 	graphID := createTestGraph(t, database, actorID)
+	grantAccount(t, database, graphID, actorID, model.GraphGradeOwner)
 	revision := func() int64 {
 		t.Helper()
 		var value int64

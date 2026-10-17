@@ -16,6 +16,7 @@ func TestPlanStorageAccountingIntegration(t *testing.T) {
 	actor := newTestID(t)
 	createTestAccount(t, database, actor)
 	graph := createTestGraph(t, database, actor)
+	grantAccount(t, database, graph, actor, model.GraphGradeOwner)
 	source := testSourceContext(t, graph, actor, "api://perm05/"+graph.String())
 	source.Body = "한글🙂a"
 	if _, err := database.CreateContextWithOperation(t.Context(), graph, source, nil, nil, WriteLimits{StoredCharsPerGraph: 4}); err != nil {

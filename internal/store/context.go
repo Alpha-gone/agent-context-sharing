@@ -361,6 +361,23 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if !discard {
 		delta = -delta
 	}
+	if webAudit != nil {
+		// 원천·파생은 MCP 갱신과 같은 정점→그래프 순서를 유지한다. 웹만 먼저
+		// 그래프를 쥐면 정점을 쥔 MCP 갱신의 활동 기록과 서로 기다리게 된다.
+		if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+			return model.Context{}, err
+		}
+		if err := requireGraphOwner(ctx, tx, graphID, webAudit.ActorID); err != nil {
+			return model.Context{}, err
+		}
+		var active bool
+		if err := tx.QueryRow(ctx, `SELECT deleted_at IS NULL FROM public.context_graph WHERE graph_id=$1`, graphID.String()).Scan(&active); err != nil {
+			return model.Context{}, fmt.Errorf("웹 상태 전이 그래프 조회: %w", err)
+		}
+		if !active {
+			return model.Context{}, ErrInvalidState
+		}
+	}
 	if err := s.updateGraphActivity(ctx, tx, graphID, delta, limits.StoredCharsPerGraph); err != nil {
 		return model.Context{}, err
 	}

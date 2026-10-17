@@ -20,6 +20,7 @@ func boundaryGraph(t *testing.T, database *Store) (model.ID, model.ID, model.Con
 	actor := newTestID(t)
 	createTestAccount(t, database, actor)
 	graph := createTestGraph(t, database, actor)
+	grantAccount(t, database, graph, actor, model.GraphGradeOwner)
 	source, err := database.CreateContext(t.Context(), graph, testSourceContext(t, graph, actor, "api://boundaries/"+graph.String()), nil)
 	if err != nil {
 		t.Fatal(err)

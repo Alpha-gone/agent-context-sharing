@@ -212,8 +212,12 @@ func TestOperatorRestoreRequiresPendingAutoDeletionIntegration(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			graphID := createTestGraph(t, database, actorID)
 			if state != "active" {
+				grantAccount(t, database, graphID, actorID, model.GraphGradeOwner)
 				if err := database.SetGraphDeleted(t.Context(), graphID, actorID, true); err != nil {
 					t.Fatalf("삭제 준비: %v", err)
+				}
+				if _, err := database.pool.Exec(t.Context(), `DELETE FROM public.graph_grant WHERE graph_id=$1`, graphID.String()); err != nil {
+					t.Fatal(err)
 				}
 			}
 			if state == "auto_deleted_without_request" {

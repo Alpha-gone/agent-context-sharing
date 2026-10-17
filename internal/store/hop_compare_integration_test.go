@@ -29,6 +29,7 @@ func createHopSample(t *testing.T, database *Store, label string) hopSample {
 	actorID := newTestID(t)
 	createTestAccount(t, database, actorID)
 	graphID := createTestGraph(t, database, actorID)
+	grantAccount(t, database, graphID, actorID, model.GraphGradeOwner)
 	sample := hopSample{graphID: graphID, nodes: map[string]model.Context{}}
 	create := func(name string, value model.Context, derivedFrom ...model.ID) model.Context {
 		t.Helper()

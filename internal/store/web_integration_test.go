@@ -16,6 +16,7 @@ func TestGraphVisualizationKeepsEdgesInsideResult(t *testing.T) {
 	actorID := newTestID(t)
 	createTestAccount(t, store, actorID)
 	graphID := createTestGraph(t, store, actorID)
+	grantAccount(t, store, graphID, actorID, model.GraphGradeOwner)
 
 	source := testSourceContext(t, graphID, actorID, "api://viz-edges/"+newTestID(t).String())
 	createdSource, err := store.CreateContext(t.Context(), graphID, source, nil)
@@ -160,6 +161,7 @@ func TestContextDeletionAndRestoreRoundTrip(t *testing.T) {
 	actorID := newTestID(t)
 	createTestAccount(t, store, actorID)
 	graphID := createTestGraph(t, store, actorID)
+	grantAccount(t, store, graphID, actorID, model.GraphGradeOwner)
 
 	source := testSourceContext(t, graphID, actorID, "api://node-restore/"+newTestID(t).String())
 	createdSource, err := store.CreateContext(t.Context(), graphID, source, nil)

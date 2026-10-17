@@ -640,7 +640,8 @@ func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Re
 				return
 			}
 			if err := server.graphs.SetGraphDeleted(request.Context(), graphID, accountID, action == "delete"); err != nil {
-				server.render(writer, http.StatusConflict, "message", pageData{Title: "삭제와 복구", Error: "현재 상태에서는 처리할 수 없습니다."})
+				status, message := deletionError(err)
+				server.render(writer, status, "message", pageData{Title: "삭제와 복구", Error: message})
 				return
 			}
 			http.Redirect(writer, request, "/graphs", http.StatusSeeOther)
@@ -651,11 +652,8 @@ func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Re
 				return
 			}
 			if _, err := server.graphs.SetContextDeleted(request.Context(), graphID, contextID, accountID, action == "delete_context", server.config.Plans.For(accountID).StoredCharactersPerGraph); err != nil {
-				message := "현재 상태에서는 처리할 수 없습니다."
-				if limit, ok := errors.AsType[plan.LimitError](err); ok && limit.Name == "stored_characters_per_graph" {
-					message = fmt.Sprintf("그래프 저장량 한도를 초과합니다. 현재 %d자, 허용 %d자입니다.", limit.Current, limit.Allowed)
-				}
-				server.render(writer, http.StatusConflict, "message", pageData{Title: "삭제와 복구", Error: message})
+				status, message := deletionError(err)
+				server.render(writer, status, "message", pageData{Title: "삭제와 복구", Error: message})
 				return
 			}
 			http.Redirect(writer, request, "/graphs/"+graphID.String()+"/deletion", http.StatusSeeOther)
@@ -665,6 +663,22 @@ func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Re
 	default:
 		methodNotAllowed(writer, "GET, POST")
 	}
+}
+
+func deletionError(err error) (int, string) {
+	if errors.Is(err, store.ErrNotFound) {
+		return http.StatusNotFound, "대상을 찾을 수 없거나 접근 권한이 변경되었습니다."
+	}
+	if errors.Is(err, store.ErrInvalidState) {
+		return http.StatusConflict, "현재 상태에서는 처리할 수 없습니다."
+	}
+	if limit, ok := errors.AsType[plan.LimitError](err); ok {
+		if limit.Name == "stored_characters_per_graph" {
+			return http.StatusConflict, fmt.Sprintf("그래프 저장량 한도를 초과합니다. 현재 %d자, 허용 %d자입니다.", limit.Current, limit.Allowed)
+		}
+		return http.StatusConflict, "현재 상태에서는 처리할 수 없습니다."
+	}
+	return http.StatusInternalServerError, "삭제·복구 처리 중 오류가 발생했습니다."
 }
 
 // renderDeletion은 그래프 영향과 노드 목록을 모아 복구 화면을 그린다. context_id를 받은

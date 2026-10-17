@@ -55,6 +55,7 @@ const maxEmbeddingResponseBytes = 8 << 20
 // Worker는 짧은 확보·저장 트랜잭션 사이에서 제공자를 호출하는 비동기 소비자다.
 type Worker struct {
 	store      *store.Store
+	proposer   RelationProposer
 	config     Config
 	httpClient *http.Client
 	logger     *slog.Logger
@@ -64,10 +65,24 @@ type Worker struct {
 	stopOnce   sync.Once
 }
 
+// RelationProposer는 사건의 색인 공개 커밋 뒤 관계 후보 생성을 알리는 경계다.
+// 오류는 이미 커밋한 색인을 되돌리거나 색인 작업을 다시 등록하지 않는다.
+type RelationProposer interface {
+	ProposeSimilarEventRelations(context.Context, model.ID, model.ID, string) error
+}
+
 // New는 제공자 호출 경계와 작업 큐 소비자를 만든다.
 func New(database *store.Store, config Config, client *http.Client, logger *slog.Logger) (*Worker, error) {
+	return NewWithRelationProposer(database, config, client, logger, database)
+}
+
+// NewWithRelationProposer는 공개된 사건 색인의 관계 후보 신호를 조립 지점에서 주입한다.
+func NewWithRelationProposer(database *store.Store, config Config, client *http.Client, logger *slog.Logger, proposer RelationProposer) (*Worker, error) {
 	if database == nil {
 		return nil, fmt.Errorf("색인 저장소가 없다")
+	}
+	if proposer == nil {
+		return nil, fmt.Errorf("관계 후보 신호 수신기가 없다")
 	}
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -93,7 +108,7 @@ func New(database *store.Store, config Config, client *http.Client, logger *slog
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Worker{store: database, config: config, httpClient: &copy, logger: logger, done: make(chan struct{})}, nil
+	return &Worker{store: database, proposer: proposer, config: config, httpClient: &copy, logger: logger, done: make(chan struct{})}, nil
 }
 
 // ModelID는 모델과 벡터 표현이 같은지 비교할 수 있는 현재 색인 식별자다.
@@ -136,52 +151,65 @@ func (worker *Worker) Close(ctx context.Context) error {
 }
 
 func (worker *Worker) run(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
 	// 오래된 모델의 벡터를 다시 등록하는 일은 기동을 막을 이유가 없다. 대상이 많으면 그만큼
 	// 기동이 늦어지고, 등록이 끝나기 전에 죽어도 upsert라 다음 기동이 같은 일을 다시 한다.
-	remaining := -1
 	if err := worker.store.ReindexOutdatedEmbeddings(ctx, worker.ModelID()); err != nil {
-		worker.logger.ErrorContext(ctx, "이전 임베딩 재색인 등록 실패", "error", err)
+		worker.logger.ErrorContext(ctx, "이전 임베딩 재색인 등록 실패", "reason_code", "reindex_registration_failed")
 	} else {
-		remaining = worker.logReindexProgress(ctx)
+		worker.logReindexProgress(ctx)
 	}
 	nextProgress := time.Now().Add(reindexProgressInterval)
-	idleInterval := idleIntervalMin
-	timer := time.NewTimer(idleInterval)
-	defer timer.Stop()
-	for {
-		// 남은 행이 0이 되면 더 늘지 않으므로 그때부터 진행률 조회를 멈춘다.
-		if remaining != 0 && !time.Now().Before(nextProgress) {
-			remaining = worker.logReindexProgress(ctx)
+	worker.consume(ctx, func(ctx context.Context) (bool, error) {
+		// 차원 전환은 옛 벡터를 비우며, 실행 중 재등록도 생길 수 있다.
+		// 옛 모델 행이 0이어도 미색인·대기·실패를 계속 관측한다.
+		if !time.Now().Before(nextProgress) {
+			worker.logReindexProgress(ctx)
 			nextProgress = time.Now().Add(reindexProgressInterval)
 		}
-		processed, err := worker.RunOnce(ctx)
+		return worker.RunOnce(ctx)
+	})
+}
+
+// consume는 DB·제공자 한 회차와 조회 간격·취소의 경계를 분리한다.
+func (worker *Worker) consume(ctx context.Context, once func(context.Context) (bool, error)) {
+	interval := idleIntervalMin
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	for ctx.Err() == nil {
+		processed, err := once(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
-			worker.logger.ErrorContext(ctx, "색인 작업 처리 실패", "error", err)
+			worker.logger.ErrorContext(ctx, "색인 작업 처리 실패", "reason_code", "index_cycle_failed")
 		}
 		if processed {
-			idleInterval = idleIntervalMin
-			continue
+			interval = idleIntervalMin
+		} else {
+			interval = min(interval*2, idleIntervalMax)
 		}
-		timer.Reset(idleInterval)
+		timer.Reset(interval)
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
 		}
-		idleInterval = min(idleInterval*2, idleIntervalMax)
 	}
 }
 
-// logReindexProgress는 옛 model_id로 남은 임베딩 행 수를 재색인 진행률로 기록하고 그 수를
-// 돌려준다. 조회에 실패하면 -1을 돌려 다음 간격에 다시 조회하게 한다.
-func (worker *Worker) logReindexProgress(ctx context.Context) int {
-	remaining, err := worker.store.OutdatedEmbeddingCount(ctx, worker.ModelID())
+// logReindexProgress는 현재 대상의 옛 벡터·현재 모델 누락과 큐 상태를 함께 기록한다.
+func (worker *Worker) logReindexProgress(ctx context.Context) {
+	progress, err := worker.store.ReindexProgress(ctx, model.ID{}, worker.ModelID())
 	if err != nil {
-		worker.logger.ErrorContext(ctx, "이전 임베딩 진행률 조회 실패", "error", err)
-		return -1
+		worker.logger.ErrorContext(ctx, "이전 임베딩 진행률 조회 실패", "reason_code", "reindex_progress_failed")
+		return
 	}
-	worker.logger.InfoContext(ctx, "이전 임베딩 재색인 진행률", "old_model_embeddings_remaining", remaining)
-	return remaining
+	worker.logger.InfoContext(ctx, "이전 임베딩 재색인 진행률",
+		"old_model_embeddings_remaining", progress.OldModelEmbeddings,
+		"missing_current_embeddings", progress.Missing, "pending", progress.Pending, "failed", progress.Failed)
 }
 
 // RunOnce는 현재 가능한 색인 작업 하나를 처리하고, 완료된 사건의 의미 관계 후보를 제안한다.
@@ -214,18 +242,34 @@ func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error)
 			}
 			worker.logger.ErrorContext(ctx, "임베딩 제공자 호출 실패",
 				"context_id", task.ContextID.String(), "graph_id", task.GraphID.String(),
+				"job_id", task.ID.String(),
 				"correlation_id", task.CorrelationID, "attempts", task.Attempts,
 				"dimension_mismatch", dimensionMismatch, "error", err.Error())
 			return store.IndexTaskResult{Failure: failure, Retryable: retryableEmbeddingError(err)}
 		}
 		return store.IndexTaskResult{Embedding: embedding, ModelID: worker.ModelID()}
 	})
+	if result.Found {
+		outcome := "not_published"
+		if err != nil {
+			outcome = "unknown"
+		} else if result.Succeeded {
+			outcome = "committed"
+		}
+		worker.logger.InfoContext(ctx, "색인 결과 공개 회차",
+			"job_id", result.Task.ID.String(), "correlation_id", result.Task.CorrelationID,
+			"graph_id", result.Task.GraphID.String(), "context_id", result.Task.ContextID.String(),
+			"stage", "result_publication", "result", outcome)
+	}
 	if err != nil {
 		return result.Found, err
 	}
-	if result.Succeeded {
-		if err := worker.store.ProposeSimilarEventRelations(ctx, result.Task.GraphID, result.Task.ContextID, worker.ModelID()); err != nil {
-			worker.logger.ErrorContext(ctx, "의미 관계 후보 제안 실패", "graph_id", result.Task.GraphID.String(), "context_id", result.Task.ContextID.String(), "error", err)
+	if result.Succeeded && result.Task.Layer == model.LayerEvent {
+		if err := worker.proposer.ProposeSimilarEventRelations(ctx, result.Task.GraphID, result.Task.ContextID, worker.ModelID()); err != nil {
+			worker.logger.ErrorContext(ctx, "의미 관계 후보 제안 실패",
+				"job_id", result.Task.ID.String(), "correlation_id", result.Task.CorrelationID,
+				"graph_id", result.Task.GraphID.String(), "context_id", result.Task.ContextID.String(),
+				"stage", "relation_proposal", "result", "failed", "reason_code", "proposal_failed")
 		}
 	}
 	return result.Found, nil

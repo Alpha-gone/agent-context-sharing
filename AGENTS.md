@@ -55,7 +55,7 @@
 
 ## Child DOX Index
 
-- `cmd/AGENTS.md`: 서버 조립과 마이그레이션·평가·감사 실행 계약.
+- `cmd/AGENTS.md`: 서버·색인 조립과 마이그레이션·평가·감사 실행 계약.
 - `internal/AGENTS.md`: 업무 패키지·데이터 접근·자원 관리·시험 경계.
 - `migrations/AGENTS.md`: SQL 파일·치환·적용 이력·개발 통합 예외.
 - `spec/AGENTS.md`: 명세 문서·용어집과 서비스별 문서 계약.

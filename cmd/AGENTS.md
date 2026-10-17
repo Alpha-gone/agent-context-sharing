@@ -2,7 +2,7 @@
 
 ## 목적
 
-- `cmd/`는 서버 조립과 마이그레이션·평가·감사 실행기를 소유한다.
+- `cmd/`는 서버·색인 조립과 마이그레이션·평가·감사 실행기를 소유한다.
 
 ## 소유권
 
@@ -12,6 +12,7 @@
 | 대상 | 정본 |
 |---|---|
 | `server/` | [조립·HTTP](../spec/service/agent-context/sdd/architecture.md), [기동·종료·주기 작업](../spec/service/agent-context/sdd/operations.md) |
+| `indexer/` | [색인 배치](../spec/service/agent-context/sdd/architecture.md#배치-조합), [소비·리스](../spec/service/agent-context/sdd/indexing.md#색인-작업-큐), [작업자 정리](../spec/service/agent-context/sdd/operations.md#기동과-종료) |
 | `eval/` | [평가 실행·집계·준비·정리](../spec/service/agent-context/sdd/evaluation.md), [평가 시험](../spec/service/agent-context/sdd/testing.md) |
 | `audit/` | [읽기 전용 불변식 감사](../spec/service/agent-context/sdd/data.md#그래프-불변식-규칙과-감사) |
 | `migrate/` | [마이그레이션 DOX](../migrations/AGENTS.md), [스키마 적용](../spec/service/agent-context/sdd/data.md#스키마-적용) |

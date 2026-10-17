@@ -168,7 +168,7 @@ func TestIndexReclaimedTaskIgnoresStaleResultIntegration(t *testing.T) {
 // TestIndexResultStorageFailureRollsBackTaskIntegration은 조건부 작업 삭제 뒤
 // 임베딩 저장이 실패하면 기존 임베딩은 보존하고 작업은 재시도 예산에 반영하는지 확인한다.
 func TestIndexResultStorageFailureRollsBackTaskIntegration(t *testing.T) {
-	database := newIntegrationStore(t)
+	database := newEmbeddingContractStore(t, "vector", 8)
 	actorID := newTestID(t)
 	createTestAccount(t, database, actorID)
 	graphID := createIndexScopeGraph(t, database, actorID, "rollback")
@@ -196,6 +196,12 @@ func TestIndexResultStorageFailureRollsBackTaskIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	readyIndexTasks(t, database, graphID, initial.Task.ContextID)
+	// 계약에 맞는 벡터의 실제 INSERT만 일시적으로 실패시킨다.
+	// 이 시험은 전용 DB를 소유하므로 다른 그래프·시험에 장애가 전파되지 않는다.
+	claimExec(t, database, `CREATE FUNCTION public.index_storage_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'synthetic storage fault' USING ERRCODE='40001'; END $$;
+		CREATE TRIGGER index_storage_fault BEFORE INSERT ON public.context_embedding
+		FOR EACH ROW EXECUTE FUNCTION public.index_storage_fault()`)
 	var claimed indexTaskStateValue
 	var revision int64
 	_, err = database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(ctx context.Context, task IndexTask) IndexTaskResult {
@@ -203,10 +209,10 @@ func TestIndexResultStorageFailureRollsBackTaskIntegration(t *testing.T) {
 		if err := database.pool.QueryRow(ctx, `SELECT content_revision FROM public.context_graph WHERE graph_id = $1`, graphID.String()).Scan(&revision); err != nil {
 			t.Fatal(err)
 		}
-		return IndexTaskResult{Embedding: make([]float64, len(vector)+1), ModelID: "new-model"}
+		return IndexTaskResult{Embedding: vector, ModelID: "new-model"}
 	})
 	if err == nil {
-		t.Fatal("잘못된 차원의 임베딩 저장이 성공했다")
+		t.Fatal("장애를 주입한 임베딩 저장이 성공했다")
 	}
 	if after := indexTaskState(t, database, initial.Task.ContextID); after.attempts != claimed.attempts+1 || after.state != "pending" || after.lastError == "" || !after.nextAttempt.After(time.Now().UTC()) {
 		t.Fatalf("저장 실패가 재시도 예산에 반영되지 않았다: %+v", after)

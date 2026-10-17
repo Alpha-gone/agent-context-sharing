@@ -37,6 +37,9 @@ func (s *Store) CreateGraph(ctx context.Context, graph model.Graph) (model.Graph
 
 // CreateGraphWithOwner는 그래프 생성과 생성 계정의 소유자 등급 부여를 한 트랜잭션에 묶는다.
 func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, limits WriteLimits) (result model.Graph, err error) {
+	if err := limits.validate(); err != nil {
+		return model.Graph{}, err
+	}
 	if err := graph.Validate(); err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 검증: %w", err)
 	}

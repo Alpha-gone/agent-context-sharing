@@ -192,6 +192,7 @@ func TestIndexRegistrationRollbackIntegration(t *testing.T) {
 				actor := newTestID(t)
 				createTestAccount(t, database, actor)
 				graph := createTestGraph(t, database, actor)
+				grantAccount(t, database, graph, actor, model.GraphGradeOwner)
 				seed, err := database.CreateContext(t.Context(), graph, testSourceContext(t, graph, actor, "api://registration-rollback/"+graph.String()), nil)
 				if err != nil {
 					t.Fatal(err)

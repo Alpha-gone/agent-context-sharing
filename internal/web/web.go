@@ -354,7 +354,12 @@ func (server *Server) graphList(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	limits := server.config.Plans.For(accountID)
-	graphs, cursor, err := server.graphs.ListGraphs(request.Context(), accountID, filter, request.URL.Query().Get("cursor"), limits.GraphPage.Default)
+	pageSize, err := limits.GraphPage.Resolve("graph_page", nil)
+	if err != nil {
+		server.render(writer, http.StatusInternalServerError, "graphs", pageData{Title: "그래프", Error: "목록 한도를 적용할 수 없습니다."})
+		return
+	}
+	graphs, cursor, err := server.graphs.ListGraphs(request.Context(), accountID, filter, request.URL.Query().Get("cursor"), pageSize)
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "graphs", pageData{Title: "그래프", Error: "그래프 목록을 읽을 수 없습니다."})
 		return
@@ -394,7 +399,12 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 		// 플랜의 0은 한도 없음이지만 홉 조회의 0은 시작점만 반환한다.
 		depth = math.MaxInt
 	}
-	hops, err := server.graphs.GraphVisualization(request.Context(), graphID, depth, limits.MaxHopNodes)
+	maxNodes, err := limits.CheckHop(depth)
+	if err != nil {
+		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "그래프", Error: "조회 한도를 적용할 수 없습니다."})
+		return
+	}
+	hops, err := server.graphs.GraphVisualization(request.Context(), graphID, depth, maxNodes)
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "그래프", Error: "시각화 데이터를 읽을 수 없습니다."})
 		return
@@ -507,7 +517,11 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 		} else {
 			account, err := server.graphs.AccountByLoginID(ctx, request.PostForm.Get("login_id"))
 			if err != nil {
-				server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "대상 계정을 찾을 수 없습니다."})
+				status, message := http.StatusInternalServerError, "대상 계정을 조회할 수 없습니다."
+				if errors.Is(err, store.ErrNotFound) {
+					status, message = http.StatusBadRequest, "대상 계정을 찾을 수 없습니다."
+				}
+				server.render(writer, status, "message", pageData{Title: "권한과 팀 관리", Error: message})
 				return
 			}
 			subjectID = account.ID
@@ -552,7 +566,7 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 		}
 	case "create_team":
 		if _, err := server.graphs.CreateTeam(ctx, actorID, strings.TrimSpace(request.PostForm.Get("team_name"))); err != nil {
-			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "팀을 만들 수 없습니다."})
+			server.render(writer, teamMutationStatus(err), "message", pageData{Title: "권한과 팀 관리", Error: "팀을 만들 수 없습니다."})
 			return
 		}
 	case "add_member", "remove_member":
@@ -563,7 +577,11 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 		}
 		account, err := server.graphs.AccountByLoginID(ctx, request.PostForm.Get("login_id"))
 		if err != nil {
-			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "대상 계정을 찾을 수 없습니다."})
+			status, message := http.StatusInternalServerError, "대상 계정을 조회할 수 없습니다."
+			if errors.Is(err, store.ErrNotFound) {
+				status, message = http.StatusBadRequest, "대상 계정을 찾을 수 없습니다."
+			}
+			server.render(writer, status, "message", pageData{Title: "권한과 팀 관리", Error: message})
 			return
 		}
 		if request.PostForm.Get("action") == "add_member" {
@@ -572,7 +590,7 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 			err = server.graphs.RemoveTeamMemberWithAudit(ctx, teamID, actorID, account.ID)
 		}
 		if err != nil {
-			server.render(writer, http.StatusConflict, "message", pageData{Title: "권한과 팀 관리", Error: "팀 구성원을 변경할 수 없습니다."})
+			server.render(writer, teamMutationStatus(err), "message", pageData{Title: "권한과 팀 관리", Error: "팀 구성원을 변경할 수 없습니다."})
 			return
 		}
 	case "delete_team", "restore_team":
@@ -582,7 +600,7 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 			return
 		}
 		if err := server.graphs.SetTeamDeleted(ctx, teamID, actorID, request.PostForm.Get("action") == "delete_team"); err != nil {
-			server.render(writer, http.StatusConflict, "message", pageData{Title: "권한과 팀 관리", Error: "팀 상태를 바꿀 수 없습니다."})
+			server.render(writer, teamMutationStatus(err), "message", pageData{Title: "권한과 팀 관리", Error: "팀 상태를 바꿀 수 없습니다."})
 			return
 		}
 	default:
@@ -590,6 +608,19 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 		return
 	}
 	http.Redirect(writer, request, accessPath(graphID), http.StatusSeeOther)
+}
+
+func teamMutationStatus(err error) int {
+	if errors.Is(err, store.ErrNotFound) {
+		return http.StatusNotFound
+	}
+	if errors.Is(err, store.ErrInvalidState) {
+		return http.StatusConflict
+	}
+	if _, ok := errors.AsType[model.FieldError](err); ok {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }
 
 // accessPath는 그래프가 있는 진입과 팀만 관리하는 진입의 되돌아갈 주소를 나눈다.
@@ -630,7 +661,8 @@ func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Re
 				return
 			}
 			if err := server.graphs.SetGraphDeleted(request.Context(), graphID, accountID, action == "delete"); err != nil {
-				server.render(writer, http.StatusConflict, "message", pageData{Title: "삭제와 복구", Error: "현재 상태에서는 처리할 수 없습니다."})
+				status, message := deletionError(err)
+				server.render(writer, status, "message", pageData{Title: "삭제와 복구", Error: message})
 				return
 			}
 			http.Redirect(writer, request, "/graphs", http.StatusSeeOther)
@@ -641,7 +673,8 @@ func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Re
 				return
 			}
 			if _, err := server.graphs.SetContextDeleted(request.Context(), graphID, contextID, accountID, action == "delete_context", server.config.Plans.For(accountID).StoredCharactersPerGraph); err != nil {
-				server.render(writer, http.StatusConflict, "message", pageData{Title: "삭제와 복구", Error: "현재 상태에서는 처리할 수 없습니다."})
+				status, message := deletionError(err)
+				server.render(writer, status, "message", pageData{Title: "삭제와 복구", Error: message})
 				return
 			}
 			http.Redirect(writer, request, "/graphs/"+graphID.String()+"/deletion", http.StatusSeeOther)
@@ -651,6 +684,22 @@ func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Re
 	default:
 		methodNotAllowed(writer, "GET, POST")
 	}
+}
+
+func deletionError(err error) (int, string) {
+	if errors.Is(err, store.ErrNotFound) {
+		return http.StatusNotFound, "대상을 찾을 수 없거나 접근 권한이 변경되었습니다."
+	}
+	if errors.Is(err, store.ErrInvalidState) {
+		return http.StatusConflict, "현재 상태에서는 처리할 수 없습니다."
+	}
+	if limit, ok := errors.AsType[plan.LimitError](err); ok {
+		if limit.Name == "stored_characters_per_graph" {
+			return http.StatusConflict, fmt.Sprintf("그래프 저장량 한도를 초과합니다. 현재 %d자, 허용 %d자입니다.", limit.Current, limit.Allowed)
+		}
+		return http.StatusConflict, "현재 상태에서는 처리할 수 없습니다."
+	}
+	return http.StatusInternalServerError, "삭제·복구 처리 중 오류가 발생했습니다."
 }
 
 // renderDeletion은 그래프 영향과 노드 목록을 모아 복구 화면을 그린다. context_id를 받은
@@ -764,8 +813,10 @@ func (server *Server) requireGrade(writer http.ResponseWriter, request *http.Req
 	if err := perm.Require(request.Context(), server.graphs, graphID, accountID, required); err != nil {
 		if _, found := errors.AsType[perm.NotFoundError](err); found {
 			server.render(writer, http.StatusNotFound, "message", pageData{Title: "그래프", Error: "그래프를 찾을 수 없습니다."})
-		} else {
+		} else if _, found := errors.AsType[perm.DeniedError](err); found {
 			server.render(writer, http.StatusForbidden, "message", pageData{Title: "접근 제한", Error: "이 화면에 접근할 권한이 없습니다."})
+		} else {
+			server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "그래프", Error: "등급을 확인할 수 없습니다."})
 		}
 		return model.ID{}, false
 	}

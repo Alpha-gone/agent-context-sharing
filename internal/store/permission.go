@@ -3,8 +3,11 @@ package store
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"slices"
+	"time"
 
 	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
@@ -35,6 +38,9 @@ type gradeQueryer interface {
 
 // effectiveGrade는 조회와 그래프 잠금 뒤의 인가 재확인에 같은 등급 계산을 적용한다.
 func effectiveGrade(ctx context.Context, queryer gradeQueryer, graphID, accountID model.ID) (model.GraphGrade, bool, error) {
+	if !graphID.IsV7() || !accountID.IsV7() {
+		return "", false, fmt.Errorf("유효 등급 조회 식별자가 UUIDv7이 아니다")
+	}
 	var grade *string
 	err := queryer.QueryRow(ctx, `
 		WITH candidate AS (
@@ -167,30 +173,29 @@ func (subjectType GrantSubjectType) valid() bool {
 	return subjectType == GrantSubjectAccount || subjectType == GrantSubjectTeam
 }
 
-// lockTeamGraphs는 팀이 등급을 가진 모든 그래프 행을 잠그되, 잠근 뒤 목록을 다시 읽어
-// 더 늘지 않을 때까지 반복한다.
-//
-// 목록을 한 번만 읽으면 잠그기 직전에 추가된 팀 등급의 그래프를 놓친다. 그 그래프에서는
-// 구성원 제거가 판정을 건너뛰고, 동시에 진행된 부여 쪽은 제거 전 구성원을 보고 유예를
-// 취소해, 접근 가능한 계정이 0인데 유예도 없는 그래프가 남는다.
+// lockTeamGraphs는 새 팀 부여와 같은 팀 행을 먼저 잠가 영향 목록을 고정한다.
+// 그래프 잠금을 쥔 채 더 작은 ID를 추가로 잠그지 않아 다중 팀의 잠금 순서도 유지한다.
 func lockTeamGraphs(ctx context.Context, tx pgx.Tx, teamID model.ID) ([]model.ID, error) {
-	locked := make([]model.ID, 0)
-	// 잠금이 늘 때마다 새 부여가 들어올 수 있으나, 잠긴 그래프에는 더 들어오지 못하므로
-	// 반복은 곧 멈춘다. 상한은 예상 밖의 상황에서 무한 반복을 막는 안전장치다.
-	for range 16 {
-		current, err := teamGraphIDs(ctx, tx, teamID)
-		if err != nil {
-			return nil, err
-		}
-		union := sortedUniqueGraphIDs(append(slices.Clone(locked), current...))
-		if slices.Equal(union, locked) {
-			return locked, nil
-		}
-		if locked, err = lockGraphs(ctx, tx, union); err != nil {
-			return nil, err
-		}
+	if _, err := lockTeam(ctx, tx, teamID); err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("팀 영향 그래프 잠금이 안정되지 않는다")
+	ids, err := teamGraphIDs(ctx, tx, teamID)
+	if err != nil {
+		return nil, err
+	}
+	return lockGraphs(ctx, tx, ids)
+}
+
+func lockTeam(ctx context.Context, tx pgx.Tx, teamID model.ID) (*time.Time, error) {
+	var deletedAt *time.Time
+	err := tx.QueryRow(ctx, `SELECT deleted_at FROM public.team WHERE team_id=$1 FOR UPDATE`, teamID.String()).Scan(&deletedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("팀 행 잠금: %w", err)
+	}
+	return deletedAt, nil
 }
 
 func teamGraphIDs(ctx context.Context, tx pgx.Tx, teamID model.ID) ([]model.ID, error) {
@@ -281,14 +286,16 @@ func sortedUniqueGraphIDs(graphIDs []model.ID) []model.ID {
 // usableOwnersSQL은 각 부여를 통해 소유자 등급을 쓸 수 있는 계정을 나열한다. 부여 식별자를
 // 함께 남겨 권한 화면이 부여 전체의 회수 결과를 같은 규칙으로 판정하게 한다.
 const usableOwnersSQL = `
-	SELECT subject_type, subject_id, subject_id AS account_id
-	FROM public.graph_grant
-	WHERE graph_id = $1 AND subject_type = 'account' AND grade = 'owner'
+	SELECT permission.subject_type, permission.subject_id, permission.subject_id AS account_id
+	FROM public.graph_grant AS permission
+	JOIN public.account AS account ON account.account_id = permission.subject_id
+	WHERE permission.graph_id = $1 AND permission.subject_type = 'account' AND permission.grade = 'owner'
 	UNION ALL
 	SELECT team_grant.subject_type, team_grant.subject_id, member.account_id
 	FROM public.graph_grant AS team_grant
 	JOIN public.team_member AS member ON member.team_id = team_grant.subject_id
 	JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL
+	JOIN public.account AS account ON account.account_id = member.account_id
 	WHERE team_grant.graph_id = $1 AND team_grant.subject_type = 'team' AND team_grant.grade = 'owner'`
 
 // requireOwner는 그래프에 소유자 등급을 쓸 수 있는 계정이 남아 있는지 본다.
@@ -328,6 +335,9 @@ func (s *Store) startGraceForDisconnectedGraphs(ctx context.Context, tx pgx.Tx, 
 		days := 0
 		if s.graceDays != nil {
 			days = s.graceDays(createdBy)
+		}
+		if days < 0 || int64(days) > math.MaxInt32 {
+			return model.FieldError{Field: "grace_days", Message: "유예 일수를 저장할 수 없다"}
 		}
 		disconnected = append(disconnected, graphID.String())
 		graceDays = append(graceDays, int32(days))
@@ -378,14 +388,16 @@ func accessibleAccountCount(ctx context.Context, tx pgx.Tx, graphID model.ID) (i
 	var accounts int
 	err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM (
-			SELECT subject_id AS account_id
-			FROM public.graph_grant
-			WHERE graph_id = $1 AND subject_type = 'account'
+			SELECT permission.subject_id AS account_id
+			FROM public.graph_grant AS permission
+			JOIN public.account AS account ON account.account_id = permission.subject_id
+			WHERE permission.graph_id = $1 AND permission.subject_type = 'account'
 			UNION
 			SELECT member.account_id
 			FROM public.graph_grant AS team_grant
 			JOIN public.team_member AS member ON member.team_id = team_grant.subject_id
 			JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL
+			JOIN public.account AS account ON account.account_id = member.account_id
 			WHERE team_grant.graph_id = $1 AND team_grant.subject_type = 'team'
 		) AS accessible`, graphID.String()).Scan(&accounts)
 	if err != nil {

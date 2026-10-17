@@ -28,7 +28,7 @@ func (NotFoundError) Error() string { return "그래프를 찾을 수 없다" }
 // Require는 대상 그래프가 없거나 접근 불가이면 존재를 드러내지 않고 not found로 처리하고,
 // 유효 등급이 모자랄 때만 필요한 등급을 반환한다.
 func Require(ctx context.Context, source GradeStore, graphID, accountID model.ID, required model.GraphGrade) error {
-	if source == nil || !required.Valid() {
+	if source == nil || !graphID.IsV7() || !accountID.IsV7() || !required.Valid() {
 		return fmt.Errorf("권한 검사 인자가 올바르지 않다")
 	}
 	actual, found, err := source.EffectiveGrade(ctx, graphID, accountID)
@@ -37,6 +37,9 @@ func Require(ctx context.Context, source GradeStore, graphID, accountID model.ID
 	}
 	if !found {
 		return NotFoundError{}
+	}
+	if !actual.Valid() {
+		return fmt.Errorf("저장소가 반환한 유효 등급 %q가 올바르지 않다", actual)
 	}
 	if rank(actual) < rank(required) {
 		return DeniedError{Required: required}

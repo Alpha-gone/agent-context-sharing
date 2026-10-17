@@ -103,8 +103,34 @@ type WriteLimits struct {
 	GraphsPerAccount int64
 	// WritesPerMinute는 1분 고정 창에서 허용할 쓰기 요청 수다.
 	WritesPerMinute int64
-	// ActorID는 요청 빈도를 셀 계정이다. 비어 있으면 빈도를 세지 않는다.
+	// ActorID는 요청 빈도를 셀 계정이다. 제한된 생성·수정에는 UUIDv7가 필수다.
 	ActorID model.ID
+}
+
+func (limits WriteLimits) validate() error {
+	for _, limit := range []struct {
+		name  string
+		value int64
+	}{
+		{"stored_characters_per_graph", limits.StoredCharsPerGraph},
+		{"graphs_per_account", limits.GraphsPerAccount},
+		{"writes_per_minute", limits.WritesPerMinute},
+	} {
+		if limit.value < 0 {
+			return model.FieldError{Field: limit.name, Message: "쓰기 한도는 음수일 수 없다"}
+		}
+	}
+	return nil
+}
+
+func (limits WriteLimits) validateContextWrite() error {
+	if err := limits.validate(); err != nil {
+		return err
+	}
+	if limits.WritesPerMinute > 0 && !limits.ActorID.IsV7() {
+		return model.FieldError{Field: "actor_account_id", Message: "제한된 생성·수정에는 요청 계정 UUIDv7가 필요하다"}
+	}
+	return nil
 }
 
 // RelationProposalConfig는 사건 관계 후보 제안에 쓰는 검증된 배포 구성이다.

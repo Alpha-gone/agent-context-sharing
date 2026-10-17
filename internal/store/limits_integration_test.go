@@ -216,6 +216,7 @@ func TestWebContextDeletionAuditSharesTransactionIntegration(t *testing.T) {
 	actorID := newTestID(t)
 	createTestAccount(t, database, actorID)
 	graphID := createTestGraph(t, database, actorID)
+	grantAccount(t, database, graphID, actorID, model.GraphGradeOwner)
 	source, err := database.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "https://example.test/web-audit-"+graphID.String()), nil)
 	if err != nil {
 		t.Fatalf("원천 생성: %v", err)

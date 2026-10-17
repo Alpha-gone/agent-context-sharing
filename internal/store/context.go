@@ -99,6 +99,9 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if !graphID.IsV7() || value.GraphID != graphID || expectedVersion < 1 {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 인자가 올바르지 않다")
 	}
+	if err := limits.validateContextWrite(); err != nil {
+		return model.Context{}, err
+	}
 	release, err := s.reserveContextWriteConnections(ctx)
 	if err != nil {
 		return model.Context{}, err
@@ -127,6 +130,9 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if previous.Version != expectedVersion {
 		return model.Context{}, VersionConflictError{Current: previous.Version}
 	}
+	if previous.DeletedAt != nil || value.DeletedAt != nil {
+		return model.Context{}, fmt.Errorf("폐기·복구는 전용 상태 전이 경로를 사용해야 한다: %w", ErrInvalidState)
+	}
 	if err := model.ValidateUpdate(previous, value); err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 검증: %w", err)
 	}
@@ -144,6 +150,7 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	}
 	query := "MATCH (node:Context) WHERE node.context_id = " + cypherString(value.ID.String()) +
 		" AND node.graph_id = " + cypherString(graphID.String()) +
+		" AND node.deleted_at IS NULL" +
 		" AND node.version = " + fmt.Sprint(expectedVersion) +
 		" SET node = " + properties + " RETURN node"
 	stored, err := s.contextFromCypher(ctx, tx, graphID, query)
@@ -249,6 +256,9 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
+	if err := limits.validate(); err != nil {
+		return model.Context{}, err
+	}
 	release, err := s.reserveContextWriteConnections(ctx)
 	if err != nil {
 		return model.Context{}, err
@@ -259,10 +269,6 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 트랜잭션 시작: %w", err)
 	}
 	defer finishWrite(ctx, tx, "changeContextDeletion", &err)
-
-	if err := consumeWriteRate(ctx, tx, limits); err != nil {
-		return model.Context{}, err
-	}
 	previous, err := s.context(ctx, tx, graphID, contextID)
 	if err != nil {
 		return model.Context{}, err
@@ -354,6 +360,23 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	delta := -utf8.RuneCountInString(previous.Body)
 	if !discard {
 		delta = -delta
+	}
+	if webAudit != nil {
+		// 원천·파생은 MCP 갱신과 같은 정점→그래프 순서를 유지한다. 웹만 먼저
+		// 그래프를 쥐면 정점을 쥔 MCP 갱신의 활동 기록과 서로 기다리게 된다.
+		if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+			return model.Context{}, err
+		}
+		if err := requireGraphOwner(ctx, tx, graphID, webAudit.ActorID); err != nil {
+			return model.Context{}, err
+		}
+		var active bool
+		if err := tx.QueryRow(ctx, `SELECT deleted_at IS NULL FROM public.context_graph WHERE graph_id=$1`, graphID.String()).Scan(&active); err != nil {
+			return model.Context{}, fmt.Errorf("웹 상태 전이 그래프 조회: %w", err)
+		}
+		if !active {
+			return model.Context{}, ErrInvalidState
+		}
 	}
 	if err := s.updateGraphActivity(ctx, tx, graphID, delta, limits.StoredCharsPerGraph); err != nil {
 		return model.Context{}, err
@@ -464,6 +487,9 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 
 // createContext은 원천 중복 확인과 그래프 활동 갱신을 포함한 실제 쓰기 트랜잭션이다.
 func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits) (result model.Context, err error) {
+	if err := limits.validateContextWrite(); err != nil {
+		return model.Context{}, err
+	}
 	release, err := s.reserveContextWriteConnections(ctx)
 	if err != nil {
 		return model.Context{}, err
@@ -475,9 +501,6 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	}
 	defer finishWrite(ctx, tx, "createContext", &err)
 
-	if err := consumeWriteRate(ctx, tx, limits); err != nil {
-		return model.Context{}, err
-	}
 	if value.Layer == model.LayerSource {
 		existing, err := s.findSourceWith(ctx, tx, graphID, value.Source.Reference.Locator)
 		if err == nil {
@@ -486,6 +509,9 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 		if !errors.Is(err, ErrNotFound) {
 			return model.Context{}, fmt.Errorf("원천 중복 조회: %w", err)
 		}
+	}
+	if err := consumeWriteRate(ctx, tx, limits); err != nil {
+		return model.Context{}, err
 	}
 	if value.Layer == model.LayerDerived {
 		if err := s.validateReferences(ctx, tx, graphID, derivedFrom); err != nil {
@@ -617,15 +643,18 @@ func (s *Store) createSupersedesEdge(ctx context.Context, tx pgx.Tx, graphID, ne
 // consumeWriteRate는 저장 트랜잭션 안에서 쓰기 요청 빈도를 센다. 한도를 넘으면 오류를
 // 돌려 트랜잭션이 되돌아가므로, 거부된 요청은 한도를 소비하지 않는다.
 func consumeWriteRate(ctx context.Context, tx pgx.Tx, limits WriteLimits) error {
-	if limits.WritesPerMinute == 0 || !limits.ActorID.IsV7() {
+	if err := limits.validateContextWrite(); err != nil {
+		return err
+	}
+	if limits.WritesPerMinute == 0 {
 		return nil
 	}
-	count, allowed, err := tryIncrementRequestRate(ctx, tx, limits.ActorID, time.Now().UTC(), int(limits.WritesPerMinute))
+	count, allowed, err := tryIncrementRequestRate(ctx, tx, limits.ActorID, time.Now().UTC(), limits.WritesPerMinute)
 	if err != nil {
 		return err
 	}
 	if !allowed {
-		return plan.LimitError{Name: "writes_per_minute", Current: int64(count), Allowed: limits.WritesPerMinute}
+		return plan.LimitError{Name: "writes_per_minute", Current: count, Allowed: limits.WritesPerMinute}
 	}
 	return nil
 }
@@ -634,6 +663,9 @@ func consumeWriteRate(ctx context.Context, tx pgx.Tx, limits WriteLimits) error 
 func validateContextInput(graphID model.ID, value model.Context, derivedFrom []model.ID) error {
 	if !graphID.IsV7() || value.GraphID != graphID {
 		return fmt.Errorf("요청 graph_id와 컨텍스트 graph_id가 일치하지 않는다")
+	}
+	if value.DeletedAt != nil {
+		return model.FieldError{Field: "deleted_at", Message: "컨텍스트는 활성 상태로 생성해야 한다"}
 	}
 	if value.Layer == model.LayerDerived && value.Derived != nil {
 		value.Derived = new(*value.Derived)

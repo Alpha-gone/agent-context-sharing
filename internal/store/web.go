@@ -22,19 +22,24 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 		return fmt.Errorf("그래프 등급 부여 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if subjectType == GrantSubjectTeam {
+		deletedAt, err := lockTeam(ctx, tx, subjectID)
+		if err != nil {
+			return err
+		}
+		if deletedAt != nil {
+			return ErrNotFound
+		}
+	}
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
 	if err := requireGraphOwner(ctx, tx, graphID, actorID); err != nil {
 		return err
 	}
-	if subjectType == GrantSubjectTeam {
-		var active bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.team WHERE team_id = $1 AND deleted_at IS NULL)`, subjectID.String()).Scan(&active); err != nil {
-			return fmt.Errorf("부여 대상 팀 조회: %w", err)
-		}
-		if !active {
-			return ErrNotFound
+	if subjectType == GrantSubjectAccount {
+		if err := requireAccount(ctx, tx, subjectID); err != nil {
+			return err
 		}
 	}
 	var before *string
@@ -165,8 +170,11 @@ func (s *Store) ListGraphGrants(ctx context.Context, graphID model.ID) ([]model.
 
 // CreateTeam은 인증된 계정을 팀 관리자로 하여 팀을 만들고 감사 기록을 남긴다.
 func (s *Store) CreateTeam(ctx context.Context, actorID model.ID, name string) (model.Team, error) {
-	if !actorID.IsV7() || name == "" {
+	if !actorID.IsV7() {
 		return model.Team{}, fmt.Errorf("팀 생성 인자가 올바르지 않다")
+	}
+	if name == "" {
+		return model.Team{}, model.FieldError{Field: "name", Message: "팀 이름은 비어 있을 수 없다"}
 	}
 	teamID, err := model.NewID()
 	if err != nil {
@@ -178,6 +186,9 @@ func (s *Store) CreateTeam(ctx context.Context, actorID model.ID, name string) (
 		return model.Team{}, fmt.Errorf("팀 생성 트랜잭션 시작: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	if err := requireAccount(ctx, tx, actorID); err != nil {
+		return model.Team{}, err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO public.team (team_id, name, manager_account_id, created_at) VALUES ($1, $2, $3, $4)`, teamID.String(), name, actorID.String(), now); err != nil {
 		return model.Team{}, fmt.Errorf("팀 생성: %w", err)
 	}
@@ -241,7 +252,7 @@ func (s *Store) ListManagedTeams(ctx context.Context, managerID model.ID) ([]mod
 	return teams, nil
 }
 
-// AddTeamMember는 팀 관리자만 호출하도록 전송 계층이 확인한 뒤 구성원을 추가한다.
+// AddTeamMember는 저장 트랜잭션에서 관리자와 대상 계정을 확인하고 구성원을 추가한다.
 func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID model.ID) error {
 	if !teamID.IsV7() || !actorID.IsV7() || !accountID.IsV7() {
 		return fmt.Errorf("팀 구성원 추가 인자가 올바르지 않다")
@@ -254,12 +265,15 @@ func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID mo
 	if err := requireTeamManager(ctx, tx, teamID, actorID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO public.team_member (team_id, account_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, teamID.String(), accountID.String()); err != nil {
-		return fmt.Errorf("팀 구성원 추가: %w", err)
+	if err := requireAccount(ctx, tx, accountID); err != nil {
+		return err
 	}
 	graphIDs, err := lockTeamGraphs(ctx, tx, teamID)
 	if err != nil {
 		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO public.team_member (team_id, account_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, teamID.String(), accountID.String()); err != nil {
+		return fmt.Errorf("팀 구성원 추가: %w", err)
 	}
 	if err := cancelGraceForConnectedGraphs(ctx, tx, graphIDs); err != nil {
 		return err
@@ -405,6 +419,17 @@ func (s *Store) insertWebAudit(ctx context.Context, tx pgx.Tx, record webAuditRe
 	return nil
 }
 
+func requireAccount(ctx context.Context, tx pgx.Tx, accountID model.ID) error {
+	var found bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.account WHERE account_id=$1)`, accountID.String()).Scan(&found); err != nil {
+		return fmt.Errorf("계정 존재 확인: %w", err)
+	}
+	if !found {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func requireTeamManager(ctx context.Context, tx pgx.Tx, teamID, accountID model.ID) error {
 	var found bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.team WHERE team_id = $1 AND manager_account_id = $2)`, teamID.String(), accountID.String()).Scan(&found); err != nil {
@@ -457,8 +482,14 @@ func (s *Store) DeletionImpact(ctx context.Context, graphID, contextID model.ID)
 		err := s.pool.QueryRow(ctx, `
 			SELECT
 				(SELECT count(*) FROM "`+s.graphName+`"."Context" WHERE properties ->> 'graph_id'::text = $1 AND properties ->> 'deleted_at'::text IS NULL),
-				(SELECT count(*) FROM public.graph_grant WHERE graph_id = $1::uuid AND subject_type = 'account') +
-				(SELECT count(DISTINCT member.account_id) FROM public.graph_grant AS team_grant JOIN public.team_member AS member ON member.team_id = team_grant.subject_id JOIN public.team ON team.team_id = member.team_id AND team.deleted_at IS NULL WHERE team_grant.graph_id = $1::uuid AND team_grant.subject_type = 'team')`, graphID.String()).Scan(&impact.Contexts, &impact.Accounts)
+				(SELECT count(*) FROM (
+					SELECT subject_id AS account_id FROM public.graph_grant WHERE graph_id=$1::uuid AND subject_type='account'
+					UNION
+					SELECT member.account_id FROM public.graph_grant AS permission
+					JOIN public.team_member AS member ON member.team_id=permission.subject_id
+					JOIN public.team ON team.team_id=member.team_id AND team.deleted_at IS NULL
+					WHERE permission.graph_id=$1::uuid AND permission.subject_type='team'
+				) AS accessible)`, graphID.String()).Scan(&impact.Contexts, &impact.Accounts)
 		if err != nil {
 			return model.DeletionImpact{}, fmt.Errorf("그래프 삭제 영향 조회: %w", err)
 		}
@@ -476,12 +507,20 @@ func (s *Store) DeletionImpact(ctx context.Context, graphID, contextID model.ID)
 	var impact model.DeletionImpact
 	switch value.Layer {
 	case model.LayerSource, model.LayerDerived:
-		query := "MATCH (derived:Context)-[edge:DERIVED_FROM]->(source:Context) WHERE source.context_id = " + cypherString(contextID.String()) + " AND source.graph_id = " + cypherString(graphID.String()) + " AND derived.graph_id = " + cypherString(graphID.String()) + " AND edge.graph_id = " + cypherString(graphID.String()) + " RETURN count(derived)"
+		query := "MATCH (derived:Context)-[edge:DERIVED_FROM]->(source:Context) WHERE source.context_id = " + cypherString(contextID.String()) + " AND source.graph_id = " + cypherString(graphID.String()) + " AND derived.graph_id = " + cypherString(graphID.String()) + " AND derived.deleted_at IS NULL AND edge.graph_id = " + cypherString(graphID.String()) + " RETURN count(derived)"
 		count, err := s.agtypeCount(ctx, query)
 		if err != nil {
 			return model.DeletionImpact{}, fmt.Errorf("근거 삭제 영향 조회: %w", err)
 		}
 		impact.Derived = count
+		if value.Layer == model.LayerSource {
+			query := "MATCH (event:Context)-[edge:HAS_MEMBER]->(source:Context) WHERE source.context_id = " + cypherString(contextID.String()) + " AND source.graph_id = " + cypherString(graphID.String()) + " AND event.graph_id = " + cypherString(graphID.String()) + " AND event.deleted_at IS NULL AND edge.graph_id = " + cypherString(graphID.String()) + " RETURN count(event)"
+			count, err := s.agtypeCount(ctx, query)
+			if err != nil {
+				return model.DeletionImpact{}, fmt.Errorf("사건 구성원 삭제 영향 조회: %w", err)
+			}
+			impact.Events = count
+		}
 	case model.LayerEvent:
 		relations, err := s.confirmedRelationCount(ctx, graphID, contextID)
 		if err != nil {
@@ -530,12 +569,15 @@ func (s *Store) SetGraphDeleted(ctx context.Context, graphID, actorID model.ID, 
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
+	if err := requireGraphOwner(ctx, tx, graphID, actorID); err != nil {
+		return err
+	}
 	// 복구는 웹에서 직접 삭제한 그래프만 되돌린다. grace_started_at이 남아 있으면 유예
 	// 만료로 자동 삭제된 그래프이며, 그 복구는 요청과 운영자 경로만 수행한다. 조건을
 	// 빼면 나중에 소유자 등급을 얻은 계정이 자동 삭제를 웹에서 되살릴 수 있다.
 	query, action := `UPDATE public.context_graph SET deleted_at = NULL WHERE graph_id = $1 AND deleted_at IS NOT NULL AND grace_started_at IS NULL`, "restore"
 	if deleted {
-		query, action = `UPDATE public.context_graph SET deleted_at = clock_timestamp() WHERE graph_id = $1 AND deleted_at IS NULL`, "delete"
+		query, action = `UPDATE public.context_graph SET deleted_at = clock_timestamp(), grace_started_at = NULL, grace_expires_at = NULL WHERE graph_id = $1 AND deleted_at IS NULL`, "delete"
 	}
 	result, err := tx.Exec(ctx, query, graphID.String())
 	if err != nil {

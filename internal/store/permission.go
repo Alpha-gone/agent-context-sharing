@@ -35,6 +35,9 @@ type gradeQueryer interface {
 
 // effectiveGrade는 조회와 그래프 잠금 뒤의 인가 재확인에 같은 등급 계산을 적용한다.
 func effectiveGrade(ctx context.Context, queryer gradeQueryer, graphID, accountID model.ID) (model.GraphGrade, bool, error) {
+	if !graphID.IsV7() || !accountID.IsV7() {
+		return "", false, fmt.Errorf("유효 등급 조회 식별자가 UUIDv7이 아니다")
+	}
 	var grade *string
 	err := queryer.QueryRow(ctx, `
 		WITH candidate AS (

@@ -99,7 +99,7 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if !graphID.IsV7() || value.GraphID != graphID || expectedVersion < 1 {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 인자가 올바르지 않다")
 	}
-	if err := limits.validate(); err != nil {
+	if err := limits.validateContextWrite(); err != nil {
 		return model.Context{}, err
 	}
 	release, err := s.reserveContextWriteConnections(ctx)
@@ -269,10 +269,6 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 트랜잭션 시작: %w", err)
 	}
 	defer finishWrite(ctx, tx, "changeContextDeletion", &err)
-
-	if err := consumeWriteRate(ctx, tx, limits); err != nil {
-		return model.Context{}, err
-	}
 	previous, err := s.context(ctx, tx, graphID, contextID)
 	if err != nil {
 		return model.Context{}, err
@@ -474,7 +470,7 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 
 // createContext은 원천 중복 확인과 그래프 활동 갱신을 포함한 실제 쓰기 트랜잭션이다.
 func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits) (result model.Context, err error) {
-	if err := limits.validate(); err != nil {
+	if err := limits.validateContextWrite(); err != nil {
 		return model.Context{}, err
 	}
 	release, err := s.reserveContextWriteConnections(ctx)
@@ -488,9 +484,6 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	}
 	defer finishWrite(ctx, tx, "createContext", &err)
 
-	if err := consumeWriteRate(ctx, tx, limits); err != nil {
-		return model.Context{}, err
-	}
 	if value.Layer == model.LayerSource {
 		existing, err := s.findSourceWith(ctx, tx, graphID, value.Source.Reference.Locator)
 		if err == nil {
@@ -499,6 +492,9 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 		if !errors.Is(err, ErrNotFound) {
 			return model.Context{}, fmt.Errorf("원천 중복 조회: %w", err)
 		}
+	}
+	if err := consumeWriteRate(ctx, tx, limits); err != nil {
+		return model.Context{}, err
 	}
 	if value.Layer == model.LayerDerived {
 		if err := s.validateReferences(ctx, tx, graphID, derivedFrom); err != nil {
@@ -630,15 +626,18 @@ func (s *Store) createSupersedesEdge(ctx context.Context, tx pgx.Tx, graphID, ne
 // consumeWriteRate는 저장 트랜잭션 안에서 쓰기 요청 빈도를 센다. 한도를 넘으면 오류를
 // 돌려 트랜잭션이 되돌아가므로, 거부된 요청은 한도를 소비하지 않는다.
 func consumeWriteRate(ctx context.Context, tx pgx.Tx, limits WriteLimits) error {
-	if limits.WritesPerMinute == 0 || !limits.ActorID.IsV7() {
+	if err := limits.validateContextWrite(); err != nil {
+		return err
+	}
+	if limits.WritesPerMinute == 0 {
 		return nil
 	}
-	count, allowed, err := tryIncrementRequestRate(ctx, tx, limits.ActorID, time.Now().UTC(), int(limits.WritesPerMinute))
+	count, allowed, err := tryIncrementRequestRate(ctx, tx, limits.ActorID, time.Now().UTC(), limits.WritesPerMinute)
 	if err != nil {
 		return err
 	}
 	if !allowed {
-		return plan.LimitError{Name: "writes_per_minute", Current: int64(count), Allowed: limits.WritesPerMinute}
+		return plan.LimitError{Name: "writes_per_minute", Current: count, Allowed: limits.WritesPerMinute}
 	}
 	return nil
 }

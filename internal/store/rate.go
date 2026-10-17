@@ -13,7 +13,8 @@ import (
 // TryIncrementRequestRate는 1분 고정 창 카운터를 한 문장으로 늘린다. allowed가 0이면
 // 플랜 한도가 없으므로 행을 만들지 않는다.
 func (s *Store) TryIncrementRequestRate(ctx context.Context, accountID model.ID, now time.Time, allowed int) (int, bool, error) {
-	return tryIncrementRequestRate(ctx, s.pool, accountID, now, allowed)
+	count, accepted, err := tryIncrementRequestRate(ctx, s.pool, accountID, now, int64(allowed))
+	return int(count), accepted, err
 }
 
 // tryIncrementRequestRate는 같은 갱신을 풀과 저장 트랜잭션에서 함께 쓰도록 분리한 것이다.
@@ -21,15 +22,15 @@ func (s *Store) TryIncrementRequestRate(ctx context.Context, accountID model.ID,
 // 「계정 플랜 값」이 이 갱신을 이미 열려 있는 저장 트랜잭션 안에서 하기로 확정했다.
 // 밖에서 먼저 올리면 판 번호 충돌이나 한도 초과로 거부된 요청과 원천 중복 멱등 재요청도
 // 한도를 소비한다.
-func tryIncrementRequestRate(ctx context.Context, queryer cypherQueryer, accountID model.ID, now time.Time, allowed int) (int, bool, error) {
-	if !accountID.IsV7() || allowed < 0 {
+func tryIncrementRequestRate(ctx context.Context, queryer cypherQueryer, accountID model.ID, now time.Time, allowed int64) (int64, bool, error) {
+	if !accountID.IsV7() || now.IsZero() || allowed < 0 {
 		return 0, false, fmt.Errorf("요청 빈도 인자가 올바르지 않다")
 	}
 	if allowed == 0 {
 		return 0, true, nil
 	}
 	window := now.UTC().Truncate(time.Minute)
-	var count int
+	var count int64
 	err := queryer.QueryRow(ctx, `
 		INSERT INTO public.request_rate (account_id, window_started_at, count)
 		VALUES ($1, $2, 1)

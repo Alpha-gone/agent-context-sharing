@@ -22,6 +22,8 @@
 
 [MCP-03](agent-context/reviews/2026-10-18-mcp-03.md)의 14종 도구 스키마·설명·annotations·공통 instructions와 서버 입력 검증을 구현했다. 합성 처리기의 실제 SDK 목록·호출 인수이며 업무 저장·등록·인증·실제 호스트 연결 완료를 뜻하지 않는다.
 
+[AUTH-01](agent-context/reviews/2026-10-18-auth-01.md)에서 잘못된 UTF-8 가입 비밀번호를 차단하고 계정 입력·현재 저장 형식·레거시 재해시의 모듈 시험을 통과했다. 공유 키·OAuth·Bearer와 실제 MCP 인증 연결은 후속 범위다.
+
 Air Context와 관련 연구에서 채택한 검색 단위·외부 원본 재현성·임베딩 용도별 비교·에이전트 업무 비용 평가(`FR-AGENT_CONTEXT-160`~`163`)는 SRS에 확정하고 [평가 SDD](agent-context/sdd/evaluation.md#초기-공개-평가-실행-설계)에 반영했다. 요구사항 자체의 미정 사항과 구분하며 [SDD 추적표](agent-context/sdd/traceability.md#요구사항-추적표)에서 추적한다. 데이터 준비·평가 실행·실제 결과는 대기 중이며, 서버 외부 원본 수집·AST 분할·이진 양자화와 관찰 마스킹의 운영 채택을 뜻하지 않는다.
 
 시험 분석용 종류별 파일 저장·흐름 추적·파일 보호(`FR-AGENT_CONTEXT-173`~`175`)는 [SRS 「종류별 진단 로그」](agent-context/SRS.md#종류별-진단-로그)에서 확정했고 [관측성 SDD](agent-context/sdd/observability.md#종류별-진단-로그)가 파일 분류·상관 ID·회전·보존·상한·실패 처리와 검증 절차를 구체화했다. 실제 파일 저장·재시작·다중 인스턴스 검증과 구현은 대기 중이다.

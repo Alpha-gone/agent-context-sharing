@@ -168,6 +168,9 @@ func (s *Service) Authenticate(ctx context.Context, loginID, password string) (m
 }
 
 func validPassword(password string) bool {
+	if !utf8.ValidString(password) {
+		return false
+	}
 	length := utf8.RuneCountInString(password)
 	return minPasswordRunes <= length && length <= maxPasswordRunes
 }

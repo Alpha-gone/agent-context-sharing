@@ -126,7 +126,7 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 	if config.CandidateLimit < 1 {
 		return nil, fmt.Errorf("검색 채널 후보 수 상한은 양수여야 한다")
 	}
-	if config.SemanticThreshold < 0 || config.SemanticThreshold > 1 {
+	if math.IsNaN(config.SemanticThreshold) || config.SemanticThreshold < 0 || config.SemanticThreshold > 1 {
 		return nil, fmt.Errorf("의미 유사도 하한은 0 이상 1 이하여야 한다")
 	}
 	if math.IsNaN(config.FoldThreshold) || config.FoldThreshold <= 0 || config.FoldThreshold > 1 {
@@ -143,8 +143,10 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 		if config.GraphStage == GraphStageBaseline {
 			return nil, fmt.Errorf("질의 적응형 라우팅은 그래프 검색 비교 단계 baseline과 함께 쓸 수 없다")
 		}
-		if config.AdaptiveDirectThreshold < 0 || config.AdaptiveDirectThreshold > 1 || config.AdaptiveMarginThreshold < 0 || config.AdaptiveMarginThreshold > 1 {
-			return nil, fmt.Errorf("직접 충분성 하한과 분리 폭은 0 이상 1 이하여야 한다")
+		for _, threshold := range []float64{config.AdaptiveDirectThreshold, config.AdaptiveMarginThreshold} {
+			if math.IsNaN(threshold) || threshold < 0 || threshold > 1 {
+				return nil, fmt.Errorf("직접 충분성 하한과 분리 폭은 0 이상 1 이하여야 한다")
+			}
 		}
 	}
 	if !slices.Contains([]Route{"", RouteDirect, RouteLocal, RouteGlobal}, config.Route) || (config.Route != "" && !config.AdaptiveRouting) {

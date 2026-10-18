@@ -233,6 +233,8 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 		candidates, err := execute()
 		metric := Channel{Latency: time.Since(started)}
 		if err != nil {
+			// 오류와 함께 반환된 부분 후보는 순위·라우팅·확장에 사용하지 않는다.
+			candidates = nil
 			// 응답에는 분류만 싣고 원인은 로그에 남긴다. 「오류의 생성과 전달」이 내부 원인을
 			// 응답에 넣지 못하게 했고, 「측정」은 실패 채널의 사유를 남기라고 요구한다.
 			metric.Failure = failureReason(err)

@@ -14,7 +14,7 @@
 
 [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)에 따라 `/mcp`는 단일 요청 POST에 `application/json` 결과를 반환한다. 요청 `Accept`는 JSON·SSE를 모두 포함하며 `Content-Type`은 JSON이다. 첫 구현은 SSE·`MCP-Session-Id`를 사용하지 않고 GET·DELETE는 `405`다. JSON-RPC 응답 POST는 거부한다. 접수 가능한 알림의 transport 응답은 `202` 빈 본문이나 이 revision의 HTTP core에는 클라이언트 알림이 없으며 `notifications/initialized`·`notifications/cancelled`를 수명주기로 제공하지 않는다.
 
-`Origin`이 있으면 허용 출처를 검사하고 부적합하면 `403`이다. 모든 요청에 `MCP-Protocol-Version`·`Mcp-Method`, `tools/call`에는 `Mcp-Name`을 검증한다. 각각 본문 revision·method·`params.name`과 일치해야 하며 헤더 누락·형식 오류·불일치는 HTTP `400`·`HeaderMismatch(-32020)`다. 헤더 이름은 대소문자를 구분하지 않고 값은 구분하며 표준 Base64 sentinel은 해독 후 비교한다. 도구에는 `x-mcp-header`를 지정하지 않으며 서비스 전용 필수 헤더를 추가하지 않는다.
+`Origin`이 있으면 허용 출처를 검사하고 부적합하면 `403`이다. 모든 요청에 `MCP-Protocol-Version`·`Mcp-Method`, `tools/call`에는 `Mcp-Name`을 검증한다. 각각 본문 revision·method·`params.name`과 일치해야 하며 헤더 누락·형식 오류·불일치는 HTTP `400`·`HeaderMismatch(-32020)`다. 헤더 이름은 대소문자를 구분하지 않고 값은 구분한다. 표준 Base64 sentinel은 이름 값인 `Mcp-Name`에서 해독 후 비교하며 revision·method에는 적용하지 않는다. 도구에는 `x-mcp-header`를 지정하지 않으며 서비스 전용 필수 헤더를 추가하지 않는다.
 
 미지원 revision은 HTTP `400`·`UnsupportedProtocolVersion(-32022)`와 `data.supported: ["2026-07-28"]`·`data.requested`를 반환한다. 유효한 revision·외피의 미지원 RPC는 HTTP `404`·`-32601`이다. 이전 `initialize` 요청은 필수 외피 누락 또는 미지원 메서드로 거부하고 지원 revision을 진단에 표시한다. 요청 본문 상한과 업무·조회 시간 예산은 유지한다.
 
@@ -143,7 +143,7 @@ MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 �
 
 ## MCP 표면
 
-직접 연결의 표면은 [표준 MCP 경계](mcp.md#표준-mcp-경계)를 따른다. 공식 SDK의 발견·요청별 메타데이터·도구·취소 계약과 14종 도구의 `description`·annotations를 구현하고 계약 스냅샷을 다시 만든다. 현재 전송 패키지·도구 스냅샷은 없으며 실제 호스트 검증 전에는 지원을 주장하지 않는다.
+직접 연결의 표면은 [표준 MCP 경계](mcp.md#표준-mcp-경계)를 따른다. 공식 SDK의 발견·요청별 메타데이터·도구·취소 계약과 14종 도구의 `description`·annotations를 구현하고 계약 스냅샷을 다시 만든다. 현재 `internal/mcp`에는 최소 SDK 진입 경계만 있으며 실제 서버 연결·업무 도구 스냅샷은 대기 상태다. 실제 호스트 검증 전에는 지원을 주장하지 않는다.
 
 ## 응답 직렬화
 
@@ -190,7 +190,7 @@ MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 �
 
 `FR-AGENT_CONTEXT-164`~`172`의 첫 구현은 공식 `github.com/modelcontextprotocol/go-sdk` `v1.8.0`을 사용한다. [공식 릴리스](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.8.0)가 `2026-07-28` 지원을 명시하며 `ServerOptions.SupportedProtocolVersions`를 해당 revision 하나로 제한한다. SDK의 추가 revision을 자동 노출하지 않고 stateful handler를 사용하지 않는다. 실제 Go 빌드·무상태 transport 동작·호스트 적합성은 인수 시험 대상이다.
 
-SDK의 지원 목록 제한만으로 이전 수명주기와 외피 없는 호출의 거부가 보장되지는 않는다. 서비스의 MCP 진입 경계는 SDK에 위임하기 전에 필수 외피·허용 revision과 메서드를 확인하고, SDK가 직접 처리하지 않는 표준 Base64 Mcp-Name의 해독·본문 대조를 보완해야 한다. 오류는 위 표준 MCP 경계의 JSON-RPC 계약을 유지한다. SDK를 교체하거나 이전 revision을 허용하는 방식으로 우회하지 않는다. [MCP-01 검토](../reviews/2026-10-18-mcp-01.md)는 공급자 단독 동작과 아직 구현하지 않은 보완 경계를 구분한다.
+SDK의 지원 목록 제한만으로 이전 수명주기와 외피 없는 호출의 거부가 보장되지는 않는다. 서비스의 MCP 진입 경계는 SDK에 위임하기 전에 필수 외피·허용 revision과 메서드를 확인하고, SDK가 직접 처리하지 않는 표준 Base64 Mcp-Name의 해독·본문 대조를 보완한다. 오류는 위 표준 MCP 경계의 JSON-RPC 계약을 유지한다. SDK를 교체하거나 이전 revision을 허용하는 방식으로 우회하지 않는다. [MCP-01 검토](../reviews/2026-10-18-mcp-01.md#서비스-진입-경계-보완과-최종-인수)에서 최소 진입 경계와 SDK의 교환을 인수했다. 실제 서버의 인증·Origin·업무 도구 연결은 후속 구현 대상이다.
 
 서버 정보·도구 설명은 고정 구성에서 만들며 사용자의 입력이나 자격 증명을 instructions에 넣지 않는다. 서버는 이전 요청·발견 결과·접속 인스턴스로 revision·기능을 추론하지 않는다. 표준 메타데이터·헤더·Origin·메시지 검증은 SDK 경계에 두고 인수 시험에서 발견을 생략한 호출과 다른 인스턴스로 이어지는 호출도 대조한다.
 

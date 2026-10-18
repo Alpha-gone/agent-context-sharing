@@ -21,6 +21,15 @@ const sdkProbeRevision = "2026-07-28"
 // SDK를 그대로 실행하여 서비스 계약과 다른 동작도 감추지 않고 관찰한다.
 func newSDKProbe(t *testing.T) *httptest.Server {
 	t.Helper()
+	return newSDKProbeWithTransport(t, func(server *sdk.Server) http.Handler {
+		return sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
+			Stateless: true, JSONResponse: true,
+		})
+	})
+}
+
+func newSDKProbeWithTransport(t *testing.T, transport func(*sdk.Server) http.Handler, toolName ...string) *httptest.Server {
+	t.Helper()
 	server := sdk.NewServer(&sdk.Implementation{Name: "mcp-01-probe", Version: "1"}, &sdk.ServerOptions{
 		SupportedProtocolVersions: []string{sdkProbeRevision},
 		Instructions:              "MCP-01 합성 적합성 시험",
@@ -34,7 +43,11 @@ func newSDKProbe(t *testing.T) *httptest.Server {
 	type output struct {
 		Client string `json:"client"`
 	}
-	sdk.AddTool(server, &sdk.Tool{Name: "probe", Description: "합성 입력의 요청별 메타데이터 확인"},
+	name := "probe"
+	if len(toolName) > 0 {
+		name = toolName[0]
+	}
+	sdk.AddTool(server, &sdk.Tool{Name: name, Description: "합성 입력의 요청별 메타데이터 확인"},
 		func(_ context.Context, request *sdk.CallToolRequest, _ input) (*sdk.CallToolResult, output, error) {
 			name := ""
 			if info := request.ClientInfo(); info != nil {
@@ -42,11 +55,8 @@ func newSDKProbe(t *testing.T) *httptest.Server {
 			}
 			return nil, output{Client: name}, nil
 		})
-	handler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
-		Stateless: true, JSONResponse: true,
-	})
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", handler)
+	mux.Handle("/mcp", transport(server))
 	probe := httptest.NewServer(mux)
 	t.Cleanup(probe.Close)
 	return probe

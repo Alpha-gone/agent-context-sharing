@@ -190,6 +190,8 @@ MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 �
 
 `FR-AGENT_CONTEXT-164`~`172`의 첫 구현은 공식 `github.com/modelcontextprotocol/go-sdk` `v1.8.0`을 사용한다. [공식 릴리스](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.8.0)가 `2026-07-28` 지원을 명시하며 `ServerOptions.SupportedProtocolVersions`를 해당 revision 하나로 제한한다. SDK의 추가 revision을 자동 노출하지 않고 stateful handler를 사용하지 않는다. 실제 Go 빌드·무상태 transport 동작·호스트 적합성은 인수 시험 대상이다.
 
+SDK의 지원 목록 제한만으로 이전 수명주기와 외피 없는 호출의 거부가 보장되지는 않는다. 서비스의 MCP 진입 경계는 SDK에 위임하기 전에 필수 외피·허용 revision과 메서드를 확인하고, SDK가 직접 처리하지 않는 표준 Base64 Mcp-Name의 해독·본문 대조를 보완해야 한다. 오류는 위 표준 MCP 경계의 JSON-RPC 계약을 유지한다. SDK를 교체하거나 이전 revision을 허용하는 방식으로 우회하지 않는다. [MCP-01 검토](../reviews/2026-10-18-mcp-01.md)는 공급자 단독 동작과 아직 구현하지 않은 보완 경계를 구분한다.
+
 서버 정보·도구 설명은 고정 구성에서 만들며 사용자의 입력이나 자격 증명을 instructions에 넣지 않는다. 서버는 이전 요청·발견 결과·접속 인스턴스로 revision·기능을 추론하지 않는다. 표준 메타데이터·헤더·Origin·메시지 검증은 SDK 경계에 두고 인수 시험에서 발견을 생략한 호출과 다른 인스턴스로 이어지는 호출도 대조한다.
 
 [캐시 계약](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching)에 따라 `server/discover`·`tools/list` 완료 결과에는 `ttlMs: 0`·`cacheScope: "private"`를 명시한다. SDK `ServerOptions.SetCacheable`로 적용하며 인증 맥락 간 캐시 공유를 허용하지 않는다. 캐시 힌트는 매 요청의 인증·등급 검사를 대체하지 않는다. 첫 구현은 구독·listChanged·sampling·elicitation·roots·MRTR와 별도 확장을 광고하지 않는다.

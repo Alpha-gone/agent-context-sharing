@@ -319,6 +319,16 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
+	if operation != nil {
+		kind := OperationUpdate
+		if discard {
+			kind = OperationDiscard
+		}
+		// 폐기 기록은 복구 채널의 근거이므로 실제 상태 전이와 같은 대상을 가리켜야 한다.
+		if err := validateContextOperation(operation, graphID, contextID, kind); err != nil {
+			return model.Context{}, err
+		}
+	}
 	if err := limits.validate(); err != nil {
 		return model.Context{}, err
 	}

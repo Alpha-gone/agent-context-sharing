@@ -44,6 +44,14 @@ type hopNeighborSource func(frontier []model.ID, label traversalLabel) ([]hopNei
 func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops int, direction string, filter []string, limit int) (result HopResult, err error) {
 	ctx, cancel := context.WithTimeout(ctx, hopWorkTimeout)
 	defer cancel()
+	defer func() {
+		if ctx.Err() != nil {
+			result, err = HopResult{}, errors.Join(err, ctx.Err(), context.Cause(ctx))
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return HopResult{}, err
+	}
 	if !graphID.IsV7() || !startID.IsV7() {
 		return HopResult{}, fmt.Errorf("홉 탐색 인자가 올바르지 않다")
 	}
@@ -78,6 +86,12 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []model.Context, hops int, direction string, filter []string, limit int) (result HopResult, err error) {
 	ctx, cancel := context.WithTimeout(ctx, hopWorkTimeout)
 	defer cancel()
+	// 조립·정리까지 같은 예산을 적용하며 호출자가 지정한 취소 원인도 보존한다.
+	defer func() {
+		if ctx.Err() != nil {
+			result, err = HopResult{}, errors.Join(err, ctx.Err(), context.Cause(ctx))
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return HopResult{}, err
 	}

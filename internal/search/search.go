@@ -320,7 +320,8 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 			graph = service.graphCandidates(ctx, input, entryPoints, true, hopDepth(input.MaxHops))
 		}
 	} else {
-		relevantLocal := hasRelevantSemantic(results[0].candidates, service.config.SemanticThreshold) || len(results[1].candidates) > 0
+		semanticCandidates, keywordCandidates := localChannelCandidates(results)
+		relevantLocal := hasRelevantSemantic(semanticCandidates, service.config.SemanticThreshold) || len(keywordCandidates) > 0
 		globalFallbackTriggered = input.Scope == "auto" && !relevantLocal
 		var global channelResult
 		if input.Scope == "global" || globalFallbackTriggered {

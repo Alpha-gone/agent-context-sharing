@@ -290,17 +290,17 @@ func (s *Service) Revoke(ctx context.Context, token Token) error {
 func (s *Service) JWKS(ctx context.Context) (jose.JSONWebKeySet, error) {
 	// 최초 로그인 전의 발견도 발급과 같은 원자적 키 초기화 경로를 사용한다.
 	if _, err := s.activeKey(ctx); err != nil {
-		return jose.JSONWebKeySet{}, err
+		return jose.JSONWebKeySet{}, fmt.Errorf("%w: 활성 키 조회: %w", ErrUnavailable, err)
 	}
 	items, err := s.store.SigningKeys(ctx)
 	if err != nil {
-		return jose.JSONWebKeySet{}, err
+		return jose.JSONWebKeySet{}, fmt.Errorf("%w: 공개 키 목록 조회: %w", ErrUnavailable, err)
 	}
 	set := jose.JSONWebKeySet{Keys: make([]jose.JSONWebKey, 0, len(items))}
 	for _, item := range items {
-		var key jose.JSONWebKey
-		if err := json.Unmarshal([]byte(item.PublicKey), &key); err != nil {
-			return jose.JSONWebKeySet{}, fmt.Errorf("공개 키 해석: %w", err)
+		key, err := publicSigningKey(item)
+		if err != nil {
+			return jose.JSONWebKeySet{}, err
 		}
 		set.Keys = append(set.Keys, key)
 	}
@@ -326,9 +326,9 @@ func (s *Service) issue(ctx context.Context, accountID model.ID, audience string
 	if err != nil {
 		return Token{}, err
 	}
-	var private jose.JSONWebKey
-	if err := json.Unmarshal([]byte(key.PrivateKey), &private); err != nil {
-		return Token{}, fmt.Errorf("개인 키 해석: %w", err)
+	private, err := privateSigningKey(key)
+	if err != nil {
+		return Token{}, err
 	}
 	options := (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", key.ID)
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: private.Key}, options)

@@ -2,8 +2,6 @@ package authz
 
 import (
 	"context"
-	"encoding/json/v2"
-	"fmt"
 	"maps"
 	"sync"
 	"time"
@@ -83,9 +81,9 @@ func (cache *verificationCache) publicKey(ctx context.Context, source authStore,
 		loaded := make(map[string]jose.JSONWebKey, len(items))
 		if err == nil {
 			for _, item := range items {
-				var public jose.JSONWebKey
-				if decodeErr := json.Unmarshal([]byte(item.PublicKey), &public); decodeErr != nil {
-					err = fmt.Errorf("공개 키 해석: %w", decodeErr)
+				public, decodeErr := publicSigningKey(item)
+				if decodeErr != nil {
+					err = decodeErr
 					break
 				}
 				loaded[item.ID] = public

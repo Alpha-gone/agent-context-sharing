@@ -131,6 +131,9 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 		if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 			return model.Context{}, err
 		}
+		if err := s.lockContext(ctx, tx, graphID, value.ID); err != nil {
+			return model.Context{}, err
+		}
 	}
 	previous, err := s.context(ctx, tx, graphID, value.ID)
 	if err != nil {

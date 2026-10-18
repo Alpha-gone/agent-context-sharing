@@ -71,6 +71,18 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		return model.Relation{}, fmt.Errorf("요청 graph_id와 관계 graph_id가 일치하지 않는다")
 	}
 	relation = normalizeRelation(relation)
+	if relation.State != model.RelationStateConfirmed {
+		return model.Relation{}, model.FieldError{Field: "state", Message: "관계 확정 입력은 confirmed 상태여야 한다"}
+	}
+	if err := relation.Validate(); err != nil {
+		return model.Relation{}, fmt.Errorf("관계 확정 입력: %w", errors.Join(ErrInvalidRelation, err))
+	}
+	if err := validateRelationOperation(operation, graphID, relation.ID, OperationAdd); err != nil {
+		return model.Relation{}, err
+	}
+	if operation != nil && (operation.AccountID != relation.ConfirmedBy || operation.AgentID != relation.ConfirmedByAgent) {
+		return model.Relation{}, model.FieldError{Field: "confirmed_by", Message: "관계 확정 주체와 관리 기록의 실행 주체가 일치해야 한다"}
+	}
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 확정 트랜잭션 시작: %w", err)
@@ -106,6 +118,8 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		if err := s.validateRelationCycle(ctx, tx, graphID, relation); err != nil {
 			return model.Relation{}, err
 		}
+		// 기존 후보의 출처는 보존하되, 후보 없이 직접 확정한 관계는 에이전트 제안이다.
+		relation.ProposedBy = model.ProposalSourceAgent
 		stored, err := s.createRelation(ctx, tx, graphID, relation)
 		if err != nil {
 			return model.Relation{}, err
@@ -162,6 +176,9 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.ID, operation *OperationRecord) (result model.Relation, err error) {
 	if !graphID.IsV7() || !relationID.IsV7() {
 		return model.Relation{}, fmt.Errorf("그래프와 관계 식별자는 UUIDv7이어야 한다")
+	}
+	if err := validateRelationOperation(operation, graphID, relationID, OperationDiscard); err != nil {
+		return model.Relation{}, err
 	}
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {

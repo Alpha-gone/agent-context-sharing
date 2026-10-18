@@ -170,6 +170,21 @@ func (s *Store) recordAppliedRelationOperation(ctx context.Context, tx pgx.Tx, o
 	return s.insertOperation(ctx, tx, copy, "applied", "")
 }
 
+// 확정은 실제 저장된 ID로 기록 대상을 채우지만, 호출자가 다른 업무·종류·대상을
+// 지정한 기록까지 덮어써서 정상 감사처럼 저장하지 않는다.
+func validateRelationOperation(operation *OperationRecord, graphID, relationID model.ID, kind OperationKind) error {
+	if operation == nil {
+		return nil
+	}
+	if operation.GraphID != graphID || operation.Kind != kind || !operation.ContextID.IsZero() ||
+		operation.TargetVersion != 0 || !operation.RelationID.IsZero() && operation.RelationID != relationID {
+		return model.FieldError{Field: "relation_id", Message: "관리 기록의 그래프·대상·연산 종류가 실제 관계 연산과 일치해야 한다"}
+	}
+	copy := *operation
+	copy.RelationID = relationID
+	return copy.valid("applied")
+}
+
 // enqueueIndexTask는 색인 대기 작업을 컨텍스트 변경과 같은 트랜잭션에서 등록한다.
 // 컨텍스트마다 한 행만 두므로 같은 행이 있으면 대기 상태로 되돌린다.
 func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contextID model.ID, layer model.Layer) error {

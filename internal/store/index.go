@@ -825,11 +825,19 @@ func (s *Store) searchCandidates(ctx context.Context, graphID model.ID, ids []mo
 // 비례해 늘어난다. 흐름 응답은 담긴 컨텍스트 전부의 출처가 필요하므로, 한 깊이씩 넓혀 가며
 // 묶어 읽고 방문한 정점을 호출 전체에서 공유한다.
 func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contextIDs []model.ID) (result map[model.ID][]model.OriginKind, err error) {
+	if !graphID.IsV7() {
+		return nil, model.FieldError{Field: "graph_id", Message: "출처 조회 그래프는 UUIDv7이어야 한다"}
+	}
+	for _, id := range contextIDs {
+		if !id.IsV7() {
+			return nil, model.FieldError{Field: "context_id", Message: "출처 조회 대상은 UUIDv7이어야 한다"}
+		}
+	}
 	result = make(map[model.ID][]model.OriginKind, len(contextIDs))
 	if len(contextIDs) == 0 {
 		return result, nil
 	}
-	ctx, release, err := s.enterReadScope(ctx)
+	ctx, release, err := s.enterHopReadScope(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -837,6 +845,7 @@ func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contex
 		if releaseErr := release(); releaseErr != nil {
 			result, err = nil, errors.Join(err, releaseErr)
 		}
+		err = connectionError(ctx, "출처 구분 조회", err)
 	}()
 	// 근거를 따라가며 만나는 모든 정점을 한 번씩만 읽는다.
 	loaded := make(map[model.ID]model.Context)

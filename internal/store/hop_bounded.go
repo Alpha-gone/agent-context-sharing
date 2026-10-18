@@ -13,7 +13,7 @@ import (
 // hopWork는 DB 내부 스캔이 아니라 애플리케이션이 받은 행·본문의 측정값이다.
 type hopWork struct {
 	identifierRows, bodyRows, edgeRows, bodyBytes int
-	// referenceRows는 근거·구성원 묶음 조회 행이다. 내부 간선과 겹쳐도 별도로 센다.
+	// referenceRows는 근거·구성원·대체 참조 묶음 조회 행이다. 내부 간선과 겹쳐도 별도로 센다.
 	referenceRows int
 }
 

@@ -124,6 +124,13 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 			starts[i] = value
 		}
 	}
+	// 스냅숏 경로는 호출자가 읽은 시작 노드를 재사용하므로 그 상태도 검사해야 한다.
+	// 독립 호출은 위에서 현재 읽기 상태로 갱신한 다음 같은 판정을 적용한다.
+	for _, start := range starts {
+		if start.DeletedAt != nil {
+			return HopResult{}, missingContextError{ID: start.ID}
+		}
+	}
 	if limit > 0 {
 		return s.hopContextsBounded(ctx, graphID, starts, hops, direction, filter, limit)
 	}
@@ -250,7 +257,7 @@ func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []mod
 // hopNeighbors는 정점 속성만 읽어 오는데 참조는 속성이 아니라 간선에 있다. 비우면 흐름
 // 응답의 확장 노드에서 `derived_from`과 `member_refs`가 빈 목록으로 나가고, 「예산 적용과
 // 절단」이 근거가 다르면 접지 않기로 한 중복 파생 접기가 근거를 구분하지 못한다.
-// 노드마다 묶어 읽지 않고 두 질의로 한 번에 읽으며, 두 질의가 받은 참조 행 수를 반환한다.
+// 노드마다 읽지 않고 근거·구성원·대체 참조를 세 묶음 질의로 읽으며 받은 행 수를 반환한다.
 func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, contexts []model.Context) (int, error) {
 	needs := make([]string, 0, len(contexts))
 	for _, value := range contexts {

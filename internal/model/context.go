@@ -364,10 +364,15 @@ func ValidateDerivedReferences(referenceIDs []ID) error {
 	if len(referenceIDs) == 0 {
 		return fieldErrorf("derived_from", "파생 근거는 1개 이상이어야 한다")
 	}
+	seen := make(map[ID]struct{}, len(referenceIDs))
 	for _, referenceID := range referenceIDs {
 		if !referenceID.IsV7() {
 			return fieldErrorf("derived_from", "파생 근거 식별자는 UUIDv7이어야 한다")
 		}
+		if _, duplicate := seen[referenceID]; duplicate {
+			return fieldErrorf("derived_from", "같은 근거를 중복해서 지정할 수 없다")
+		}
+		seen[referenceID] = struct{}{}
 	}
 	return nil
 }
@@ -535,10 +540,15 @@ func (attributes EventAttributes) validate() error {
 	if len(attributes.MemberIDs) == 0 {
 		return fieldErrorf("member_refs", "사건 구성원은 1개 이상이어야 한다")
 	}
+	seen := make(map[ID]struct{}, len(attributes.MemberIDs))
 	for _, memberID := range attributes.MemberIDs {
 		if !memberID.IsV7() {
 			return fieldErrorf("member_refs", "사건 구성원 식별자는 UUIDv7이어야 한다")
 		}
+		if _, duplicate := seen[memberID]; duplicate {
+			return fieldErrorf("member_refs", "같은 구성원을 중복해서 지정할 수 없다")
+		}
+		seen[memberID] = struct{}{}
 	}
 	return nil
 }

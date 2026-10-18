@@ -207,6 +207,7 @@ AGE 그래프는 하나만 만든다. 이름은 배포 구성으로 두되 인�
 | `team_member` | `team_id/account_id: uuid` | 없음 | PK `(team_id, account_id)`, 계정별 팀 조회 인덱스 |
 | `context_embedding` | `context_id/graph_id: uuid`, `embedding: vector(n) 또는 halfvec(n)`, `model_id/storage_tier: text`, `indexed_at/last_accessed_at: timestamptz` | 없음 | `storage_tier` LIST 파티션과 값 CHECK. 두 자식에서 각각 UNIQUE `context_id`. 그래프·HNSW 조회와 전역 중복 책임은 [임베딩 스키마](#임베딩-스키마) |
 | `index_task` | `task_id/context_id/graph_id: uuid`, `attempts: integer`, `state/last_error/correlation_id: text`, `enqueued_at/next_attempt_at: timestamptz` | `last_error`, `correlation_id` | PK `task_id`, UNIQUE `context_id`, 시도 횟수 기본 0·음수 금지, 상태 CHECK. 확보는 상태·다음 시도 시각, 세대는 [큐 계약](indexing.md#색인-작업-큐) |
+| `context_revision` | `graph_id/context_id/supersedes_context_id: uuid`, `version/previous_version/supersedes_version: bigint`, `snapshot: jsonb` | `previous_version`, `supersedes_context_id`, `supersedes_version` | 복합 PK·이전/대체 FK·판/쌍/JSON object CHECK. 상세는 [파생 판 이력](#파생-판-이력) |
 | `operation_log` | `operation_id/graph_id/context_id/relation_id/actor_account_id/actor_agent_id: uuid`, `operation_kind/judgment_input/result/reject_reason: text`, `target_version: bigint`, `applied_at: timestamptz` | `context_id`, `relation_id`, `target_version`, `reject_reason` | PK `operation_id`. 연산·결과·대상 조합 CHECK는 아래 표. 컨텍스트·관계별 이력과 그래프별 감사·보존 조회 |
 | `idempotency_record` | `actor_account_id: uuid`, `idempotency_key/tool_name: text`, `request_fingerprint: bytea`, `tool_result: jsonb`, `received_at/expires_at: timestamptz` | `tool_result`는 트랜잭션 내부 예약 중에만 허용 | PK `(actor_account_id, idempotency_key)`. 키 형식과 32바이트 지문 CHECK. 결과 없는 커밋은 저장소가 금지하며 [멱등성 경계](mcp.md#멱등성-저장과-경합)에서 검증. 만료 인덱스 |
 | `web_audit_log` | `audit_id/actor_account_id/graph_id/subject_id/team_id/member_account_id/target_context_id/requester_account_id: uuid`, `target_kind/action/subject_type/before_grade/after_grade: text`, `occurred_at: timestamptz` | 공통 5개 열 `audit_id/target_kind/action/actor_account_id/occurred_at` 이외 | PK `audit_id`, 종류·행위·선택 등급 CHECK와 운영자 복구 요청자 필수 CHECK. 종류별 필수·금지 조합은 저장소 검증. 그래프 없는 팀 감사도 계정·시각으로 조회 |
@@ -246,7 +247,7 @@ CHECK는 같은 행의 값과 NULL 조합을 검사한다. 다른 행의 존재�
 
 ## 스키마 적용
 
-현재 적용 순서는 `001_init.sql` → `009_remove_legacy_connection.sql` → `010_target_schema.sql` → `011_query_statistics.sql` → `012_embedding_configuration.sql`이다. 적용된 SQL·checksum은 유지하고 과거 002~008의 번호를 재사용하지 않는다. 009는 사용하지 않는 연결 전용 테이블을 제거하며, 010은 [목표 DDL](#신규-구현의-ddl-대응)의 OAuth·등록·멱등성·bigint 대응을 추가한다. 011은 조회 인덱스·통계를 보강하고 012는 [벡터 형상 전환](indexing.md#전환복귀-경계)과 선택 상관 ID 열의 준비를 담당한다. 서비스·작업자 정지와 백업 후 명시적으로 적용한다. 기존 행이 새 제약에 맞지 않으면 자동 삭제·수정하지 않고 해당 파일 전체를 롤백한다. 저장 구조의 준비는 인증·등록 연산이나 실제 호스트 지원의 완료를 뜻하지 않는다.
+현재 적용 순서는 `001_init.sql` → `009_remove_legacy_connection.sql` → `010_target_schema.sql` → `011_query_statistics.sql` → `012_embedding_configuration.sql` → `013_context_revision.sql`이다. 적용된 SQL·checksum은 유지하고 과거 002~008의 번호를 재사용하지 않는다. 009는 사용하지 않는 연결 전용 테이블을 제거하며, 010은 [목표 DDL](#신규-구현의-ddl-대응)의 OAuth·등록·멱등성·bigint 대응을 추가한다. 011은 조회 인덱스·통계를 보강하고 012는 [벡터 형상 전환](indexing.md#전환복귀-경계)과 선택 상관 ID 열의 준비를 담당한다. 서비스·작업자 정지와 백업 후 명시적으로 적용한다. 기존 행이 새 제약에 맞지 않으면 자동 삭제·수정하지 않고 해당 파일 전체를 롤백한다. 저장 구조의 준비는 인증·등록 연산이나 실제 호스트 지원의 완료를 뜻하지 않는다.
 
 번호를 붙인 마이그레이션 파일과 적용 이력 테이블로 스키마를 만들고 판올림한다. 운영 중인 데이터베이스의 테이블을 손으로 고치지 않는다.
 
@@ -287,6 +288,14 @@ CHECK는 같은 행의 값과 NULL 조합을 검사한다. 다른 행의 존재�
 이력 조회·각 DDL 트랜잭션·자문 잠금은 같은 전용 연결을 사용한다. 대기 중인 실행기가 풀의 다른 연결을 점유해 적용을 막지 않게 한다. 잠금 획득 취소나 해제 실패로 소유권이 불명확한 연결은 폐기하고, 취소와 별개인 제한 시간으로 정리한다. 파일은 양수 세 자리 번호이며 중복·적용 파일명/checksum 변경·마지막 적용 판 이전 번호의 신규 추가를 거부한다. 삭제된 파일의 이력은 그대로 보존하되 재적용하지 않는다.
 
 구성 값을 파일에 넣기 전에 검증한다. 그래프 이름·벡터 타입·콜드 tablespace는 식별자나 타입 자리에 들어가 매개변수로 묶을 수 없으므로, 허용된 형식과 값 집합을 통과한 값만 치환한다. 통과하지 못하면 이력 테이블을 포함한 SQL을 실행하지 않는다. 그래프·tablespace 식별자는 PostgreSQL의 63바이트 한도를 넘지 않아야 한다.
+
+## 파생 판 이력
+
+`context_revision`은 일반 갱신·시스템 근거 표시·폐기·복구와 명시적 대체의 이전/결과 판을 검색 정점과 분리하여 보존한다. 키는 `(graph_id, context_id, version)`이며 같은 키의 스냅숏을 덮어쓰지 않는다. `snapshot` JSONB는 해당 판의 공통·파생 속성과 근거/대체 참조를 모두 담는다. `previous_version`은 같은 컨텍스트의 이전 판을, `supersedes_context_id`·`supersedes_version`은 명시적 대체 당시의 이전 컨텍스트 판을 가리킨다. 대체 이후 갱신에도 고정된 대체 판을 이어받는다. `previous_version`은 같은 복합 키에 대한 자기 FK이며 대체 쌍도 이력 키에 FK로 연결한다.
+
+이전 판과 결과 판은 정점·큐·감사와 같은 쓰기 트랜잭션에서 저장한다. 생성 시 파생의 판 1을 기록하며 전파로 바뀐 직접 파생도 각각 기록한다. 기존 데이터에는 과거 내용을 역산하지 않고 첫 변경·대체 시 관찰한 현재 판을 연결 없는 기준 스냅숏으로 보존한다. 기존 대체 간선의 과거 대상 판이 알려지지 않으면 그 판 번호를 만들어 채우지 않는다. 이전 본문과 참조는 소프트 삭제·복구 뒤에도 보존하고 현재 저장량·검색 후보·홉 정점 수에는 더하지 않는다. 임의 판 조회는 필수 graph_id와 스냅숏의 ID·판 재검사를 사용하는 저장 접근 계층 내부 경계이며 새 MCP 업무 도구는 추가하지 않는다.
+
+013은 이 관계형 테이블과 자기/대체 FK·판/대체 쌍/JSON object CHECK를 추가한다. 기존 001~012와 적용 이력은 변경하지 않는다. 기존 DB는 서비스·작업자 정지와 백업 후 013을 적용한다. 이전 프로그램으로 복귀해도 테이블을 삭제하지 않으며 그 프로그램이 새로 만든 판의 이력은 보장하지 않는다.
 
 ## 그래프 스키마
 

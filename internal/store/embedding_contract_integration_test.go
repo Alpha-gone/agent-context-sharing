@@ -59,7 +59,7 @@ func newEmbeddingContractStore(t *testing.T, vectorType string, dimension int) *
 	}
 	t.Cleanup(pool.Close)
 	cfg := migrate.Config{GraphName: "agent_context", VectorType: vectorType, VectorDim: dimension, IndexTargetLayers: "all_layers"}
-	for _, want := range []int{5, 0} {
+	for _, want := range []int{6, 0} {
 		count := 0
 		err := migrate.WithLock(t.Context(), pool, func(ctx context.Context, conn *pgxpool.Conn) error {
 			loaded, applied, err := migrate.Prepare(ctx, conn, migrations.FS, ".", cfg)

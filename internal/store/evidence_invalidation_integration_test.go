@@ -195,7 +195,8 @@ func TestEvidenceInvalidationAGEConflictIntegration(t *testing.T) {
 // 프로덕션 코드에 시험용 분기 없이 두 Read Committed 트랜잭션의 순서를 고정한다.
 type afterEvidenceReadTx struct {
 	pgx.Tx
-	afterRead func()
+	afterRead           func()
+	evidenceTargetsRead bool
 }
 
 func (tx *afterEvidenceReadTx) Begin(ctx context.Context) (pgx.Tx, error) {
@@ -208,10 +209,20 @@ func (tx *afterEvidenceReadTx) Begin(ctx context.Context) (pgx.Tx, error) {
 
 func (tx *afterEvidenceReadTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	rows, err := tx.Tx.Query(ctx, sql, args...)
-	if err != nil || !strings.Contains(sql, "RETURN derived") {
+	if err != nil {
 		return rows, err
 	}
-	return &afterEvidenceReadRows{Rows: rows, afterRead: tx.afterRead}, nil
+	if strings.Contains(sql, "RETURN derived.context_id") {
+		tx.evidenceTargetsRead = true
+	}
+	// 대상 ID 조회 뒤 공통 조립 경계가 본문과 판을 다시 읽는다. ID만 읽은
+	// 시점에 커밋하면 새 판을 정상 사용하므로, 실제 정점 판을 읽은 뒤에 겹친다.
+	if !tx.evidenceTargetsRead || !strings.Contains(sql, "RETURN node ORDER BY node.context_id") || tx.afterRead == nil {
+		return rows, nil
+	}
+	afterRead := tx.afterRead
+	tx.afterRead = nil
+	return &afterEvidenceReadRows{Rows: rows, afterRead: afterRead}, nil
 }
 
 type afterEvidenceReadRows struct {

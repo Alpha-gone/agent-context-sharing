@@ -60,10 +60,26 @@ func (signals RouteSignals) Decide(directThreshold, marginThreshold float64) (Ro
 	return RouteLocal, ReasonAmbiguousLocal
 }
 
-// routeSignals는 진입 채널 결과와 그 임시 결합에서 라우터 신호를 만든다. results의 앞 두
-// 항목은 의미 유사도와 키워드 채널이다.
+// localChannelCandidates는 채널 배열의 순서와 무관하게 관련성 판정의 입력을 고른다.
+// 실패 채널은 결합과 마찬가지로 라우팅·국소 진입점에서도 제외한다.
+func localChannelCandidates(results []channelResult) (semantic, keyword []model.SearchCandidate) {
+	for _, result := range results {
+		if result.metric.Failure != "" {
+			continue
+		}
+		switch result.name {
+		case "semantic":
+			semantic = result.candidates
+		case "keyword":
+			keyword = result.candidates
+		}
+	}
+	return semantic, keyword
+}
+
+// routeSignals는 진입 채널 결과와 그 임시 결합에서 라우터 신호를 만든다.
 func routeSignals(results []channelResult, combined []combinedCandidate, semanticThreshold float64) RouteSignals {
-	semantic, keyword := results[0].candidates, results[1].candidates
+	semantic, keyword := localChannelCandidates(results)
 	signals := RouteSignals{
 		RelevantLocal: hasRelevantSemantic(semantic, semanticThreshold) || len(keyword) > 0,
 		SemanticCount: len(semantic),
@@ -86,13 +102,14 @@ func routeSignals(results []channelResult, combined []combinedCandidate, semanti
 // 유사도 하한을 넘은 의미 후보와 키워드 후보만 관련 후보다. 시간 필터 후보는 질의 관련성이
 // 없어 결합에는 남지만 확장 시작점으로 쓰지 않는다.
 func relevantLocalContexts(results []channelResult, combined []combinedCandidate, semanticThreshold float64) []model.Context {
+	semantic, keyword := localChannelCandidates(results)
 	relevant := map[model.ID]struct{}{}
-	for _, candidate := range results[0].candidates {
+	for _, candidate := range semantic {
 		if candidate.Similarity >= semanticThreshold {
 			relevant[candidate.Context.ID] = struct{}{}
 		}
 	}
-	for _, candidate := range results[1].candidates {
+	for _, candidate := range keyword {
 		relevant[candidate.Context.ID] = struct{}{}
 	}
 	values := make([]model.Context, 0, len(relevant))

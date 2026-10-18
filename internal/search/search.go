@@ -126,10 +126,10 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 	if config.CandidateLimit < 1 {
 		return nil, fmt.Errorf("검색 채널 후보 수 상한은 양수여야 한다")
 	}
-	if config.SemanticThreshold < 0 || config.SemanticThreshold > 1 {
+	if math.IsNaN(config.SemanticThreshold) || config.SemanticThreshold < 0 || config.SemanticThreshold > 1 {
 		return nil, fmt.Errorf("의미 유사도 하한은 0 이상 1 이하여야 한다")
 	}
-	if config.FoldThreshold <= 0 || config.FoldThreshold > 1 {
+	if math.IsNaN(config.FoldThreshold) || config.FoldThreshold <= 0 || config.FoldThreshold > 1 {
 		return nil, fmt.Errorf("중복 파생 접기 임계값은 0 초과 1 이하여야 한다")
 	}
 	if config.GraphStage == "" {
@@ -143,8 +143,10 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 		if config.GraphStage == GraphStageBaseline {
 			return nil, fmt.Errorf("질의 적응형 라우팅은 그래프 검색 비교 단계 baseline과 함께 쓸 수 없다")
 		}
-		if config.AdaptiveDirectThreshold < 0 || config.AdaptiveDirectThreshold > 1 || config.AdaptiveMarginThreshold < 0 || config.AdaptiveMarginThreshold > 1 {
-			return nil, fmt.Errorf("직접 충분성 하한과 분리 폭은 0 이상 1 이하여야 한다")
+		for _, threshold := range []float64{config.AdaptiveDirectThreshold, config.AdaptiveMarginThreshold} {
+			if math.IsNaN(threshold) || threshold < 0 || threshold > 1 {
+				return nil, fmt.Errorf("직접 충분성 하한과 분리 폭은 0 이상 1 이하여야 한다")
+			}
 		}
 	}
 	if !slices.Contains([]Route{"", RouteDirect, RouteLocal, RouteGlobal}, config.Route) || (config.Route != "" && !config.AdaptiveRouting) {
@@ -170,6 +172,11 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 // Flow는 진입 채널을 결합하고 구성에 따라 그래프 경로와 전역 요약을 추가한다.
 func (service *Service) Flow(ctx context.Context, input Input) (flowResult Flow, flowErr error) {
 	defer func() {
+		if ctx.Err() != nil {
+			// 취소를 채널 부분 성공으로 숨기거나 이미 조립한 본문을 함께 반환하지 않는다.
+			flowResult = Flow{Read: flowResult.Read}
+			flowErr = errors.Join(flowErr, ctx.Err(), context.Cause(ctx))
+		}
 		if service.diagnostics == nil {
 			return
 		}
@@ -180,21 +187,17 @@ func (service *Service) Flow(ctx context.Context, input Input) (flowResult Flow,
 		service.diagnostics.RecordDiagnostic(ctx, "INFO", "flow", "completed", "completed")
 	}()
 
-	// Budget 0은 「계정 플랜」이 선언한 대로 한도 없음이다.
-	if !input.GraphID.IsV7() || input.WorkContext == "" || input.Budget < 0 || input.MaxHops < 0 || input.MaxHopNodes < 0 {
-		return Flow{}, fmt.Errorf("검색 입력이 올바르지 않다")
+	if err := input.Validate(); err != nil {
+		return Flow{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Flow{}, err
 	}
 	if input.Scope == "" {
 		input.Scope = "auto"
 	}
-	if !slices.Contains([]string{"auto", "local", "global"}, input.Scope) {
-		return Flow{}, fmt.Errorf("검색 범위가 올바르지 않다")
-	}
 	if input.AsOf.IsZero() {
 		input.AsOf = time.Now().UTC()
-	}
-	if input.AsOf.Location() != time.UTC {
-		return Flow{}, fmt.Errorf("검색 기준 시각은 UTC여야 한다")
 	}
 	if service.config.Consistency == "" {
 		return service.flow(ctx, input, func() ([]float64, error) { return service.embedder.Embed(ctx, input.WorkContext) })
@@ -206,6 +209,9 @@ func (service *Service) Flow(ctx context.Context, input Input) (flowResult Flow,
 	if input.Scope != "global" {
 		embedding, embedErr = service.embedder.Embed(ctx, input.WorkContext)
 	}
+	if err := ctx.Err(); err != nil {
+		return Flow{}, errors.Join(embedErr, err)
+	}
 	var flow Flow
 	stats, err := service.consistent.WithReadSnapshot(ctx, func(readContext context.Context) error {
 		var err error
@@ -213,6 +219,9 @@ func (service *Service) Flow(ctx context.Context, input Input) (flowResult Flow,
 		return err
 	})
 	flow.Read = stats
+	if err != nil && !errors.Is(err, ErrAllChannelsFailed) {
+		return Flow{Read: stats}, err
+	}
 	return flow, err
 }
 
@@ -226,6 +235,8 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 		candidates, err := execute()
 		metric := Channel{Latency: time.Since(started)}
 		if err != nil {
+			// 오류와 함께 반환된 부분 후보는 순위·라우팅·확장에 사용하지 않는다.
+			candidates = nil
 			// 응답에는 분류만 싣고 원인은 로그에 남긴다. 「오류의 생성과 전달」이 내부 원인을
 			// 응답에 넣지 못하게 했고, 「측정」은 실패 채널의 사유를 남기라고 요구한다.
 			metric.Failure = failureReason(err)
@@ -311,7 +322,8 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 			graph = service.graphCandidates(ctx, input, entryPoints, true, hopDepth(input.MaxHops))
 		}
 	} else {
-		relevantLocal := hasRelevantSemantic(results[0].candidates, service.config.SemanticThreshold) || len(results[1].candidates) > 0
+		semanticCandidates, keywordCandidates := localChannelCandidates(results)
+		relevantLocal := hasRelevantSemantic(semanticCandidates, service.config.SemanticThreshold) || len(keywordCandidates) > 0
 		globalFallbackTriggered = input.Scope == "auto" && !relevantLocal
 		var global channelResult
 		if input.Scope == "global" || globalFallbackTriggered {

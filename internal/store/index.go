@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
@@ -579,12 +580,28 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 // 문단이 없으면 후보가 나오지 않는다. 후보를 내는 이 채널은 겹치는 어휘만으로도
 // 문단을 찾아야 하므로 어휘를 OR로 조립하고 구문 해석은 websearch_to_tsquery에 맡긴다.
 func websearchOrQuery(query string) string {
-	return strings.Join(strings.Fields(query), " OR ")
+	var terms []string
+	start, quoted := 0, false
+	for index, value := range query {
+		if value == '"' {
+			quoted = !quoted
+		}
+		if !quoted && unicode.IsSpace(value) {
+			if start < index {
+				terms = append(terms, query[start:index])
+			}
+			start = index + len(string(value))
+		}
+	}
+	if start < len(query) {
+		terms = append(terms, query[start:])
+	}
+	return strings.Join(terms, " OR ")
 }
 
 func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query string, current time.Time, limit int) (result []SearchCandidate, err error) {
 	query = websearchOrQuery(query)
-	if !graphID.IsV7() || !current.UTC().Equal(current) || limit < 1 {
+	if !graphID.IsV7() || current.IsZero() || current.Location() != time.UTC || limit < 1 {
 		return nil, fmt.Errorf("키워드 검색 인자가 올바르지 않다")
 	}
 	ctx, release, err := s.enterReadScope(ctx)
@@ -623,7 +640,7 @@ func (s *Store) KeywordCandidates(ctx context.Context, graphID model.ID, query s
 
 // TimeCandidates는 지정 시점에 유효했던 활성 컨텍스트를 최근 기록 순으로 읽는다.
 func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.Time, limit int) (result []SearchCandidate, err error) {
-	if !graphID.IsV7() || !asOf.UTC().Equal(asOf) || limit < 1 {
+	if !graphID.IsV7() || asOf.IsZero() || asOf.Location() != time.UTC || limit < 1 {
 		return nil, fmt.Errorf("시간 검색 인자가 올바르지 않다")
 	}
 	ctx, release, err := s.enterReadScope(ctx)
@@ -659,7 +676,7 @@ func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.
 
 // GlobalSummaryCandidates는 전역 범위 흐름의 시작점이 될 활성 전역 요약 파생을 최근 순으로 읽는다.
 func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, asOf time.Time, limit int) (result []SearchCandidate, err error) {
-	if !graphID.IsV7() || !asOf.UTC().Equal(asOf) || limit < 1 {
+	if !graphID.IsV7() || asOf.IsZero() || asOf.Location() != time.UTC || limit < 1 {
 		return nil, fmt.Errorf("전역 요약 검색 인자가 올바르지 않다")
 	}
 	ctx, release, err := s.enterReadScope(ctx)
@@ -694,7 +711,7 @@ func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, a
 
 // SemanticCandidates는 현재 모델과 같은 벡터만 사용해 활성 기본 검색 후보를 읽는다.
 func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelID string, embedding []float64, current time.Time, limit int) (result []SearchCandidate, err error) {
-	if !graphID.IsV7() || modelID == "" || len(embedding) == 0 || !current.UTC().Equal(current) || limit < 1 {
+	if !graphID.IsV7() || modelID == "" || len(embedding) == 0 || current.IsZero() || current.Location() != time.UTC || limit < 1 {
 		return nil, fmt.Errorf("의미 유사도 검색 인자가 올바르지 않다")
 	}
 	// 후보 식별자만 트랜잭션 안에서 읽고, 조립은 트랜잭션을 닫은 뒤에 한다. 반복 탐색
@@ -718,7 +735,12 @@ func (s *Store) SemanticCandidates(ctx context.Context, graphID model.ID, modelI
 		if err != nil {
 			return nil, fmt.Errorf("의미 유사도 검색 트랜잭션 시작: %w", err)
 		}
-		defer tx.Rollback(ctx)
+		defer func() {
+			err = connectionError(ctx, "의미 유사도 검색 종료", errors.Join(err, rollbackTransaction(ctx, tx)))
+			if err != nil {
+				result = nil
+			}
+		}()
 	}
 	if err := enableIterativeScan(ctx, tx); err != nil {
 		return nil, err

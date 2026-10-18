@@ -44,6 +44,14 @@ type hopNeighborSource func(frontier []model.ID, label traversalLabel) ([]hopNei
 func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops int, direction string, filter []string, limit int) (result HopResult, err error) {
 	ctx, cancel := context.WithTimeout(ctx, hopWorkTimeout)
 	defer cancel()
+	defer func() {
+		if ctx.Err() != nil {
+			result, err = HopResult{}, errors.Join(err, ctx.Err(), context.Cause(ctx))
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return HopResult{}, err
+	}
 	if !graphID.IsV7() || !startID.IsV7() {
 		return HopResult{}, fmt.Errorf("홉 탐색 인자가 올바르지 않다")
 	}
@@ -78,6 +86,12 @@ func (s *Store) HopContexts(ctx context.Context, graphID, startID model.ID, hops
 func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []model.Context, hops int, direction string, filter []string, limit int) (result HopResult, err error) {
 	ctx, cancel := context.WithTimeout(ctx, hopWorkTimeout)
 	defer cancel()
+	// 조립·정리까지 같은 예산을 적용하며 호출자가 지정한 취소 원인도 보존한다.
+	defer func() {
+		if ctx.Err() != nil {
+			result, err = HopResult{}, errors.Join(err, ctx.Err(), context.Cause(ctx))
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return HopResult{}, err
 	}
@@ -122,6 +136,13 @@ func (s *Store) HopContextsFrom(ctx context.Context, graphID model.ID, starts []
 				return HopResult{}, missingContextError{ID: id}
 			}
 			starts[i] = value
+		}
+	}
+	// 스냅숏 경로는 호출자가 읽은 시작 노드를 재사용하므로 그 상태도 검사해야 한다.
+	// 독립 호출은 위에서 현재 읽기 상태로 갱신한 다음 같은 판정을 적용한다.
+	for _, start := range starts {
+		if start.DeletedAt != nil {
+			return HopResult{}, missingContextError{ID: start.ID}
 		}
 	}
 	if limit > 0 {
@@ -250,7 +271,7 @@ func (s *Store) traverseHops(ctx context.Context, graphID model.ID, starts []mod
 // hopNeighbors는 정점 속성만 읽어 오는데 참조는 속성이 아니라 간선에 있다. 비우면 흐름
 // 응답의 확장 노드에서 `derived_from`과 `member_refs`가 빈 목록으로 나가고, 「예산 적용과
 // 절단」이 근거가 다르면 접지 않기로 한 중복 파생 접기가 근거를 구분하지 못한다.
-// 노드마다 묶어 읽지 않고 두 질의로 한 번에 읽으며, 두 질의가 받은 참조 행 수를 반환한다.
+// 노드마다 읽지 않고 근거·구성원·대체 참조를 세 묶음 질의로 읽으며 받은 행 수를 반환한다.
 func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, contexts []model.Context) (int, error) {
 	needs := make([]string, 0, len(contexts))
 	for _, value := range contexts {

@@ -162,7 +162,7 @@ func (tracer *hopBudgetTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn,
 	}
 	kind := ""
 	switch {
-	case strings.Contains(data.SQL, "RETURN source.context_id, target.context_id"):
+	case strings.Contains(data.SQL, "MATCH (source:Context)-[edge:") && strings.Contains(data.SQL, "ORDER BY source.context_id, target.context_id"):
 		kind = "references"
 	case strings.Contains(data.SQL, "cypher("):
 		kind = "graph"

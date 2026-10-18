@@ -81,7 +81,7 @@ func TestHopConcurrentDiscardIntegration(t *testing.T) {
 					}
 					stage := "RETURN node ORDER BY node.context_id"
 					if limit == 0 {
-						stage = "RETURN source.context_id, target.context_id"
+						stage = "ORDER BY source.context_id, target.context_id"
 					}
 					barrier := &hopReadBarrier{query: leaf.ID.String(), stage: stage, ready: make(chan struct{}), resume: make(chan struct{})}
 					type outcome struct {

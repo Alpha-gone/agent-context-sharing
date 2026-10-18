@@ -129,7 +129,7 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 	if config.SemanticThreshold < 0 || config.SemanticThreshold > 1 {
 		return nil, fmt.Errorf("의미 유사도 하한은 0 이상 1 이하여야 한다")
 	}
-	if config.FoldThreshold <= 0 || config.FoldThreshold > 1 {
+	if math.IsNaN(config.FoldThreshold) || config.FoldThreshold <= 0 || config.FoldThreshold > 1 {
 		return nil, fmt.Errorf("중복 파생 접기 임계값은 0 초과 1 이하여야 한다")
 	}
 	if config.GraphStage == "" {

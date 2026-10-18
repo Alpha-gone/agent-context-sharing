@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,6 +148,9 @@ func createSimilarEventGraph(t *testing.T, database *store.Store, actorID model.
 	t.Helper()
 	graphID = integrationID(t)
 	now := time.Now().UTC().Truncate(time.Second)
+	if err = database.CreateAccount(t.Context(), store.Account{ID: actorID, LoginID: strings.ReplaceAll(actorID.String(), "-", ""), PasswordHash: "synthetic-password-hash", CreatedAt: now}); err != nil {
+		return graphID, firstEventID, secondEventID, err
+	}
 	if _, err = database.CreateGraph(t.Context(), model.Graph{
 		ID: graphID, Name: "index relation integration", CreatedBy: actorID,
 		CreatedAt: now, LastActivityAt: now, Version: 1,

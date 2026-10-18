@@ -1,12 +1,12 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
-	"sort"
 	"time"
 
 	"agent_context_sharing/internal/model"
@@ -248,7 +248,7 @@ func (s *Store) ListContextRelations(ctx context.Context, graphID, contextID mod
 }
 
 // ProposeEventRelations는 저장된 사건과 같은 그래프의 사건을 비교해 시간 인접과
-// 구성원 진부분집합 후보를 만든다. 임베딩 유사도 후보는 색인 성공이 방아쇠이므로 6단계
+// 구성원 진부분집합 후보를 만든다. 임베딩 유사도 후보는 색인 성공이 방아쇠이므로
 // index 작업자가 이 메서드와 분리해 처리한다.
 func (s *Store) ProposeEventRelations(ctx context.Context, graphID, eventID model.ID) error {
 	if s.relationProposals == nil {
@@ -282,17 +282,17 @@ func (s *Store) ProposeEventRelations(ctx context.Context, graphID, eventID mode
 			partOf = append(partOf, rankedRelationCandidate{relation: relation, rank: int64(memberCount)})
 		}
 	}
-	sort.Slice(precedes, func(left, right int) bool {
-		if precedes[left].rank != precedes[right].rank {
-			return precedes[left].rank < precedes[right].rank
+	slices.SortFunc(precedes, func(left, right rankedRelationCandidate) int {
+		if order := cmp.Compare(left.rank, right.rank); order != 0 {
+			return order
 		}
-		return relationIdentityLess(precedes[left].relation, precedes[right].relation)
+		return compareRelationIdentity(left.relation, right.relation)
 	})
-	sort.Slice(partOf, func(left, right int) bool {
-		if partOf[left].rank != partOf[right].rank {
-			return partOf[left].rank > partOf[right].rank
+	slices.SortFunc(partOf, func(left, right rankedRelationCandidate) int {
+		if order := cmp.Compare(right.rank, left.rank); order != 0 {
+			return order
 		}
-		return relationIdentityLess(partOf[left].relation, partOf[right].relation)
+		return compareRelationIdentity(left.relation, right.relation)
 	})
 	if err := s.proposeRankedRelations(ctx, graphID, precedes); err != nil {
 		return fmt.Errorf("시간 인접 관계 후보 제안: %w", err)
@@ -322,7 +322,8 @@ func (s *Store) proposeEventRelationsAfterSave(ctx context.Context, graphID mode
 
 func (s *Store) proposeEventRelations(ctx context.Context, graphID model.ID, event model.Context) {
 	if err := s.ProposeEventRelations(ctx, graphID, event.ID); err != nil {
-		slog.ErrorContext(ctx, "사건 관계 후보 제안 실패", "graph_id", graphID.String(), "context_id", event.ID.String(), "error", err)
+		slog.ErrorContext(ctx, "사건 관계 후보 제안 실패", "graph_id", graphID.String(), "context_id", event.ID.String(),
+			"stage", "relation_proposal", "result", "failed", "reason_code", "proposal_failed")
 	}
 }
 
@@ -438,11 +439,9 @@ func eventContains(whole, part model.EventAttributes) bool {
 	return whole.End == nil || (part.End != nil && !part.End.After(*whole.End))
 }
 
-func relationIdentityLess(left, right model.Relation) bool {
-	if left.FromContextID != right.FromContextID {
-		return left.FromContextID.String() < right.FromContextID.String()
-	}
-	return left.ToContextID.String() < right.ToContextID.String()
+func compareRelationIdentity(left, right model.Relation) int {
+	return cmp.Or(cmp.Compare(left.FromContextID.String(), right.FromContextID.String()),
+		cmp.Compare(left.ToContextID.String(), right.ToContextID.String()))
 }
 
 func (s *Store) proposeRankedRelations(ctx context.Context, graphID model.ID, candidates []rankedRelationCandidate) error {
@@ -451,7 +450,7 @@ func (s *Store) proposeRankedRelations(ctx context.Context, graphID model.ID, ca
 		if created >= s.relationProposals.Limit {
 			return nil
 		}
-		wasCreated, err := s.createProposedRelation(ctx, graphID, candidate.relation)
+		wasCreated, err := s.createProposedRelation(ctx, graphID, candidate.relation, "")
 		if err != nil {
 			return err
 		}
@@ -475,7 +474,7 @@ func (s *Store) validateRelationCycle(ctx context.Context, tx pgx.Tx, graphID mo
 	return nil
 }
 
-func (s *Store) createProposedRelation(ctx context.Context, graphID model.ID, relation model.Relation) (bool, error) {
+func (s *Store) createProposedRelation(ctx context.Context, graphID model.ID, relation model.Relation, modelID string) (created bool, err error) {
 	relationID, err := model.NewID()
 	if err != nil {
 		return false, fmt.Errorf("관계 식별자 생성: %w", err)
@@ -485,7 +484,7 @@ func (s *Store) createProposedRelation(ctx context.Context, graphID model.ID, re
 	if err != nil {
 		return false, fmt.Errorf("후보 관계 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer finishWrite(ctx, tx, "relation_proposal", &err)
 	// 확정 경로와 같은 이유로 정체성 조회와 생성 사이를 직렬화한다. 후보 제안이 확정과
 	// 겹쳐도 같은 정체성의 간선이 둘 생기지 않아야 한다.
 	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
@@ -504,6 +503,12 @@ func (s *Store) createProposedRelation(ctx context.Context, graphID model.ID, re
 	if err != nil {
 		return false, err
 	}
+	// 후보 계산과 그래프 잠금 사이에 사건·벡터가 바뀔 수 있다. 현재 신호가 사라진
+	// 후보는 건너뛰고 다음 후보를 시도하며, 과거 구성원이나 시간으로 간선을 만들지 않는다.
+	valid, err := s.validProposalSignal(ctx, tx, relation, from, to, modelID)
+	if err != nil || !valid {
+		return false, err
+	}
 	if err := model.ValidateRelation(relation, from, to); err != nil {
 		return false, fmt.Errorf("후보 관계 검증: %w", errors.Join(ErrInvalidRelation, err))
 	}
@@ -517,6 +522,32 @@ func (s *Store) createProposedRelation(ctx context.Context, graphID model.ID, re
 		return false, fmt.Errorf("후보 관계 커밋: %w", err)
 	}
 	return true, nil
+}
+
+func (s *Store) validProposalSignal(ctx context.Context, tx pgx.Tx, relation model.Relation, from, to model.Context, modelID string) (bool, error) {
+	if from.Layer != model.LayerEvent || to.Layer != model.LayerEvent || from.DeletedAt != nil || to.DeletedAt != nil {
+		return false, nil
+	}
+	var current model.Relation
+	var valid bool
+	switch relation.Type {
+	case model.RelationTypePrecedes:
+		current, _, valid = adjacentPrecedesCandidate(relation.GraphID, from, to, s.relationProposals.AdjacencyWindow)
+	case model.RelationTypePartOf:
+		current, _, valid = memberSubsetCandidate(relation.GraphID, from, to)
+	case model.RelationTypeRelatesTo:
+		err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM public.context_embedding AS source
+			JOIN public.context_embedding AS target ON target.graph_id=source.graph_id AND target.model_id=source.model_id
+			WHERE source.graph_id=$1 AND source.context_id=$2 AND target.context_id=$3
+				AND source.model_id=$4 AND source.embedding <=> target.embedding <= $5
+		)`, relation.GraphID.String(), from.ID.String(), to.ID.String(), modelID,
+			1-s.relationProposals.SimilarityThreshold).Scan(&valid)
+		return valid, err
+	default:
+		return false, nil
+	}
+	return valid && current.FromContextID == relation.FromContextID && current.ToContextID == relation.ToContextID, nil
 }
 
 func (s *Store) listRelations(ctx context.Context, queryer cypherQueryer, graphID, contextID model.ID, states []model.RelationState, types []model.RelationType, cursor string, limit int) ([]model.Relation, string, error) {

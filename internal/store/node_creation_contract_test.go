@@ -318,6 +318,8 @@ func nodeFailCreation(t *testing.T, database *Store, graph model.ID, stage strin
 	switch stage {
 	case "queue":
 		table = "index_task"
+	case "history":
+		table = "context_revision"
 	case "activity":
 		table, event = "context_graph", "UPDATE"
 	}

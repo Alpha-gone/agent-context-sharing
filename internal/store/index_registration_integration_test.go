@@ -171,7 +171,7 @@ func TestIndexRegistrationLifecycleIntegration(t *testing.T) {
 // 개별 임시 DB의 업무 행 전체를 비교하되 시험 sequence·트리거는 제외한다.
 func registrationStateFingerprint(t *testing.T, database *Store) string {
 	t.Helper()
-	tables := []string{"public.context_graph", "public.index_task", "public.context_embedding", "public.operation_log", "public.web_audit_log", database.contextTable(), pgx.Identifier{"agent_context", "_ag_label_edge"}.Sanitize()}
+	tables := []string{"public.context_revision", "public.context_graph", "public.index_task", "public.context_embedding", "public.operation_log", "public.web_audit_log", database.contextTable(), pgx.Identifier{"agent_context", "_ag_label_edge"}.Sanitize()}
 	parts := make([]string, 0, len(tables))
 	for _, table := range tables {
 		parts = append(parts, `(SELECT COALESCE(string_agg(row_to_json(t)::text,'' ORDER BY row_to_json(t)::text),'') FROM `+table+` t)`)

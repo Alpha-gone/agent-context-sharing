@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -9,6 +12,26 @@ import (
 	"agent_context_sharing/internal/store"
 	"agent_context_sharing/internal/web"
 )
+
+func TestWebCredentialErrorMapping(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		input, expected error
+	}{
+		{"success", nil, nil},
+		{"busy", fmt.Errorf("wrapped: %w", authz.ErrPasswordBusy), web.ErrAuthenticationBusy},
+		{"unavailable", fmt.Errorf("%w: synthetic-sensitive-marker", authz.ErrUnavailable), web.ErrAuthenticationUnavailable},
+		{"mismatch", authz.ErrInvalidCredential, authz.ErrInvalidCredential},
+		{"duplicate", authz.ErrLoginIDExists, authz.ErrLoginIDExists},
+		{"canceled", context.Canceled, context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if !errors.Is(webCredentialError(test.input), test.expected) {
+				t.Fatal("웹 자격 오류 사상이 다릅니다")
+			}
+		})
+	}
+}
 
 func TestWebSessionRoundTripIntegration(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")

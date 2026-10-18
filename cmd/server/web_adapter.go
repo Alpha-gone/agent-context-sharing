@@ -14,18 +14,22 @@ type webAuthentication struct{ service *authz.Service }
 
 func (adapter webAuthentication) Authenticate(ctx context.Context, loginID, password string) (model.ID, error) {
 	id, err := adapter.service.Authenticate(ctx, loginID, password)
-	if errors.Is(err, authz.ErrPasswordBusy) {
-		return model.ID{}, web.ErrAuthenticationBusy
-	}
-	return id, err
+	return id, webCredentialError(err)
 }
 
 func (adapter webAuthentication) Register(ctx context.Context, loginID, password string) (model.ID, error) {
 	id, err := adapter.service.Register(ctx, loginID, password)
+	return id, webCredentialError(err)
+}
+
+func webCredentialError(err error) error {
 	if errors.Is(err, authz.ErrPasswordBusy) {
-		return model.ID{}, web.ErrAuthenticationBusy
+		return web.ErrAuthenticationBusy
 	}
-	return id, err
+	if errors.Is(err, authz.ErrUnavailable) {
+		return web.ErrAuthenticationUnavailable
+	}
+	return err
 }
 
 func (adapter webAuthentication) WebSession(ctx context.Context, accountID model.ID, audience string) (web.Session, error) {

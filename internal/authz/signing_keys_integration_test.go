@@ -23,7 +23,7 @@ import (
 )
 
 func TestSharedSigningKeyContractIntegration(t *testing.T) {
-	firstStore, secondStore := newSigningKeyContractStores(t)
+	firstStore, secondStore := newAuthenticationContractStores(t)
 	arrived, release := make(chan struct{}, 2), make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(unblock)
@@ -189,7 +189,7 @@ func assertSharedToken(t *testing.T, service *Service, token Token, expected mod
 }
 
 // 시험별 DB에 정식 마이그레이션을 적용하고 공유 DB의 서명 키는 변경하지 않는다.
-func newSigningKeyContractStores(t *testing.T) (*store.Store, *store.Store) {
+func newAuthenticationContractStores(t *testing.T) (*store.Store, *store.Store) {
 	t.Helper()
 	address := os.Getenv("TEST_DATABASE_URL")
 	if address == "" {
@@ -211,7 +211,7 @@ func newSigningKeyContractStores(t *testing.T) (*store.Store, *store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := "auth02_" + strings.ReplaceAll(id.String(), "-", "")
+	name := "auth_contract_" + strings.ReplaceAll(id.String(), "-", "")
 	identifier := pgx.Identifier{name}.Sanitize()
 	if _, err := admin.Exec(t.Context(), "CREATE DATABASE "+identifier); err != nil {
 		t.Fatal("시험 전용 DB를 만들지 못했습니다(DB 생성 권한 필요)")

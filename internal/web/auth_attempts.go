@@ -21,6 +21,9 @@ const (
 // ErrAuthenticationBusy는 인가 계층이 비밀번호 작업을 시작하지 못했음을 나타낸다.
 var ErrAuthenticationBusy = errors.New("authentication_busy")
 
+// ErrAuthenticationUnavailable는 자격 불일치와 구분할 인증 처리 장애다.
+var ErrAuthenticationUnavailable = errors.New("authentication_unavailable")
+
 type attemptWindow struct {
 	until time.Time
 	count int

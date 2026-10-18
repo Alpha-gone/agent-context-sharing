@@ -239,18 +239,25 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 		next := localRedirect(request.PostForm.Get("next"))
 		loginID := request.PostForm.Get("login_id")
 		accountID, err := server.auth.Authenticate(request.Context(), loginID, request.PostForm.Get("password"))
+		if request.Context().Err() != nil {
+			return
+		}
 		if err != nil {
 			if errors.Is(err, ErrAuthenticationBusy) {
 				server.authenticationLimited(writer, time.Second)
 				return
 			}
+			if errors.Is(err, ErrAuthenticationUnavailable) {
+				server.render(writer, http.StatusInternalServerError, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "로그인 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."})
+				return
+			}
 			server.render(writer, http.StatusUnauthorized, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "로그인 아이디 또는 비밀번호가 올바르지 않습니다."})
 			return
 		}
+		session, err := server.auth.WebSession(request.Context(), accountID, SessionAudience)
 		if request.Context().Err() != nil {
 			return
 		}
-		session, err := server.auth.WebSession(request.Context(), accountID, SessionAudience)
 		if err != nil {
 			server.render(writer, http.StatusInternalServerError, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "세션을 만들 수 없습니다."})
 			return
@@ -280,9 +287,17 @@ func (server *Server) register(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		loginID := request.PostForm.Get("login_id")
-		if _, err := server.auth.Register(request.Context(), loginID, request.PostForm.Get("password")); err != nil {
+		_, err := server.auth.Register(request.Context(), loginID, request.PostForm.Get("password"))
+		if request.Context().Err() != nil {
+			return
+		}
+		if err != nil {
 			if errors.Is(err, ErrAuthenticationBusy) {
 				server.authenticationLimited(writer, time.Second)
+				return
+			}
+			if errors.Is(err, ErrAuthenticationUnavailable) {
+				server.render(writer, http.StatusInternalServerError, "register", pageData{Title: "계정 등록", LoginID: loginID, Error: "계정 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."})
 				return
 			}
 			server.render(writer, http.StatusBadRequest, "register", pageData{Title: "계정 등록", LoginID: loginID, Error: "로그인 아이디 또는 비밀번호 형식이 올바르지 않거나 이미 사용 중입니다."})

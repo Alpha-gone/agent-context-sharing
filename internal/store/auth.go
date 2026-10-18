@@ -7,9 +7,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"agent_context_sharing/internal/model"
 )
+
+// ErrLoginIDExists는 계정 로그인 아이디의 유일 제약 위반만 나타낸다.
+var ErrLoginIDExists = errors.New("login_id_exists")
 
 // Account은 인증에 필요한 계정 식별자와 저장된 자격 증명이다.
 type Account struct {
@@ -35,8 +39,11 @@ func (s *Store) CreateAccount(ctx context.Context, account Account) error {
 		return fmt.Errorf("계정 생성 인자가 올바르지 않다")
 	}
 	_, err := s.pool.Exec(ctx, `INSERT INTO public.account (account_id, login_id, password_hash, created_at) VALUES ($1, $2, $3, $4)`, account.ID.String(), account.LoginID, account.PasswordHash, account.CreatedAt)
+	if failure, ok := errors.AsType[*pgconn.PgError](err); ok && failure.Code == "23505" && failure.SchemaName == "public" && failure.TableName == "account" && failure.ConstraintName == "account_login_id_idx" {
+		return ErrLoginIDExists
+	}
 	if err != nil {
-		return fmt.Errorf("계정 생성: %w", err)
+		return storageError("account_create", err)
 	}
 	return nil
 }
@@ -53,11 +60,11 @@ func (s *Store) AccountByLoginID(ctx context.Context, loginID string) (Account, 
 		return Account{}, ErrNotFound
 	}
 	if err != nil {
-		return Account{}, fmt.Errorf("계정 조회: %w", err)
+		return Account{}, storageError("account_lookup", err)
 	}
 	parsed, err := model.ParseID(id)
 	if err != nil {
-		return Account{}, fmt.Errorf("저장된 계정 식별자: %w", err)
+		return Account{}, storageError("account_identifier", err)
 	}
 	account.ID, account.CreatedAt = parsed, account.CreatedAt.UTC()
 	return account, nil
@@ -71,7 +78,7 @@ func (s *Store) UpdatePasswordHashIfMatches(ctx context.Context, accountID model
 	}
 	result, err := s.pool.Exec(ctx, `UPDATE public.account SET password_hash = $3 WHERE account_id = $1 AND password_hash = $2`, accountID.String(), oldHash, newHash)
 	if err != nil {
-		return false, fmt.Errorf("비밀번호 해시 갱신: %w", err)
+		return false, storageError("password_hash_update", err)
 	}
 	return result.RowsAffected() == 1, nil
 }

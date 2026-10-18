@@ -97,38 +97,49 @@ func New(source authStore, config Config) (*Service, error) {
 // Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.
 func (s *Service) Register(ctx context.Context, loginID, password string) (model.ID, error) {
 	if !loginIDPattern.MatchString(loginID) || !validPassword(password) {
-		return model.ID{}, fmt.Errorf("로그인 아이디 또는 비밀번호가 올바르지 않다")
+		return model.ID{}, ErrInvalidAccountInput
 	}
 	if err := s.passwords.acquire(ctx); err != nil {
 		return model.ID{}, err
 	}
 	defer s.passwords.release()
 	hash, err := s.passwords.generate(password, s.config.BcryptCost)
-	if err != nil {
-		return model.ID{}, fmt.Errorf("비밀번호 해시 생성: %w", err)
-	}
 	if err := ctx.Err(); err != nil {
 		return model.ID{}, err
 	}
+	if err != nil {
+		return model.ID{}, &credentialFailure{ErrUnavailable, err}
+	}
 	id, err := model.NewID()
 	if err != nil {
-		return model.ID{}, fmt.Errorf("계정 식별자 생성: %w", err)
+		return model.ID{}, &credentialFailure{ErrUnavailable, err}
 	}
 	err = s.store.CreateAccount(ctx, store.Account{ID: id, LoginID: loginID, PasswordHash: hash, CreatedAt: time.Now().UTC()})
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return model.ID{}, err
+	}
+	if errors.Is(err, store.ErrLoginIDExists) {
+		return model.ID{}, ErrLoginIDExists
+	}
+	if err != nil {
+		return model.ID{}, &credentialFailure{ErrUnavailable, err}
 	}
 	return id, nil
 }
 
-// Authenticate는 저장된 bcrypt 해시와 제시한 비밀번호를 대조하고, 기존 직접 bcrypt
-// 해시는 성공한 로그인에서 현재 형식으로 바꾼다.
+// Authenticate는 저장된 해시와 비밀번호를 대조하고 이전 저장 형식은 성공 시 갱신한다.
 func (s *Service) Authenticate(ctx context.Context, loginID, password string) (model.ID, error) {
 	if err := s.passwords.acquire(ctx); err != nil {
 		return model.ID{}, err
 	}
 	defer s.passwords.release()
-	account, err := s.store.AccountByLoginID(ctx, loginID)
+	var account store.Account
+	var err error
+	if loginIDPattern.MatchString(loginID) {
+		account, err = s.store.AccountByLoginID(ctx, loginID)
+	} else {
+		err = store.ErrNotFound
+	}
 	if ctx.Err() != nil {
 		return model.ID{}, ctx.Err()
 	}
@@ -137,31 +148,38 @@ func (s *Service) Authenticate(ctx context.Context, loginID, password string) (m
 		if ctx.Err() != nil {
 			return model.ID{}, ctx.Err()
 		}
-		if err == nil {
-			err = bcrypt.ErrMismatchedHashAndPassword
+		if err != nil && !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return model.ID{}, &credentialFailure{ErrUnavailable, err}
 		}
-		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
+		return model.ID{}, &credentialFailure{ErrInvalidCredential, bcrypt.ErrMismatchedHashAndPassword}
 	}
 	if err != nil {
-		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
+		return model.ID{}, &credentialFailure{ErrUnavailable, err}
 	}
 	legacy, err := s.passwords.compare(account.PasswordHash, password)
 	if ctx.Err() != nil {
 		return model.ID{}, ctx.Err()
 	}
 	if err != nil {
-		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return model.ID{}, &credentialFailure{ErrInvalidCredential, err}
+		}
+		return model.ID{}, &credentialFailure{ErrUnavailable, err}
 	}
 	if legacy {
 		hash, err := s.passwords.generate(password, s.config.BcryptCost)
-		if err != nil {
-			return model.ID{}, fmt.Errorf("비밀번호 해시 생성: %w", err)
-		}
 		if err := ctx.Err(); err != nil {
 			return model.ID{}, err
 		}
-		if _, err := s.store.UpdatePasswordHashIfMatches(ctx, account.ID, account.PasswordHash, hash); err != nil {
-			return model.ID{}, fmt.Errorf("비밀번호 해시 갱신: %w", err)
+		if err != nil {
+			return model.ID{}, &credentialFailure{ErrUnavailable, err}
+		}
+		_, err = s.store.UpdatePasswordHashIfMatches(ctx, account.ID, account.PasswordHash, hash)
+		if err := ctx.Err(); err != nil {
+			return model.ID{}, err
+		}
+		if err != nil {
+			return model.ID{}, &credentialFailure{ErrUnavailable, err}
 		}
 	}
 	return account.ID, nil

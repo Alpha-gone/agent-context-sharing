@@ -237,7 +237,7 @@ func (s *memoryStore) CreateAccount(_ context.Context, account store.Account) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.accounts[account.LoginID]; ok {
-		return errors.New("duplicate")
+		return store.ErrLoginIDExists
 	}
 	s.accounts[account.LoginID] = account
 	return nil

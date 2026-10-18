@@ -90,7 +90,7 @@ func TestPasswordWorkBoundsAllCredentialPaths(t *testing.T) {
 			success++
 		case errors.Is(err, bcrypt.ErrMismatchedHashAndPassword):
 			mismatch++
-		case err.Error() == "duplicate":
+		case errors.Is(err, ErrLoginIDExists):
 			duplicate++
 		default:
 			t.Fatal(err)

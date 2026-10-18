@@ -825,11 +825,19 @@ func (s *Store) searchCandidates(ctx context.Context, graphID model.ID, ids []mo
 // 비례해 늘어난다. 흐름 응답은 담긴 컨텍스트 전부의 출처가 필요하므로, 한 깊이씩 넓혀 가며
 // 묶어 읽고 방문한 정점을 호출 전체에서 공유한다.
 func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contextIDs []model.ID) (result map[model.ID][]model.OriginKind, err error) {
+	if !graphID.IsV7() {
+		return nil, model.FieldError{Field: "graph_id", Message: "출처 조회 그래프는 UUIDv7이어야 한다"}
+	}
+	for _, id := range contextIDs {
+		if !id.IsV7() {
+			return nil, model.FieldError{Field: "context_id", Message: "출처 조회 대상은 UUIDv7이어야 한다"}
+		}
+	}
 	result = make(map[model.ID][]model.OriginKind, len(contextIDs))
 	if len(contextIDs) == 0 {
 		return result, nil
 	}
-	ctx, release, err := s.enterReadScope(ctx)
+	ctx, release, err := s.enterHopReadScope(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -837,6 +845,7 @@ func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contex
 		if releaseErr := release(); releaseErr != nil {
 			result, err = nil, errors.Join(err, releaseErr)
 		}
+		err = connectionError(ctx, "출처 구분 조회", err)
 	}()
 	// 근거를 따라가며 만나는 모든 정점을 한 번씩만 읽는다.
 	loaded := make(map[model.ID]model.Context)
@@ -940,6 +949,8 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 	}
 	// 유사도 하한을 질의의 조건으로 내린다. Go에서 걸러내면 상한까지 뽑은 후보가 모두 임계값
 	// 미달일 때 기준을 넘는 후보가 더 있어도 놓친다. 코사인 거리는 1에서 유사도를 뺀 값이다.
+	// 기존 정체성도 LIMIT 전에 제외해야 앞선 proposed/confirmed/discarded가 상한을
+	// 차지하여 다음 방아쇠에서도 나머지 유효 후보를 영구히 밀어내지 않는다.
 	rows, err := tx.Query(ctx, `
 		SELECT candidate.context_id::text
 		FROM public.context_embedding AS candidate
@@ -949,6 +960,12 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 			AND candidate.embedding <=> $4 <= $5
 			AND node.properties ->> 'graph_id'::text = $2::text
 			AND node.properties ->> 'layer'::text = 'event' AND node.properties ->> 'deleted_at'::text IS NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM "`+s.graphName+`"."RELATES_TO" AS relation
+				WHERE relation.properties ->> 'graph_id'::text = $2::text
+					AND relation.properties ->> 'from_context_id'::text = LEAST($1::text, candidate.context_id::text)
+					AND relation.properties ->> 'to_context_id'::text = GREATEST($1::text, candidate.context_id::text)
+			)
 		ORDER BY candidate.embedding <=> $4, candidate.context_id
 		LIMIT $6`,
 		eventID.String(), graphID.String(), modelID, targetVector,
@@ -967,7 +984,7 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 	}
 	for _, otherID := range similar {
 		relation := normalizeRelation(proposedRelation(graphID, model.RelationTypeRelatesTo, eventID, otherID))
-		if _, err := s.createProposedRelation(ctx, graphID, relation); err != nil {
+		if _, err := s.createProposedRelation(ctx, graphID, relation, modelID); err != nil {
 			return fmt.Errorf("의미 관계 후보 저장: %w", err)
 		}
 	}

@@ -164,6 +164,11 @@ func TestIndexFailuresConsumeAttemptBudgetIntegration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			removeFailure := func() {}
+			if stage == "save" {
+				// 차원 불일치는 영구 실패다. 재시도 예산은 정상 벡터의 일시적 저장 장애로 검사한다.
+				removeFailure = lifeFailGraphWrite(t, database, graph, "context_embedding", "INSERT", false)
+			}
 			if stage == "read" {
 				query := "MATCH (n:Context {context_id: " + cypherString(target.ID.String()) + "}) SET n.version = 0 RETURN n"
 				if _, err := database.pool.Exec(t.Context(), database.cypherSQL(query, "n agtype"), pgx.QueryExecModeExec); err != nil {
@@ -183,7 +188,9 @@ func TestIndexFailuresConsumeAttemptBudgetIntegration(t *testing.T) {
 				if stage == "empty" {
 					return IndexTaskResult{}
 				}
-				return IndexTaskResult{Embedding: []float64{1}, ModelID: "wrong-dimension"}
+				vector := make([]float64, embeddingDimension(t, database))
+				vector[0] = 1
+				return IndexTaskResult{Embedding: vector, ModelID: "retry-save"}
 			}
 			attemptLimit := maxIndexAttempts
 			if stage == "empty" {
@@ -205,6 +212,7 @@ func TestIndexFailuresConsumeAttemptBudgetIntegration(t *testing.T) {
 					t.Fatalf("재시도 예산: attempts=%d state=%s delayed=%t", attempts, state, delayed)
 				}
 			}
+			removeFailure()
 			readyIndexTasks(t, database, graph, other.ID)
 			result, err := database.ProcessNextIndexTaskInGraph(t.Context(), graph, scopeTestProcessor(embeddingDimension(t, database)))
 			if err != nil || !result.Succeeded || result.Task.ContextID != other.ID {

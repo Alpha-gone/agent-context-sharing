@@ -45,7 +45,8 @@ type OperationRecord struct {
 func (operation OperationRecord) forRelation() bool { return operation.RelationID.IsV7() }
 
 // RecordRejectedOperation은 되돌린 변경 트랜잭션 밖에 거부 기록을 남긴다.
-func (s *Store) RecordRejectedOperation(ctx context.Context, operation OperationRecord, reason string) error {
+func (s *Store) RecordRejectedOperation(ctx context.Context, operation OperationRecord, reason string) (err error) {
+	defer func() { err = writeFailure(ctx, "rejected_operation", err) }()
 	if err := operation.valid("rejected"); err != nil {
 		return err
 	}
@@ -107,36 +108,20 @@ func (s *Store) HasOperationJudgment(ctx context.Context, graphID model.ID, judg
 // valid는 적용과 거부의 대상 요구가 다르므로 기록 결과를 함께 본다. 추가와 확정의 거부는
 // 「기록 항목」이 대상을 비우기로 확정했고, 적용 기록은 언제나 대상을 하나 갖는다.
 func (operation OperationRecord) valid(result string) error {
-	if operation.Kind != OperationAdd && operation.Kind != OperationUpdate && operation.Kind != OperationSupersede && operation.Kind != OperationDiscard && operation.Kind != OperationKeep {
-		return fmt.Errorf("관리 연산 종류 %q가 올바르지 않다", operation.Kind)
+	// 대상의 잘못된 UUID를 대상 없음으로 바꾸지 않고 논리 모델과 같은 계약으로 검사한다.
+	var reason string
+	if result == "rejected" {
+		reason = "validation"
 	}
-	if !operation.GraphID.IsV7() || !operation.AccountID.IsV7() || !operation.AgentID.IsV7() {
-		return fmt.Errorf("관리 연산 식별자가 UUIDv7이 아니다")
+	return operation.managementOperation(time.Now().UTC(), result, reason).Validate()
+}
+
+func (operation OperationRecord) managementOperation(at time.Time, result, reason string) model.ManagementOperation {
+	return model.ManagementOperation{
+		Kind: operation.Kind, GraphID: operation.GraphID, ContextID: operation.ContextID, RelationID: operation.RelationID,
+		TargetVersion: operation.TargetVersion, JudgmentInput: operation.JudgmentInput, AccountID: operation.AccountID,
+		AgentID: operation.AgentID, AppliedAt: at, Result: model.OperationResult(result), RejectionReason: reason,
 	}
-	if operation.ContextID.IsV7() && operation.forRelation() {
-		return fmt.Errorf("관리 연산 대상은 컨텍스트와 사건 관계 중 하나여야 한다")
-	}
-	if !operation.ContextID.IsV7() && !operation.forRelation() {
-		if result != "rejected" {
-			return fmt.Errorf("적용한 관리 연산에는 대상이 있어야 한다")
-		}
-		if operation.TargetVersion != 0 {
-			return fmt.Errorf("대상 없는 기록에는 판 번호를 둘 수 없다")
-		}
-	} else if operation.forRelation() {
-		if operation.Kind != OperationAdd && operation.Kind != OperationDiscard {
-			return fmt.Errorf("사건 관계 기록의 연산 종류 %q가 올바르지 않다", operation.Kind)
-		}
-		if operation.TargetVersion != 0 {
-			return fmt.Errorf("사건 관계에는 판 번호가 없다")
-		}
-	} else if operation.TargetVersion < 1 {
-		return fmt.Errorf("관리 연산 대상 판 번호가 올바르지 않다")
-	}
-	if operation.JudgmentInput == "" {
-		return fmt.Errorf("관리 연산 판단 입력이 비어 있다")
-	}
-	return nil
 }
 
 func (s *Store) recordAppliedOperation(ctx context.Context, tx pgx.Tx, operation *OperationRecord, targetVersion int64) error {
@@ -168,6 +153,21 @@ func (s *Store) recordAppliedRelationOperation(ctx context.Context, tx pgx.Tx, o
 		return err
 	}
 	return s.insertOperation(ctx, tx, copy, "applied", "")
+}
+
+// 확정은 실제 저장된 ID로 기록 대상을 채우지만, 호출자가 다른 업무·종류·대상을
+// 지정한 기록까지 덮어써서 정상 감사처럼 저장하지 않는다.
+func validateRelationOperation(operation *OperationRecord, graphID, relationID model.ID, kind OperationKind) error {
+	if operation == nil {
+		return nil
+	}
+	if operation.GraphID != graphID || operation.Kind != kind || !operation.ContextID.IsZero() ||
+		operation.TargetVersion != 0 || !operation.RelationID.IsZero() && operation.RelationID != relationID {
+		return model.FieldError{Field: "relation_id", Message: "관리 기록의 그래프·대상·연산 종류가 실제 관계 연산과 일치해야 한다"}
+	}
+	copy := *operation
+	copy.RelationID = relationID
+	return copy.valid("applied")
 }
 
 // enqueueIndexTask는 색인 대기 작업을 컨텍스트 변경과 같은 트랜잭션에서 등록한다.
@@ -219,6 +219,10 @@ type operationQueryer interface {
 }
 
 func (s *Store) insertOperation(ctx context.Context, queryer operationQueryer, operation OperationRecord, result, reason string) error {
+	at := time.Now().UTC()
+	if err := operation.managementOperation(at, result, reason).Validate(); err != nil {
+		return err
+	}
 	operationID, err := model.NewID()
 	if err != nil {
 		return fmt.Errorf("관리 연산 기록 식별자 생성: %w", err)
@@ -240,7 +244,7 @@ func (s *Store) insertOperation(ctx context.Context, queryer operationQueryer, o
 			judgment_input, actor_account_id, actor_agent_id, applied_at, result, reject_reason
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		operationID.String(), operation.GraphID.String(), string(operation.Kind), contextID, relationID, targetVersion,
-		operation.JudgmentInput, operation.AccountID.String(), operation.AgentID.String(), time.Now().UTC(), result, nullableString(reason),
+		operation.JudgmentInput, operation.AccountID.String(), operation.AgentID.String(), at, result, nullableString(reason),
 	)
 	if err != nil {
 		return fmt.Errorf("관리 연산 기록: %w", err)

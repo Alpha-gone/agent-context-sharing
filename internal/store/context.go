@@ -131,6 +131,9 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 		if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 			return model.Context{}, err
 		}
+		if err := s.lockContext(ctx, tx, graphID, value.ID); err != nil {
+			return model.Context{}, err
+		}
 	}
 	previous, err := s.context(ctx, tx, graphID, value.ID)
 	if err != nil {
@@ -315,6 +318,16 @@ func validateContextOperation(operation *OperationRecord, graphID, contextID mod
 func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord, webAudit *webAuditRecord, limits WriteLimits, discard bool) (result model.Context, err error) {
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
+	}
+	if operation != nil {
+		kind := OperationUpdate
+		if discard {
+			kind = OperationDiscard
+		}
+		// 폐기 기록은 복구 채널의 근거이므로 실제 상태 전이와 같은 대상을 가리켜야 한다.
+		if err := validateContextOperation(operation, graphID, contextID, kind); err != nil {
+			return model.Context{}, err
+		}
 	}
 	if err := limits.validate(); err != nil {
 		return model.Context{}, err

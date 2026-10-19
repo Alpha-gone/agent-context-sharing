@@ -80,7 +80,7 @@
 
 ### AUTH-06
 
-- [ ] **OAuth 발견과 공개 클라이언트 등록을 구현한다.**
+- [x] **OAuth 발견과 공개 클라이언트 등록을 구현한다.**
 - 선행: [ARCH-05](architecture.md#arch-05), [AUTH-02](#auth-02).
 
 1. 고정 공개 resource·issuer·scope를 보호 리소스와 인가 서버 메타데이터에 제공한다. PKCE S256·none·두 grant·iss 지원을 명시한다.
@@ -89,6 +89,7 @@
 
 - 산출물: 메타데이터·등록 해석·결합 검증과 issuer/resource/callback 위반 표본.
 - 완료 기준: 임의 Host로 메타데이터를 만들지 않고 등록하지 않은 URI로 오류 리디렉션하지 않는다.
+- 완료 근거: [AUTH-06 검토](../reviews/2026-10-19-auth-06.md). 고정 resource·issuer·scope·PKCE·grant·iss 메타데이터 두 경로를 조립하고 사전 등록의 복사·client/callback/resource 대조와 exact/same_ip 포트 경계를 구현했다. URI 오류의 자원 시작 전 차단, Host·전달 헤더·query 비의존, 닫힌 DB에서의 실제 TLS GET/HEAD·405를 검증했다. 인증 201건·구성 303건·서버 251건, 총 755건·race와 전체 build·vet·형식 검사를 통과했다. 인가 HTTP와 오류 리디렉션 연결은 AUTH-07에서 이 대조 경계를 사용한다.
 
 ### AUTH-07
 

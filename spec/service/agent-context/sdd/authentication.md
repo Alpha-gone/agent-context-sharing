@@ -1,12 +1,12 @@
 # 계정 인증과 OAuth
 
-계정 자격 증명, 웹 세션, 목표 OAuth 발견·인가·갱신·폐기와 키 검증의 정본이다. 웹 인증과 목표 OAuth의 구현 상태를 구분한다.
+계정 자격 증명, 웹 세션, OAuth 발견·사전 등록 대조, 목표 인가·갱신·폐기와 키 검증의 정본이다. 웹 인증·발견과 목표 OAuth 처리의 구현 상태를 구분한다.
 
 [설계 전체](../SDD.md) · [요구사항과 설계 대응](traceability.md)
 
 ## 인가 서버
 
-현재 `internal/authz`는 계정 자격 증명·웹 세션 JWT·서명 키와 폐기 목록을 소유한다. `internal/web`가 로그인·가입·로그아웃 화면과 쿠키를 처리하고 `cmd/server/web_adapter.go`가 두 경계를 연결한다. ES256 서명·검증은 `github.com/go-jose/go-jose/v4`에 맡기고 암호 알고리즘을 직접 구현하지 않는다.
+현재 `internal/authz`는 계정 자격 증명·웹 세션 JWT·서명 키와 폐기 목록, OAuth 발견·사전 등록 대조를 소유한다. `internal/web`가 로그인·가입·로그아웃 화면과 쿠키를 처리하고 `cmd/server/web_adapter.go`가 두 경계를 연결한다. ES256 서명·검증은 `github.com/go-jose/go-jose/v4`에 맡기고 암호 알고리즘을 직접 구현하지 않는다.
 
 표준 OAuth의 인가 코드·갱신·폐기 기능은 [OAuth discovery와 최초 인가](authentication.md#oauth-discovery와-최초-인가)·[갱신·폐기와 공유 저장](authentication.md#갱신폐기와-공유-저장)의 목표로 추가할 예정이며 현재 구현하지 않았다.
 
@@ -39,6 +39,10 @@
 보호 리소스 메타데이터는 `resource`를 공개 HTTPS `/mcp` URI로, `authorization_servers`를 인가 서버 issuer로, scope를 `agent-context`로 제공한다. 인가 서버 메타데이터는 표준 endpoint와 `S256`, `token_endpoint_auth_methods_supported=["none"]`, `authorization_response_iss_parameter_supported=true`, `grant_types_supported=["authorization_code","refresh_token"]`을 광고한다.
 
 초기 등록은 대상 호스트별 공개 `client_id`와 허용 callback을 직접 연결용 등록 구성으로 관리한다. 제품 이름이 아니라 실제 표시한 callback을 검증하며 동일 loopback IP의 포트만 예외로 둔다. 등록은 설정 데이터이며 호스트별 코드가 아니다. CIMD는 `TBD-AGENT_CONTEXT-060`을 유지하고, 외부 URL fetch·SSRF 방어 없는 자동 등록은 열지 않는다.
+
+구성 계층이 검증한 issuer·resource·client 등록을 인증 서비스에 복사하여 주입한다. 요청의 client·resource는 원문으로 등록과 대조한다. HTTPS와 `exact` callback은 완전 일치이며 `same_ip`의 HTTP literal loopback만 유효한 명시 포트의 변경을 허용한다. IP 표기·경로·query·escape는 바꾸지 않는다. 첫 시험의 exact 등록에는 일반 loopback 포트 예외를 적용하지 않는다. 등록 대조 자체는 리디렉션이나 외부 요청을 수행하지 않고, 미등록·결합 위반은 고정된 오류로 반환한다.
+
+두 메타데이터 경로는 TLS 판정 뒤 인증 없이 GET·HEAD로 제공하고 JSON·no-store를 사용한다. issuer와 endpoint는 설정 origin에 고정하며 요청 Host·전달 헤더로 만들지 않는다. 발견 구현은 인가·token·갱신 처리의 완료를 뜻하지 않으며 해당 처리는 AUTH-07 이후 인수한다.
 
 구현 예정인 인가 코드는 해시 저장·60초·1회 소비·PKCE·client·callback·resource 결합과 `iss` 응답을 사용한다. 토큰 교환에서 `token_type=Bearer` 접근 토큰과 새 갱신 계열을 발급한다. 웹 세션은 12시간 정책으로 검증하되 그 만료를 MCP 갱신 계열의 만료로 사용하지 않는다. 인가 코드 재사용 시 최초 교환으로 만든 갱신 계열을 폐기한다.
 
@@ -164,6 +168,8 @@ JWT 서명·공통 클레임 검증을 공유하고 `aud`와 폐기 책임을 �
 DB는 해시 길이·소비 쌍의 NULL 조합·FK와 키 유일성을 검사한다. 60초·1시간·7일·30일 계산, `retain_until` 하한, 현재 시각의 만료, S256 검증, 계정/client/resource/scope 결합과 폐기 상태는 인증 저장 연산이 같은 계열 잠금 아래 판정한다. `expires_at`이 지났다는 이유로 조회 단계에서 소비 기록을 숨기면 재사용 탐지를 잃으므로 유효성 판정과 물리 정리를 구분한다.
 
 ## 목표 OAuth HTTP 경로
+
+두 메타데이터 경로는 AUTH-06에서 구현했다. 인가·token·연결 관리의 HTTP 처리와 보호 MCP 인증은 후속 작업이다.
 
 | 경로 | 메서드 | 계약 |
 |---|---|---|

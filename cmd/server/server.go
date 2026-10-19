@@ -38,14 +38,20 @@ type publicKeyRoutes interface {
 	JWKS(http.ResponseWriter, *http.Request)
 }
 
+type oauthMetadataRoutes interface {
+	ProtectedResourceMetadata(http.ResponseWriter, *http.Request)
+	AuthorizationServerMetadata(http.ResponseWriter, *http.Request)
+}
+
 // application은 1단계 HTTP 상태 경로와 요청 로그를 관리한다.
 type application struct {
-	database   readiness
-	logger     *slog.Logger
-	transport  transportSecurity
-	web        *web.Server
-	publicKeys publicKeyRoutes
-	accepting  atomic.Bool
+	database      readiness
+	logger        *slog.Logger
+	transport     transportSecurity
+	web           *web.Server
+	publicKeys    publicKeyRoutes
+	oauthMetadata oauthMetadataRoutes
+	accepting     atomic.Bool
 }
 
 // statusResponse는 상태 확인 경로가 반환하는 민감 정보 없는 본문이다.
@@ -74,6 +80,19 @@ func (app *application) handler() http.Handler {
 	gated := http.NewServeMux()
 	if app.publicKeys != nil {
 		gated.HandleFunc("GET /jwks.json", app.publicKeys.JWKS)
+	}
+	if app.oauthMetadata != nil {
+		for path, handler := range map[string]http.HandlerFunc{
+			"/.well-known/oauth-protected-resource/mcp": app.oauthMetadata.ProtectedResourceMetadata,
+			"/.well-known/oauth-authorization-server":   app.oauthMetadata.AuthorizationServerMetadata,
+		} {
+			gated.HandleFunc("GET "+path, handler)
+			gated.HandleFunc(path, func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Cache-Control", "no-store")
+				writer.Header().Set("Allow", "GET, HEAD")
+				writer.WriteHeader(http.StatusMethodNotAllowed)
+			})
+		}
 	}
 	if app.web != nil {
 		gated.Handle("/", app.web)

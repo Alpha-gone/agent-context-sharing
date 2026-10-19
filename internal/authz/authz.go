@@ -48,6 +48,8 @@ var (
 type Config struct {
 	Issuer     string
 	BcryptCost int
+	// OAuth는 구성 계층에서 URI와 사전 등록을 검증한 뒤 주입한다. nil이면 웹 인증만 제공한다.
+	OAuth *OAuthConfig
 }
 
 // Service는 데이터 접근 계층 위에서 인증·인가 계약을 수행한다.
@@ -60,6 +62,7 @@ type Service struct {
 	// cache는 「토큰 검증」이 요청마다 가져오지 않기로 한 서명 키와 폐기 목록을 담는다.
 	cache *verificationCache
 	now   func() time.Time
+	oauth *OAuthConfig
 }
 
 // authStore는 인가 서버가 데이터베이스 접근 계층에 요구하는 최소 계약이다.
@@ -92,7 +95,12 @@ func New(source authStore, config Config) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("더미 비밀번호 해시 생성: %w", err)
 	}
-	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash, passwords: newPasswordWork(), cache: newVerificationCache(), now: time.Now}, nil
+	oauth, err := copyOAuthConfig(config.OAuth)
+	if err != nil {
+		return nil, err
+	}
+	config.OAuth = oauth
+	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash, passwords: newPasswordWork(), cache: newVerificationCache(), now: time.Now, oauth: oauth}, nil
 }
 
 // Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.

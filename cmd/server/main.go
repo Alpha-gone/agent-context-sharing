@@ -121,6 +121,7 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	authorization, err := authz.New(database, authz.Config{
 		Issuer:     cfg.AuthorizationServerURL.String(),
 		BcryptCost: cfg.BcryptCost,
+		OAuth:      oauthConfiguration(cfg),
 	})
 	if err != nil {
 		return fmt.Errorf("인가 서버 준비: %w", err)
@@ -144,6 +145,7 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	app := newApplication(database, slog.Default(), transport)
 	app.web = webServer
 	app.publicKeys = authorizationHandler
+	app.oauthMetadata = authorizationHandler
 	server := newHTTPServer(cfg.HTTPAddr, app.handler())
 
 	stopSignals := make(chan os.Signal, 1)

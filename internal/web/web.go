@@ -164,6 +164,9 @@ func (server *Server) serveAsset(writer http.ResponseWriter, request *http.Reque
 
 // ServeHTTP는 계약에 있는 로그인·등록·로그아웃과 웹 관리 경로를 처리한다.
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodPost && (request.URL.Path == "/login" || request.URL.Path == "/register") {
+		writer.Header().Set("Cache-Control", "no-store")
+	}
 	if err := server.crossOrigin.Check(request); err != nil {
 		server.render(writer, http.StatusForbidden, "message", pageData{Title: "접근 제한", Error: "다른 출처에서 보낸 요청은 처리할 수 없습니다."})
 		return
@@ -229,11 +232,7 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 		}
 		server.render(writer, http.StatusOK, "login", pageData{Title: "로그인", Message: message, Next: localRedirect(request.URL.Query().Get("next"))})
 	case http.MethodPost:
-		if !server.allowAuthentication(writer, request) {
-			return
-		}
-		if err := request.ParseForm(); err != nil {
-			server.authenticationFormError(writer, "login", err)
+		if !server.parseAuthenticationForm(writer, request, "login") {
 			return
 		}
 		next := localRedirect(request.PostForm.Get("next"))
@@ -279,11 +278,7 @@ func (server *Server) register(writer http.ResponseWriter, request *http.Request
 	case http.MethodGet:
 		server.render(writer, http.StatusOK, "register", pageData{Title: "계정 등록"})
 	case http.MethodPost:
-		if !server.allowAuthentication(writer, request) {
-			return
-		}
-		if err := request.ParseForm(); err != nil {
-			server.authenticationFormError(writer, "register", err)
+		if !server.parseAuthenticationForm(writer, request, "register") {
 			return
 		}
 		loginID := request.PostForm.Get("login_id")

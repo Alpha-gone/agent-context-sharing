@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -219,5 +220,71 @@ func awaitPasswordWork(t *testing.T, started <-chan struct{}) {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("비밀번호 시험 작업이 시작되지 않았습니다")
+	}
+}
+
+func TestPasswordWorkCanceledRegistrationRetainsSlotUntilReturn(t *testing.T) {
+	backend := newMemoryStore()
+	service := testService(t, backend)
+	observed := &credentialLookupStore{authStore: backend}
+	service.store = observed
+	started := make(chan struct{}, passwordWorkLimit+1)
+	finish := make(chan struct{})
+	release := sync.OnceFunc(func() { close(finish) })
+	var workers sync.WaitGroup
+	t.Cleanup(func() { release(); workers.Wait() })
+	var generated atomic.Int32
+	service.passwords.generate = func(password string, cost int) (string, error) {
+		generated.Add(1)
+		hash, err := hashPassword(password, cost)
+		started <- struct{}{}
+		<-finish
+		return hash, err
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	results := make(chan error, passwordWorkLimit)
+	for i := range passwordWorkLimit {
+		workers.Go(func() {
+			requestContext := t.Context()
+			if i == 0 {
+				requestContext = ctx
+			}
+			_, err := service.Register(requestContext, fmt.Sprintf("slotuser%d", i), "correct password")
+			results <- err
+		})
+	}
+	for range passwordWorkLimit {
+		awaitPasswordWork(t, started)
+	}
+	cancel()
+	if _, err := service.Register(t.Context(), "overflow", "correct password"); !errors.Is(err, ErrPasswordBusy) {
+		t.Fatal("취소된 생성 작업이 반환 전에 자리를 해제했습니다")
+	}
+	if _, err := service.Authenticate(t.Context(), "missing", "wrong password"); !errors.Is(err, ErrPasswordBusy) {
+		t.Fatal("포화 상태의 로그인이 대기하거나 실행됐습니다")
+	}
+	if generated.Load() != passwordWorkLimit || observed.lookups.Load() != 0 {
+		t.Fatal("초과 요청에서 DB·해시 작업을 시작했습니다")
+	}
+	release()
+	workers.Wait()
+	close(results)
+	var canceled, succeeded int
+	for err := range results {
+		switch {
+		case errors.Is(err, context.Canceled):
+			canceled++
+		case err == nil:
+			succeeded++
+		default:
+			t.Fatal("비밀번호 작업 결과가 다릅니다")
+		}
+	}
+	if canceled != 1 || succeeded != passwordWorkLimit-1 || len(service.passwords.slots) != 0 || len(backend.accounts) != passwordWorkLimit-1 {
+		t.Fatal("취소 뒤 계정 생성·자리 반환 경계가 다릅니다")
+	}
+	if _, err := service.Register(t.Context(), "recovered", "correct password"); err != nil {
+		t.Fatal("자리 반환 뒤 정상 가입 실패")
 	}
 }

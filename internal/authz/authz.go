@@ -1,4 +1,4 @@
-// Package authz는 계정 자격 증명, 웹 세션 JWT와 폐기 목록을 관리한다.
+// Package authz는 계정·웹 세션·OAuth 자격의 발급·검증과 공유 폐기를 관리한다.
 package authz
 
 import (
@@ -52,6 +52,8 @@ type Config struct {
 	OAuth *OAuthConfig
 	// AuthorizationCodes는 코드 저장·소비·최초 계열 생성을 하나의 DB 경계로 묶는다.
 	AuthorizationCodes AuthorizationCodeStore
+	// AccessTokens는 Bearer의 공유 개별·계열 폐기와 결합을 요청마다 확인한다.
+	AccessTokens AccessTokenStore
 }
 
 // Service는 데이터 접근 계층 위에서 인증·인가 계약을 수행한다.
@@ -61,7 +63,7 @@ type Service struct {
 	config            Config
 	dummyPasswordHash string
 	passwords         *passwordWork
-	// cache는 「토큰 검증」이 요청마다 가져오지 않기로 한 서명 키와 폐기 목록을 담는다.
+	// cache는 공개 키와 웹 세션 폐기 목록을 담는다. Bearer 폐기는 요청마다 조회한다.
 	cache *verificationCache
 	now   func() time.Time
 	oauth *OAuthConfig
@@ -288,6 +290,25 @@ func (s *Service) Verify(ctx context.Context, raw, audience string) (accountID m
 // 반면 서명 키나 폐기 목록을 읽지 못한 것은 자격 증명과 무관하므로 ErrUnavailable로
 // 따로 올린다. 어느 조회가 실패했는지는 감싼 원인에만 남고 응답에는 담기지 않는다.
 func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (jwt.Claims, error) {
+	claims, err := s.signedClaims(ctx, raw, audience)
+	if err != nil {
+		return jwt.Claims{}, err
+	}
+	revoked, err := s.cache.isRevoked(ctx, s.store, claims.ID, s.now().UTC())
+	if err := ctx.Err(); err != nil {
+		return jwt.Claims{}, err
+	}
+	if err != nil {
+		return jwt.Claims{}, &credentialFailure{ErrUnavailable, err}
+	}
+	if revoked {
+		return jwt.Claims{}, ErrInvalidCredential
+	}
+	return claims, nil
+}
+
+// signedClaims는 웹 폐기 캐시를 적용하지 않는 공통 서명·필수 클레임 경계다.
+func (s *Service) signedClaims(ctx context.Context, raw, audience string, extra ...any) (jwt.Claims, error) {
 	if err := ctx.Err(); err != nil {
 		return jwt.Claims{}, err
 	}
@@ -314,22 +335,12 @@ func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (jwt
 	}
 	var claims jwt.Claims
 	now := s.now().UTC()
-	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: now}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil || len(claims.Audience) != 1 {
+	if parsed.Claims(public.Key, append([]any{&claims}, extra...)...) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: now}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil || len(claims.Audience) != 1 {
 		return jwt.Claims{}, ErrInvalidCredential
 	}
 	// 공급자 검증은 exp와 현재 시각이 같은 순간을 허용하므로 반열린 수명을 별도로 확인한다.
 	issued, expires := claims.IssuedAt.Time(), claims.Expiry.Time()
 	if !now.Before(expires) || !issued.Before(expires) || (audience == "web" && expires.Sub(issued) > webSessionLifetime) {
-		return jwt.Claims{}, ErrInvalidCredential
-	}
-	revoked, err := s.cache.isRevoked(ctx, s.store, claims.ID, now)
-	if err := ctx.Err(); err != nil {
-		return jwt.Claims{}, err
-	}
-	if err != nil {
-		return jwt.Claims{}, &credentialFailure{ErrUnavailable, err}
-	}
-	if revoked {
 		return jwt.Claims{}, ErrInvalidCredential
 	}
 	return claims, nil

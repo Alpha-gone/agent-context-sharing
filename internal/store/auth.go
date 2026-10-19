@@ -95,11 +95,8 @@ func (s *Store) RevokeToken(ctx context.Context, tokenID string, expiresAt time.
 	return nil
 }
 
-// IsTokenRevoked는 아직 만료되지 않은 폐기 목록 항목을 확인한다.
-// RevokedTokenIDs는 아직 만료되지 않은 폐기 토큰 식별자를 모두 읽는다.
-//
-// 「토큰 검증」이 폐기 목록을 요청마다 가져오지 않기로 했으므로 접근 계층이 이 목록을
-// 메모리에 두고 쓴다. 폐기 행은 토큰 만료까지만 남으므로 목록의 크기가 제한된다.
+// RevokedTokenIDs는 웹 세션 검증 캐시에 적재할 유효 폐기 식별자를 읽는다.
+// Bearer는 OAuthAccessAllowed에서 개별·계열 폐기를 매 요청 함께 확인한다.
 func (s *Store) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, error) {
 	if now.IsZero() {
 		return nil, fmt.Errorf("폐기 목록 조회 시각이 비어 있다")
@@ -123,6 +120,7 @@ func (s *Store) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, e
 	return ids, nil
 }
 
+// IsTokenRevoked는 아직 만료되지 않은 개별 폐기 항목을 확인한다.
 func (s *Store) IsTokenRevoked(ctx context.Context, tokenID string, now time.Time) (bool, error) {
 	if tokenID == "" || now.IsZero() {
 		return false, fmt.Errorf("토큰 폐기 조회 인자가 올바르지 않다")

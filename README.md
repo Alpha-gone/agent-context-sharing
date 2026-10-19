@@ -95,7 +95,7 @@ TLS_KEY_FILE=/absolute/path/localhost-key.pem
 
 나머지는 `.env.example`의 개발 기본값으로 시작합니다. `AUTHORIZATION_SERVER_URL=https://localhost:8080`을 웹 세션의 고정 issuer로 사용합니다.
 
-서버는 DB 연결 전에 MCP·OAuth·진단 구성까지 검사합니다. 기존 `.env`에는 두 환경 예시의 `MCP_RESOURCE_URL`, `MCP_ALLOWED_ORIGINS`, `OAUTH_CLIENT_REGISTRATIONS`, `DIAGNOSTIC_INSTANCE_ID`를 추가하고 실제 공개 주소·호스트의 client ID로 맞추십시오. issuer와 resource는 서로 다른 HTTPS origin을 사용할 수 있습니다. 등록 형식과 loopback 포트 정책은 [구성 계약](spec/service/agent-context/sdd/operations.md#목표-추가-구성)을 따릅니다. `DIAGNOSTIC_LOG_DIR`·`DIAGNOSTIC_LOG_LEVEL`은 비우면 각각 `/var/log/agent-context`·`INFO`입니다. OAuth 인가·토큰·MCP 처리기와 영속 진단 파일·볼륨은 후속 구현·인수 대상입니다.
+서버는 DB 연결 전에 MCP·OAuth·진단 구성까지 검사합니다. 기존 `.env`에는 두 환경 예시의 `MCP_RESOURCE_URL`, `MCP_ALLOWED_ORIGINS`, `OAUTH_CLIENT_REGISTRATIONS`, `DIAGNOSTIC_INSTANCE_ID`를 추가하고 실제 공개 주소·호스트의 client ID로 맞추십시오. issuer와 resource는 서로 다른 HTTPS origin을 사용할 수 있습니다. 등록 형식과 loopback 포트 정책은 [구성 계약](spec/service/agent-context/sdd/operations.md#목표-추가-구성)을 따릅니다. `DIAGNOSTIC_LOG_DIR`·`DIAGNOSTIC_LOG_LEVEL`은 비우면 각각 `/var/log/agent-context`·`INFO`입니다. OAuth 최초 인가·코드 교환과 Bearer 보호 인증 경계는 구현했으며 MCP 전송 조립·갱신 회전과 영속 진단 파일·볼륨은 후속 구현·인수 대상입니다.
 
 Go 프로그램은 `.env`를 자동으로 읽지 않습니다. 직접 작성한 신뢰할 수 있는 `.env`만 현재 셸에 내보내십시오. 이 방식은 파일을 셸 코드로 실행합니다.
 
@@ -144,7 +144,7 @@ INDEX_WORKER_PLACEMENT=external go run ./cmd/indexer
 
 ### 3. 현재 제공 범위
 
-공개 OAuth 발견 메타데이터는 `/.well-known/oauth-protected-resource/mcp`와 `/.well-known/oauth-authorization-server`에서 제공합니다. `/authorize`의 로그인·명시적 동의·PKCE S256 코드 발급과 `/token`의 최초 코드 교환을 구현했습니다. 보호 `/mcp`·Bearer 검증·갱신 grant·본인 연결 폐기와 실제 호스트 인수는 후속 범위입니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다. [AUTH-07 검토](spec/service/agent-context/reviews/2026-10-20-auth-07.md)에서 현재 인수 범위를 확인할 수 있습니다.
+공개 OAuth 발견 메타데이터는 `/.well-known/oauth-protected-resource/mcp`와 `/.well-known/oauth-authorization-server`에서 제공합니다. `/authorize`의 로그인·명시적 동의·PKCE S256 코드 발급과 `/token`의 최초 코드 교환, Bearer 검증·보호 인증 경계를 구현했습니다. 실제 보호 `/mcp` 전송 조립·갱신 grant·본인 연결 폐기와 호스트 인수는 후속 범위입니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다. [AUTH-08 검토](spec/service/agent-context/reviews/2026-10-20-auth-08.md)에서 현재 인증 경계의 인수 범위를 확인할 수 있습니다.
 
 ### 개발 환경 재생성
 

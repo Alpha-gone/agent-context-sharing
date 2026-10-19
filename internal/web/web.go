@@ -164,7 +164,7 @@ func (server *Server) serveAsset(writer http.ResponseWriter, request *http.Reque
 
 // ServeHTTP는 계약에 있는 로그인·등록·로그아웃과 웹 관리 경로를 처리한다.
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	if request.Method == http.MethodPost && (request.URL.Path == "/login" || request.URL.Path == "/register") {
+	if request.Method == http.MethodPost && (request.URL.Path == "/login" || request.URL.Path == "/register" || request.URL.Path == "/logout") {
 		writer.Header().Set("Cache-Control", "no-store")
 	}
 	if err := server.crossOrigin.Check(request); err != nil {
@@ -310,8 +310,20 @@ func (server *Server) logout(writer http.ResponseWriter, request *http.Request) 
 	case http.MethodGet:
 		server.render(writer, http.StatusOK, "logout", pageData{Title: "로그아웃"})
 	case http.MethodPost:
-		if _, session, ok := server.session(request); ok {
-			if err := server.auth.Revoke(request.Context(), session); err != nil {
+		_, session, err := server.verifiedSession(request)
+		if request.Context().Err() != nil {
+			return
+		}
+		if errors.Is(err, ErrAuthenticationUnavailable) {
+			server.sessionUnavailable(writer)
+			return
+		}
+		if err == nil {
+			err := server.auth.Revoke(request.Context(), session)
+			if request.Context().Err() != nil {
+				return
+			}
+			if err != nil {
 				server.render(writer, http.StatusInternalServerError, "logout", pageData{Title: "로그아웃", Error: "로그아웃을 완료할 수 없습니다."})
 				return
 			}
@@ -325,9 +337,8 @@ func (server *Server) logout(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (server *Server) graphList(writer http.ResponseWriter, request *http.Request) {
-	accountID, _, ok := server.session(request)
+	accountID, _, ok := server.session(writer, request)
 	if !ok {
-		http.Redirect(writer, request, "/login", http.StatusSeeOther)
 		return
 	}
 	if request.Method == http.MethodPost {
@@ -440,9 +451,8 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 // 대로 소유자만 할 수 있고, 등급 표도 소유자에게만 보인다. 팀 동작의 관리자 판정은
 // store가 트랜잭션 안에서 한다.
 func (server *Server) graphAccess(writer http.ResponseWriter, request *http.Request, graphID model.ID) {
-	accountID, _, ok := server.session(request)
+	accountID, _, ok := server.session(writer, request)
 	if !ok {
-		http.Redirect(writer, request, "/login", http.StatusSeeOther)
 		return
 	}
 	owner := false
@@ -774,9 +784,8 @@ func (server *Server) graphAudit(writer http.ResponseWriter, request *http.Reque
 }
 
 func (server *Server) operatorRestores(writer http.ResponseWriter, request *http.Request) {
-	accountID, _, ok := server.session(request)
+	accountID, _, ok := server.session(writer, request)
 	if !ok {
-		http.Redirect(writer, request, "/login", http.StatusSeeOther)
 		return
 	}
 	switch request.Method {
@@ -815,9 +824,8 @@ func (server *Server) operatorRestores(writer http.ResponseWriter, request *http
 }
 
 func (server *Server) requireGrade(writer http.ResponseWriter, request *http.Request, graphID model.ID, required model.GraphGrade) (model.ID, bool) {
-	accountID, _, ok := server.session(request)
+	accountID, _, ok := server.session(writer, request)
 	if !ok {
-		http.Redirect(writer, request, "/login", http.StatusSeeOther)
 		return model.ID{}, false
 	}
 	if err := perm.Require(request.Context(), server.graphs, graphID, accountID, required); err != nil {
@@ -882,16 +890,36 @@ func localRedirect(value string) string {
 	return target.RequestURI()
 }
 
-func (server *Server) session(request *http.Request) (model.ID, Session, bool) {
+func (server *Server) verifiedSession(request *http.Request) (model.ID, Session, error) {
+	if err := request.Context().Err(); err != nil {
+		return model.ID{}, Session{}, err
+	}
 	cookie, err := request.Cookie(sessionCookie)
 	if err != nil || cookie.Value == "" {
+		return model.ID{}, Session{}, http.ErrNoCookie
+	}
+	return server.auth.VerifyWebSession(request.Context(), cookie.Value, SessionAudience)
+}
+
+func (server *Server) session(writer http.ResponseWriter, request *http.Request) (model.ID, Session, bool) {
+	writer.Header().Set("Cache-Control", "no-store")
+	accountID, session, err := server.verifiedSession(request)
+	if request.Context().Err() != nil {
 		return model.ID{}, Session{}, false
 	}
-	accountID, session, err := server.auth.VerifyWebSession(request.Context(), cookie.Value, SessionAudience)
 	if err != nil {
+		if errors.Is(err, ErrAuthenticationUnavailable) {
+			server.sessionUnavailable(writer)
+		} else {
+			http.Redirect(writer, request, "/login", http.StatusSeeOther)
+		}
 		return model.ID{}, Session{}, false
 	}
 	return accountID, session, true
+}
+
+func (server *Server) sessionUnavailable(writer http.ResponseWriter) {
+	server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "인증 장애", Error: "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요."})
 }
 
 func (server *Server) setSessionCookie(writer http.ResponseWriter, request *http.Request, session Session) {

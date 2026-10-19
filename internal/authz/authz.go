@@ -59,6 +59,7 @@ type Service struct {
 	passwords         *passwordWork
 	// cache는 「토큰 검증」이 요청마다 가져오지 않기로 한 서명 키와 폐기 목록을 담는다.
 	cache *verificationCache
+	now   func() time.Time
 }
 
 // authStore는 인가 서버가 데이터베이스 접근 계층에 요구하는 최소 계약이다.
@@ -91,7 +92,7 @@ func New(source authStore, config Config) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("더미 비밀번호 해시 생성: %w", err)
 	}
-	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash, passwords: newPasswordWork(), cache: newVerificationCache()}, nil
+	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash, passwords: newPasswordWork(), cache: newVerificationCache(), now: time.Now}, nil
 }
 
 // Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.
@@ -226,8 +227,20 @@ func passwordMaterial(password string) string {
 
 // WebSession은 웹 채널 전용 audience와 12시간 수명을 가진 서명 쿠키 값을 발급한다.
 func (s *Service) WebSession(ctx context.Context, accountID model.ID, audience string) (Token, error) {
-	now := time.Now().UTC()
-	return s.issue(ctx, accountID, audience, now)
+	if err := ctx.Err(); err != nil {
+		return Token{}, err
+	}
+	if !accountID.IsV7() || audience != "web" {
+		return Token{}, ErrInvalidCredential
+	}
+	token, err := s.issue(ctx, accountID, audience, s.now().UTC())
+	if err := ctx.Err(); err != nil {
+		return Token{}, err
+	}
+	if err != nil {
+		return Token{}, &credentialFailure{ErrUnavailable, err}
+	}
+	return token, nil
 }
 
 // Verify는 기대 audience, 서명, 필수 클레임, 만료와 폐기 목록을 한 경로에서 확인한다.
@@ -265,6 +278,12 @@ func (s *Service) Verify(ctx context.Context, raw, audience string) (accountID m
 // 반면 서명 키나 폐기 목록을 읽지 못한 것은 자격 증명과 무관하므로 ErrUnavailable로
 // 따로 올린다. 어느 조회가 실패했는지는 감싼 원인에만 남고 응답에는 담기지 않는다.
 func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (jwt.Claims, error) {
+	if err := ctx.Err(); err != nil {
+		return jwt.Claims{}, err
+	}
+	if audience == "" {
+		return jwt.Claims{}, ErrInvalidCredential
+	}
 	parsed, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
 	if err != nil {
 		return jwt.Claims{}, ErrInvalidCredential
@@ -273,20 +292,32 @@ func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (jwt
 		return jwt.Claims{}, ErrInvalidCredential
 	}
 	public, err := s.cache.publicKey(ctx, s.store, parsed.Headers[0].KeyID)
+	if err := ctx.Err(); err != nil {
+		return jwt.Claims{}, err
+	}
 	if err != nil {
 		// 모르는 `kid`는 자격 증명의 문제이고, 그 밖의 조회 실패는 저장소의 문제다.
 		if errors.Is(err, store.ErrNotFound) {
 			return jwt.Claims{}, ErrInvalidCredential
 		}
-		return jwt.Claims{}, fmt.Errorf("%w: 서명 키 조회: %w", ErrUnavailable, err)
+		return jwt.Claims{}, &credentialFailure{ErrUnavailable, err}
 	}
 	var claims jwt.Claims
-	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil {
+	now := s.now().UTC()
+	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: now}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil || len(claims.Audience) != 1 {
 		return jwt.Claims{}, ErrInvalidCredential
 	}
-	revoked, err := s.cache.isRevoked(ctx, s.store, claims.ID, time.Now().UTC())
+	// 공급자 검증은 exp와 현재 시각이 같은 순간을 허용하므로 반열린 수명을 별도로 확인한다.
+	issued, expires := claims.IssuedAt.Time(), claims.Expiry.Time()
+	if !now.Before(expires) || !issued.Before(expires) || (audience == "web" && expires.Sub(issued) > webSessionLifetime) {
+		return jwt.Claims{}, ErrInvalidCredential
+	}
+	revoked, err := s.cache.isRevoked(ctx, s.store, claims.ID, now)
+	if err := ctx.Err(); err != nil {
+		return jwt.Claims{}, err
+	}
 	if err != nil {
-		return jwt.Claims{}, fmt.Errorf("%w: 폐기 목록 조회: %w", ErrUnavailable, err)
+		return jwt.Claims{}, &credentialFailure{ErrUnavailable, err}
 	}
 	if revoked {
 		return jwt.Claims{}, ErrInvalidCredential
@@ -296,12 +327,21 @@ func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (jwt
 
 // Revoke는 로그아웃에서 jti를 만료 시각까지 막는다.
 func (s *Service) Revoke(ctx context.Context, token Token) error {
-	if err := s.store.RevokeToken(ctx, token.ID, token.ExpiresAt); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if token.ID == "" || token.ExpiresAt.IsZero() {
+		return ErrInvalidCredential
+	}
+	if err := s.store.RevokeToken(ctx, token.ID, token.ExpiresAt); err != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return &credentialFailure{ErrUnavailable, err}
 	}
 	// 이 인스턴스가 방금 폐기한 토큰은 다음 적재를 기다리지 않고 곧바로 막는다.
 	s.cache.invalidateRevocations(token.ID)
-	return nil
+	return ctx.Err()
 }
 
 // JWKS는 검증자에게 비공개 키 없이 공개 키 목록을 제공한다.
@@ -344,6 +384,9 @@ func (s *Service) issue(ctx context.Context, accountID model.ID, audience string
 	if err != nil {
 		return Token{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return Token{}, err
+	}
 	private, err := privateSigningKey(key)
 	if err != nil {
 		return Token{}, err
@@ -357,6 +400,7 @@ func (s *Service) issue(ctx context.Context, accountID model.ID, audience string
 	if err != nil {
 		return Token{}, err
 	}
+	now = now.Truncate(time.Second)
 	expires := now.Add(webSessionLifetime)
 	raw, err := jwt.Signed(signer).Claims(jwt.Claims{Issuer: s.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{audience}, IssuedAt: jwt.NewNumericDate(now), Expiry: jwt.NewNumericDate(expires), ID: jti}).Serialize()
 	if err != nil {

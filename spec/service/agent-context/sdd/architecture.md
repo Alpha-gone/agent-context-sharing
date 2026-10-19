@@ -32,7 +32,7 @@
 
 현재 외부 진입점은 사용자·운영자의 웹 브라우저다. 웹 계정 세션·그래프 관리가 저장 계층에 연결되고 색인 작업자는 임베딩 제공자를 호출한다. 검색·감사·평가는 내부 패키지와 실행기가 소유한다.
 
-목표 직접 연결에서는 에이전트 호스트의 내장 MCP 클라이언트가 표준 OAuth 인가 후 보호된 도구를 호출한다. 호스트별 별도 중계 프로그램은 두지 않는다. OAuth 발견·최초 인가·코드 교환 경로는 등록했으며 보호 MCP·갱신 회전의 조립과 실제 호스트 인수는 후속 범위다.
+목표 직접 연결에서는 에이전트 호스트의 내장 MCP 클라이언트가 표준 OAuth 인가 후 보호된 도구를 호출한다. 호스트별 별도 중계 프로그램은 두지 않는다. OAuth 발견·최초 인가·코드 교환 경로는 등록했으며 보호 MCP의 조립과 실제 호스트 인수는 후속 범위다.
 
 ## 배포 형상
 
@@ -75,7 +75,7 @@ flowchart TB
 
 ## 배치 조합
 
-색인 작업자는 `INDEX_WORKER_PLACEMENT=embedded|external`로 선택하며 기본값은 `embedded`다. 주기 작업은 모든 인스턴스에 내장하되 자문 잠금으로 회차당 하나만 실행한다. 웹 인증·세션과 공개 키는 애플리케이션에 둔다. OAuth 발견·인가·최초 코드 교환도 같은 애플리케이션에 두며 보호 MCP·갱신 회전의 배치는 후속 범위다.
+색인 작업자는 `INDEX_WORKER_PLACEMENT=embedded|external`로 선택하며 기본값은 `embedded`다. 주기 작업은 모든 인스턴스에 내장하되 자문 잠금으로 회차당 하나만 실행한다. 웹 인증·세션과 공개 키는 애플리케이션에 둔다. OAuth 발견·인가·최초 코드 교환도 같은 애플리케이션에 두며 보호 MCP의 배치는 후속 범위다.
 
 ## 패키지 경계
 
@@ -86,7 +86,7 @@ flowchart TB
 | `store`  | 그래프와 테이블에 닿는 모든 질의와 기록, 그래프 불변식 규칙 실행. `graph_id`를 필수 인자로 받는다 | `model`, `plan`                         |
 | `perm`   | 직접 부여와 팀 상속으로 계산한 유효 등급으로 연산별 등급을 검사한다                        | `model`                                    |
 | `index`  | 색인 작업 소비·재시도와 본문·질의의 임베딩 제공자 호출                                     | `model`, `store`                           |
-| `authz` | 계정 등록·비밀번호 검증, 웹 세션 발급·검증·폐기, JWKS·OAuth 발견·사전 등록·인가 코드·최초 토큰 교환·Bearer 보호 인증 | `model`, `store` |
+| `authz` | 계정 등록·비밀번호 검증, 웹 세션 발급·검증·폐기, JWKS·OAuth 발견·사전 등록·인가 코드·최초 토큰 교환·Bearer 보호 인증·갱신 회전 | `model`, `store` |
 | `search` | 네 채널 실행, 질의 적응형 라우팅, 순위 역수 합 결합, 근거 경로 보존 선택, 예산 적용 | `model` (저장·임베딩 호출은 주입 인터페이스) |
 | `web`    | 관리 화면 여섯 종·인증 및 인가 동의 화면의 처리와 렌더링                                                               | `model`, `perm`, `plan`, `store`           |
 | `config` | 배포 구성 값의 읽기와 검증                                                                 | `plan`                                     |
@@ -177,14 +177,14 @@ AGE가 돌려주는 `agtype`은 PostgreSQL 기본 타입이 아니다. `store`�
 | `/jwks.json` | GET | 서명 공개 키 |
 | `/.well-known/oauth-protected-resource/mcp`, `/.well-known/oauth-authorization-server` | GET, HEAD | 고정 OAuth 발견 |
 | `/authorize` | GET, POST | 웹 세션·명시적 동의와 인가 코드 |
-| `/token` | POST | OAuth 최초 코드 교환. 갱신 grant는 후속 |
+| `/token` | POST | OAuth 최초 코드 교환과 갱신 회전 |
 | `/graphs`, `/graphs/{graph_id}` | GET | 웹 |
 | `/graphs/{graph_id}/access`, `/graphs/{graph_id}/deletion` | GET, POST | 웹 |
 | `/graphs/{graph_id}/audit` | GET | 웹 |
 | `/operator/restores` | GET, POST | 웹 |
 | `/healthz`, `/readyz` | GET | 상태 확인·TLS 판정 밖 |
 
-보호 MCP·갱신·연결 관리의 후속 경로는 [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계)를 따른다. 인가 화면은 웹 인터페이스와 서버 어댑터를 통해 authz를 호출하며 `web`에서 `authz`를 import하지 않는다. 코드 교환·Bearer 공유 폐기는 별도의 좁은 저장 인터페이스로 주입하며 DB 핸들을 노출하지 않는다. Bearer 검증 결과 전달과 HTTP 오류 사상은 authz의 ProtectBearer가 제공하고 실제 /mcp 전송 조립은 MCP-02에서 연결한다. 등록하지 않은 경로도 TLS 검사를 거치고 `404`를 반환한다.
+보호 MCP·연결 관리의 후속 경로는 [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계)를 따른다. 인가 화면은 웹 인터페이스와 서버 어댑터를 통해 authz를 호출하며 `web`에서 `authz`를 import하지 않는다. 코드 교환·갱신 회전·Bearer 공유 폐기는 별도의 좁은 저장 인터페이스로 주입하며 DB 핸들을 노출하지 않는다. Bearer 검증 결과 전달과 HTTP 오류 사상은 authz의 ProtectBearer가 제공하고 실제 /mcp 전송 조립은 MCP-02에서 연결한다. 등록하지 않은 경로도 TLS 검사를 거치고 `404`를 반환한다.
 
 ## 버전 요구
 

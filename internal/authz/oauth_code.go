@@ -10,8 +10,6 @@ import (
 
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
-	"github.com/go-jose/go-jose/v4"
-	"github.com/go-jose/go-jose/v4/jwt"
 )
 
 // AuthorizationCodeStore는 코드의 저장과 최초 교환의 트랜잭션 경계다.
@@ -104,15 +102,7 @@ func (s *Service) ExchangeAuthorizationCode(ctx context.Context, raw, client, ca
 	if s.config.AuthorizationCodes == nil {
 		return OAuthTokens{}, ErrUnavailable
 	}
-	key, err := s.activeKey(ctx)
-	if err != nil {
-		return OAuthTokens{}, &credentialFailure{ErrUnavailable, err}
-	}
-	private, err := privateSigningKey(key)
-	if err != nil {
-		return OAuthTokens{}, &credentialFailure{ErrUnavailable, err}
-	}
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: private.Key}, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", key.ID))
+	signer, err := s.oauthSigner(ctx)
 	if err != nil {
 		return OAuthTokens{}, &credentialFailure{ErrUnavailable, err}
 	}
@@ -123,20 +113,12 @@ func (s *Service) ExchangeAuthorizationCode(ctx context.Context, raw, client, ca
 			if err != nil {
 				return store.OAuthInitialGrant{}, err
 			}
-			refresh, err := secret()
+			var hash [32]byte
+			result, hash, err = s.issueOAuthTokens(signer, store.OAuthGrantBinding{ID: grantID, AccountID: code.AccountID, ClientID: code.ClientID, Resource: code.Resource, Scope: code.Scope}, now)
 			if err != nil {
 				return store.OAuthInitialGrant{}, err
 			}
-			jti, err := secret()
-			if err != nil {
-				return store.OAuthInitialGrant{}, err
-			}
-			raw, err := jwt.Signed(signer).Claims(jwt.Claims{Issuer: s.config.Issuer, Subject: code.AccountID.String(), Audience: jwt.Audience{code.Resource}, IssuedAt: jwt.NewNumericDate(now), Expiry: jwt.NewNumericDate(now.Add(time.Hour)), ID: jti}).Claims(map[string]any{"scope": code.Scope, "client_id": code.ClientID, "grant_id": grantID.String()}).Serialize()
-			if err != nil {
-				return store.OAuthInitialGrant{}, err
-			}
-			result = OAuthTokens{AccessToken: raw, TokenType: "Bearer", ExpiresIn: 3600, Scope: code.Scope, RefreshToken: refresh}
-			return store.OAuthInitialGrant{ID: grantID, RefreshHash: sha256.Sum256([]byte(refresh))}, nil
+			return store.OAuthInitialGrant{ID: grantID, RefreshHash: hash}, nil
 		})
 	if err := ctx.Err(); err != nil {
 		return OAuthTokens{}, err

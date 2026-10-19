@@ -8,7 +8,7 @@ import (
 
 const tokenFormLimit = 64 << 10
 
-// Token은 공개 client의 코드 교환을 처리한다. 갱신 grant는 AUTH-09에서 연결한다.
+// Token은 공개 client의 최초 코드 교환과 갱신 회전을 처리한다.
 func (h *Handler) Token(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Pragma", "no-cache")
@@ -64,17 +64,28 @@ func (h *Handler) Token(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 		return
 	}
-	if request.PostForm.Get("grant_type") != "authorization_code" {
+	var required []string
+	switch request.PostForm.Get("grant_type") {
+	case "authorization_code":
+		required = []string{"code", "client_id", "redirect_uri", "resource", "code_verifier"}
+	case "refresh_token":
+		required = []string{"refresh_token", "client_id", "resource"}
+	default:
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "unsupported_grant_type"})
 		return
 	}
-	for _, key := range []string{"code", "client_id", "redirect_uri", "resource", "code_verifier"} {
+	for _, key := range required {
 		if request.PostForm.Get(key) == "" {
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 			return
 		}
 	}
-	tokens, err := h.service.ExchangeAuthorizationCode(request.Context(), request.PostForm.Get("code"), request.PostForm.Get("client_id"), request.PostForm.Get("redirect_uri"), request.PostForm.Get("resource"), request.PostForm.Get("code_verifier"))
+	var tokens OAuthTokens
+	if request.PostForm.Get("grant_type") == "authorization_code" {
+		tokens, err = h.service.ExchangeAuthorizationCode(request.Context(), request.PostForm.Get("code"), request.PostForm.Get("client_id"), request.PostForm.Get("redirect_uri"), request.PostForm.Get("resource"), request.PostForm.Get("code_verifier"))
+	} else {
+		tokens, err = h.service.Refresh(request.Context(), request.PostForm.Get("refresh_token"), request.PostForm.Get("client_id"), request.PostForm.Get("resource"), request.PostForm.Get("scope"))
+	}
 	if request.Context().Err() != nil {
 		return
 	}

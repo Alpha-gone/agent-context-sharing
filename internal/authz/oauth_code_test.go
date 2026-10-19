@@ -159,7 +159,7 @@ func TestOAuthTokenHTTPInputBoundary(t *testing.T) {
 		{"header authentication", "POST", "", "application/x-www-form-urlencoded", base.Encode(), "Bearer synthetic", -1, 400, "invalid_client"},
 		{"client secret", "POST", "", "application/x-www-form-urlencoded", base.Encode() + "&client_secret=synthetic", "", -1, 400, "invalid_client"},
 		{"missing grant", "POST", "", "application/x-www-form-urlencoded", "code=synthetic", "", -1, 400, "invalid_request"},
-		{"refresh pending", "POST", "", "application/x-www-form-urlencoded", "grant_type=refresh_token", "", -1, 400, "unsupported_grant_type"},
+		{"unsupported grant", "POST", "", "application/x-www-form-urlencoded", "grant_type=client_credentials", "", -1, 400, "unsupported_grant_type"},
 		{"missing code", "POST", "", "application/x-www-form-urlencoded", "grant_type=authorization_code", "", -1, 400, "invalid_request"},
 		{"announced over limit", "POST", "", "application/x-www-form-urlencoded", "x", "", tokenFormLimit + 1, 413, "invalid_request"},
 		{"chunked over limit", "POST", "", "application/x-www-form-urlencoded", "x=" + strings.Repeat("x", tokenFormLimit), "", -1, 413, "invalid_request"},

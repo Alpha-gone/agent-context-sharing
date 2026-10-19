@@ -54,6 +54,8 @@ type Config struct {
 	AuthorizationCodes AuthorizationCodeStore
 	// AccessTokens는 Bearer의 공유 개별·계열 폐기와 결합을 요청마다 확인한다.
 	AccessTokens AccessTokenStore
+	// RefreshTokens는 갱신 회전과 재사용 계열 폐기의 공유 트랜잭션 경계다.
+	RefreshTokens RefreshTokenStore
 }
 
 // Service는 데이터 접근 계층 위에서 인증·인가 계약을 수행한다.

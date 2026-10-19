@@ -124,6 +124,7 @@ func runConfigured(cfg config.Config) (resultErr error) {
 		OAuth:              oauthConfiguration(cfg),
 		AuthorizationCodes: database,
 		AccessTokens:       database,
+		RefreshTokens:      database,
 	})
 	if err != nil {
 		return fmt.Errorf("인가 서버 준비: %w", err)

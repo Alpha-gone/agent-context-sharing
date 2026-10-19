@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json/v2"
 	"io"
 	"log/slog"
@@ -20,7 +21,7 @@ import (
 
 func TestOAuthAuthorizationTLSIntegration(t *testing.T) {
 	backend := newPublicAuthenticationStore(t)
-	config := authz.Config{Issuer: "https://issuer.test", BcryptCost: 4, AuthorizationCodes: backend, OAuth: &authz.OAuthConfig{Resource: "https://resource.test/mcp", Clients: map[string]authz.OAuthClient{"first": {RedirectURIs: []string{"http://127.0.0.1:49152/callback"}, Resources: []string{"https://resource.test/mcp"}, LoopbackPortPolicy: "exact"}}}}
+	config := authz.Config{Issuer: "https://issuer.test", BcryptCost: 4, AuthorizationCodes: backend, AccessTokens: backend, RefreshTokens: backend, OAuth: &authz.OAuthConfig{Resource: "https://resource.test/mcp", Clients: map[string]authz.OAuthClient{"first": {RedirectURIs: []string{"http://127.0.0.1:49152/callback"}, Resources: []string{"https://resource.test/mcp"}, LoopbackPortPolicy: "exact"}}}}
 	service, err := authz.New(backend, config)
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +108,23 @@ func TestOAuthAuthorizationTLSIntegration(t *testing.T) {
 	if response.StatusCode != 200 || json.Unmarshal(body, &tokens) != nil || tokens.AccessToken == "" || tokens.RefreshToken == "" || tokens.TokenType != "Bearer" || tokens.ExpiresIn != 3600 || response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("Pragma") != "no-cache" || len(response.Cookies()) != 0 {
 		t.Fatal("TLS 최초 토큰 교환 실패")
 	}
+	refreshForm := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {tokens.RefreshToken}, "client_id": {"first"}, "resource": values["resource"]}
+	response, body = do("POST", "/token", refreshForm.Encode(), nil)
+	var rotated authz.OAuthTokens
+	if response.StatusCode != 200 || json.Unmarshal(body, &rotated) != nil || rotated.RefreshToken == "" || rotated.RefreshToken == tokens.RefreshToken || rotated.AccessToken == "" || response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("Pragma") != "no-cache" || len(response.Cookies()) != 0 {
+		t.Fatal("TLS 갱신 회전 실패")
+	}
+	if _, err := service.VerifyBearer(t.Context(), rotated.AccessToken); err != nil {
+		t.Fatal("회전 접근 토큰 거부")
+	}
+	response, body = do("POST", "/token", refreshForm.Encode(), nil)
+	var reuse map[string]string
+	if response.StatusCode != 400 || json.Unmarshal(body, &reuse) != nil || reuse["error"] != "invalid_grant" {
+		t.Fatal("TLS 갱신 재사용 오류 누락")
+	}
+	if _, err := service.VerifyBearer(t.Context(), rotated.AccessToken); err == nil {
+		t.Fatal("갱신 재사용 계열 폐기 누락")
+	}
 	response, body = do("POST", "/token", form.Encode(), nil)
 	var failure map[string]string
 	if response.StatusCode != 400 || json.Unmarshal(body, &failure) != nil || failure["error"] != "invalid_grant" {
@@ -115,9 +133,10 @@ func TestOAuthAuthorizationTLSIntegration(t *testing.T) {
 	if _, _, err := service.Verify(t.Context(), cookie.Value, "web"); err != nil {
 		t.Fatal("OAuth 코드 재사용이 독립 웹 세션을 폐기")
 	}
-	for _, secret := range []string{code, tokens.AccessToken, tokens.RefreshToken, verifier, cookie.Value, "correct password", "synthetic-state"} {
-		if strings.Contains(logs.String(), secret) {
-			t.Fatal("서버 로그에 OAuth·계정 자격 또는 state 노출")
+	for _, secret := range []string{code, tokens.AccessToken, tokens.RefreshToken, rotated.AccessToken, rotated.RefreshToken, verifier, cookie.Value, "correct password", "synthetic-state"} {
+		hash := sha256.Sum256([]byte(secret))
+		if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), hex.EncodeToString(hash[:])) {
+			t.Fatal("서버 로그에 OAuth·계정 자격·해시 또는 state 노출")
 		}
 	}
 	for _, target := range []string{"/authorize", "/token"} {

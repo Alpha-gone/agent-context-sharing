@@ -88,6 +88,8 @@ type GraphStore interface {
 
 // Config는 웹 화면의 고정된 HTTP 경계를 모은다.
 type Config struct {
+	// Authorization은 로그인·세션과 분리된 OAuth 인가의 업무 경계다.
+	Authorization Authorization
 	// SecureCookie는 현재 요청이 애플리케이션의 TLS 판정을 통과했는지 알려 준다.
 	SecureCookie func(*http.Request) bool
 	// ClientAddress는 조립 계층에서 기존 프록시 신뢰 검사를 적용한 출처 주소다.
@@ -133,7 +135,7 @@ func New(auth Authentication, graphs GraphStore, config Config) (*Server, error)
 	templates, err := template.New("pages").Funcs(template.FuncMap{
 		"formatTime": func(value time.Time) string { return value.UTC().Format(time.RFC3339) },
 		"accessPath": accessPath,
-	}).Parse(pageTemplates)
+	}).Parse(pageTemplates + authorizationTemplates)
 	if err != nil {
 		return nil, fmt.Errorf("웹 템플릿 해석: %w", err)
 	}
@@ -164,6 +166,9 @@ func (server *Server) serveAsset(writer http.ResponseWriter, request *http.Reque
 
 // ServeHTTP는 계약에 있는 로그인·등록·로그아웃과 웹 관리 경로를 처리한다.
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.URL.Path == "/authorize" {
+		setAuthorizationHeaders(writer)
+	}
 	if request.Method == http.MethodPost && (request.URL.Path == "/login" || request.URL.Path == "/register" || request.URL.Path == "/logout") {
 		writer.Header().Set("Cache-Control", "no-store")
 	}
@@ -172,6 +177,8 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	switch request.URL.Path {
+	case "/authorize":
+		server.authorize(writer, request)
 	case "/" + visualizationAssetPath:
 		server.serveAsset(writer, request, visualizationAssetPath)
 	case "/login":
@@ -955,10 +962,13 @@ func (server *Server) render(writer http.ResponseWriter, status int, name string
 }
 
 type pageData struct {
-	Title   string
-	Message string
-	Error   string
-	LoginID string
+	AuthorizationClient   string
+	AuthorizationResource string
+	AuthorizationAction   string
+	Title                 string
+	Message               string
+	Error                 string
+	LoginID               string
 	// Next에는 로그인 뒤 돌아갈 서버 내부 화면 경로를 둔다.
 	Next              string
 	AccountID         model.ID

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net/url"
 
 	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/model"
@@ -11,6 +12,33 @@ import (
 
 // webAuthentication은 웹 전송 계층이 authz 패키지 구현에 직접 의존하지 않도록 경계를 맞춘다.
 type webAuthentication struct{ service *authz.Service }
+
+func (adapter webAuthentication) ValidateAuthorizationTarget(client, callback, resource string) error {
+	return adapter.service.ValidateAuthorizationTarget(client, callback, resource)
+}
+
+func authorizationRequest(values url.Values) authz.AuthorizationRequest {
+	return authz.AuthorizationRequest{ClientID: values.Get("client_id"), RedirectURI: values.Get("redirect_uri"), Resource: values.Get("resource"), ResponseType: values.Get("response_type"), Scope: values.Get("scope"), Challenge: values.Get("code_challenge"), ChallengeMethod: values.Get("code_challenge_method")}
+}
+
+func (adapter webAuthentication) ValidateAuthorizationRequest(values url.Values) string {
+	err := adapter.service.ValidateAuthorizationRequest(authorizationRequest(values))
+	if err == nil {
+		return ""
+	}
+	if failure, ok := errors.AsType[*authz.OAuthError](err); ok {
+		return failure.Code
+	}
+	return "invalid_request"
+}
+
+func (adapter webAuthentication) IssueAuthorizationCode(ctx context.Context, account model.ID, values url.Values) (string, error) {
+	return adapter.service.IssueAuthorizationCode(ctx, account, authorizationRequest(values))
+}
+
+func (adapter webAuthentication) AuthorizationIssuer() string {
+	return adapter.service.AuthorizationIssuer()
+}
 
 func (adapter webAuthentication) Authenticate(ctx context.Context, loginID, password string) (model.ID, error) {
 	id, err := adapter.service.Authenticate(ctx, loginID, password)

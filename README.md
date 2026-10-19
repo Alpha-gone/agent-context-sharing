@@ -144,7 +144,7 @@ INDEX_WORKER_PLACEMENT=external go run ./cmd/indexer
 
 ### 3. 현재 제공 범위
 
-표준 MCP·OAuth 직접 연결의 인가·토큰·업무 호출은 후속 구현 대상입니다. 공개 OAuth 발견 메타데이터는 `/.well-known/oauth-protected-resource/mcp`와 `/.well-known/oauth-authorization-server`에서 제공합니다. 현재 `/mcp`, `/authorize`, `/token`은 제공하지 않습니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다.
+공개 OAuth 발견 메타데이터는 `/.well-known/oauth-protected-resource/mcp`와 `/.well-known/oauth-authorization-server`에서 제공합니다. `/authorize`의 로그인·명시적 동의·PKCE S256 코드 발급과 `/token`의 최초 코드 교환을 구현했습니다. 보호 `/mcp`·Bearer 검증·갱신 grant·본인 연결 폐기와 실제 호스트 인수는 후속 범위입니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다. [AUTH-07 검토](spec/service/agent-context/reviews/2026-10-20-auth-07.md)에서 현재 인수 범위를 확인할 수 있습니다.
 
 ### 개발 환경 재생성
 

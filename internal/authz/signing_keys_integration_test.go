@@ -191,6 +191,12 @@ func assertSharedToken(t *testing.T, service *Service, token Token, expected mod
 // 시험별 DB에 정식 마이그레이션을 적용하고 공유 DB의 서명 키는 변경하지 않는다.
 func newAuthenticationContractStores(t *testing.T) (*store.Store, *store.Store) {
 	t.Helper()
+	first, second, _ := newAuthenticationContractDatabase(t)
+	return first, second
+}
+
+func newAuthenticationContractDatabase(t *testing.T) (*store.Store, *store.Store, *pgxpool.Pool) {
+	t.Helper()
 	address := os.Getenv("TEST_DATABASE_URL")
 	if address == "" {
 		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
@@ -258,5 +264,5 @@ func newAuthenticationContractStores(t *testing.T) (*store.Store, *store.Store) 
 		t.Cleanup(backend.Close)
 		return backend
 	}
-	return makeStore(), makeStore()
+	return makeStore(), makeStore(), pool
 }

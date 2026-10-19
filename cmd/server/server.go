@@ -43,6 +43,10 @@ type oauthMetadataRoutes interface {
 	AuthorizationServerMetadata(http.ResponseWriter, *http.Request)
 }
 
+type oauthTokenRoutes interface {
+	Token(http.ResponseWriter, *http.Request)
+}
+
 // application은 1단계 HTTP 상태 경로와 요청 로그를 관리한다.
 type application struct {
 	database      readiness
@@ -51,6 +55,7 @@ type application struct {
 	web           *web.Server
 	publicKeys    publicKeyRoutes
 	oauthMetadata oauthMetadataRoutes
+	oauthTokens   oauthTokenRoutes
 	accepting     atomic.Bool
 }
 
@@ -96,6 +101,9 @@ func (app *application) handler() http.Handler {
 	}
 	if app.web != nil {
 		gated.Handle("/", app.web)
+	}
+	if app.oauthTokens != nil {
+		gated.HandleFunc("/token", app.oauthTokens.Token)
 	}
 
 	mux := http.NewServeMux()

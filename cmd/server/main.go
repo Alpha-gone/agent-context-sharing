@@ -119,9 +119,10 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	}
 	periodic.Start(context.Background())
 	authorization, err := authz.New(database, authz.Config{
-		Issuer:     cfg.AuthorizationServerURL.String(),
-		BcryptCost: cfg.BcryptCost,
-		OAuth:      oauthConfiguration(cfg),
+		Issuer:             cfg.AuthorizationServerURL.String(),
+		BcryptCost:         cfg.BcryptCost,
+		OAuth:              oauthConfiguration(cfg),
+		AuthorizationCodes: database,
 	})
 	if err != nil {
 		return fmt.Errorf("인가 서버 준비: %w", err)
@@ -131,6 +132,7 @@ func runConfigured(cfg config.Config) (resultErr error) {
 		trustedProxies: cfg.TrustedProxies,
 	}
 	webServer, err := web.New(webAuthentication{service: authorization}, database, web.Config{
+		Authorization: webAuthentication{service: authorization},
 		SecureCookie:  transport.isTLSRequest,
 		ClientAddress: transport.clientAddress,
 		Plans:         cfg.AccountPlans,
@@ -146,6 +148,7 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	app.web = webServer
 	app.publicKeys = authorizationHandler
 	app.oauthMetadata = authorizationHandler
+	app.oauthTokens = authorizationHandler
 	server := newHTTPServer(cfg.HTTPAddr, app.handler())
 
 	stopSignals := make(chan os.Signal, 1)

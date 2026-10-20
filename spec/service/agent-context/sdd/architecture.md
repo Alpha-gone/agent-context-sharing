@@ -184,7 +184,7 @@ AGE가 돌려주는 `agtype`은 PostgreSQL 기본 타입이 아니다. `store`�
 | `/operator/restores` | GET, POST | 웹 |
 | `/healthz`, `/readyz` | GET | 상태 확인·TLS 판정 밖 |
 
-보호 MCP·연결 관리의 후속 경로는 [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계)를 따른다. 인가 화면은 웹 인터페이스와 서버 어댑터를 통해 authz를 호출하며 `web`에서 `authz`를 import하지 않는다. 코드 교환·갱신 회전·Bearer 공유 폐기는 별도의 좁은 저장 인터페이스로 주입하며 DB 핸들을 노출하지 않는다. Bearer 검증 결과 전달과 HTTP 오류 사상은 authz의 ProtectBearer가 제공하고 실제 /mcp 전송 조립은 MCP-02에서 연결한다. 등록하지 않은 경로도 TLS 검사를 거치고 `404`를 반환한다.
+보호 MCP·연결 관리의 후속 경로는 [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계)를 따른다. 인가 화면은 웹 인터페이스와 서버 어댑터를 통해 authz를 호출하며 `web`에서 `authz`를 import하지 않는다. 코드 교환·갱신 회전·Bearer 공유 폐기는 별도의 좁은 저장 인터페이스로 주입하며 DB 핸들을 노출하지 않는다. Bearer 검증 결과 전달과 HTTP 오류 사상은 authz의 ProtectBearer가 제공한다. MCP-02의 newMCPHandler가 이를 MCP Principal로 옮기고 application의 선택 /mcp 슬롯을 TLS 판정 아래에 연결한다. mcp.NewHandler는 14종 처리기를 모두 요구하므로 현재 main은 임시 처리기로 경로를 활성화하지 않으며 실제 업무 조립은 MCP-06·07에서 진행한다. 등록하지 않은 경로도 TLS 검사를 거치고 `404`를 반환한다.
 
 ## 버전 요구
 

@@ -1,6 +1,6 @@
 # MCP 전송과 도구 계약
 
-목표 Streamable HTTP 전송, 도구 14종, 행위자 결합, 멱등성 외피, 입력·응답·오류의 정본이다. 직접 연결 전송은 구현 대기다.
+목표 Streamable HTTP 전송, 도구 14종, 행위자 결합, 멱등성 외피, 입력·응답·오류의 정본이다. 보호 HTTP 전송 모듈은 구현했으며 기동 경로의 업무 연결·전체 서버/호스트 인수는 대기다.
 
 [설계 전체](../SDD.md) · [요구사항과 설계 대응](traceability.md)
 
@@ -19,6 +19,16 @@
 미지원 revision은 HTTP `400`·`UnsupportedProtocolVersion(-32022)`와 `data.supported: ["2026-07-28"]`·`data.requested`를 반환한다. 유효한 revision·외피의 미지원 RPC는 HTTP `404`·`-32601`이다. 이전 `initialize` 요청은 필수 외피 누락 또는 미지원 메서드로 거부하고 지원 revision을 진단에 표시한다. 요청 본문 상한과 업무·조회 시간 예산은 유지한다.
 
 완료 결과에는 `resultType: "complete"`를 포함하고 도구 결과의 표준 `content`, `structuredContent`, `isError`에 기존 도메인 결과·오류를 매핑한다. 도메인 오류 8종의 의미와 `context_flow_get` 평면 응답은 유지하고 기존 업무 도구 13종에 등록 도구 하나를 추가하여 목표 목록은 14종이다. SDK·호스트의 실제 적합성은 `TBD-AGENT_CONTEXT-064`에서 검증하며 revision 선정만으로 지원 완료를 주장하지 않는다.
+
+### 보호 HTTP 구현 경계
+
+`mcp.NewHandler`는 검증된 허용 Origin·Bearer 보호 함수와 완전한 14종 처리기를 받는다. Origin 원문 대조→POST·미디어 타입·표준 헤더 형식→제한된 바이트 읽기→Bearer 검증→JSON·메타데이터·헤더/본문 대조→SDK·도구 입력 검증 순서다. Origin이 없으면 허용하며 빈 값·복수·목록은 거부한다. 단일 JSON Content-Type은 매개변수를 허용하고, Accept는 JSON과 SSE의 유효한 양수 품질 범위를 요구한다. 구체적인 q=0 거부는 wildcard보다 우선한다.
+
+전송 본문은 고정 SDK의 기본값인 4 MiB로 제한한다. 선언 길이가 초과하면 읽기 전에, 길이 미상·chunked·축소 선언은 제한된 읽기로 413·JSON-RPC -32600을 반환한다. 초과 요청은 인증·업무를 호출하지 않고 JSON 해석은 Bearer 뒤에 수행한다. 헤더로 확인할 수 있는 선행 거부는 본문을 읽지 않는다. 단일 JSON 이외의 Content-Type은 415, JSON·SSE를 함께 허용하지 않는 Accept는 400이다.
+
+발견·목록의 ttlMs=0·private와 별도로 모든 HTTP 응답에 no-store를 유지한다. 공개 Host를 loopback 프록시로 전달하는 보호 생성자는 SDK의 자동 localhost Host 거부를 해제하고 정확한 Origin·Bearer와 바깥 TLS 판정을 적용한다. 인증 없는 SDK 관찰 경계는 이 옵션을 사용하지 않는다. SDK의 PropagateRequestCancellation을 명시해 원래 요청의 context를 유지한다. 업무 시간 예산·커밋/재생·실제 단절 인수는 후속 MCP-08이 소유한다.
+
+[MCP-02 인수](../reviews/2026-10-20-mcp-02.md)는 실제 OAuth/TLS와 서버 라우터 주입까지 검증했다. 현재 main에는 업무 13종을 대신할 임시 처리기를 넣지 않는다. MCP-06·07에서 실제 업무 처리기를 모두 주입하고 MCP-09의 전체 서버 계약·TEST-08의 실제 호스트 시험으로 직접 연결을 인수한다.
 
 ## 공통 행위자·도구·쓰기 안전성
 
@@ -53,11 +63,11 @@ UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용
 
 [MCP-04 모듈 인수](../reviews/2026-10-20-mcp-04.md)에서 등록·현재 결합 검사·소유자 폐기 API를 구현했다. `store.RegisterAgent`와 `RevokeAgent`는 계정 행을 같은 순서로 잠그고 Read Committed의 별도 명령으로 현재 등록·개수를 대조한다. 활성 재조회는 상한에서도 ID·생성 시각을 유지하며 폐기 키는 복구하지 않는다. 모든 client의 활성 개수를 계정당 128개로 제한하고 소유 폐기로 빈자리를 회복한다. 폐기는 반복해도 최초 시각을 유지하며 다른 계정·없는 등록은 같은 오류다.
 
-`model.ValidateRegistrationKey`가 저장 방식과 독립적인 키 형식을 소유한다. `mcp.RegisterAgent`와 `BindActor`는 인증 경계가 주입한 Principal의 계정/client만 사용하며 저장소는 AgentRegistry 인터페이스로 주입한다. clientInfo·agent·등록 키로 그래프 등급을 만들지 않는다. BindActor는 매번 현재 활성 결합을 확인하고 검증한 계정·agent만 반환한다. 누적 상한은 plan.LimitError의 agent_registrations_per_account로 전달하고 저장 해석·조회 장애는 입력 거부와 구분한다. 실제 /mcp·여섯 업무 쓰기·/connections 목록과 POST의 연결은 MCP-02·06·AUTH-10의 후속 범위다.
+`model.ValidateRegistrationKey`가 저장 방식과 독립적인 키 형식을 소유한다. `mcp.RegisterAgent`와 `BindActor`는 인증 경계가 주입한 Principal의 계정/client만 사용하며 저장소는 AgentRegistry 인터페이스로 주입한다. clientInfo·agent·등록 키로 그래프 등급을 만들지 않는다. BindActor는 매번 현재 활성 결합을 확인하고 검증한 계정·agent만 반환한다. 누적 상한은 plan.LimitError의 agent_registrations_per_account로 전달하고 저장 해석·조회 장애는 입력 거부와 구분한다. 보호 /mcp 전송·실제 Bearer와 등록의 결합 모듈은 MCP-02에서 인수했다. 기동 경로의 여섯 업무 쓰기·/connections 목록과 POST의 연결은 MCP-06·AUTH-10의 후속 범위다.
 
 ## 요청 처리 순서
 
-MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 검증, Bearer 검증·현재 권한 검사·행위자 결합, 도메인 연산·멱등성 트랜잭션, 출력 격리 확인과 표준 결과 매핑 순으로 수행한다. HTTP 오류와 도메인 오류를 구분하고 내부 장애를 재인증 신호로 바꾸지 않는다. 세부 정본은 [표준 MCP 경계](mcp.md#표준-mcp-경계)·[공통 행위자·도구·쓰기 안전성](mcp.md#공통-행위자도구쓰기-안전성)이다.
+보호 HTTP·인증 주체 전달 모듈은 구현했으며 실제 업무 도구의 조립은 후속 대상이다. 표준 SDK 메시지·입력 검증, Bearer 검증·현재 권한 검사·행위자 결합, 도메인 연산·멱등성 트랜잭션, 출력 격리 확인과 표준 결과 매핑 순으로 수행한다. HTTP 오류와 도메인 오류를 구분하고 내부 장애를 재인증 신호로 바꾸지 않는다. 세부 정본은 [표준 MCP 경계](mcp.md#표준-mcp-경계)·[공통 행위자·도구·쓰기 안전성](mcp.md#공통-행위자도구쓰기-안전성)이다.
 
 저장 계층의 멱등성·관리 기록·권한 재검사·원천 불변 규칙은 유지하며 전송 어댑터 부재를 도메인 계약의 제거로 해석하지 않는다.
 
@@ -198,7 +208,7 @@ MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 �
 
 `FR-AGENT_CONTEXT-164`~`172`의 첫 구현은 공식 `github.com/modelcontextprotocol/go-sdk` `v1.8.0`을 사용한다. [공식 릴리스](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.8.0)가 `2026-07-28` 지원을 명시하며 `ServerOptions.SupportedProtocolVersions`를 해당 revision 하나로 제한한다. SDK의 추가 revision을 자동 노출하지 않고 stateful handler를 사용하지 않는다. 실제 Go 빌드·무상태 transport 동작·호스트 적합성은 인수 시험 대상이다.
 
-SDK의 지원 목록 제한만으로 이전 수명주기와 외피 없는 호출의 거부가 보장되지는 않는다. 서비스의 MCP 진입 경계는 SDK에 위임하기 전에 필수 외피·허용 revision과 메서드를 확인하고, SDK가 직접 처리하지 않는 표준 Base64 Mcp-Name의 해독·본문 대조를 보완한다. 오류는 위 표준 MCP 경계의 JSON-RPC 계약을 유지한다. SDK를 교체하거나 이전 revision을 허용하는 방식으로 우회하지 않는다. [MCP-01 검토](../reviews/2026-10-18-mcp-01.md#서비스-진입-경계-보완과-최종-인수)에서 최소 진입 경계와 SDK의 교환을 인수했다. 실제 서버의 인증·Origin·업무 도구 연결은 후속 구현 대상이다.
+SDK의 지원 목록 제한만으로 이전 수명주기와 외피 없는 호출의 거부가 보장되지는 않는다. 서비스의 MCP 진입 경계는 SDK에 위임하기 전에 필수 외피·허용 revision과 메서드를 확인하고, SDK가 직접 처리하지 않는 표준 Base64 Mcp-Name의 해독·본문 대조를 보완한다. 오류는 위 표준 MCP 경계의 JSON-RPC 계약을 유지한다. SDK를 교체하거나 이전 revision을 허용하는 방식으로 우회하지 않는다. [MCP-01 검토](../reviews/2026-10-18-mcp-01.md#서비스-진입-경계-보완과-최종-인수)에서 최소 진입 경계와 SDK의 교환을 인수했다. 인증·Origin·서버 라우터 결합 모듈은 [MCP-02 검토](../reviews/2026-10-20-mcp-02.md)에서 인수했다. 기동 경로의 업무 13종 연결과 전체 서버 계약은 후속 구현 대상이다.
 
 서버 정보·도구 설명은 고정 구성에서 만들며 사용자의 입력이나 자격 증명을 instructions에 넣지 않는다. 서버는 이전 요청·발견 결과·접속 인스턴스로 revision·기능을 추론하지 않는다. 표준 메타데이터·헤더·Origin·메시지 검증은 SDK 경계에 두고 인수 시험에서 발견을 생략한 호출과 다른 인스턴스로 이어지는 호출도 대조한다.
 

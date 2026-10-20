@@ -17,14 +17,21 @@ import (
 const protocolRevision = "2026-07-28"
 
 // newSDKTransport는 SDK의 이전 수명주기 경로를 서비스 외피로 차단한다.
-// 인증·Origin 정책·업무 도구 조립은 MCP-02 이후의 진입점 책임이다.
-// 이 처리기만으로 보호된 /mcp 경로를 공개하지 않는다.
+// 이 처리기만으로 보호된 /mcp 경로를 공개하지 않는다. 공개 진입은 NewHandler다.
 func newSDKTransport(server *sdk.Server, maxBodyBytes int64) http.Handler {
+	return sdkTransport(server, maxBodyBytes, false)
+}
+
+func sdkTransport(server *sdk.Server, maxBodyBytes int64, publicProxy bool) http.Handler {
 	if server == nil || maxBodyBytes <= 0 {
 		panic("MCP SDK 서버와 양수 본문 상한이 필요하다")
 	}
 	next := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, &sdk.StreamableHTTPOptions{
 		Stateless: true, JSONResponse: true, MaxRequestBodyBytes: maxBodyBytes,
+		PropagateRequestCancellation: true,
+		// 공개 Host를 loopback 프록시로 전달하는 배치를 지원한다. NewHandler의
+		// 정확한 Origin 허용 목록·Bearer 검사와 바깥 서버의 TLS 판정이 선행한다.
+		DisableLocalhostProtection: publicProxy,
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost {
@@ -32,15 +39,8 @@ func newSDKTransport(server *sdk.Server, maxBodyBytes int64) http.Handler {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		body := http.MaxBytesReader(w, request.Body, maxBodyBytes)
-		data, err := io.ReadAll(body)
-		body.Close()
-		if err != nil {
-			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-				writeTransportError(w, http.StatusRequestEntityTooLarge, nil, -32600, "request body too large", nil)
-			} else {
-				writeTransportError(w, http.StatusBadRequest, nil, -32600, "cannot read request body", nil)
-			}
+		data, ok := readTransportBody(w, request, maxBodyBytes)
+		if !ok {
 			return
 		}
 		var wire map[string]jsontext.Value
@@ -117,6 +117,25 @@ func newSDKTransport(server *sdk.Server, maxBodyBytes int64) http.Handler {
 		forward.Body = io.NopCloser(bytes.NewReader(data))
 		next.ServeHTTP(w, forward)
 	})
+}
+
+func readTransportBody(w http.ResponseWriter, request *http.Request, limit int64) ([]byte, bool) {
+	if request.ContentLength > limit {
+		writeTransportError(w, http.StatusRequestEntityTooLarge, nil, -32600, "request body too large", nil)
+		return nil, false
+	}
+	body := http.MaxBytesReader(w, request.Body, limit)
+	defer body.Close()
+	data, err := io.ReadAll(body)
+	if err != nil {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			writeTransportError(w, http.StatusRequestEntityTooLarge, nil, -32600, "request body too large", nil)
+		} else {
+			writeTransportError(w, http.StatusBadRequest, nil, -32600, "cannot read request body", nil)
+		}
+		return nil, false
+	}
+	return data, true
 }
 
 func validTransportID(id jsontext.Value) bool {

@@ -56,6 +56,7 @@ type application struct {
 	publicKeys    publicKeyRoutes
 	oauthMetadata oauthMetadataRoutes
 	oauthTokens   oauthTokenRoutes
+	mcp           http.Handler
 	accepting     atomic.Bool
 }
 
@@ -104,6 +105,9 @@ func (app *application) handler() http.Handler {
 	}
 	if app.oauthTokens != nil {
 		gated.HandleFunc("/token", app.oauthTokens.Token)
+	}
+	if app.mcp != nil {
+		gated.Handle("/mcp", app.mcp)
 	}
 
 	mux := http.NewServeMux()

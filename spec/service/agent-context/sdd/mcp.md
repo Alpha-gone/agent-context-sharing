@@ -49,6 +49,12 @@
 
 UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용한다. 활성 행만의 부분 UNIQUE로 만들면 폐기 키를 새 활성 ID로 암묵 복구할 수 있으므로 사용하지 않는다. 계정·client별 목록과 활성 128개 한도 판정에는 `(account_id, client_id, created_at, agent_id)`와 `account_id WHERE revoked_at IS NULL` 인덱스를 둔다. 상한은 CHECK로 세지 않고 계정 범위 잠금 아래 재검사하며, UUID 타입·유일 제약만으로 활성·계정/client 결합이 검증되었다고 간주하지 않는다.
 
+### 등록 구현 경계
+
+[MCP-04 모듈 인수](../reviews/2026-10-20-mcp-04.md)에서 등록·현재 결합 검사·소유자 폐기 API를 구현했다. `store.RegisterAgent`와 `RevokeAgent`는 계정 행을 같은 순서로 잠그고 Read Committed의 별도 명령으로 현재 등록·개수를 대조한다. 활성 재조회는 상한에서도 ID·생성 시각을 유지하며 폐기 키는 복구하지 않는다. 모든 client의 활성 개수를 계정당 128개로 제한하고 소유 폐기로 빈자리를 회복한다. 폐기는 반복해도 최초 시각을 유지하며 다른 계정·없는 등록은 같은 오류다.
+
+`model.ValidateRegistrationKey`가 저장 방식과 독립적인 키 형식을 소유한다. `mcp.RegisterAgent`와 `BindActor`는 인증 경계가 주입한 Principal의 계정/client만 사용하며 저장소는 AgentRegistry 인터페이스로 주입한다. clientInfo·agent·등록 키로 그래프 등급을 만들지 않는다. BindActor는 매번 현재 활성 결합을 확인하고 검증한 계정·agent만 반환한다. 누적 상한은 plan.LimitError의 agent_registrations_per_account로 전달하고 저장 해석·조회 장애는 입력 거부와 구분한다. 실제 /mcp·여섯 업무 쓰기·/connections 목록과 POST의 연결은 MCP-02·06·AUTH-10의 후속 범위다.
+
 ## 요청 처리 순서
 
 MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 검증, Bearer 검증·현재 권한 검사·행위자 결합, 도메인 연산·멱등성 트랜잭션, 출력 격리 확인과 표준 결과 매핑 순으로 수행한다. HTTP 오류와 도메인 오류를 구분하고 내부 장애를 재인증 신호로 바꾸지 않는다. 세부 정본은 [표준 MCP 경계](mcp.md#표준-mcp-경계)·[공통 행위자·도구·쓰기 안전성](mcp.md#공통-행위자도구쓰기-안전성)이다.

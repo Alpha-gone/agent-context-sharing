@@ -28,7 +28,7 @@
 
 발견·목록의 ttlMs=0·private와 별도로 모든 HTTP 응답에 no-store를 유지한다. 공개 Host를 loopback 프록시로 전달하는 보호 생성자는 SDK의 자동 localhost Host 거부를 해제하고 정확한 Origin·Bearer와 바깥 TLS 판정을 적용한다. 인증 없는 SDK 관찰 경계는 이 옵션을 사용하지 않는다. SDK의 PropagateRequestCancellation을 명시해 원래 요청의 context를 유지한다. 업무 시간 예산·커밋/재생·실제 단절 인수는 후속 MCP-08이 소유한다.
 
-[MCP-02 인수](../reviews/2026-10-20-mcp-02.md)는 실제 OAuth/TLS와 서버 라우터 주입까지 검증했다. 현재 main에는 업무 13종을 대신할 임시 처리기를 넣지 않는다. MCP-06·07에서 실제 업무 처리기를 모두 주입하고 MCP-09의 전체 서버 계약·TEST-08의 실제 호스트 시험으로 직접 연결을 인수한다.
+[MCP-02 인수](../reviews/2026-10-20-mcp-02.md)는 실제 OAuth/TLS와 서버 라우터 주입까지 검증했다. 현재 main에는 업무 13종을 대신할 임시 처리기를 넣지 않는다. MCP-06·07에서 여덟 쓰기·다섯 읽기 처리기 모듈을 인수했다. 기동 경로의 전체 주입은 ARCH-07, 전체 서버 계약은 MCP-09, 실제 호스트는 TEST-08에서 인수한다.
 
 ## 공통 행위자·도구·쓰기 안전성
 
@@ -105,7 +105,7 @@ UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용
 
 ## 입력 검증
 
-아래 MCP 입력 검증 분담은 표준 전송 계층의 계약이다. 14종 도구의 스키마·표면 검증은 구현했으며 실제 인증·업무 저장 연결은 후속 대상이다. 모델·저장 계층의 검증과 웹 입력 검증은 유지한다.
+아래 MCP 입력 검증 분담은 표준 전송 계층의 계약이다. 14종 도구의 스키마·표면 검증과 등록·쓰기·읽기 도메인 연결 모듈을 구현했으며 기동 경로의 전체 조립은 후속 대상이다. 모델·저장 계층의 검증과 웹 입력 검증은 유지한다.
 
 검증은 `model`과 `mcp`가 나눠 맡는다.
 
@@ -165,7 +165,25 @@ UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용
 
 ## 응답 직렬화
 
-후속 MCP 구현은 `resultType: "complete"`와 표준 `content`, `structuredContent`, `isError`에 도메인 결과·오류를 매핑한다. 작업 컨텍스트 흐름의 평면 결과를 유지하고 HTTP·JSON-RPC·도메인 오류 계층을 구분한다. 현재 웹 응답과 상태 경로는 각 처리기의 직렬화를 유지한다.
+MCP 처리기는 `resultType: "complete"`와 표준 `content`, `structuredContent`, `isError`에 도메인 결과·오류를 매핑한다. 도메인 JSON 객체와 같은 값의 text content를 만들고 고정 SDK가 complete 외피를 직렬화한다. 현재 웹 응답과 상태 경로는 각 처리기의 직렬화를 유지한다.
+
+### 읽기 도구 연결
+
+`NewReadHandlers`가 graph_list/get·node_get·relation_list·context_flow_get을 연결한다. graph_list는 인증 계정의 유효 등급을 저장 질의에서 필터하고 나머지는 현재 viewer 등급과 활성 그래프를 검사한다. 페이지 크기·홉·결과 노드 수·문자 예산은 현재 계정 플랜을 적용한다. 홉 생략은 0, 방향 생략은 both이며 흐름의 as_of 생략은 요청 시점 UTC다. scope 생략은 검색기의 auto 기본값으로 전달한다. 커서 인코딩은 도구 스키마, 내부 시각·식별자는 저장소가 검사한다. 무제한 페이지도 요청 크기만큼 메모리를 미리 확보하지 않고 실제 행 수에 따라 확장하며 추가 한 행의 정수 오버플로를 막는다.
+
+| 도구 | 구조화 결과 객체 |
+|---|---|
+| graph_list | graphs와 next_cursor. 항목은 graph_id·name·description·last_activity_at·grade |
+| graph_get | 쓰기와 같은 graph 객체 |
+| node_get | contexts·references·relations·truncated. 컨텍스트 항목에 최단 거리 distance |
+| relation_list | 관계 메타데이터 목록 relations와 next_cursor |
+| context_flow_get | contexts·references·relations·entry_points·budget·channels·truncated와 선택 route·route_reason |
+
+목록 끝의 next_cursor는 빈 문자열이고 빈 목록은 배열이다. 공개 member_refs 필터는 조립 어댑터가 내부 has_member로 바꾸며 응답 reference_type은 member_refs다. 참조 간선은 from_context_id·to_context_id·reference_type, 확정 사건 관계 간선은 같은 양 끝과 relation_type으로 분리한다. 응답 정점의 graph·삭제·중복 상태와 간선 양 끝의 반환 집합 포함 여부를 재검사하고 불일치 결과는 내부 오류로 처리한다. 노드 결과는 거리·기록 시각·ID, 흐름은 rank·기록 시각·ID, 간선은 양 끝·종류로 결정적으로 정렬한다.
+
+흐름 항목의 entry_distance·matched_channels·rank·origin_kinds와 선택 folded_count를 보존한다. budget은 used·limit, channels는 채널별 candidates·latency_ms·contribution·failure이며 내부 연결 계측과 후보 차수는 싣지 않는다. truncated.result_truncated는 정상 부분 결과의 표시다. 홉 절단에는 hop_boundary, 예산 절단에는 reason·excluded를 보존하며 두 절단이 겹치면 둘 다 싣는다. 일부 채널 실패·빈 결과·절단은 isError=false다. DB 내부 장애와 감싸진 부재·커서 오류를 조립 경계에서 구분하며 내부 원문은 응답에 포함하지 않는다.
+
+[MCP-07 모듈 인수](../reviews/2026-10-20-mcp-07.md)는 실제 저장·검색과 고정 SDK 외피를 각각 검증했다. 보호 OAuth/TLS를 포함한 전체 조립·오류 계층/시간 예산·단절·전체 스냅샷과 실제 호스트 인수는 후속 범위다.
 
 ## 오류의 생성과 전달
 

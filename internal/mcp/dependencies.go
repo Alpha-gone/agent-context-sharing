@@ -71,18 +71,13 @@ type RelationWriter interface {
 	DiscardRelation(context.Context, model.ID, model.ID, Actor, plan.Limits) (model.Relation, error)
 }
 
-// WriteResult는 업무 쓰기의 최초 결과다. 표준 SDK 외피·자격 증명을 보관하지 않는다.
-type WriteResult struct {
-	Graph    *model.Graph
-	Node     *model.Context
-	Relation *model.Relation
-}
-
 // WriteExecutor는 계정 범위의 멱등성 예약과 도메인 쓰기를 한 커밋에 묶는다.
 // normalizedInput에는 request_id와 OAuth 자격·표준 결과 외피를 포함하지 않는다.
-// 재생 전 인증·등급·행위자 결합은 요청 처리기가 다시 검사한다.
+// check는 잠금을 얻은 뒤 재생 전에 현재 인증·등급·행위자를 읽기 전용으로 검사한다.
+// apply는 성공·결정적 거부를 도메인 JSON 객체로 반환한다. error는 미완료 실패로
+// 예약·쓰기를 롤백하며 표준 SDK 외피와 내부 일시 장애는 보관하지 않는다.
 type WriteExecutor interface {
-	ExecuteWrite(ctx context.Context, accountID model.ID, requestID, tool string, normalizedInput []byte, apply func(context.Context) (WriteResult, error)) (WriteResult, error)
+	ExecuteWrite(ctx context.Context, accountID model.ID, requestID, tool string, normalizedInput []byte, check func(context.Context) error, apply func(context.Context) ([]byte, error)) ([]byte, error)
 }
 
 // Diagnostics는 고정 코드만 전달한다. 본문·URL·error·헤더·자격을 받지 않는다.

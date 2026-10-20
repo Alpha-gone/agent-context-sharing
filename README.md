@@ -146,7 +146,7 @@ INDEX_WORKER_PLACEMENT=external go run ./cmd/indexer
 
 공개 OAuth 발견 메타데이터는 `/.well-known/oauth-protected-resource/mcp`와 `/.well-known/oauth-authorization-server`에서 제공합니다. `/authorize`의 로그인·명시적 동의·PKCE S256 코드 발급과 `/token`의 최초 코드 교환·갱신 회전, Bearer 검증·보호 인증 경계를 구현했습니다. 보호 `/mcp` 전송 생성자와 서버 라우터·Bearer 연결 모듈도 구현했습니다. 기동 경로의 업무 13종 연결·본인 연결 폐기와 호스트 인수는 후속 범위입니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다. [AUTH-09 검토](spec/service/agent-context/reviews/2026-10-20-auth-09.md)에서 현재 인증 경계의 인수 범위를 확인할 수 있습니다.
 
-에이전트 등록·현재 계정/client 결합 검사·소유자 폐기의 내부 API도 [MCP-04 검토](spec/service/agent-context/reviews/2026-10-20-mcp-04.md)에서 인수했습니다. [MCP-02 검토](spec/service/agent-context/reviews/2026-10-20-mcp-02.md)에서 보호 전송·발견·4 MiB 본문 상한·표준 외피와 실제 TLS/OAuth 결합을 인수했습니다. [MCP-05 검토](spec/service/agent-context/reviews/2026-10-20-mcp-05.md)에서 쓰기 키·24시간 결과 재생 실행 경계도 인수했습니다. 현재 기동 경로에 필요한 업무 13종의 실제 처리기와 `/connections` 화면은 후속 범위입니다.
+에이전트 등록·현재 계정/client 결합 검사·소유자 폐기의 내부 API도 [MCP-04 검토](spec/service/agent-context/reviews/2026-10-20-mcp-04.md)에서 인수했습니다. [MCP-02 검토](spec/service/agent-context/reviews/2026-10-20-mcp-02.md)에서 보호 전송·발견·4 MiB 본문 상한·표준 외피와 실제 TLS/OAuth 결합을 인수했습니다. [MCP-05 검토](spec/service/agent-context/reviews/2026-10-20-mcp-05.md)에서 쓰기 키·24시간 결과 재생 실행 경계도 인수했습니다. [MCP-06 검토](spec/service/agent-context/reviews/2026-10-20-mcp-06.md)에서 여덟 쓰기 도구의 실제 도메인 연결·재생·오류 변환과 OAuth/TLS 표본을 인수했습니다. 다섯 읽기 도구와 기동 경로의 전체 처리기 조립·`/connections` 화면은 후속 범위입니다.
 
 ## 개발 환경 재생성
 

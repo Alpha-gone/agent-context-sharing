@@ -47,27 +47,7 @@ func (runner *WriteRunner) Execute(ctx context.Context, principal Principal, too
 	}
 	key, _ := values["request_id"].(string)
 	delete(values, "request_id")
-	// UUID 허용 표기만 통일한다. 본문·판단 입력·URI의 문자열은 변경하지 않는다.
-	for _, definition := range runner.catalog.definitions {
-		if definition.tool.Name != tool {
-			continue
-		}
-		for name, schema := range definition.tool.InputSchema.(*jsonschema.Schema).Properties {
-			value, present := values[name]
-			if !present {
-				continue
-			}
-			if schema.Format == "uuid-v7" {
-				id, _ := model.ParseID(value.(string))
-				values[name] = id.String()
-			} else if schema.Type == "array" && schema.Items != nil && schema.Items.Format == "uuid-v7" {
-				for i, item := range value.([]any) {
-					id, _ := model.ParseID(item.(string))
-					value.([]any)[i] = id.String()
-				}
-			}
-		}
-	}
+	runner.normalizeIDs(tool, values)
 	normalized, err := json.Marshal(map[string]any{"tool": tool, "arguments": values}, json.Deterministic(true))
 	if err != nil {
 		return nil, fmt.Errorf("쓰기 인자 정규화: %w", err)
@@ -89,4 +69,28 @@ func (runner *WriteRunner) Execute(ctx context.Context, principal Principal, too
 		}
 		return checkCtx.Err()
 	}, apply)
+}
+
+func (runner *WriteRunner) normalizeIDs(tool string, values map[string]any) {
+	// UUID 허용 표기만 통일한다. 본문·판단 입력·URI의 문자열은 변경하지 않는다.
+	for _, definition := range runner.catalog.definitions {
+		if definition.tool.Name != tool {
+			continue
+		}
+		for name, schema := range definition.tool.InputSchema.(*jsonschema.Schema).Properties {
+			value, present := values[name]
+			if !present {
+				continue
+			}
+			if schema.Format == "uuid-v7" {
+				id, _ := model.ParseID(value.(string))
+				values[name] = id.String()
+			} else if schema.Type == "array" && schema.Items != nil && schema.Items.Format == "uuid-v7" {
+				for i, item := range value.([]any) {
+					id, _ := model.ParseID(item.(string))
+					value.([]any)[i] = id.String()
+				}
+			}
+		}
+	}
 }

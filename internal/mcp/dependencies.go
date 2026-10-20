@@ -62,8 +62,13 @@ type GraphWriter interface {
 type NodeWriter interface {
 	CreateNode(context.Context, model.ID, model.Context, Actor, plan.Limits) (model.Context, error)
 	UpdateNode(context.Context, model.ID, model.Context, int64, model.OperationKind, Actor, plan.Limits) (model.Context, error)
-	DiscardNode(context.Context, model.ID, model.ID, int64, Actor, plan.Limits) (model.Context, error)
-	RestoreNode(context.Context, model.ID, model.ID, int64, Actor, plan.Limits) (model.Context, error)
+	DiscardNode(context.Context, model.ID, model.ID, Actor, plan.Limits) (model.Context, error)
+	RestoreNode(context.Context, model.ID, model.ID, Actor, plan.Limits) (model.Context, error)
+}
+
+// RejectedOperations는 도메인 저장점 롤백 뒤 같은 재생 트랜잭션에 거부를 기록한다.
+type RejectedOperations interface {
+	RecordRejectedOperation(context.Context, model.ManagementOperation) error
 }
 
 type RelationWriter interface {
@@ -99,6 +104,7 @@ type Dependencies struct {
 	NodeWrites     NodeWriter
 	RelationWrites RelationWriter
 	Writes         WriteExecutor
+	Rejections     RejectedOperations
 	Diagnostics    Diagnostics
 }
 
@@ -112,7 +118,7 @@ func (d Dependencies) Validate() error {
 		{"nodes", d.Nodes}, {"hops", d.Hops}, {"relations", d.Relations},
 		{"flow", d.Flow}, {"agents", d.Agents}, {"graph_writes", d.GraphWrites},
 		{"node_writes", d.NodeWrites}, {"relation_writes", d.RelationWrites},
-		{"writes", d.Writes}, {"diagnostics", d.Diagnostics},
+		{"writes", d.Writes}, {"rejections", d.Rejections}, {"diagnostics", d.Diagnostics},
 	} {
 		if dependency.value == nil {
 			return fmt.Errorf("MCP 조립에 %s가 필요하다", dependency.name)

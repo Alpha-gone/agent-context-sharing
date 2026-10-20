@@ -147,6 +147,12 @@ func TestPublicAuthenticationAddressBudgetsIntegration(t *testing.T) {
 // 공유 DB는 생성 권한 확인에만 사용하고 계정·서명 키는 정식 마이그레이션을 적용한 별도 DB에 둔다.
 func newPublicAuthenticationStore(t *testing.T) *store.Store {
 	t.Helper()
+	backend, _, _ := newServerContractDatabase(t)
+	return backend
+}
+
+func newServerContractDatabase(t *testing.T) (*store.Store, *pgxpool.Pool, string) {
+	t.Helper()
 	address := os.Getenv("TEST_DATABASE_URL")
 	if address == "" {
 		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
@@ -205,10 +211,13 @@ func newPublicAuthenticationStore(t *testing.T) *store.Store {
 			t.Fatal(err)
 		}
 	}
+	query := isolated.Query()
+	query.Set("pool_max_conns", "4")
+	isolated.RawQuery = query.Encode()
 	backend, err := store.New(t.Context(), isolated.String(), "agent_context", nil, nil, "")
 	if err != nil {
 		t.Fatal("시험 전용 저장소를 준비하지 못했습니다")
 	}
 	t.Cleanup(backend.Close)
-	return backend
+	return backend, pool, isolated.String()
 }

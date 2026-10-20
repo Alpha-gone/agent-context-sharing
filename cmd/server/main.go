@@ -125,6 +125,7 @@ func runConfigured(cfg config.Config) (resultErr error) {
 		AuthorizationCodes: database,
 		AccessTokens:       database,
 		RefreshTokens:      database,
+		Connections:        database,
 	})
 	if err != nil {
 		return fmt.Errorf("인가 서버 준비: %w", err)
@@ -135,6 +136,7 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	}
 	webServer, err := web.New(webAuthentication{service: authorization}, database, web.Config{
 		Authorization: webAuthentication{service: authorization},
+		Connections:   webAuthentication{service: authorization},
 		SecureCookie:  transport.isTLSRequest,
 		ClientAddress: transport.clientAddress,
 		Plans:         cfg.AccountPlans,

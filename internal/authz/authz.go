@@ -56,6 +56,8 @@ type Config struct {
 	AccessTokens AccessTokenStore
 	// RefreshTokens는 갱신 회전과 재사용 계열 폐기의 공유 트랜잭션 경계다.
 	RefreshTokens RefreshTokenStore
+	// Connections는 본인 계열·등록 목록과 명시적 폐기의 공유 저장 경계다.
+	Connections ConnectionStore
 }
 
 // Service는 데이터 접근 계층 위에서 인증·인가 계약을 수행한다.

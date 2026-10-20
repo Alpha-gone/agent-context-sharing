@@ -90,6 +90,7 @@ type GraphStore interface {
 type Config struct {
 	// Authorization은 로그인·세션과 분리된 OAuth 인가의 업무 경계다.
 	Authorization Authorization
+	Connections   ConnectionManagement
 	// SecureCookie는 현재 요청이 애플리케이션의 TLS 판정을 통과했는지 알려 준다.
 	SecureCookie func(*http.Request) bool
 	// ClientAddress는 조립 계층에서 기존 프록시 신뢰 검사를 적용한 출처 주소다.
@@ -99,7 +100,7 @@ type Config struct {
 	Plans plan.AccountPlans
 }
 
-// Server는 로그인·등록·로그아웃과 웹 관리 화면 여섯 종을 처리한다.
+// Server는 계정 화면·여섯 업무 화면과 본인 연결 관리를 처리한다.
 type Server struct {
 	auth        Authentication
 	graphs      GraphStore
@@ -133,9 +134,11 @@ func New(auth Authentication, graphs GraphStore, config Config) (*Server, error)
 		return nil, fmt.Errorf("웹 서버 구성이 올바르지 않다")
 	}
 	templates, err := template.New("pages").Funcs(template.FuncMap{
-		"formatTime": func(value time.Time) string { return value.UTC().Format(time.RFC3339) },
-		"accessPath": accessPath,
-	}).Parse(pageTemplates + authorizationTemplates)
+		"formatTime":       func(value time.Time) string { return value.UTC().Format(time.RFC3339) },
+		"accessPath":       accessPath,
+		"connectionStatus": connectionStatus,
+		"connectionExpiry": connectionExpiry,
+	}).Parse(pageTemplates + authorizationTemplates + connectionTemplates)
 	if err != nil {
 		return nil, fmt.Errorf("웹 템플릿 해석: %w", err)
 	}
@@ -166,7 +169,7 @@ func (server *Server) serveAsset(writer http.ResponseWriter, request *http.Reque
 
 // ServeHTTP는 계약에 있는 로그인·등록·로그아웃과 웹 관리 경로를 처리한다.
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	if request.URL.Path == "/authorize" {
+	if request.URL.Path == "/authorize" || request.URL.Path == "/connections" {
 		setAuthorizationHeaders(writer)
 	}
 	if request.Method == http.MethodPost && (request.URL.Path == "/login" || request.URL.Path == "/register" || request.URL.Path == "/logout") {
@@ -177,6 +180,8 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	switch request.URL.Path {
+	case "/connections":
+		server.connections(writer, request)
 	case "/authorize":
 		server.authorize(writer, request)
 	case "/" + visualizationAssetPath:
@@ -962,6 +967,7 @@ func (server *Server) render(writer http.ResponseWriter, status int, name string
 }
 
 type pageData struct {
+	Connections           store.ConnectionPage
 	AuthorizationClient   string
 	AuthorizationResource string
 	AuthorizationAction   string
@@ -1068,7 +1074,7 @@ body { margin: 0; } main { max-width: 1120px; margin: 32px auto; padding: 0 16px
 {{define "register"}}{{template "head" .}}<h1>계정 등록</h1><form class="panel" method="post" action="/register"><label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" pattern="[a-z0-9_]{3,32}" required></label><p>영문 소문자, 숫자, 밑줄을 사용해 3~32자로 입력합니다.</p><label>비밀번호<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="128" required></label><p>비밀번호는 8~128자입니다.</p><button type="submit">등록</button></form><p><a href="/login">로그인으로 돌아가기</a></p>{{template "foot" .}}{{end}}
 {{define "logout"}}{{template "head" .}}<h1>로그아웃</h1><form class="panel" method="post" action="/logout"><p>이 브라우저의 세션을 종료합니다.</p><button type="submit">로그아웃</button></form>{{template "foot" .}}{{end}}
 {{define "message"}}{{template "head" .}}<h1>{{.Title}}</h1><p><a href="/graphs">그래프 목록</a></p>{{template "foot" .}}{{end}}
-{{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav>
+{{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/connections">연결 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav>
 <form class="panel actions" method="get" action="/graphs">
 <label for="graph-name">이름 필터<input id="graph-name" name="name" value="{{.NameFilter}}"></label>
 <fieldset class="grade-filter" aria-describedby="grade-filter-help"><legend>등급</legend><div class="grade-options">

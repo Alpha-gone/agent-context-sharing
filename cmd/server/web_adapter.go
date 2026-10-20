@@ -7,11 +7,21 @@ import (
 
 	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/store"
 	"agent_context_sharing/internal/web"
 )
 
 // webAuthentication은 웹 전송 계층이 authz 패키지 구현에 직접 의존하지 않도록 경계를 맞춘다.
 type webAuthentication struct{ service *authz.Service }
+
+func (adapter webAuthentication) ListConnections(ctx context.Context, account, before model.ID) (store.ConnectionPage, error) {
+	page, err := adapter.service.ListConnections(ctx, account, before)
+	return page, webCredentialError(err)
+}
+
+func (adapter webAuthentication) RevokeConnection(ctx context.Context, account model.ID, action string, target model.ID) error {
+	return webCredentialError(adapter.service.RevokeConnection(ctx, account, action, target))
+}
 
 func (adapter webAuthentication) ValidateAuthorizationTarget(client, callback, resource string) error {
 	return adapter.service.ValidateAuthorizationTarget(client, callback, resource)

@@ -86,7 +86,7 @@ flowchart TB
 | `store`  | 그래프와 테이블에 닿는 모든 질의와 기록, 그래프 불변식 규칙 실행. `graph_id`를 필수 인자로 받는다 | `model`, `plan`                         |
 | `perm`   | 직접 부여와 팀 상속으로 계산한 유효 등급으로 연산별 등급을 검사한다                        | `model`                                    |
 | `index`  | 색인 작업 소비·재시도와 본문·질의의 임베딩 제공자 호출                                     | `model`, `store`                           |
-| `authz` | 계정 등록·비밀번호 검증, 웹 세션 발급·검증·폐기, JWKS·OAuth 발견·사전 등록·인가 코드·최초 토큰 교환·Bearer 보호 인증·갱신 회전 | `model`, `store` |
+| `authz` | 계정 등록·비밀번호 검증, 웹 세션 발급·검증·폐기, JWKS·OAuth 발견·사전 등록·인가 코드·최초 토큰 교환·Bearer 보호 인증·갱신 회전·본인 연결 관리 | `model`, `store` |
 | `search` | 네 채널 실행, 질의 적응형 라우팅, 순위 역수 합 결합, 근거 경로 보존 선택, 예산 적용 | `model` (저장·임베딩 호출은 주입 인터페이스) |
 | `web`    | 관리 화면 여섯 종·인증 및 인가 동의 화면의 처리와 렌더링                                                               | `model`, `perm`, `plan`, `store`           |
 | `config` | 배포 구성 값의 읽기와 검증                                                                 | `plan`                                     |
@@ -184,7 +184,7 @@ AGE가 돌려주는 `agtype`은 PostgreSQL 기본 타입이 아니다. `store`�
 | `/operator/restores` | GET, POST | 웹 |
 | `/healthz`, `/readyz` | GET | 상태 확인·TLS 판정 밖 |
 
-보호 MCP·연결 관리의 후속 경로는 [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계)를 따른다. 인가 화면은 웹 인터페이스와 서버 어댑터를 통해 authz를 호출하며 `web`에서 `authz`를 import하지 않는다. 코드 교환·갱신 회전·Bearer 공유 폐기는 별도의 좁은 저장 인터페이스로 주입하며 DB 핸들을 노출하지 않는다. Bearer 검증 결과 전달과 HTTP 오류 사상은 authz의 ProtectBearer가 제공한다. MCP-02의 newMCPHandler가 이를 MCP Principal로 옮기고 application의 선택 /mcp 슬롯을 TLS 판정 아래에 연결한다. mcp.NewHandler는 14종 처리기를 모두 요구하므로 현재 main은 임시 처리기로 경로를 활성화하지 않으며 MCP-06의 newMCPWriteHandlers는 여덟 쓰기에 현재 등급·플랜·저장/거부 기록·재생 실행기를 주입한다. MCP-07의 newMCPReadHandlers는 다섯 읽기에 현재 등급·플랜·그래프/노드/홉/관계와 검색기를 주입하고 저장 오류·구성원 참조 이름을 맞춘다. MCP-08의 서버 조립 어댑터는 본문·인증·도구 실행의 [요청 시간 예산과 오류 경계](mcp.md#요청-시간-예산과-오류-경계)를 적용한다. 기동 경로의 전체 업무 조립은 ARCH-06·07·MCP-09에서 인수한다. 등록하지 않은 경로도 TLS 검사를 거치고 `404`를 반환한다.
+보호 MCP의 후속 경로는 [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계)를 따른다. 인가 화면은 웹 인터페이스와 서버 어댑터를 통해 authz를 호출하며 `web`에서 `authz`를 import하지 않는다. 코드 교환·갱신 회전·Bearer 공유 폐기·본인 연결 관리는 별도의 좁은 저장 인터페이스로 주입하며 DB 핸들을 노출하지 않는다. AUTH-10의 `/connections`는 같은 웹 어댑터를 통해 authz를 호출하고 main에서 공유 저장소와 함께 조립한다. 입력·화면 계약은 [연결 관리 화면](web.md#목표-연결-관리-화면)을 따른다. Bearer 검증 결과 전달과 HTTP 오류 사상은 authz의 ProtectBearer가 제공한다. MCP-02의 newMCPHandler가 이를 MCP Principal로 옮기고 application의 선택 /mcp 슬롯을 TLS 판정 아래에 연결한다. mcp.NewHandler는 14종 처리기를 모두 요구하므로 현재 main은 임시 처리기로 경로를 활성화하지 않으며 MCP-06의 newMCPWriteHandlers는 여덟 쓰기에 현재 등급·플랜·저장/거부 기록·재생 실행기를 주입한다. MCP-07의 newMCPReadHandlers는 다섯 읽기에 현재 등급·플랜·그래프/노드/홉/관계와 검색기를 주입하고 저장 오류·구성원 참조 이름을 맞춘다. MCP-08의 서버 조립 어댑터는 본문·인증·도구 실행의 [요청 시간 예산과 오류 경계](mcp.md#요청-시간-예산과-오류-경계)를 적용한다. 기동 경로의 전체 업무 조립은 ARCH-06·07·MCP-09에서 인수한다. 등록하지 않은 경로도 TLS 검사를 거치고 `404`를 반환한다.
 
 ## 버전 요구
 

@@ -62,8 +62,13 @@ type GraphWriter interface {
 type NodeWriter interface {
 	CreateNode(context.Context, model.ID, model.Context, Actor, plan.Limits) (model.Context, error)
 	UpdateNode(context.Context, model.ID, model.Context, int64, model.OperationKind, Actor, plan.Limits) (model.Context, error)
-	DiscardNode(context.Context, model.ID, model.ID, int64, Actor, plan.Limits) (model.Context, error)
-	RestoreNode(context.Context, model.ID, model.ID, int64, Actor, plan.Limits) (model.Context, error)
+	DiscardNode(context.Context, model.ID, model.ID, Actor, plan.Limits) (model.Context, error)
+	RestoreNode(context.Context, model.ID, model.ID, Actor, plan.Limits) (model.Context, error)
+}
+
+// RejectedOperations는 도메인 저장점 롤백 뒤 같은 재생 트랜잭션에 거부를 기록한다.
+type RejectedOperations interface {
+	RecordRejectedOperation(context.Context, model.ManagementOperation) error
 }
 
 type RelationWriter interface {
@@ -71,18 +76,13 @@ type RelationWriter interface {
 	DiscardRelation(context.Context, model.ID, model.ID, Actor, plan.Limits) (model.Relation, error)
 }
 
-// WriteResult는 업무 쓰기의 최초 결과다. 표준 SDK 외피·자격 증명을 보관하지 않는다.
-type WriteResult struct {
-	Graph    *model.Graph
-	Node     *model.Context
-	Relation *model.Relation
-}
-
 // WriteExecutor는 계정 범위의 멱등성 예약과 도메인 쓰기를 한 커밋에 묶는다.
 // normalizedInput에는 request_id와 OAuth 자격·표준 결과 외피를 포함하지 않는다.
-// 재생 전 인증·등급·행위자 결합은 요청 처리기가 다시 검사한다.
+// check는 잠금을 얻은 뒤 재생 전에 현재 인증·등급·행위자를 읽기 전용으로 검사한다.
+// apply는 성공·결정적 거부를 도메인 JSON 객체로 반환한다. error는 미완료 실패로
+// 예약·쓰기를 롤백하며 표준 SDK 외피와 내부 일시 장애는 보관하지 않는다.
 type WriteExecutor interface {
-	ExecuteWrite(ctx context.Context, accountID model.ID, requestID, tool string, normalizedInput []byte, apply func(context.Context) (WriteResult, error)) (WriteResult, error)
+	ExecuteWrite(ctx context.Context, accountID model.ID, requestID, tool string, normalizedInput []byte, check func(context.Context) error, apply func(context.Context) ([]byte, error)) ([]byte, error)
 }
 
 // Diagnostics는 고정 코드만 전달한다. 본문·URL·error·헤더·자격을 받지 않는다.
@@ -104,6 +104,7 @@ type Dependencies struct {
 	NodeWrites     NodeWriter
 	RelationWrites RelationWriter
 	Writes         WriteExecutor
+	Rejections     RejectedOperations
 	Diagnostics    Diagnostics
 }
 
@@ -117,7 +118,7 @@ func (d Dependencies) Validate() error {
 		{"nodes", d.Nodes}, {"hops", d.Hops}, {"relations", d.Relations},
 		{"flow", d.Flow}, {"agents", d.Agents}, {"graph_writes", d.GraphWrites},
 		{"node_writes", d.NodeWrites}, {"relation_writes", d.RelationWrites},
-		{"writes", d.Writes}, {"diagnostics", d.Diagnostics},
+		{"writes", d.Writes}, {"rejections", d.Rejections}, {"diagnostics", d.Diagnostics},
 	} {
 		if dependency.value == nil {
 			return fmt.Errorf("MCP 조립에 %s가 필요하다", dependency.name)

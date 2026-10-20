@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -37,6 +38,212 @@ func credentialRequest(path, peer, login string) *http.Request {
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.RemoteAddr = peer
 	return request
+}
+
+type observedCredentialBody struct {
+	io.Reader
+	reads      int
+	beforeRead func()
+}
+
+func (body *observedCredentialBody) Read(buffer []byte) (int, error) {
+	body.reads++
+	if body.beforeRead != nil {
+		body.beforeRead()
+	}
+	return body.Reader.Read(buffer)
+}
+
+func (*observedCredentialBody) Close() error { return nil }
+
+func TestAuthenticationFormBoundary(t *testing.T) {
+	for _, path := range []string{"/login", "/register"} {
+		for _, test := range []struct {
+			name               string
+			body               string
+			types              []string
+			unknownLength      bool
+			status             int
+			read, authenticate bool
+		}{
+			{"below limit", "padding=" + strings.Repeat("a", authFormLimit-9), []string{"application/x-www-form-urlencoded"}, false, 303, true, true},
+			{"at limit", "padding=" + strings.Repeat("a", authFormLimit-8), []string{"application/x-www-form-urlencoded"}, false, 303, true, true},
+			{"known oversized", strings.Repeat("a", authFormLimit+1), []string{"application/x-www-form-urlencoded"}, false, 413, false, false},
+			{"stream at limit", "padding=" + strings.Repeat("a", authFormLimit-8), []string{"application/x-www-form-urlencoded"}, true, 303, true, true},
+			{"stream oversized", strings.Repeat("a", authFormLimit+1), []string{"application/x-www-form-urlencoded"}, true, 413, true, false},
+			{"parameters", "login_id=tester", []string{"Application/X-Www-Form-Urlencoded; charset=UTF-8"}, false, 303, true, true},
+			{"missing type", "login_id=tester", nil, false, 400, false, false},
+			{"unsupported type", "{}", []string{"application/json"}, false, 400, false, false},
+			{"multipart", "ignored", []string{"multipart/form-data; boundary=example"}, false, 400, false, false},
+			{"duplicate type", "login_id=tester", []string{"application/x-www-form-urlencoded", "application/x-www-form-urlencoded"}, false, 400, false, false},
+			{"invalid parameter", "login_id=tester", []string{"application/x-www-form-urlencoded; charset"}, false, 400, false, false},
+			{"malformed form", "password=%zz", []string{"application/x-www-form-urlencoded"}, false, 400, true, false},
+		} {
+			t.Run(path+"/"+test.name, func(t *testing.T) {
+				auth := &countingCredentials{}
+				server, err := New(auth, &fakeGraphStore{}, Config{SecureCookie: func(*http.Request) bool { return true }})
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(test.body))
+				body := &observedCredentialBody{Reader: request.Body}
+				request.Body = body
+				request.Header["Content-Type"] = test.types
+				if test.unknownLength {
+					request.ContentLength = -1
+				}
+				response := httptest.NewRecorder()
+				server.ServeHTTP(response, request)
+				if response.Code != test.status || response.Header().Get("Cache-Control") != "no-store" || (body.reads > 0) != test.read || (auth.calls.Load() > 0) != test.authenticate {
+					t.Fatalf("양식 경계: status=%d reads=%d auth=%d", response.Code, body.reads, auth.calls.Load())
+				}
+				if server.attempts.global.count != 1 {
+					t.Fatal("양식 오류가 공유 예산을 소비하지 않았습니다")
+				}
+			})
+		}
+	}
+}
+
+func TestAuthenticationCancellationAndEarlyRejection(t *testing.T) {
+	for _, path := range []string{"/login", "/register"} {
+		for _, mode := range []string{"address cancellation", "body cancellation", "cross origin", "source limit"} {
+			t.Run(path+"/"+mode, func(t *testing.T) {
+				auth := &countingCredentials{}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				config := Config{SecureCookie: func(*http.Request) bool { return true }}
+				if mode == "address cancellation" {
+					config.ClientAddress = func(*http.Request) netip.Addr { cancel(); return netip.MustParseAddr("192.0.2.1") }
+				}
+				server, err := New(auth, &fakeGraphStore{}, config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := credentialRequest(path, "192.0.2.1:1234", "tester").WithContext(ctx)
+				body := &observedCredentialBody{Reader: request.Body}
+				request.Body = body
+				switch mode {
+				case "body cancellation":
+					body.beforeRead = cancel
+				case "cross origin":
+					request.Header.Set("Sec-Fetch-Site", "cross-site")
+				case "source limit":
+					for range authSourceLimit {
+						server.attempts.allow(netip.MustParseAddr("192.0.2.1"))
+					}
+				}
+				response := httptest.NewRecorder()
+				server.ServeHTTP(response, request)
+				if auth.calls.Load() != 0 || len(response.Result().Cookies()) != 0 || response.Header().Get("Cache-Control") != "no-store" {
+					t.Fatal("선행 거부에서 인증 호출·쿠키 발급 또는 캐시 허용")
+				}
+				if mode == "body cancellation" {
+					if body.reads == 0 || server.attempts.global.count != 1 || response.Body.Len() != 0 {
+						t.Fatal("읽기 중 취소 경계가 다릅니다")
+					}
+				} else if body.reads != 0 {
+					t.Fatal("선행 거부에서 본문을 읽었습니다")
+				}
+				if mode == "address cancellation" && (server.attempts.global.count != 0 || response.Body.Len() != 0) {
+					t.Fatal("주소 해석 중 취소가 예산·응답을 생성했습니다")
+				}
+				if mode == "cross origin" && response.Code != 403 {
+					t.Fatal("출처 거부 응답 변경")
+				}
+				if mode == "source limit" && response.Code != 429 {
+					t.Fatal("시도 제한 응답 변경")
+				}
+			})
+		}
+	}
+}
+
+func TestAuthenticationCapacityRetryUsesRemainingWindows(t *testing.T) {
+	auth := &countingCredentials{}
+	server, err := New(auth, &fakeGraphStore{}, Config{SecureCookie: func(*http.Request) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	server.attempts.now = func() time.Time { return now }
+	for i := range authSourceCapacity {
+		server.attempts.sources[netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 1}), 32)] = attemptWindow{until: now.Add(10100 * time.Millisecond), count: 1}
+	}
+	for _, seconds := range []string{"11", "10"} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, credentialRequest("/login", "192.0.2.1:1234", "tester"))
+		if response.Code != 429 || response.Header().Get("Retry-After") != seconds || auth.calls.Load() != 0 || len(server.attempts.sources) != authSourceCapacity {
+			t.Fatal("활성 상태 상한의 재시도·무인증·보존 경계가 다릅니다")
+		}
+		now = now.Add(time.Second)
+	}
+	server.attempts.global = attemptWindow{until: now.Add(20 * time.Second), count: authGlobalLimit}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, credentialRequest("/login", "192.0.2.1:1234", "tester"))
+	if response.Header().Get("Retry-After") != "20" {
+		t.Fatal("가득 찬 상태에서 전체 제한 창을 누락했습니다")
+	}
+	now = now.Add(20 * time.Second)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, credentialRequest("/register", "192.0.2.1:1234", "tester"))
+	if response.Code != 303 || len(server.attempts.sources) != 1 {
+		t.Fatal("만료 상태 정리 뒤 회복하지 못했습니다")
+	}
+}
+
+func TestAuthenticationMalformedPeersShareUnknownBudget(t *testing.T) {
+	auth := &countingCredentials{loginError: errors.New("wrong")}
+	server, err := New(auth, &fakeGraphStore{}, Config{SecureCookie: func(*http.Request) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peers := []string{"invalid:1234", "192.0.2.1", "192.0.2.2:invalid", "[fe80::1%en0]:1234", ""}
+	for i := range authSourceLimit + 1 {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, credentialRequest("/login", peers[i%len(peers)], "tester"))
+		expected := 401
+		if i == authSourceLimit {
+			expected = 429
+		}
+		if response.Code != expected {
+			t.Fatal("주소 해석 실패가 공통 출처 예산을 우회했습니다")
+		}
+	}
+	if auth.calls.Load() != authSourceLimit || len(server.attempts.sources) != 1 {
+		t.Fatal("실패 주소별 상태가 증가했습니다")
+	}
+}
+
+func TestAuthenticationHTTPConcurrentGlobalBound(t *testing.T) {
+	auth := &countingCredentials{loginError: errors.New("wrong"), registerError: errors.New("duplicate")}
+	server, err := New(auth, &fakeGraphStore{}, Config{SecureCookie: func(*http.Request) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	server.attempts.now = func() time.Time { return now }
+	var limited, unexpected atomic.Int32
+	var workers sync.WaitGroup
+	for i := range authGlobalLimit * 2 {
+		workers.Go(func() {
+			path, expected := "/login", 401
+			if i%2 == 1 {
+				path, expected = "/register", 400
+			}
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, credentialRequest(path, fmt.Sprintf("192.0.2.%d:1234", i+1), "tester"))
+			if response.Code == 429 && response.Header().Get("Retry-After") == "60" {
+				limited.Add(1)
+			} else if response.Code != expected {
+				unexpected.Add(1)
+			}
+		})
+	}
+	workers.Wait()
+	if limited.Load() != authGlobalLimit || unexpected.Load() != 0 || auth.calls.Load() != authGlobalLimit {
+		t.Fatal("동시 HTTP 로그인·가입이 전체 예산을 초과했습니다")
+	}
 }
 
 func TestAuthenticationAttemptsSharedAcrossRoutesAndRecover(t *testing.T) {

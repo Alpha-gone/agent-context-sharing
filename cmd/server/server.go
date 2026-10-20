@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/netip"
 	"runtime/debug"
@@ -39,14 +38,26 @@ type publicKeyRoutes interface {
 	JWKS(http.ResponseWriter, *http.Request)
 }
 
+type oauthMetadataRoutes interface {
+	ProtectedResourceMetadata(http.ResponseWriter, *http.Request)
+	AuthorizationServerMetadata(http.ResponseWriter, *http.Request)
+}
+
+type oauthTokenRoutes interface {
+	Token(http.ResponseWriter, *http.Request)
+}
+
 // application은 1단계 HTTP 상태 경로와 요청 로그를 관리한다.
 type application struct {
-	database   readiness
-	logger     *slog.Logger
-	transport  transportSecurity
-	web        *web.Server
-	publicKeys publicKeyRoutes
-	accepting  atomic.Bool
+	database      readiness
+	logger        *slog.Logger
+	transport     transportSecurity
+	web           *web.Server
+	publicKeys    publicKeyRoutes
+	oauthMetadata oauthMetadataRoutes
+	oauthTokens   oauthTokenRoutes
+	mcp           http.Handler
+	accepting     atomic.Bool
 }
 
 // statusResponse는 상태 확인 경로가 반환하는 민감 정보 없는 본문이다.
@@ -64,11 +75,10 @@ func newApplication(database readiness, logger *slog.Logger, transport transport
 	return app
 }
 
-// handler는 1단계에서 정한 상태 경로와 모든 요청의 안전한 구조화 로그를 등록한다.
+// handler는 상태·업무 경로에 공통 전송 판정과 안전한 구조화 로그를 연결한다.
 //
-// 경로 표면을 두 층으로 나눈다. 상태 확인 두 경로만 TLS 판정 앞에 두고 나머지는 전부
-// 뒤에 둔다. `SRS.md`의 「transport와 프로토콜」이 `FR-AGENT_CONTEXT-140`에 이 예외를
-// 두었으며, 프로브는 프록시를 거치지 않고 오므로 판정을 지나면 항상 실패한다.
+// 상태 확인 두 경로만 TLS 판정의 예외이며 나머지는 라우터보다 먼저 확인한다.
+// FR-AGENT_CONTEXT-140의 프로브는 프록시를 거치지 않고 오기 때문이다.
 //
 // 등록되지 않은 경로도 판정 뒤에 둔다. 평문 요청에 어떤 경로가 있는지 알리지 않는다.
 func (app *application) handler() http.Handler {
@@ -77,15 +87,34 @@ func (app *application) handler() http.Handler {
 	if app.publicKeys != nil {
 		gated.HandleFunc("GET /jwks.json", app.publicKeys.JWKS)
 	}
+	if app.oauthMetadata != nil {
+		for path, handler := range map[string]http.HandlerFunc{
+			"/.well-known/oauth-protected-resource/mcp": app.oauthMetadata.ProtectedResourceMetadata,
+			"/.well-known/oauth-authorization-server":   app.oauthMetadata.AuthorizationServerMetadata,
+		} {
+			gated.HandleFunc("GET "+path, handler)
+			gated.HandleFunc(path, func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Cache-Control", "no-store")
+				writer.Header().Set("Allow", "GET, HEAD")
+				writer.WriteHeader(http.StatusMethodNotAllowed)
+			})
+		}
+	}
 	if app.web != nil {
 		gated.Handle("/", app.web)
+	}
+	if app.oauthTokens != nil {
+		gated.HandleFunc("/token", app.oauthTokens.Token)
+	}
+	if app.mcp != nil {
+		gated.Handle("/mcp", app.mcp)
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", app.health)
 	mux.HandleFunc("GET /readyz", app.ready)
-	mux.Handle("/", app.requireTLS(gated))
-	return app.logRequests(app.recoverPanics(mux))
+	mux.Handle("/", gated)
+	return app.logRequests(app.recoverPanics(app.requireTLS(mux)))
 }
 
 // recoverPanics는 처리기에서 빠져나온 panic을 500으로 바꾸고 원인을 로그에 남긴다.
@@ -117,7 +146,10 @@ func (app *application) recoverPanics(next http.Handler) http.Handler {
 // requireTLS는 배포가 정한 신뢰 경계에서 확인되지 않은 평문 요청을 처리하지 않는다.
 func (app *application) requireTLS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if !app.isTLSRequest(request) {
+		probe := (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+			(request.URL.Path == "/healthz" || request.URL.Path == "/readyz")
+		// ServeMux의 경로 정규화 리디렉션도 전송 판정 뒤에서만 실행한다.
+		if !probe && !app.isTLSRequest(request) {
 			writeStatus(writer, http.StatusBadRequest, "https_required")
 			return
 		}
@@ -149,7 +181,7 @@ func (security transportSecurity) isTLSRequest(request *http.Request) bool {
 	if len(forwarded) != 1 {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(forwarded[0]), "https")
+	return strings.ToLower(strings.Trim(forwarded[0], " \t")) == "https"
 }
 
 // isTrustedProxy는 요청을 보낸 상대가 전달 헤더를 신뢰할 대역에 속하는지 확인한다.
@@ -168,7 +200,7 @@ func (security transportSecurity) clientAddress(request *http.Request) netip.Add
 	}
 	values := request.Header.Values("CF-Connecting-IP")
 	if len(values) == 1 {
-		address, err := netip.ParseAddr(strings.TrimSpace(values[0]))
+		address, err := netip.ParseAddr(strings.Trim(values[0], " \t"))
 		if err == nil && address.Zone() == "" {
 			return address.Unmap()
 		}
@@ -179,15 +211,11 @@ func (security transportSecurity) clientAddress(request *http.Request) netip.Add
 // remoteAddr는 http.Request.RemoteAddr의 host:port 표기에서 비교 가능한 주소를 뽑는다.
 // IPv4-mapped IPv6로 들어온 상대도 구성에 적은 IPv4 대역과 맞도록 편다.
 func remoteAddr(value string) (netip.Addr, bool) {
-	host, _, err := net.SplitHostPort(value)
-	if err != nil {
-		host = value
-	}
-	address, err := netip.ParseAddr(host)
-	if err != nil {
+	peer, err := netip.ParseAddrPort(value)
+	if err != nil || peer.Addr().Zone() != "" {
 		return netip.Addr{}, false
 	}
-	return address.Unmap(), true
+	return peer.Addr().Unmap(), true
 }
 
 // health는 프로세스가 HTTP 요청에 응답하는지만 확인한다.

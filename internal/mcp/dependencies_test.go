@@ -21,6 +21,7 @@ type dependencyStub struct {
 	NodeWriter
 	RelationWriter
 	WriteExecutor
+	RejectedOperations
 	Diagnostics
 }
 
@@ -29,7 +30,7 @@ func TestDependenciesValidateWithoutCallingProviders(t *testing.T) {
 	dependencies := Dependencies{
 		Grades: stub, Plans: stub, Graphs: stub, Nodes: stub, Hops: stub,
 		Relations: stub, Flow: stub, Agents: stub, GraphWrites: stub,
-		NodeWrites: stub, RelationWrites: stub, Writes: stub, Diagnostics: stub,
+		NodeWrites: stub, RelationWrites: stub, Writes: stub, Rejections: stub, Diagnostics: stub,
 	}
 	if err := dependencies.Validate(); err != nil {
 		t.Fatal(err)
@@ -50,6 +51,7 @@ func TestDependenciesValidateWithoutCallingProviders(t *testing.T) {
 		{"node_writes", func(d *Dependencies) { d.NodeWrites = nil }},
 		{"relation_writes", func(d *Dependencies) { d.RelationWrites = nil }},
 		{"writes", func(d *Dependencies) { d.Writes = nil }},
+		{"rejections", func(d *Dependencies) { d.Rejections = nil }},
 		{"diagnostics", func(d *Dependencies) { d.Diagnostics = nil }},
 	} {
 		t.Run(sample.name, func(t *testing.T) {

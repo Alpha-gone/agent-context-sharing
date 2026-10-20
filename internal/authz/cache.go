@@ -2,8 +2,6 @@ package authz
 
 import (
 	"context"
-	"encoding/json/v2"
-	"fmt"
 	"maps"
 	"sync"
 	"time"
@@ -34,8 +32,8 @@ func (load *cacheLoad) wait(ctx context.Context) error {
 	}
 }
 
-// verificationCache는 토큰 검증이 요청마다 데이터베이스를 읽지 않도록 서명 키와 폐기
-// 목록을 메모리에 둔다.
+// verificationCache는 공개 키와 웹 세션 폐기 목록을 메모리에 둔다.
+// Bearer의 개별·계열 폐기는 이 캐시를 사용하지 않는다.
 type verificationCache struct {
 	mu sync.Mutex
 	// keys에는 실제 저장된 공개 키만 둔다. 모르는 kid 자체는 적재하지 않는다.
@@ -83,9 +81,9 @@ func (cache *verificationCache) publicKey(ctx context.Context, source authStore,
 		loaded := make(map[string]jose.JSONWebKey, len(items))
 		if err == nil {
 			for _, item := range items {
-				var public jose.JSONWebKey
-				if decodeErr := json.Unmarshal([]byte(item.PublicKey), &public); decodeErr != nil {
-					err = fmt.Errorf("공개 키 해석: %w", decodeErr)
+				public, decodeErr := publicSigningKey(item)
+				if decodeErr != nil {
+					err = decodeErr
 					break
 				}
 				loaded[item.ID] = public

@@ -95,7 +95,7 @@ TLS_KEY_FILE=/absolute/path/localhost-key.pem
 
 나머지는 `.env.example`의 개발 기본값으로 시작합니다. `AUTHORIZATION_SERVER_URL=https://localhost:8080`을 웹 세션의 고정 issuer로 사용합니다.
 
-서버는 DB 연결 전에 MCP·OAuth·진단 구성까지 검사합니다. 기존 `.env`에는 두 환경 예시의 `MCP_RESOURCE_URL`, `MCP_ALLOWED_ORIGINS`, `OAUTH_CLIENT_REGISTRATIONS`, `DIAGNOSTIC_INSTANCE_ID`를 추가하고 실제 공개 주소·호스트의 client ID로 맞추십시오. issuer와 resource는 서로 다른 HTTPS origin을 사용할 수 있습니다. 등록 형식과 loopback 포트 정책은 [구성 계약](spec/service/agent-context/sdd/operations.md#목표-추가-구성)을 따릅니다. `DIAGNOSTIC_LOG_DIR`·`DIAGNOSTIC_LOG_LEVEL`은 비우면 각각 `/var/log/agent-context`·`INFO`입니다. 실제 MCP·OAuth 처리기와 영속 진단 파일·볼륨은 후속 구현·인수 대상입니다.
+서버는 DB 연결 전에 MCP·OAuth·진단 구성까지 검사합니다. 기존 `.env`에는 두 환경 예시의 `MCP_RESOURCE_URL`, `MCP_ALLOWED_ORIGINS`, `OAUTH_CLIENT_REGISTRATIONS`, `DIAGNOSTIC_INSTANCE_ID`를 추가하고 실제 공개 주소·호스트의 client ID로 맞추십시오. issuer와 resource는 서로 다른 HTTPS origin을 사용할 수 있습니다. 등록 형식과 loopback 포트 정책은 [구성 계약](spec/service/agent-context/sdd/operations.md#목표-추가-구성)을 따릅니다. `DIAGNOSTIC_LOG_DIR`·`DIAGNOSTIC_LOG_LEVEL`은 비우면 각각 `/var/log/agent-context`·`INFO`입니다. OAuth 최초 인가·코드 교환·Bearer 보호 인증·갱신 회전은 구현했으며 MCP 전송 조립과 영속 진단 파일·볼륨은 후속 구현·인수 대상입니다.
 
 Go 프로그램은 `.env`를 자동으로 읽지 않습니다. 직접 작성한 신뢰할 수 있는 `.env`만 현재 셸에 내보내십시오. 이 방식은 파일을 셸 코드로 실행합니다.
 
@@ -144,9 +144,11 @@ INDEX_WORKER_PLACEMENT=external go run ./cmd/indexer
 
 ### 3. 현재 제공 범위
 
-표준 MCP·OAuth 직접 연결은 설계가 채택되었으나 아직 구현되지 않았습니다. 현재 `/mcp`, `/authorize`, `/token`과 OAuth 메타데이터 경로는 제공하지 않습니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다.
+공개 OAuth 발견 메타데이터는 `/.well-known/oauth-protected-resource/mcp`와 `/.well-known/oauth-authorization-server`에서 제공합니다. `/authorize`의 로그인·명시적 동의·PKCE S256 코드 발급과 `/token`의 최초 코드 교환·갱신 회전, Bearer 검증·보호 인증 경계를 구현했습니다. 보호 `/mcp` 전송 생성자와 서버 라우터·Bearer 연결 모듈도 구현했습니다. 기동 경로의 업무 13종 연결·본인 연결 폐기와 호스트 인수는 후속 범위입니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다. [AUTH-09 검토](spec/service/agent-context/reviews/2026-10-20-auth-09.md)에서 현재 인증 경계의 인수 범위를 확인할 수 있습니다.
 
-### 개발 환경 재생성
+에이전트 등록·현재 계정/client 결합 검사·소유자 폐기의 내부 API도 [MCP-04 검토](spec/service/agent-context/reviews/2026-10-20-mcp-04.md)에서 인수했습니다. [MCP-02 검토](spec/service/agent-context/reviews/2026-10-20-mcp-02.md)에서 보호 전송·발견·4 MiB 본문 상한·표준 외피와 실제 TLS/OAuth 결합을 인수했습니다. [MCP-05 검토](spec/service/agent-context/reviews/2026-10-20-mcp-05.md)에서 쓰기 키·24시간 결과 재생 실행 경계도 인수했습니다. [MCP-06 검토](spec/service/agent-context/reviews/2026-10-20-mcp-06.md)에서 여덟 쓰기 도구의 실제 도메인 연결·재생·오류 변환과 OAuth/TLS 표본을 인수했습니다. [MCP-07 검토](spec/service/agent-context/reviews/2026-10-20-mcp-07.md)에서 다섯 읽기 도구·목록 커서·평면 흐름·표준 완료 결과도 인수했습니다. [MCP-08 검토](spec/service/agent-context/reviews/2026-10-20-mcp-08.md)에서 오류 계층·요청 예산·HTTP 취소와 실제 자원 회복을 인수했습니다. [AUTH-10 검토](spec/service/agent-context/reviews/2026-10-20-auth-10.md)에서 `/connections`의 본인 계열·활성 등록 목록과 폐기를 인수했습니다. 계열 폐기는 접근·갱신을 차단하고 웹 세션을 유지하며 등록 폐기는 기존 기여·감사를 보존합니다. 기동 경로의 전체 MCP 조립과 실제 브라우저·호스트 인수는 후속 범위입니다.
+
+## 개발 환경 재생성
 
 개발 환경을 처음부터 만들 때는 기존 개발 볼륨을 제거한 뒤 기동합니다. 이 절차는 개발 DB와 WAL 데이터를 삭제하므로 보존할 데이터가 없는 개발 환경에 적용합니다. 마이그레이션을 승인된 개발 통합 예외로 `001_init.sql`에 합쳐 checksum이 달라진 경우에도 이전 개발·시험 DB를 재생성합니다. 적용 조건은 [마이그레이션 계약](migrations/AGENTS.md)을 따릅니다.
 

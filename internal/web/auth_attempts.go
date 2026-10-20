@@ -2,7 +2,7 @@ package web
 
 import (
 	"errors"
-	"net"
+	"mime"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -20,6 +20,9 @@ const (
 
 // ErrAuthenticationBusy는 인가 계층이 비밀번호 작업을 시작하지 못했음을 나타낸다.
 var ErrAuthenticationBusy = errors.New("authentication_busy")
+
+// ErrAuthenticationUnavailable는 자격 불일치와 구분할 인증 처리 장애다.
+var ErrAuthenticationUnavailable = errors.New("authentication_unavailable")
 
 type attemptWindow struct {
 	until time.Time
@@ -53,13 +56,19 @@ func (attempts *authAttempts) allow(address netip.Addr) time.Duration {
 	source, exists := attempts.sources[key]
 	if !exists || !now.Before(source.until) {
 		// 만료 항목만 회수해 공격으로 활성 제한을 밀어내지 못하게 한다.
+		var remaining time.Duration
 		for key, window := range attempts.sources {
 			if !now.Before(window.until) {
 				delete(attempts.sources, key)
+			} else {
+				remaining = max(remaining, window.until.Sub(now))
 			}
 		}
 		if len(attempts.sources) >= authSourceCapacity {
-			return authAttemptWindow
+			if attempts.global.count >= authGlobalLimit {
+				remaining = max(remaining, attempts.global.until.Sub(now))
+			}
+			return remaining
 		}
 		source = attemptWindow{until: now.Add(authAttemptWindow)}
 	}
@@ -84,11 +93,14 @@ func (attempts *authAttempts) allow(address netip.Addr) time.Duration {
 }
 
 func requestAddress(request *http.Request) netip.Addr {
-	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	peer, err := netip.ParseAddrPort(request.RemoteAddr)
 	if err != nil {
-		host = request.RemoteAddr
+		return netip.Addr{}
 	}
-	address, _ := netip.ParseAddr(host)
+	address := peer.Addr()
+	if address.Zone() != "" {
+		return netip.Addr{}
+	}
 	return address.Unmap()
 }
 
@@ -100,11 +112,47 @@ func (server *Server) allowAuthentication(writer http.ResponseWriter, request *h
 	if server.config.ClientAddress != nil {
 		address = server.config.ClientAddress(request)
 	}
-	if retry := server.attempts.allow(address); retry > 0 {
+	if request.Context().Err() != nil {
+		return false
+	}
+	retry := server.attempts.allow(address)
+	if request.Context().Err() != nil {
+		return false
+	}
+	if retry > 0 {
 		server.authenticationLimited(writer, retry)
 		return false
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, authFormLimit)
+	return true
+}
+
+func (server *Server) parseAuthenticationForm(writer http.ResponseWriter, request *http.Request, template string) bool {
+	if !server.allowAuthentication(writer, request) {
+		return false
+	}
+	if request.ContentLength > authFormLimit {
+		server.authenticationFormError(writer, template, &http.MaxBytesError{Limit: authFormLimit})
+		return false
+	}
+	types := request.Header.Values("Content-Type")
+	if len(types) != 1 {
+		server.authenticationFormError(writer, template, http.ErrNotSupported)
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(types[0])
+	if err != nil || mediaType != "application/x-www-form-urlencoded" {
+		server.authenticationFormError(writer, template, http.ErrNotSupported)
+		return false
+	}
+	err = request.ParseForm()
+	if request.Context().Err() != nil {
+		return false
+	}
+	if err != nil {
+		server.authenticationFormError(writer, template, err)
+		return false
+	}
 	return true
 }
 

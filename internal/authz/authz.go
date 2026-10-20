@@ -1,4 +1,4 @@
-// Package authz는 계정 자격 증명, 웹 세션 JWT와 폐기 목록을 관리한다.
+// Package authz는 계정·웹 세션·OAuth 자격의 발급·검증과 공유 폐기를 관리한다.
 package authz
 
 import (
@@ -48,6 +48,16 @@ var (
 type Config struct {
 	Issuer     string
 	BcryptCost int
+	// OAuth는 구성 계층에서 URI와 사전 등록을 검증한 뒤 주입한다. nil이면 웹 인증만 제공한다.
+	OAuth *OAuthConfig
+	// AuthorizationCodes는 코드 저장·소비·최초 계열 생성을 하나의 DB 경계로 묶는다.
+	AuthorizationCodes AuthorizationCodeStore
+	// AccessTokens는 Bearer의 공유 개별·계열 폐기와 결합을 요청마다 확인한다.
+	AccessTokens AccessTokenStore
+	// RefreshTokens는 갱신 회전과 재사용 계열 폐기의 공유 트랜잭션 경계다.
+	RefreshTokens RefreshTokenStore
+	// Connections는 본인 계열·등록 목록과 명시적 폐기의 공유 저장 경계다.
+	Connections ConnectionStore
 }
 
 // Service는 데이터 접근 계층 위에서 인증·인가 계약을 수행한다.
@@ -57,8 +67,10 @@ type Service struct {
 	config            Config
 	dummyPasswordHash string
 	passwords         *passwordWork
-	// cache는 「토큰 검증」이 요청마다 가져오지 않기로 한 서명 키와 폐기 목록을 담는다.
+	// cache는 공개 키와 웹 세션 폐기 목록을 담는다. Bearer 폐기는 요청마다 조회한다.
 	cache *verificationCache
+	now   func() time.Time
+	oauth *OAuthConfig
 }
 
 // authStore는 인가 서버가 데이터베이스 접근 계층에 요구하는 최소 계약이다.
@@ -91,44 +103,60 @@ func New(source authStore, config Config) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("더미 비밀번호 해시 생성: %w", err)
 	}
-	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash, passwords: newPasswordWork(), cache: newVerificationCache()}, nil
+	oauth, err := copyOAuthConfig(config.OAuth)
+	if err != nil {
+		return nil, err
+	}
+	config.OAuth = oauth
+	return &Service{store: source, config: config, dummyPasswordHash: dummyPasswordHash, passwords: newPasswordWork(), cache: newVerificationCache(), now: time.Now, oauth: oauth}, nil
 }
 
 // Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.
 func (s *Service) Register(ctx context.Context, loginID, password string) (model.ID, error) {
 	if !loginIDPattern.MatchString(loginID) || !validPassword(password) {
-		return model.ID{}, fmt.Errorf("로그인 아이디 또는 비밀번호가 올바르지 않다")
+		return model.ID{}, ErrInvalidAccountInput
 	}
 	if err := s.passwords.acquire(ctx); err != nil {
 		return model.ID{}, err
 	}
 	defer s.passwords.release()
 	hash, err := s.passwords.generate(password, s.config.BcryptCost)
-	if err != nil {
-		return model.ID{}, fmt.Errorf("비밀번호 해시 생성: %w", err)
-	}
 	if err := ctx.Err(); err != nil {
 		return model.ID{}, err
 	}
+	if err != nil {
+		return model.ID{}, &credentialFailure{ErrUnavailable, err}
+	}
 	id, err := model.NewID()
 	if err != nil {
-		return model.ID{}, fmt.Errorf("계정 식별자 생성: %w", err)
+		return model.ID{}, &credentialFailure{ErrUnavailable, err}
 	}
 	err = s.store.CreateAccount(ctx, store.Account{ID: id, LoginID: loginID, PasswordHash: hash, CreatedAt: time.Now().UTC()})
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return model.ID{}, err
+	}
+	if errors.Is(err, store.ErrLoginIDExists) {
+		return model.ID{}, ErrLoginIDExists
+	}
+	if err != nil {
+		return model.ID{}, &credentialFailure{ErrUnavailable, err}
 	}
 	return id, nil
 }
 
-// Authenticate는 저장된 bcrypt 해시와 제시한 비밀번호를 대조하고, 기존 직접 bcrypt
-// 해시는 성공한 로그인에서 현재 형식으로 바꾼다.
+// Authenticate는 저장된 해시와 비밀번호를 대조하고 이전 저장 형식은 성공 시 갱신한다.
 func (s *Service) Authenticate(ctx context.Context, loginID, password string) (model.ID, error) {
 	if err := s.passwords.acquire(ctx); err != nil {
 		return model.ID{}, err
 	}
 	defer s.passwords.release()
-	account, err := s.store.AccountByLoginID(ctx, loginID)
+	var account store.Account
+	var err error
+	if loginIDPattern.MatchString(loginID) {
+		account, err = s.store.AccountByLoginID(ctx, loginID)
+	} else {
+		err = store.ErrNotFound
+	}
 	if ctx.Err() != nil {
 		return model.ID{}, ctx.Err()
 	}
@@ -137,37 +165,47 @@ func (s *Service) Authenticate(ctx context.Context, loginID, password string) (m
 		if ctx.Err() != nil {
 			return model.ID{}, ctx.Err()
 		}
-		if err == nil {
-			err = bcrypt.ErrMismatchedHashAndPassword
+		if err != nil && !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return model.ID{}, &credentialFailure{ErrUnavailable, err}
 		}
-		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
+		return model.ID{}, &credentialFailure{ErrInvalidCredential, bcrypt.ErrMismatchedHashAndPassword}
 	}
 	if err != nil {
-		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
+		return model.ID{}, &credentialFailure{ErrUnavailable, err}
 	}
 	legacy, err := s.passwords.compare(account.PasswordHash, password)
 	if ctx.Err() != nil {
 		return model.ID{}, ctx.Err()
 	}
 	if err != nil {
-		return model.ID{}, fmt.Errorf("자격 증명 검증: %w", err)
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return model.ID{}, &credentialFailure{ErrInvalidCredential, err}
+		}
+		return model.ID{}, &credentialFailure{ErrUnavailable, err}
 	}
 	if legacy {
 		hash, err := s.passwords.generate(password, s.config.BcryptCost)
-		if err != nil {
-			return model.ID{}, fmt.Errorf("비밀번호 해시 생성: %w", err)
-		}
 		if err := ctx.Err(); err != nil {
 			return model.ID{}, err
 		}
-		if _, err := s.store.UpdatePasswordHashIfMatches(ctx, account.ID, account.PasswordHash, hash); err != nil {
-			return model.ID{}, fmt.Errorf("비밀번호 해시 갱신: %w", err)
+		if err != nil {
+			return model.ID{}, &credentialFailure{ErrUnavailable, err}
+		}
+		_, err = s.store.UpdatePasswordHashIfMatches(ctx, account.ID, account.PasswordHash, hash)
+		if err := ctx.Err(); err != nil {
+			return model.ID{}, err
+		}
+		if err != nil {
+			return model.ID{}, &credentialFailure{ErrUnavailable, err}
 		}
 	}
 	return account.ID, nil
 }
 
 func validPassword(password string) bool {
+	if !utf8.ValidString(password) {
+		return false
+	}
 	length := utf8.RuneCountInString(password)
 	return minPasswordRunes <= length && length <= maxPasswordRunes
 }
@@ -205,8 +243,20 @@ func passwordMaterial(password string) string {
 
 // WebSession은 웹 채널 전용 audience와 12시간 수명을 가진 서명 쿠키 값을 발급한다.
 func (s *Service) WebSession(ctx context.Context, accountID model.ID, audience string) (Token, error) {
-	now := time.Now().UTC()
-	return s.issue(ctx, accountID, audience, now)
+	if err := ctx.Err(); err != nil {
+		return Token{}, err
+	}
+	if !accountID.IsV7() || audience != "web" {
+		return Token{}, ErrInvalidCredential
+	}
+	token, err := s.issue(ctx, accountID, audience, s.now().UTC())
+	if err := ctx.Err(); err != nil {
+		return Token{}, err
+	}
+	if err != nil {
+		return Token{}, &credentialFailure{ErrUnavailable, err}
+	}
+	return token, nil
 }
 
 // Verify는 기대 audience, 서명, 필수 클레임, 만료와 폐기 목록을 한 경로에서 확인한다.
@@ -244,6 +294,31 @@ func (s *Service) Verify(ctx context.Context, raw, audience string) (accountID m
 // 반면 서명 키나 폐기 목록을 읽지 못한 것은 자격 증명과 무관하므로 ErrUnavailable로
 // 따로 올린다. 어느 조회가 실패했는지는 감싼 원인에만 남고 응답에는 담기지 않는다.
 func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (jwt.Claims, error) {
+	claims, err := s.signedClaims(ctx, raw, audience)
+	if err != nil {
+		return jwt.Claims{}, err
+	}
+	revoked, err := s.cache.isRevoked(ctx, s.store, claims.ID, s.now().UTC())
+	if err := ctx.Err(); err != nil {
+		return jwt.Claims{}, err
+	}
+	if err != nil {
+		return jwt.Claims{}, &credentialFailure{ErrUnavailable, err}
+	}
+	if revoked {
+		return jwt.Claims{}, ErrInvalidCredential
+	}
+	return claims, nil
+}
+
+// signedClaims는 웹 폐기 캐시를 적용하지 않는 공통 서명·필수 클레임 경계다.
+func (s *Service) signedClaims(ctx context.Context, raw, audience string, extra ...any) (jwt.Claims, error) {
+	if err := ctx.Err(); err != nil {
+		return jwt.Claims{}, err
+	}
+	if audience == "" {
+		return jwt.Claims{}, ErrInvalidCredential
+	}
 	parsed, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
 	if err != nil {
 		return jwt.Claims{}, ErrInvalidCredential
@@ -252,22 +327,24 @@ func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (jwt
 		return jwt.Claims{}, ErrInvalidCredential
 	}
 	public, err := s.cache.publicKey(ctx, s.store, parsed.Headers[0].KeyID)
+	if err := ctx.Err(); err != nil {
+		return jwt.Claims{}, err
+	}
 	if err != nil {
 		// 모르는 `kid`는 자격 증명의 문제이고, 그 밖의 조회 실패는 저장소의 문제다.
 		if errors.Is(err, store.ErrNotFound) {
 			return jwt.Claims{}, ErrInvalidCredential
 		}
-		return jwt.Claims{}, fmt.Errorf("%w: 서명 키 조회: %w", ErrUnavailable, err)
+		return jwt.Claims{}, &credentialFailure{ErrUnavailable, err}
 	}
 	var claims jwt.Claims
-	if parsed.Claims(public.Key, &claims) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: time.Now()}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil {
+	now := s.now().UTC()
+	if parsed.Claims(public.Key, append([]any{&claims}, extra...)...) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: now}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil || len(claims.Audience) != 1 {
 		return jwt.Claims{}, ErrInvalidCredential
 	}
-	revoked, err := s.cache.isRevoked(ctx, s.store, claims.ID, time.Now().UTC())
-	if err != nil {
-		return jwt.Claims{}, fmt.Errorf("%w: 폐기 목록 조회: %w", ErrUnavailable, err)
-	}
-	if revoked {
+	// 공급자 검증은 exp와 현재 시각이 같은 순간을 허용하므로 반열린 수명을 별도로 확인한다.
+	issued, expires := claims.IssuedAt.Time(), claims.Expiry.Time()
+	if !now.Before(expires) || !issued.Before(expires) || (audience == "web" && expires.Sub(issued) > webSessionLifetime) {
 		return jwt.Claims{}, ErrInvalidCredential
 	}
 	return claims, nil
@@ -275,29 +352,38 @@ func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (jwt
 
 // Revoke는 로그아웃에서 jti를 만료 시각까지 막는다.
 func (s *Service) Revoke(ctx context.Context, token Token) error {
-	if err := s.store.RevokeToken(ctx, token.ID, token.ExpiresAt); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if token.ID == "" || token.ExpiresAt.IsZero() {
+		return ErrInvalidCredential
+	}
+	if err := s.store.RevokeToken(ctx, token.ID, token.ExpiresAt); err != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return &credentialFailure{ErrUnavailable, err}
 	}
 	// 이 인스턴스가 방금 폐기한 토큰은 다음 적재를 기다리지 않고 곧바로 막는다.
 	s.cache.invalidateRevocations(token.ID)
-	return nil
+	return ctx.Err()
 }
 
 // JWKS는 검증자에게 비공개 키 없이 공개 키 목록을 제공한다.
 func (s *Service) JWKS(ctx context.Context) (jose.JSONWebKeySet, error) {
 	// 최초 로그인 전의 발견도 발급과 같은 원자적 키 초기화 경로를 사용한다.
 	if _, err := s.activeKey(ctx); err != nil {
-		return jose.JSONWebKeySet{}, err
+		return jose.JSONWebKeySet{}, fmt.Errorf("%w: 활성 키 조회: %w", ErrUnavailable, err)
 	}
 	items, err := s.store.SigningKeys(ctx)
 	if err != nil {
-		return jose.JSONWebKeySet{}, err
+		return jose.JSONWebKeySet{}, fmt.Errorf("%w: 공개 키 목록 조회: %w", ErrUnavailable, err)
 	}
 	set := jose.JSONWebKeySet{Keys: make([]jose.JSONWebKey, 0, len(items))}
 	for _, item := range items {
-		var key jose.JSONWebKey
-		if err := json.Unmarshal([]byte(item.PublicKey), &key); err != nil {
-			return jose.JSONWebKeySet{}, fmt.Errorf("공개 키 해석: %w", err)
+		key, err := publicSigningKey(item)
+		if err != nil {
+			return jose.JSONWebKeySet{}, err
 		}
 		set.Keys = append(set.Keys, key)
 	}
@@ -323,9 +409,12 @@ func (s *Service) issue(ctx context.Context, accountID model.ID, audience string
 	if err != nil {
 		return Token{}, err
 	}
-	var private jose.JSONWebKey
-	if err := json.Unmarshal([]byte(key.PrivateKey), &private); err != nil {
-		return Token{}, fmt.Errorf("개인 키 해석: %w", err)
+	if err := ctx.Err(); err != nil {
+		return Token{}, err
+	}
+	private, err := privateSigningKey(key)
+	if err != nil {
+		return Token{}, err
 	}
 	options := (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", key.ID)
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: private.Key}, options)
@@ -336,6 +425,7 @@ func (s *Service) issue(ctx context.Context, accountID model.ID, audience string
 	if err != nil {
 		return Token{}, err
 	}
+	now = now.Truncate(time.Second)
 	expires := now.Add(webSessionLifetime)
 	raw, err := jwt.Signed(signer).Claims(jwt.Claims{Issuer: s.config.Issuer, Subject: accountID.String(), Audience: jwt.Audience{audience}, IssuedAt: jwt.NewNumericDate(now), Expiry: jwt.NewNumericDate(expires), ID: jti}).Serialize()
 	if err != nil {

@@ -88,6 +88,9 @@ type GraphStore interface {
 
 // Config는 웹 화면의 고정된 HTTP 경계를 모은다.
 type Config struct {
+	// Authorization은 로그인·세션과 분리된 OAuth 인가의 업무 경계다.
+	Authorization Authorization
+	Connections   ConnectionManagement
 	// SecureCookie는 현재 요청이 애플리케이션의 TLS 판정을 통과했는지 알려 준다.
 	SecureCookie func(*http.Request) bool
 	// ClientAddress는 조립 계층에서 기존 프록시 신뢰 검사를 적용한 출처 주소다.
@@ -97,7 +100,7 @@ type Config struct {
 	Plans plan.AccountPlans
 }
 
-// Server는 로그인·등록·로그아웃과 웹 관리 화면 여섯 종을 처리한다.
+// Server는 계정 화면·여섯 업무 화면과 본인 연결 관리를 처리한다.
 type Server struct {
 	auth        Authentication
 	graphs      GraphStore
@@ -131,9 +134,11 @@ func New(auth Authentication, graphs GraphStore, config Config) (*Server, error)
 		return nil, fmt.Errorf("웹 서버 구성이 올바르지 않다")
 	}
 	templates, err := template.New("pages").Funcs(template.FuncMap{
-		"formatTime": func(value time.Time) string { return value.UTC().Format(time.RFC3339) },
-		"accessPath": accessPath,
-	}).Parse(pageTemplates)
+		"formatTime":       func(value time.Time) string { return value.UTC().Format(time.RFC3339) },
+		"accessPath":       accessPath,
+		"connectionStatus": connectionStatus,
+		"connectionExpiry": connectionExpiry,
+	}).Parse(pageTemplates + authorizationTemplates + connectionTemplates)
 	if err != nil {
 		return nil, fmt.Errorf("웹 템플릿 해석: %w", err)
 	}
@@ -164,11 +169,21 @@ func (server *Server) serveAsset(writer http.ResponseWriter, request *http.Reque
 
 // ServeHTTP는 계약에 있는 로그인·등록·로그아웃과 웹 관리 경로를 처리한다.
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.URL.Path == "/authorize" || request.URL.Path == "/connections" {
+		setAuthorizationHeaders(writer)
+	}
+	if request.Method == http.MethodPost && (request.URL.Path == "/login" || request.URL.Path == "/register" || request.URL.Path == "/logout") {
+		writer.Header().Set("Cache-Control", "no-store")
+	}
 	if err := server.crossOrigin.Check(request); err != nil {
 		server.render(writer, http.StatusForbidden, "message", pageData{Title: "접근 제한", Error: "다른 출처에서 보낸 요청은 처리할 수 없습니다."})
 		return
 	}
 	switch request.URL.Path {
+	case "/connections":
+		server.connections(writer, request)
+	case "/authorize":
+		server.authorize(writer, request)
 	case "/" + visualizationAssetPath:
 		server.serveAsset(writer, request, visualizationAssetPath)
 	case "/login":
@@ -229,28 +244,31 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 		}
 		server.render(writer, http.StatusOK, "login", pageData{Title: "로그인", Message: message, Next: localRedirect(request.URL.Query().Get("next"))})
 	case http.MethodPost:
-		if !server.allowAuthentication(writer, request) {
-			return
-		}
-		if err := request.ParseForm(); err != nil {
-			server.authenticationFormError(writer, "login", err)
+		if !server.parseAuthenticationForm(writer, request, "login") {
 			return
 		}
 		next := localRedirect(request.PostForm.Get("next"))
 		loginID := request.PostForm.Get("login_id")
 		accountID, err := server.auth.Authenticate(request.Context(), loginID, request.PostForm.Get("password"))
+		if request.Context().Err() != nil {
+			return
+		}
 		if err != nil {
 			if errors.Is(err, ErrAuthenticationBusy) {
 				server.authenticationLimited(writer, time.Second)
 				return
 			}
+			if errors.Is(err, ErrAuthenticationUnavailable) {
+				server.render(writer, http.StatusInternalServerError, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "로그인 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."})
+				return
+			}
 			server.render(writer, http.StatusUnauthorized, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "로그인 아이디 또는 비밀번호가 올바르지 않습니다."})
 			return
 		}
+		session, err := server.auth.WebSession(request.Context(), accountID, SessionAudience)
 		if request.Context().Err() != nil {
 			return
 		}
-		session, err := server.auth.WebSession(request.Context(), accountID, SessionAudience)
 		if err != nil {
 			server.render(writer, http.StatusInternalServerError, "login", pageData{Title: "로그인", LoginID: loginID, Next: next, Error: "세션을 만들 수 없습니다."})
 			return
@@ -272,17 +290,21 @@ func (server *Server) register(writer http.ResponseWriter, request *http.Request
 	case http.MethodGet:
 		server.render(writer, http.StatusOK, "register", pageData{Title: "계정 등록"})
 	case http.MethodPost:
-		if !server.allowAuthentication(writer, request) {
-			return
-		}
-		if err := request.ParseForm(); err != nil {
-			server.authenticationFormError(writer, "register", err)
+		if !server.parseAuthenticationForm(writer, request, "register") {
 			return
 		}
 		loginID := request.PostForm.Get("login_id")
-		if _, err := server.auth.Register(request.Context(), loginID, request.PostForm.Get("password")); err != nil {
+		_, err := server.auth.Register(request.Context(), loginID, request.PostForm.Get("password"))
+		if request.Context().Err() != nil {
+			return
+		}
+		if err != nil {
 			if errors.Is(err, ErrAuthenticationBusy) {
 				server.authenticationLimited(writer, time.Second)
+				return
+			}
+			if errors.Is(err, ErrAuthenticationUnavailable) {
+				server.render(writer, http.StatusInternalServerError, "register", pageData{Title: "계정 등록", LoginID: loginID, Error: "계정 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."})
 				return
 			}
 			server.render(writer, http.StatusBadRequest, "register", pageData{Title: "계정 등록", LoginID: loginID, Error: "로그인 아이디 또는 비밀번호 형식이 올바르지 않거나 이미 사용 중입니다."})
@@ -300,8 +322,20 @@ func (server *Server) logout(writer http.ResponseWriter, request *http.Request) 
 	case http.MethodGet:
 		server.render(writer, http.StatusOK, "logout", pageData{Title: "로그아웃"})
 	case http.MethodPost:
-		if _, session, ok := server.session(request); ok {
-			if err := server.auth.Revoke(request.Context(), session); err != nil {
+		_, session, err := server.verifiedSession(request)
+		if request.Context().Err() != nil {
+			return
+		}
+		if errors.Is(err, ErrAuthenticationUnavailable) {
+			server.sessionUnavailable(writer)
+			return
+		}
+		if err == nil {
+			err := server.auth.Revoke(request.Context(), session)
+			if request.Context().Err() != nil {
+				return
+			}
+			if err != nil {
 				server.render(writer, http.StatusInternalServerError, "logout", pageData{Title: "로그아웃", Error: "로그아웃을 완료할 수 없습니다."})
 				return
 			}
@@ -315,9 +349,8 @@ func (server *Server) logout(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (server *Server) graphList(writer http.ResponseWriter, request *http.Request) {
-	accountID, _, ok := server.session(request)
+	accountID, _, ok := server.session(writer, request)
 	if !ok {
-		http.Redirect(writer, request, "/login", http.StatusSeeOther)
 		return
 	}
 	if request.Method == http.MethodPost {
@@ -430,9 +463,8 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 // 대로 소유자만 할 수 있고, 등급 표도 소유자에게만 보인다. 팀 동작의 관리자 판정은
 // store가 트랜잭션 안에서 한다.
 func (server *Server) graphAccess(writer http.ResponseWriter, request *http.Request, graphID model.ID) {
-	accountID, _, ok := server.session(request)
+	accountID, _, ok := server.session(writer, request)
 	if !ok {
-		http.Redirect(writer, request, "/login", http.StatusSeeOther)
 		return
 	}
 	owner := false
@@ -764,9 +796,8 @@ func (server *Server) graphAudit(writer http.ResponseWriter, request *http.Reque
 }
 
 func (server *Server) operatorRestores(writer http.ResponseWriter, request *http.Request) {
-	accountID, _, ok := server.session(request)
+	accountID, _, ok := server.session(writer, request)
 	if !ok {
-		http.Redirect(writer, request, "/login", http.StatusSeeOther)
 		return
 	}
 	switch request.Method {
@@ -805,9 +836,8 @@ func (server *Server) operatorRestores(writer http.ResponseWriter, request *http
 }
 
 func (server *Server) requireGrade(writer http.ResponseWriter, request *http.Request, graphID model.ID, required model.GraphGrade) (model.ID, bool) {
-	accountID, _, ok := server.session(request)
+	accountID, _, ok := server.session(writer, request)
 	if !ok {
-		http.Redirect(writer, request, "/login", http.StatusSeeOther)
 		return model.ID{}, false
 	}
 	if err := perm.Require(request.Context(), server.graphs, graphID, accountID, required); err != nil {
@@ -872,16 +902,36 @@ func localRedirect(value string) string {
 	return target.RequestURI()
 }
 
-func (server *Server) session(request *http.Request) (model.ID, Session, bool) {
+func (server *Server) verifiedSession(request *http.Request) (model.ID, Session, error) {
+	if err := request.Context().Err(); err != nil {
+		return model.ID{}, Session{}, err
+	}
 	cookie, err := request.Cookie(sessionCookie)
 	if err != nil || cookie.Value == "" {
+		return model.ID{}, Session{}, http.ErrNoCookie
+	}
+	return server.auth.VerifyWebSession(request.Context(), cookie.Value, SessionAudience)
+}
+
+func (server *Server) session(writer http.ResponseWriter, request *http.Request) (model.ID, Session, bool) {
+	writer.Header().Set("Cache-Control", "no-store")
+	accountID, session, err := server.verifiedSession(request)
+	if request.Context().Err() != nil {
 		return model.ID{}, Session{}, false
 	}
-	accountID, session, err := server.auth.VerifyWebSession(request.Context(), cookie.Value, SessionAudience)
 	if err != nil {
+		if errors.Is(err, ErrAuthenticationUnavailable) {
+			server.sessionUnavailable(writer)
+		} else {
+			http.Redirect(writer, request, "/login", http.StatusSeeOther)
+		}
 		return model.ID{}, Session{}, false
 	}
 	return accountID, session, true
+}
+
+func (server *Server) sessionUnavailable(writer http.ResponseWriter) {
+	server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "인증 장애", Error: "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요."})
 }
 
 func (server *Server) setSessionCookie(writer http.ResponseWriter, request *http.Request, session Session) {
@@ -917,10 +967,14 @@ func (server *Server) render(writer http.ResponseWriter, status int, name string
 }
 
 type pageData struct {
-	Title   string
-	Message string
-	Error   string
-	LoginID string
+	Connections           store.ConnectionPage
+	AuthorizationClient   string
+	AuthorizationResource string
+	AuthorizationAction   string
+	Title                 string
+	Message               string
+	Error                 string
+	LoginID               string
 	// Next에는 로그인 뒤 돌아갈 서버 내부 화면 경로를 둔다.
 	Next              string
 	AccountID         model.ID
@@ -1020,7 +1074,7 @@ body { margin: 0; } main { max-width: 1120px; margin: 32px auto; padding: 0 16px
 {{define "register"}}{{template "head" .}}<h1>계정 등록</h1><form class="panel" method="post" action="/register"><label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" pattern="[a-z0-9_]{3,32}" required></label><p>영문 소문자, 숫자, 밑줄을 사용해 3~32자로 입력합니다.</p><label>비밀번호<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="128" required></label><p>비밀번호는 8~128자입니다.</p><button type="submit">등록</button></form><p><a href="/login">로그인으로 돌아가기</a></p>{{template "foot" .}}{{end}}
 {{define "logout"}}{{template "head" .}}<h1>로그아웃</h1><form class="panel" method="post" action="/logout"><p>이 브라우저의 세션을 종료합니다.</p><button type="submit">로그아웃</button></form>{{template "foot" .}}{{end}}
 {{define "message"}}{{template "head" .}}<h1>{{.Title}}</h1><p><a href="/graphs">그래프 목록</a></p>{{template "foot" .}}{{end}}
-{{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav>
+{{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/connections">연결 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav>
 <form class="panel actions" method="get" action="/graphs">
 <label for="graph-name">이름 필터<input id="graph-name" name="name" value="{{.NameFilter}}"></label>
 <fieldset class="grade-filter" aria-describedby="grade-filter-help"><legend>등급</legend><div class="grade-options">

@@ -174,7 +174,7 @@ func TestAuthenticateRehashesLegacyDirectBcryptHash(t *testing.T) {
 	}
 	currentHash, rehashed := strings.CutPrefix(account.PasswordHash, passwordHashPrefix)
 	if !rehashed {
-		t.Fatalf("기존 해시가 현재 형식으로 바뀌지 않았다: %q", account.PasswordHash)
+		t.Fatal("기존 해시가 현재 형식으로 바뀌지 않았다")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(currentHash), []byte(passwordMaterial(password))); err != nil {
 		t.Fatalf("재해시한 비밀번호 대조: %v", err)
@@ -209,7 +209,7 @@ func TestAuthenticateUpgradesRawDigestHash(t *testing.T) {
 		t.Fatalf("재해시한 계정 조회: %v", err)
 	}
 	if !strings.HasPrefix(account.PasswordHash, passwordHashPrefix) {
-		t.Fatalf("v1 해시가 현재 형식으로 바뀌지 않았다: %q", account.PasswordHash)
+		t.Fatal("v1 해시가 현재 형식으로 바뀌지 않았다")
 	}
 }
 
@@ -237,7 +237,7 @@ func (s *memoryStore) CreateAccount(_ context.Context, account store.Account) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.accounts[account.LoginID]; ok {
-		return errors.New("duplicate")
+		return store.ErrLoginIDExists
 	}
 	s.accounts[account.LoginID] = account
 	return nil

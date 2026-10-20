@@ -11,7 +11,11 @@ import (
 func TestJWKSPublishesPublicKeysOnly(t *testing.T) {
 	service := testService(t, newMemoryStore())
 	// 첫 발급이 활성 서명 키를 만든다.
-	if _, err := service.WebSession(t.Context(), model.ID{1}, "web"); err != nil {
+	id, err := model.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.WebSession(t.Context(), id, "web"); err != nil {
 		t.Fatalf("세션 발급: %v", err)
 	}
 	handler, err := NewHandler(service)

@@ -1,6 +1,6 @@
 # MCP 전송과 도구 계약
 
-목표 Streamable HTTP 전송, 도구 14종, 행위자 결합, 멱등성 외피, 입력·응답·오류의 정본이다. 직접 연결 전송은 구현 대기다.
+목표 Streamable HTTP 전송, 도구 14종, 행위자 결합, 멱등성 외피, 입력·응답·오류의 정본이다. 보호 HTTP 전송 모듈은 구현했으며 기동 경로의 업무 연결·전체 서버/호스트 인수는 대기다.
 
 [설계 전체](../SDD.md) · [요구사항과 설계 대응](traceability.md)
 
@@ -14,11 +14,21 @@
 
 [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)에 따라 `/mcp`는 단일 요청 POST에 `application/json` 결과를 반환한다. 요청 `Accept`는 JSON·SSE를 모두 포함하며 `Content-Type`은 JSON이다. 첫 구현은 SSE·`MCP-Session-Id`를 사용하지 않고 GET·DELETE는 `405`다. JSON-RPC 응답 POST는 거부한다. 접수 가능한 알림의 transport 응답은 `202` 빈 본문이나 이 revision의 HTTP core에는 클라이언트 알림이 없으며 `notifications/initialized`·`notifications/cancelled`를 수명주기로 제공하지 않는다.
 
-`Origin`이 있으면 허용 출처를 검사하고 부적합하면 `403`이다. 모든 요청에 `MCP-Protocol-Version`·`Mcp-Method`, `tools/call`에는 `Mcp-Name`을 검증한다. 각각 본문 revision·method·`params.name`과 일치해야 하며 헤더 누락·형식 오류·불일치는 HTTP `400`·`HeaderMismatch(-32020)`다. 헤더 이름은 대소문자를 구분하지 않고 값은 구분하며 표준 Base64 sentinel은 해독 후 비교한다. 도구에는 `x-mcp-header`를 지정하지 않으며 서비스 전용 필수 헤더를 추가하지 않는다.
+`Origin`이 있으면 허용 출처를 검사하고 부적합하면 `403`이다. 모든 요청에 `MCP-Protocol-Version`·`Mcp-Method`, `tools/call`에는 `Mcp-Name`을 검증한다. 각각 본문 revision·method·`params.name`과 일치해야 하며 헤더 누락·형식 오류·불일치는 HTTP `400`·`HeaderMismatch(-32020)`다. 헤더 이름은 대소문자를 구분하지 않고 값은 구분한다. 표준 Base64 sentinel은 이름 값인 `Mcp-Name`에서 해독 후 비교하며 revision·method에는 적용하지 않는다. 도구에는 `x-mcp-header`를 지정하지 않으며 서비스 전용 필수 헤더를 추가하지 않는다.
 
 미지원 revision은 HTTP `400`·`UnsupportedProtocolVersion(-32022)`와 `data.supported: ["2026-07-28"]`·`data.requested`를 반환한다. 유효한 revision·외피의 미지원 RPC는 HTTP `404`·`-32601`이다. 이전 `initialize` 요청은 필수 외피 누락 또는 미지원 메서드로 거부하고 지원 revision을 진단에 표시한다. 요청 본문 상한과 업무·조회 시간 예산은 유지한다.
 
 완료 결과에는 `resultType: "complete"`를 포함하고 도구 결과의 표준 `content`, `structuredContent`, `isError`에 기존 도메인 결과·오류를 매핑한다. 도메인 오류 8종의 의미와 `context_flow_get` 평면 응답은 유지하고 기존 업무 도구 13종에 등록 도구 하나를 추가하여 목표 목록은 14종이다. SDK·호스트의 실제 적합성은 `TBD-AGENT_CONTEXT-064`에서 검증하며 revision 선정만으로 지원 완료를 주장하지 않는다.
+
+### 보호 HTTP 구현 경계
+
+`mcp.NewHandler`는 검증된 허용 Origin·Bearer 보호 함수와 완전한 14종 처리기를 받는다. Origin 원문 대조→POST·미디어 타입·표준 헤더 형식→제한된 바이트 읽기→Bearer 검증→JSON·메타데이터·헤더/본문 대조→SDK·도구 입력 검증 순서다. Origin이 없으면 허용하며 빈 값·복수·목록은 거부한다. 단일 JSON Content-Type은 매개변수를 허용하고, Accept는 JSON과 SSE의 유효한 양수 품질 범위를 요구한다. 구체적인 q=0 거부는 wildcard보다 우선한다.
+
+전송 본문은 고정 SDK의 기본값인 4 MiB로 제한한다. 선언 길이가 초과하면 읽기 전에, 길이 미상·chunked·축소 선언은 제한된 읽기로 413·JSON-RPC -32600을 반환한다. 초과 요청은 인증·업무를 호출하지 않고 JSON 해석은 Bearer 뒤에 수행한다. 헤더로 확인할 수 있는 선행 거부는 본문을 읽지 않는다. 단일 JSON 이외의 Content-Type은 415, JSON·SSE를 함께 허용하지 않는 Accept는 400이다.
+
+발견·목록의 ttlMs=0·private와 별도로 모든 HTTP 응답에 no-store를 유지한다. 공개 Host를 loopback 프록시로 전달하는 보호 생성자는 SDK의 자동 localhost Host 거부를 해제하고 정확한 Origin·Bearer와 바깥 TLS 판정을 적용한다. 인증 없는 SDK 관찰 경계는 이 옵션을 사용하지 않는다. SDK의 PropagateRequestCancellation을 명시해 원래 요청의 context를 유지한다. 업무 시간 예산·커밋/재생·실제 단절의 모듈 경계는 [MCP-08 검토](../reviews/2026-10-20-mcp-08.md)에서 인수했다. 전체 기동·호스트 인수는 후속이다.
+
+[MCP-02 인수](../reviews/2026-10-20-mcp-02.md)는 실제 OAuth/TLS와 서버 라우터 주입까지 검증했다. 현재 main에는 업무 13종을 대신할 임시 처리기를 넣지 않는다. MCP-06·07에서 여덟 쓰기·다섯 읽기 처리기 모듈을 인수했다. 기동 경로의 전체 주입은 ARCH-07, 전체 서버 계약은 MCP-09, 실제 호스트는 TEST-08에서 인수한다.
 
 ## 공통 행위자·도구·쓰기 안전성
 
@@ -49,9 +59,15 @@
 
 UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용한다. 활성 행만의 부분 UNIQUE로 만들면 폐기 키를 새 활성 ID로 암묵 복구할 수 있으므로 사용하지 않는다. 계정·client별 목록과 활성 128개 한도 판정에는 `(account_id, client_id, created_at, agent_id)`와 `account_id WHERE revoked_at IS NULL` 인덱스를 둔다. 상한은 CHECK로 세지 않고 계정 범위 잠금 아래 재검사하며, UUID 타입·유일 제약만으로 활성·계정/client 결합이 검증되었다고 간주하지 않는다.
 
+### 등록 구현 경계
+
+[MCP-04 모듈 인수](../reviews/2026-10-20-mcp-04.md)에서 등록·현재 결합 검사·소유자 폐기 API를 구현했다. `store.RegisterAgent`와 `RevokeAgent`는 계정 행을 같은 순서로 잠그고 Read Committed의 별도 명령으로 현재 등록·개수를 대조한다. 활성 재조회는 상한에서도 ID·생성 시각을 유지하며 폐기 키는 복구하지 않는다. 모든 client의 활성 개수를 계정당 128개로 제한하고 소유 폐기로 빈자리를 회복한다. 폐기는 반복해도 최초 시각을 유지하며 다른 계정·없는 등록은 같은 오류다.
+
+`model.ValidateRegistrationKey`가 저장 방식과 독립적인 키 형식을 소유한다. `mcp.RegisterAgent`와 `BindActor`는 인증 경계가 주입한 Principal의 계정/client만 사용하며 저장소는 AgentRegistry 인터페이스로 주입한다. clientInfo·agent·등록 키로 그래프 등급을 만들지 않는다. BindActor는 매번 현재 활성 결합을 확인하고 검증한 계정·agent만 반환한다. 누적 상한은 plan.LimitError의 agent_registrations_per_account로 전달하고 저장 해석·조회 장애는 입력 거부와 구분한다. 보호 /mcp 전송·실제 Bearer와 등록의 결합 모듈은 MCP-02에서 인수했다. 기동 경로의 여섯 업무 쓰기·/connections 목록과 POST의 연결은 MCP-06·AUTH-10의 후속 범위다.
+
 ## 요청 처리 순서
 
-MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 검증, Bearer 검증·현재 권한 검사·행위자 결합, 도메인 연산·멱등성 트랜잭션, 출력 격리 확인과 표준 결과 매핑 순으로 수행한다. HTTP 오류와 도메인 오류를 구분하고 내부 장애를 재인증 신호로 바꾸지 않는다. 세부 정본은 [표준 MCP 경계](mcp.md#표준-mcp-경계)·[공통 행위자·도구·쓰기 안전성](mcp.md#공통-행위자도구쓰기-안전성)이다.
+보호 HTTP·인증 주체 전달 모듈은 구현했으며 실제 업무 도구의 조립은 후속 대상이다. 표준 SDK 메시지·입력 검증, Bearer 검증·현재 권한 검사·행위자 결합, 도메인 연산·멱등성 트랜잭션, 출력 격리 확인과 표준 결과 매핑 순으로 수행한다. HTTP 오류와 도메인 오류를 구분하고 내부 장애를 재인증 신호로 바꾸지 않는다. 세부 정본은 [표준 MCP 경계](mcp.md#표준-mcp-경계)·[공통 행위자·도구·쓰기 안전성](mcp.md#공통-행위자도구쓰기-안전성)이다.
 
 저장 계층의 멱등성·관리 기록·권한 재검사·원천 불변 규칙은 유지하며 전송 어댑터 부재를 도메인 계약의 제거로 해석하지 않는다.
 
@@ -89,7 +105,7 @@ MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 �
 
 ## 입력 검증
 
-아래 MCP 입력 검증 분담은 구현 예정인 표준 전송 계층의 목표다. 현재 모델·저장 계층의 검증과 웹 입력 검증은 유지한다.
+아래 MCP 입력 검증 분담은 표준 전송 계층의 계약이다. 14종 도구의 스키마·표면 검증과 등록·쓰기·읽기 도메인 연결 모듈을 구현했으며 기동 경로의 전체 조립은 후속 대상이다. 모델·저장 계층의 검증과 웹 입력 검증은 유지한다.
 
 검증은 `model`과 `mcp`가 나눠 맡는다.
 
@@ -104,6 +120,8 @@ MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 �
 | 시점 순서, 사건 시간 범위, 관계의 양 끝 유형과 순환                     | `model` |
 
 `model`에 두는 검증은 저장 방식과 무관한 규칙이고, `mcp`에 두는 검증은 연산 표면의 규칙이다. 같은 규칙을 두 곳에 두지 않으므로 한쪽만 고쳐 어긋나는 일이 없다.
+
+도구 목록에 제공하는 스키마를 서버에서도 검증한다. 적용 판 `jsonschema-go`는 `format`을 검증하지 않으므로 UUIDv7·실제 UTC 달력 시각·URI·불투명 커서의 Base64 URL 인코딩은 MCP에서 보완한다. 커서 내부 값·현재 대상의 계층·시간 순서·참조 존재·권한·행위자 결합은 각 소유 모델·저장·권한 경계가 판정한다. 필드별 위반은 입력 원문 없이 `invalid_argument`와 필드로 반환한다. 정수 입력은 소수부가 0인 표기와 지수 표기를 포함해 정밀도 손실 없이 해석한다.
 
 `context_flow_get`의 `as_of`는 `FR-AGENT_CONTEXT-082`에 따라 미지정이면 현재 UTC를 사용한다. 내부 검색 입력도 `model`과 같은 `Location() == time.UTC` 기준으로 검사하며, 같은 순간을 표현하는 지역 시간대나 별도 고정 시간대는 UTC 입력으로 간주하지 않는다. 검증은 검색 저장소·임베딩·읽기 스냅숏을 사용하기 전에 완료한다.
 
@@ -143,11 +161,29 @@ MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 �
 
 ## MCP 표면
 
-직접 연결의 표면은 [표준 MCP 경계](mcp.md#표준-mcp-경계)를 따른다. 공식 SDK의 발견·요청별 메타데이터·도구·취소 계약과 14종 도구의 `description`·annotations를 구현하고 계약 스냅샷을 다시 만든다. 현재 전송 패키지·도구 스냅샷은 없으며 실제 호스트 검증 전에는 지원을 주장하지 않는다.
+직접 연결의 표면은 [표준 MCP 경계](mcp.md#표준-mcp-경계)를 따른다. 현재 `internal/mcp`에는 최소 SDK 진입 경계와 [14종 도구 정의·검증](../reviews/2026-10-18-mcp-03.md)이 있다. 공통 instructions와 도구의 description·annotations·스키마를 실제 SDK 목록·호출로 인수했다. 실제 서버 연결·업무 도구의 전체 결과 스냅샷·취소·호스트 인수는 대기 상태다. 실제 호스트 검증 전에는 지원을 주장하지 않는다.
 
 ## 응답 직렬화
 
-후속 MCP 구현은 `resultType: "complete"`와 표준 `content`, `structuredContent`, `isError`에 도메인 결과·오류를 매핑한다. 작업 컨텍스트 흐름의 평면 결과를 유지하고 HTTP·JSON-RPC·도메인 오류 계층을 구분한다. 현재 웹 응답과 상태 경로는 각 처리기의 직렬화를 유지한다.
+MCP 처리기는 `resultType: "complete"`와 표준 `content`, `structuredContent`, `isError`에 도메인 결과·오류를 매핑한다. 도메인 JSON 객체와 같은 값의 text content를 만들고 고정 SDK가 complete 외피를 직렬화한다. 현재 웹 응답과 상태 경로는 각 처리기의 직렬화를 유지한다.
+
+### 읽기 도구 연결
+
+`NewReadHandlers`가 graph_list/get·node_get·relation_list·context_flow_get을 연결한다. graph_list는 인증 계정의 유효 등급을 저장 질의에서 필터하고 나머지는 현재 viewer 등급과 활성 그래프를 검사한다. 페이지 크기·홉·결과 노드 수·문자 예산은 현재 계정 플랜을 적용한다. 홉 생략은 0, 방향 생략은 both이며 흐름의 as_of 생략은 요청 시점 UTC다. scope 생략은 검색기의 auto 기본값으로 전달한다. 커서 인코딩은 도구 스키마, 내부 시각·식별자는 저장소가 검사한다. 무제한 페이지도 요청 크기만큼 메모리를 미리 확보하지 않고 실제 행 수에 따라 확장하며 추가 한 행의 정수 오버플로를 막는다.
+
+| 도구 | 구조화 결과 객체 |
+|---|---|
+| graph_list | graphs와 next_cursor. 항목은 graph_id·name·description·last_activity_at·grade |
+| graph_get | 쓰기와 같은 graph 객체 |
+| node_get | contexts·references·relations·truncated. 컨텍스트 항목에 최단 거리 distance |
+| relation_list | 관계 메타데이터 목록 relations와 next_cursor |
+| context_flow_get | contexts·references·relations·entry_points·budget·channels·truncated와 선택 route·route_reason |
+
+목록 끝의 next_cursor는 빈 문자열이고 빈 목록은 배열이다. 공개 member_refs 필터는 조립 어댑터가 내부 has_member로 바꾸며 응답 reference_type은 member_refs다. 참조 간선은 from_context_id·to_context_id·reference_type, 확정 사건 관계 간선은 같은 양 끝과 relation_type으로 분리한다. 응답 정점의 graph·삭제·중복 상태와 간선 양 끝의 반환 집합 포함 여부를 재검사하고 불일치 결과는 내부 오류로 처리한다. 노드 결과는 거리·기록 시각·ID, 흐름은 rank·기록 시각·ID, 간선은 양 끝·종류로 결정적으로 정렬한다.
+
+흐름 항목의 entry_distance·matched_channels·rank·origin_kinds와 선택 folded_count를 보존한다. budget은 used·limit, channels는 채널별 candidates·latency_ms·contribution·failure이며 내부 연결 계측과 후보 차수는 싣지 않는다. truncated.result_truncated는 정상 부분 결과의 표시다. 홉 절단에는 hop_boundary, 예산 절단에는 reason·excluded를 보존하며 두 절단이 겹치면 둘 다 싣는다. 일부 채널 실패·빈 결과·절단은 isError=false다. DB 내부 장애와 감싸진 부재·커서 오류를 조립 경계에서 구분하며 내부 원문은 응답에 포함하지 않는다.
+
+[MCP-07 모듈 인수](../reviews/2026-10-20-mcp-07.md)는 실제 저장·검색과 고정 SDK 외피를 각각 검증했다. 보호 OAuth/TLS를 포함한 전체 조립·오류 계층/시간 예산·단절·전체 스냅샷과 실제 호스트 인수는 후속 범위다.
 
 ## 오류의 생성과 전달
 
@@ -190,11 +226,21 @@ MCP 요청 처리는 후속 구현 대상이다. 표준 SDK 메시지·입력 �
 
 `FR-AGENT_CONTEXT-164`~`172`의 첫 구현은 공식 `github.com/modelcontextprotocol/go-sdk` `v1.8.0`을 사용한다. [공식 릴리스](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.8.0)가 `2026-07-28` 지원을 명시하며 `ServerOptions.SupportedProtocolVersions`를 해당 revision 하나로 제한한다. SDK의 추가 revision을 자동 노출하지 않고 stateful handler를 사용하지 않는다. 실제 Go 빌드·무상태 transport 동작·호스트 적합성은 인수 시험 대상이다.
 
+SDK의 지원 목록 제한만으로 이전 수명주기와 외피 없는 호출의 거부가 보장되지는 않는다. 서비스의 MCP 진입 경계는 SDK에 위임하기 전에 필수 외피·허용 revision과 메서드를 확인하고, SDK가 직접 처리하지 않는 표준 Base64 Mcp-Name의 해독·본문 대조를 보완한다. 오류는 위 표준 MCP 경계의 JSON-RPC 계약을 유지한다. SDK를 교체하거나 이전 revision을 허용하는 방식으로 우회하지 않는다. [MCP-01 검토](../reviews/2026-10-18-mcp-01.md#서비스-진입-경계-보완과-최종-인수)에서 최소 진입 경계와 SDK의 교환을 인수했다. 인증·Origin·서버 라우터 결합 모듈은 [MCP-02 검토](../reviews/2026-10-20-mcp-02.md)에서 인수했다. 기동 경로의 업무 13종 연결과 전체 서버 계약은 후속 구현 대상이다.
+
 서버 정보·도구 설명은 고정 구성에서 만들며 사용자의 입력이나 자격 증명을 instructions에 넣지 않는다. 서버는 이전 요청·발견 결과·접속 인스턴스로 revision·기능을 추론하지 않는다. 표준 메타데이터·헤더·Origin·메시지 검증은 SDK 경계에 두고 인수 시험에서 발견을 생략한 호출과 다른 인스턴스로 이어지는 호출도 대조한다.
 
 [캐시 계약](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching)에 따라 `server/discover`·`tools/list` 완료 결과에는 `ttlMs: 0`·`cacheScope: "private"`를 명시한다. SDK `ServerOptions.SetCacheable`로 적용하며 인증 맥락 간 캐시 공유를 허용하지 않는다. 캐시 힌트는 매 요청의 인증·등급 검사를 대체하지 않는다. 첫 구현은 구독·listChanged·sampling·elicitation·roots·MRTR와 별도 확장을 광고하지 않는다.
 
 HTTP 취소는 해당 요청의 연결 단절과 서버 시간 예산으로 감지해 진행 중 DB·제공자 호출의 context에 전파한다. [표준 취소](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/cancellation)의 `notifications/cancelled`는 stdio용이며 이 HTTP 서버에 요구하지 않는다. JSON 단일 응답에서는 원격 단절 감지 시점에 한계가 있으므로 즉시 취소를 보장하지 않는다. 커밋 전에 실패하면 도메인 트랜잭션을 롤백한다. 이미 커밋한 쓰기의 HTTP 단절·취소는 적용 결과를 되돌리지 않으며 최초 멱등성 결과도 보존한다. 결과를 모르면 같은 키 또는 현재 상태 조회로 확인한다.
+
+### 요청 시간 예산과 오류 경계
+
+서버 조립은 MCP 요청 진입부터 본문 수신·인증·도구 실행 전체에 30초 context 예산을 적용한다. 호출자의 더 짧은 마감·취소가 우선하며 수신 본문에도 같은 읽기 마감을 적용한다. DB·제공자의 기존 마감은 이 바깥 예산을 늘리지 않는다. 단일 JSON 응답의 취소 감지 한계를 서버 예산으로 보완하며 새 환경 변수나 취소 알림을 요구하지 않는다. 처리기가 context를 무시한 경우의 강제 종료나 정리·전송의 정확한 벽시계 상한을 보장하지 않는다.
+
+도구 경계는 처리기가 전달한 오류의 도메인 코드와 부가 정보를 보존한다. 내부 의존 장애·취소·예상 밖 오류 또는 결과 누락은 원문 없는 internal 완료 결과로 바꾼다. 이 오류를 JSON-RPC 오류 원문이나 재인가 신호로 전달하지 않는다. 인증·전송 외피 오류는 각 HTTP/JSON-RPC 계약을 유지한다. 서버 예산 소진으로 인증/SDK가 응답 없이 반환하면 아직 응답을 시작하지 않은 경우에만 HTTP 500 server_error·no-store를 반환하며 WWW-Authenticate를 추가하지 않는다. 이미 보낸 상태/본문을 덧쓰지 않는다.
+
+SDK의 HTTP 반환과 하위 작업의 롤백·연결 반환은 따로 관찰한다. 저장소의 취소 독립 정리 예산·읽기 자리·연결 예약 반환을 유지하며, 커밋한 최초 멱등성 결과는 응답 유실 후 다른 인스턴스에서 같은 키로 회수할 수 있어야 한다.
 
 ## 도구 입력과 반환 계약
 
@@ -234,8 +280,26 @@ HTTP 취소는 해당 요청의 연결 단절과 서버 시간 예산으로 감�
 
 ## 멱등성 저장과 경합
 
+### 쓰기 도구 연결
+
+MCP-06은 `NewWriteHandlers`에 현재 등급·플랜·그래프/노드 조회·등록·여덟 쓰기·거부 기록·재생 실행기를 주입한다. `cmd/server`의 저장 어댑터가 기존 Store API의 한도·관리 기록 형식을 맞추며 DB 핸들과 SDK 타입을 저장 계층으로 넘기지 않는다. 미사용 노드 폐기/복구 주입 계약의 기대 판 인자는 제거한다. 공개 입력은 바뀌지 않는다.
+
+인증 경계의 Principal을 받은 뒤 재생 잠금 후 현재 그래프의 활성 상태·편집자 등급, 이어 활성 agent 결합을 확인한다. 최초 적용은 현재 계정 플랜을 전달하며 저장 경계가 누적·빈도 한도를 원자적으로 검사한다. 재생에는 조회 결과의 판을 다시 적용하거나 한도를 소비하지 않는다. Bearer의 전송 오류·시간 예산과 단절 처리는 [MCP-08](../reviews/2026-10-20-mcp-08.md)에서 모듈 인수했다. 기동 경로의 전체 조립·계약은 후속 범위다.
+
+수정 입력은 생략과 명시한 빈 문자열·null을 구분하여 현재 값에 병합한다. 계층에 맞지 않는 수정 필드는 거부하고 원천 불변·keep·파생 대체·사건/관계 정체성과 복구 채널은 기존 저장 API에 위임한다. 판단 입력 생략 시 request_id를 제외한 정규화 도구·인자를 관리 기록에 남긴다. 생성/확정 거부는 대상을 비우며, 기존 노드의 거부 판은 조회한 현재 판 또는 충돌 오류의 판을 사용한다.
+
+성공 완료 객체의 graph/node/relation은 snake_case 속성과 문자열 UUID·UTC 시각으로 직렬화한다. 거부는 code·message와 field/required_grade/current_version/limit/current/allowed/alternative_channel의 해당 값을 보존한다. 저장 내부 장애는 조립 어댑터가 원인을 보존한 DependencyFailure로 구분해 내부 오류에 포함된 필드 오류가 결정적 입력 거부로 저장되지 않게 한다. 결정적 거부만 저장점 롤백 후 거부 기록과 함께 재생 결과로 커밋하며, 내부 장애·취소는 완료 결과로 저장하지 않는다.
+
+MCP-05의 실행 경계는 `WriteRunner`와 주입 `WriteExecutor.ExecuteWrite`다. 기존 미사용 WriteResult 전용 주입 계약을 도메인 완료 객체의 JSON 바이트 계약으로 구체화한다. 저장소는 MCP SDK·프로토콜 오류를 알지 않으며 성공·결정적 거부 객체만 보관한다. Apply의 error는 미완료 실패이며 예약까지 롤백한다. 도메인 거부는 해당 쓰기의 저장점 롤백 뒤 필요한 거부 감사를 남기고 오류 코드·부가 정보를 완료 객체로 직렬화한다. 여덟 도구의 변환은 [쓰기 도구 연결](#쓰기-도구-연결)을 따른다.
+
+WriteRunner는 같은 공개 스키마로 인자를 검사한 뒤 request_id를 제외한다. 도구 이름·나머지 인자를 결정적으로 직렬화하며 객체 키 순서·JSON escape·정수의 소수/지수 표기·UUID의 허용 표기를 통일한다. 배열 순서·중복과 선택 필드 생략 여부는 유지하고 clientInfo·표준 외피·자격은 지문에 넣지 않는다. 문자열 키는 대소문자를 구분한다. WriteExecutor는 이 정규화 값의 SHA-256을 저장하고 같은 계정·키로 직렬화한다.
+
+필수 Check 콜백은 인증·현재 등급을 읽기 전용으로 재검사한다. 키가 있으면 자문 잠금을 획득한 뒤, 재생 행을 읽기 전에 실행하며 WriteRunner는 뒤이어 여섯 쓰기의 현재 행위자 결합을 확인한다. 잠금 대기 중 상실한 권한·폐기 등록으로 이전 결과를 얻을 수 없다. 키가 없으면 같은 검사 뒤 일반 업무 쓰기를 수행하며 재생 행을 만들지 않는다. 키 대기·업무 쓰기의 예약은 바깥 경계를 공유한다. 기존 UUID 호출 API는 같은 내부 저장 경계에 위임해 기존 행·지문·결과를 유지한다.
+
 같은 계정·`request_id`의 자문 잠금과 재생 행을 예약한 트랜잭션에서 지문을 대조한다. 요청 지문은 도구 이름과 키를 제외한 정규화 인자의 SHA-256이며 행위자·기대 판·판단 입력도 포함한다. 같은 키의 다른 요청은 `invalid_argument`다. 현재 인증·권한·행위자 검사를 통과한 뒤 기존 완료 결과를 재생한다.
 
 최초 처리의 도메인 쓰기와 적용 감사·색인 작업은 같은 트랜잭션·저장점 안에 묶고 최초 성공 또는 결정적 도메인 거부 결과를 채운 뒤 커밋한다. 결과 없는 예약은 커밋하지 않는다. 일시 내부 장애·취소·연결 실패는 예약과 쓰기를 롤백하여 다음 같은 키가 다시 처리할 수 있게 한다. 재생은 저장된 결과를 반환하는 것이므로 오래된 기대 판을 다시 적용하지 않는다. 새 키·새 쓰기는 현재 판을 검증한다.
+
+[MCP-05 모듈 인수](../reviews/2026-10-20-mcp-05.md)에서 위 실행 경계를 구현했다. Store.ExecuteWrite가 문자열 키·SHA-256·DB 시계의 수명을 관리하고 기존 ReplayIdempotent는 UUID 호출을 같은 경계로 연결한다. 실제 삽입 여부로 최초 예약과 완료 재생을 구분하고 비어 있거나 잘못된 결과·표준 외피·명백한 자격 필드는 커밋하지 않는다. 최초와 재생은 같은 jsonb 표현을 반환한다. 오류는 원인을 보존하고 저장 장애의 원문은 노출하지 않는다. 키가 없어도 완료 객체·오류/취소를 검사하며, 업무가 이미 커밋한 뒤의 불확정 결과에는 재조회가 필요하다. 여덟 도구의 현재 권한 조회·도메인 변환은 [MCP-06](../reviews/2026-10-20-mcp-06.md)에서 인수했다.
 
 동시 재생은 첫 커밋 뒤 같은 결과를 읽고 적용 기록·색인 작업·한도 카운터를 다시 늘리지 않는다. 최초 접수부터 24시간이 지나면 키 재사용을 새 요청으로 처리할 수 있으므로 그 이후 안전한 자동 재시도를 보장하지 않는다. 재생 시 수명을 연장하지 않는다. DB 연결 예약·잠금 순서는 [아키텍처](architecture.md#데이터베이스-연결)와 [수명주기](context-lifecycle.md#판정의-직렬화)를 따른다.

@@ -153,7 +153,11 @@ func (s *Store) ListGraphs(ctx context.Context, accountID model.ID, filter model
 		cursorActivity = decoded.activity
 		cursorGraphID = decoded.graphID.String()
 	}
-	arguments := []any{accountID.String(), likeContains(filter.Name), gradeRanks, cursorActivity, cursorGraphID, limit + 1}
+	fetch := limit
+	if limit < int(^uint(0)>>1) {
+		fetch++
+	}
+	arguments := []any{accountID.String(), likeContains(filter.Name), gradeRanks, cursorActivity, cursorGraphID, fetch}
 	rows, err := s.pool.Query(ctx, `
 		WITH grant_candidate AS (
 			SELECT graph_id, grade
@@ -189,7 +193,7 @@ func (s *Store) ListGraphs(ctx context.Context, accountID model.ID, filter model
 	}
 	defer rows.Close()
 
-	graphs := make([]model.GraphListItem, 0, limit)
+	graphs := make([]model.GraphListItem, 0)
 	for rows.Next() {
 		graph, err := scanGraphListItem(rows)
 		if err != nil {

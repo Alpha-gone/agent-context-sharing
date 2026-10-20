@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"time"
@@ -33,17 +35,71 @@ type afterWriteCommit struct {
 // ErrIdempotencyConflict는 같은 키를 다른 도구 또는 인자에 쓴 경우다.
 var ErrIdempotencyConflict = errors.New("멱등성 키가 다른 요청에 쓰였다")
 
-// ReplayIdempotent는 같은 계정·키의 완료 결과를 재생하거나, 새 요청의 결과를 보관한다.
-//
-// 저장소는 계정·키 자문 잠금을 보유한 채 업무 함수를 실행해 동시 재시도를 직렬화한다.
-// 업무 쓰기가 자체 트랜잭션을 소유하는 기존 공개 계약을 보존하면서도, 완료 결과를 쓰기
-// 뒤 응답 전 보관해 응답 전달 실패를 같은 키로 회수할 수 있게 한다.
-func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest, run func(context.Context) ([]byte, error)) (result []byte, err error) {
+// ReplayIdempotent는 기존 UUID 호출의 호환 진입점이다. 새 MCP 호출은
+// 문자열 키·현재 권한 재검사를 필수로 받는 ExecuteWrite를 사용한다.
+func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest, run func(context.Context) ([]byte, error)) ([]byte, error) {
 	if !request.AccountID.IsV7() || !request.Key.IsV7() || request.ToolName == "" || run == nil {
 		return nil, fmt.Errorf("멱등성 요청 인자가 올바르지 않다")
 	}
-	// 업무 함수의 권한·대상 조회는 이 트랜잭션을 쥔 채 풀에서 연결을 하나 더 쓴다. 같은 키의
-	// 재시도도 자문 잠금을 기다리는 동안 연결을 쥐므로 「데이터베이스 연결」대로 먼저 예약한다.
+	return s.replayWrite(ctx, request.AccountID, request.Key.String(), request.ToolName, request.Fingerprint, func(context.Context) error { return nil }, run)
+}
+
+// ExecuteWrite는 완료 도메인 객체만 보관하며 check를 잠금 대기 뒤에도 실행한다.
+// check는 읽기 전용이고, apply의 결정적 거부는 JSON 객체·nil error로 반환한다.
+// error는 미완료 실패이며 바깥 예약·쓰기를 모두 되돌린다.
+func (s *Store) ExecuteWrite(ctx context.Context, account model.ID, key, tool string, normalized []byte, check func(context.Context) error, apply func(context.Context) ([]byte, error)) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !account.IsV7() || check == nil || apply == nil {
+		return nil, fmt.Errorf("쓰기 주체와 처리기가 필요하다")
+	}
+	switch tool {
+	case "graph_create", "graph_update", "node_create", "node_update", "node_discard", "node_restore", "relation_confirm", "relation_discard":
+	default:
+		return nil, model.FieldError{Field: "name", Message: "쓰기 도구를 확인해 주십시오."}
+	}
+	if _, ok := ctx.Value(writeTransactionContextKey{}).(pgx.Tx); ok {
+		return nil, storageError("nested_idempotency", errors.New("재생 경계는 중첩할 수 없다"))
+	}
+	if key != "" {
+		if err := model.ValidateRegistrationKey(key); err != nil {
+			return nil, model.FieldError{Field: "request_id", Message: "쓰기 키를 확인해 주십시오."}
+		}
+	}
+	if len(normalized) == 0 || !jsontext.Value(normalized).IsValid() {
+		return nil, storageError("write_fingerprint", errors.New("정규화 인자가 필요하다"))
+	}
+	if key == "" {
+		if err := check(ctx); err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		result, err := apply(ctx)
+		if err != nil {
+			return nil, writeFailure(ctx, "write_apply", storageError("write_apply", err))
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !completedWriteJSON(result) {
+			return nil, storageError("write_result", errors.New("완료 도메인 객체가 필요하다"))
+		}
+		return result, nil
+	}
+	return s.replayWrite(ctx, account, key, tool, sha256.Sum256(normalized), check, apply)
+}
+
+func (s *Store) replayWrite(ctx context.Context, account model.ID, key, tool string, fingerprint [sha256.Size]byte, check func(context.Context) error, run func(context.Context) ([]byte, error)) (result []byte, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, ok := ctx.Value(writeTransactionContextKey{}).(pgx.Tx); ok {
+		return nil, storageError("nested_idempotency", errors.New("재생 경계는 중첩할 수 없다"))
+	}
+	// 바깥 예약은 업무 저장점과 공유한다. 잠금 대기 중에도 풀 읽기 한 자리를 남긴다.
 	release, err := s.reserveConnections(ctx, idempotencyConnections)
 	if err != nil {
 		return nil, err
@@ -51,48 +107,66 @@ func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest
 	defer release()
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return nil, connectionError(ctx, "멱등성 트랜잭션 시작", err)
+		return nil, storageError("idempotency_begin", connectionError(ctx, "재생 트랜잭션 시작", err))
 	}
-	defer func() { err = errors.Join(connectionError(ctx, "멱등성 처리", err), rollbackTransaction(ctx, tx)) }()
-
-	// 계정과 키를 함께 두 int64 잠금으로 나눠, 다른 계정의 같은 키가 서로 기다리지 않게 한다.
-	lockInput := make([]byte, 0, len(request.AccountID)+len(request.Key))
-	lockInput = append(lockInput, request.AccountID[:]...)
-	lockInput = append(lockInput, request.Key[:]...)
-	lockDigest := sha256.Sum256(lockInput)
-	var lockKey int64
-	for _, octet := range lockDigest[:8] {
-		lockKey = lockKey<<8 | int64(octet)
+	defer func() {
+		if cleanupErr := rollbackTransaction(ctx, tx); cleanupErr != nil {
+			err = errors.Join(err, storageError("idempotency_rollback", cleanupErr))
+		}
+		err = writeFailure(ctx, "idempotency", err)
+		if err != nil {
+			result = nil
+		}
+	}()
+	lockInput := append(append([]byte{}, account[:]...), []byte(key)...)
+	digest := sha256.Sum256(lockInput)
+	var lock int64
+	for _, octet := range digest[:8] {
+		lock = lock<<8 | int64(octet)
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey); err != nil {
-		return nil, fmt.Errorf("멱등성 요청 잠금: %w", err)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lock); err != nil {
+		return nil, storageError("idempotency_lock", err)
 	}
-	now := time.Now().UTC()
-	if _, err := tx.Exec(ctx, `DELETE FROM public.idempotency_record WHERE actor_account_id = $1 AND idempotency_key = $2 AND expires_at <= $3`, request.AccountID.String(), request.Key.String(), now); err != nil {
-		return nil, fmt.Errorf("만료 멱등성 결과 삭제: %w", err)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO public.idempotency_record (
-			actor_account_id, idempotency_key, tool_name, request_fingerprint, tool_result, received_at, expires_at
-		) VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, $6)
-		ON CONFLICT DO NOTHING`, request.AccountID.String(), request.Key.String(), request.ToolName, request.Fingerprint[:], now, now.Add(idempotencyRetention)); err != nil {
-		return nil, fmt.Errorf("멱등성 요청 예약: %w", err)
+	if err := check(ctx); err != nil {
+		return nil, err
 	}
-	var toolName string
-	var fingerprint, stored []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT tool_name, request_fingerprint, tool_result
-		FROM public.idempotency_record
-		WHERE actor_account_id = $1 AND idempotency_key = $2
-		FOR UPDATE`, request.AccountID.String(), request.Key.String()).Scan(&toolName, &fingerprint, &stored); err != nil {
-		return nil, fmt.Errorf("멱등성 요청 조회: %w", err)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if toolName != request.ToolName || !bytes.Equal(fingerprint, request.Fingerprint[:]) {
-		return nil, ErrIdempotencyConflict
+	// 모든 인스턴스가 같은 DB 시계로 잠금 대기 뒤의 수명을 판정한다.
+	var received time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&received); err != nil {
+		return nil, storageError("idempotency_clock", err)
 	}
-	if string(stored) != "{}" {
+	if _, err := tx.Exec(ctx, `DELETE FROM public.idempotency_record WHERE actor_account_id=$1 AND idempotency_key=$2 AND expires_at <= $3`, account.String(), key, received); err != nil {
+		return nil, storageError("idempotency_expiry", err)
+	}
+	inserted, err := tx.Exec(ctx, `
+		INSERT INTO public.idempotency_record(actor_account_id,idempotency_key,tool_name,request_fingerprint,tool_result,received_at,expires_at)
+		VALUES($1,$2,$3,$4,'{}'::jsonb,$5,$6) ON CONFLICT DO NOTHING`, account.String(), key, tool, fingerprint[:], received, received.Add(idempotencyRetention))
+	if err != nil {
+		return nil, storageError("idempotency_reserve", err)
+	}
+	var storedTool string
+	var storedFingerprint, stored []byte
+	if err := tx.QueryRow(ctx, `SELECT tool_name,request_fingerprint,tool_result FROM public.idempotency_record WHERE actor_account_id=$1 AND idempotency_key=$2 FOR UPDATE`, account.String(), key).Scan(&storedTool, &storedFingerprint, &stored); err != nil {
+		return nil, storageError("idempotency_lookup", err)
+	}
+	if storedTool != tool || !bytes.Equal(storedFingerprint, fingerprint[:]) {
+		return nil, model.FieldError{Field: "request_id", Message: "같은 쓰기 키의 요청이 다릅니다.", Cause: ErrIdempotencyConflict}
+	}
+	if inserted.RowsAffected() == 0 {
+		if !completedWriteJSON(stored) {
+			return nil, storageError("idempotency_stored_result", errors.New("완료 결과를 확인할 수 없다"))
+		}
 		if err := tx.Commit(ctx); err != nil {
-			return nil, fmt.Errorf("멱등성 재생 커밋: %w", err)
+			return nil, storageError("idempotency_replay_commit", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		return stored, nil
 	}
@@ -101,21 +175,41 @@ func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest
 	transactionContext = context.WithValue(transactionContext, afterWriteCommitContextKey{}, afterCommit)
 	result, err = run(transactionContext)
 	if err != nil {
+		return nil, storageError("idempotency_apply", err)
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE public.idempotency_record
-		SET tool_result = $3::jsonb
-		WHERE actor_account_id = $1 AND idempotency_key = $2`, request.AccountID.String(), request.Key.String(), result); err != nil {
-		return nil, fmt.Errorf("멱등성 결과 저장: %w", err)
+	if !completedWriteJSON(result) {
+		return nil, storageError("idempotency_result", errors.New("완료 도메인 객체가 필요하다"))
+	}
+	// 최초 응답과 재생에 같은 jsonb 표현을 사용한다. 빈 예약은 커밋하지 않는다.
+	if err := tx.QueryRow(ctx, `UPDATE public.idempotency_record SET tool_result=$3::jsonb WHERE actor_account_id=$1 AND idempotency_key=$2 RETURNING tool_result`, account.String(), key, result).Scan(&result); err != nil {
+		return nil, storageError("idempotency_result_store", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("멱등성 결과 커밋: %w", err)
+		return nil, storageError("idempotency_commit", err)
 	}
 	for _, callback := range afterCommit.callbacks {
 		callback()
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
+}
+
+func completedWriteJSON(data []byte) bool {
+	var object map[string]jsontext.Value
+	if json.Unmarshal(data, &object) != nil || len(object) == 0 {
+		return false
+	}
+	for _, field := range []string{"jsonrpc", "resultType", "_meta", "access_token", "refresh_token"} {
+		if _, present := object[field]; present {
+			return false
+		}
+	}
+	return true
 }
 
 // deferAfterWriteCommit은 호출자가 소유하지 않은 쓰기 트랜잭션의 커밋 뒤에만 실행할

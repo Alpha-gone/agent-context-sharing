@@ -598,7 +598,7 @@ func (s *Store) listRelations(ctx context.Context, queryer cypherQueryer, graphI
 	}
 	defer rows.Close()
 
-	relations := make([]model.Relation, 0, limit)
+	relations := make([]model.Relation, 0)
 	for rows.Next() {
 		var raw, rawSource, rawTarget string
 		if err := rows.Scan(&raw, &rawSource, &rawTarget); err != nil {

@@ -1,32 +1,38 @@
 package main
 
 import (
-	"os"
+	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/model"
-	"agent_context_sharing/internal/store"
 	"agent_context_sharing/internal/web"
 )
 
+func TestWebCredentialErrorMapping(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		input, expected error
+	}{
+		{"success", nil, nil},
+		{"busy", fmt.Errorf("wrapped: %w", authz.ErrPasswordBusy), web.ErrAuthenticationBusy},
+		{"unavailable", fmt.Errorf("%w: synthetic-sensitive-marker", authz.ErrUnavailable), web.ErrAuthenticationUnavailable},
+		{"mismatch", authz.ErrInvalidCredential, authz.ErrInvalidCredential},
+		{"duplicate", authz.ErrLoginIDExists, authz.ErrLoginIDExists},
+		{"canceled", context.Canceled, context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if !errors.Is(webCredentialError(test.input), test.expected) {
+				t.Fatal("웹 자격 오류 사상이 다릅니다")
+			}
+		})
+	}
+}
+
 func TestWebSessionRoundTripIntegration(t *testing.T) {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
-			t.Fatal("TEST_DATABASE_URL이 필요하다")
-		}
-		t.Skip("TEST_DATABASE_URL이 없어 웹 인증 연결 통합 테스트를 건너뛴다")
-	}
-	graphName := os.Getenv("AGE_GRAPH_NAME")
-	if graphName == "" {
-		graphName = "agent_context"
-	}
-	backend, err := store.New(t.Context(), databaseURL, graphName, nil, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(backend.Close)
+	backend := newPublicAuthenticationStore(t)
 	service, err := authz.New(backend, authz.Config{Issuer: "https://service.test", BcryptCost: 4})
 	if err != nil {
 		t.Fatal(err)

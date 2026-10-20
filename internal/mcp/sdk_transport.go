@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -130,6 +131,8 @@ func readTransportBody(w http.ResponseWriter, request *http.Request, limit int64
 	if err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			writeTransportError(w, http.StatusRequestEntityTooLarge, nil, -32600, "request body too large", nil)
+		} else if timeout, ok := errors.AsType[net.Error](err); request.Context().Err() != nil || ok && timeout.Timeout() {
+			writeTransportError(w, http.StatusInternalServerError, nil, -32603, "request unavailable", nil)
 		} else {
 			writeTransportError(w, http.StatusBadRequest, nil, -32600, "cannot read request body", nil)
 		}

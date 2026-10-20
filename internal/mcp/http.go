@@ -66,9 +66,19 @@ func NewHandler(config HTTPConfig) (http.Handler, error) {
 		handlers[name] = func(ctx context.Context, request *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 			principal, ok := ctx.Value(principalKey{}).(Principal)
 			if !ok {
-				return nil, fmt.Errorf("MCP 인증 주체가 필요하다")
+				return writeErrorResult(&DependencyFailure{})
 			}
-			return handler(ctx, principal, request)
+			result, err := handler(ctx, principal, request)
+			if ctx.Err() != nil {
+				return writeErrorResult(ctx.Err())
+			}
+			if err != nil {
+				return writeErrorResult(err)
+			}
+			if result == nil {
+				return writeErrorResult(&DependencyFailure{})
+			}
+			return result, nil
 		}
 	}
 	if err := catalog.register(server, handlers); err != nil {

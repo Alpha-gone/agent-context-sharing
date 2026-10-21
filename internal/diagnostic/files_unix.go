@@ -35,7 +35,7 @@ func fileFailure(code string, cause error) error { return &FileError{Code: code,
 var fileKinds = [...]Kind{Request, Auth, Search, Index, Management, System}
 
 // Files는 준비된 파일과 잠금의 수명을 소유한다. 파일 fd·경로를 업무 패키지에
-// 공개하지 않는다. 대기열·인코딩·회전은 이 자원을 사용하는 후속 기록기의 책임이다.
+// 공개하지 않는다. 대기열·인코딩은 Recorder가, 회전은 후속 관측성 항목이 담당한다.
 type Files struct {
 	parent      *os.File
 	root        *os.File

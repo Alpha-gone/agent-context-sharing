@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/plan"
 	"agent_context_sharing/internal/store"
@@ -42,10 +43,11 @@ type periodicTask struct {
 
 // periodicWorker는 모든 애플리케이션 인스턴스에 내장되는 일곱 주기 작업의 시작과 종료를 관리한다.
 type periodicWorker struct {
-	store  periodicStore
-	logger *slog.Logger
-	now    func() time.Time
-	tasks  []periodicTask
+	diagnostics diagnostic.Observer
+	store       periodicStore
+	logger      *slog.Logger
+	now         func() time.Time
+	tasks       []periodicTask
 
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -138,9 +140,22 @@ func (worker *periodicWorker) runPeriodically(ctx context.Context, task periodic
 }
 
 func (worker *periodicWorker) runTask(ctx context.Context, task periodicTask) {
+	ctx = diagnostic.ResumeJob(ctx, "")
 	count, acquired, err := worker.store.WithTryAdvisoryLock(ctx, task.lockKey, task.run)
+	job := map[string]string{"proposal_cleanup": "relation_cleanup", "request_rate_cleanup": "rate_window_cleanup", "embedding_tier_move": "embedding_tier"}[task.name]
+	if job == "" {
+		job = task.name
+	}
+	result, reason, level := "completed", "completed", "INFO"
+	if !acquired {
+		result = "skipped"
+	}
 	if err != nil {
-		worker.logger.ErrorContext(ctx, "주기 작업 실패", "task", task.name, "processed", count, "status", "failed", "error", err)
+		result, reason, level = "failed", "store_unavailable", "ERROR"
+	}
+	diagnostic.Observe(worker.diagnostics, ctx, level, "worker", result, reason, false, diagnostic.Fields{System: diagnostic.SystemFields{Job: job, Processed: uint64(max(count, 0))}})
+	if err != nil {
+		worker.logger.ErrorContext(ctx, "주기 작업 실패", "task", task.name, "processed", count, "status", "failed", "reason_code", "store_unavailable")
 		return
 	}
 	if !acquired {

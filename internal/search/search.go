@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 )
 
@@ -171,6 +172,7 @@ func New(database Store, embedder Embedder, config Config, logger *slog.Logger) 
 
 // Flow는 진입 채널을 결합하고 구성에 따라 그래프 경로와 전역 요약을 추가한다.
 func (service *Service) Flow(ctx context.Context, input Input) (flowResult Flow, flowErr error) {
+	started := time.Now()
 	defer func() {
 		if ctx.Err() != nil {
 			// 취소를 채널 부분 성공으로 숨기거나 이미 조립한 본문을 함께 반환하지 않는다.
@@ -181,10 +183,10 @@ func (service *Service) Flow(ctx context.Context, input Input) (flowResult Flow,
 			return
 		}
 		if flowErr != nil {
-			service.diagnostics.RecordDiagnostic(ctx, "WARN", "flow", "failed", "search_failed")
+			service.observe(ctx, "flow", "failed", "search_failed", diagnostic.SearchFields{LatencyMS: uint64(time.Since(started).Milliseconds())})
 			return
 		}
-		service.diagnostics.RecordDiagnostic(ctx, "INFO", "flow", "completed", "completed")
+		service.observe(ctx, "flow", "completed", "completed", diagnostic.SearchFields{LatencyMS: uint64(time.Since(started).Milliseconds())})
 	}()
 
 	if err := input.Validate(); err != nil {
@@ -244,6 +246,7 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 		} else {
 			metric.Candidates = len(candidates)
 		}
+		service.observeChannel(ctx, name, metric)
 		results[index] = channelResult{name: name, candidates: candidates, metric: metric}
 	}
 	semantic := func() ([]model.SearchCandidate, error) {
@@ -278,6 +281,7 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 	// 진입점이 없으면 확장할 것도 없으므로 그래프 채널의 상태까지 남기고 끝낸다.
 	allEntryChannelsFailed := func() (Flow, error) {
 		graph := service.graphCandidates(ctx, input, nil, false, 0)
+		service.observeChannel(ctx, "graph", graph.metric)
 		channels[graph.name] = graph.metric
 		return Flow{Channels: channels}, ErrAllChannelsFailed
 	}
@@ -348,11 +352,14 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 		graph = service.graphCandidates(ctx, input, entryPoints, globalFallbackApplied, hopDepth(input.MaxHops))
 		route, reason = legacyRoute(input.Scope, service.config.GraphStage, globalFallbackApplied, graph)
 	}
+	service.observeChannel(ctx, "graph", graph.metric)
+	service.observe(ctx, "routing", "completed", "completed", diagnostic.SearchFields{Path: string(route), SelectionReason: reason})
 	channels[graph.name] = graph.metric
 	results = append(results, graph)
 	combined = combine(results)
 	combined = foldSimilarDerived(combined, service.config.FoldThreshold)
 	graphView := buildCandidateSubgraph(combined, results)
+	service.observe(ctx, "selection", "pending", "completed", diagnostic.SearchFields{Candidates: uint64(len(combined)), Nodes: uint64(len(graphView.degrees))})
 	var selected []combinedCandidate
 	var used int
 	var truncation *Truncation
@@ -393,6 +400,8 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 		}
 	}
 	edges := filterEdges(selected, results)
+	service.observe(ctx, "selection", "completed", "completed", diagnostic.SearchFields{Candidates: uint64(selection.Candidates), Nodes: uint64(len(selected)), Edges: uint64(len(edges))})
+	service.observe(ctx, "budget", "completed", "completed", diagnostic.SearchFields{Characters: uint64(used), Nodes: uint64(len(selected)), Truncated: truncation != nil || graph.boundary != nil})
 	flow := Flow{Contexts: contexts, Edges: edges, EntryPoints: contextIDs(entryPoints), BudgetUsed: used, Budget: input.Budget, Channels: channels, Truncation: truncation, HopBoundary: graph.boundary, Selection: selection, Route: route, RouteReason: reason, RouteSignals: model.RouteSignals(signals)}
 	service.logger.InfoContext(ctx, "작업 컨텍스트 흐름 검색 완료", "semantic_candidates", channels["semantic"].Candidates, "keyword_candidates", channels["keyword"].Candidates, "time_candidates", channels["time"].Candidates, "global_fallback_triggered", globalFallbackTriggered, "global_fallback_applied", globalFallbackApplied, "selected_route", route, "route_reason", reason, "graph_candidates", channels["graph"].Candidates, "budget_used", used, "budget", input.Budget, "truncated", truncation != nil, "hop_truncated", graph.boundary != nil, "evidence_path_selection", service.config.EvidencePathSelection, "selection_candidates", selection.Candidates, "selection_selected", selection.Selected, "selection_connectors", selection.Connectors, "selection_unreachable", selection.Unreachable)
 	return flow, nil
@@ -437,6 +446,7 @@ type channelResult struct {
 
 func (service *Service) globalSummaries(ctx context.Context, input Input) channelResult {
 	result := channelResult{name: "global_summary"}
+	defer func() { service.observeChannel(ctx, "global_summary", result.metric) }()
 	// 명시한 전역 범위는 클라이언트가 고른 진입점 계약이므로 배포 구성으로 끄지 않는다.
 	// 구성이 끄는 것은 국소 결과의 관련성이 낮을 때 전역 요약을 시작점으로 더하는
 	// `auto`의 자동 전환뿐이다. 적응형 라우팅은 전역 진입 여부를 직접 정하므로 이 값을 보지

@@ -30,6 +30,7 @@ type afterWriteCommitContextKey struct{}
 
 type afterWriteCommit struct {
 	callbacks []func()
+	outcomes  []func(string)
 }
 
 // ErrIdempotencyConflict는 같은 키를 다른 도구 또는 인자에 쓴 경우다.
@@ -109,9 +110,17 @@ func (s *Store) replayWrite(ctx context.Context, account model.ID, key, tool str
 	if err != nil {
 		return nil, storageError("idempotency_begin", connectionError(ctx, "재생 트랜잭션 시작", err))
 	}
+	outcomes := &afterWriteCommit{}
+	outcome := "rolled_back"
 	defer func() {
 		if cleanupErr := rollbackTransaction(ctx, tx); cleanupErr != nil {
 			err = errors.Join(err, storageError("idempotency_rollback", cleanupErr))
+			if outcome != "committed" {
+				outcome = "unknown"
+			}
+		}
+		for _, report := range outcomes.outcomes {
+			report(outcome)
 		}
 		err = writeFailure(ctx, "idempotency", err)
 		if err != nil {
@@ -170,7 +179,7 @@ func (s *Store) replayWrite(ctx context.Context, account model.ID, key, tool str
 		}
 		return stored, nil
 	}
-	afterCommit := &afterWriteCommit{}
+	afterCommit := outcomes
 	transactionContext := context.WithValue(ctx, writeTransactionContextKey{}, tx)
 	transactionContext = context.WithValue(transactionContext, afterWriteCommitContextKey{}, afterCommit)
 	result, err = run(transactionContext)
@@ -187,9 +196,14 @@ func (s *Store) replayWrite(ctx context.Context, account model.ID, key, tool str
 	if err := tx.QueryRow(ctx, `UPDATE public.idempotency_record SET tool_result=$3::jsonb WHERE actor_account_id=$1 AND idempotency_key=$2 RETURNING tool_result`, account.String(), key, result).Scan(&result); err != nil {
 		return nil, storageError("idempotency_result_store", err)
 	}
+	outcome = "unknown"
 	if err := tx.Commit(ctx); err != nil {
+		if errors.Is(err, pgx.ErrTxCommitRollback) {
+			outcome = "rolled_back"
+		}
 		return nil, storageError("idempotency_commit", err)
 	}
+	outcome = "committed"
 	for _, callback := range afterCommit.callbacks {
 		callback()
 	}
@@ -229,10 +243,10 @@ func deferAfterWriteCommit(ctx context.Context, callback func()) bool {
 func (s *Store) writeTransaction(ctx context.Context) (pgx.Tx, error) {
 	if tx, ok := ctx.Value(writeTransactionContextKey{}).(pgx.Tx); ok {
 		nested, err := tx.Begin(ctx)
-		return nested, storageError("write_savepoint", connectionError(ctx, "저장점 시작", err))
+		return observeWriteTx(ctx, nested, true), storageError("write_savepoint", connectionError(ctx, "저장점 시작", err))
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	return tx, storageError("write_begin", connectionError(ctx, "쓰기 트랜잭션 시작", err))
+	return observeWriteTx(ctx, tx, false), storageError("write_begin", connectionError(ctx, "쓰기 트랜잭션 시작", err))
 }
 
 // CleanupExpiredIdempotencyRecords는 보관 기간이 끝난 재시도 결과를 지운다.

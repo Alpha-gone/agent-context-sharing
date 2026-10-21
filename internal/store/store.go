@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -45,7 +46,9 @@ var graphNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // Store는 애플리케이션이 소유하는 단일 데이터 접근 계층이다.
 type Store struct {
-	diagnostics Diagnostics
+	diagnostics           Diagnostics
+	managementDiagnostics diagnostic.Observer
+	indexDiagnostics      diagnostic.Observer
 	// pool 필드는 패키지 밖에 노출하지 않는 pgx 연결 풀이다.
 	pool *pgxpool.Pool
 	// graphName 필드는 모든 AGE openCypher 호출이 공유하는 물리 그래프 이름이다.

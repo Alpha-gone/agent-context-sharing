@@ -79,3 +79,13 @@ func validInstance(value string) bool {
 	}
 	return true
 }
+
+// ResumeJob는 저장소가 확보한 등록 세대의 상관 ID만 복원한다. HTTP 입력에는 사용하지 않는다.
+// 이전 회차의 job·flow는 계승하지 않고 시험 실행만 유지한다.
+func ResumeJob(ctx context.Context, correlationID string) context.Context {
+	trace := Trace{testRun: TraceFromContext(ctx).testRun}.NewJob()
+	if validID(correlationID) {
+		trace.correlation = correlationID
+	}
+	return WithTrace(ctx, trace)
+}

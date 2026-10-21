@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/perm"
 	"agent_context_sharing/internal/plan"
@@ -77,6 +78,7 @@ type GraphStore interface {
 
 // Config는 웹 화면의 고정된 HTTP 경계를 모은다.
 type Config struct {
+	Diagnostics diagnostic.Observer
 	// Authorization은 로그인·세션과 분리된 OAuth 인가의 업무 경계다.
 	Authorization Authorization
 	Connections   ConnectionManagement
@@ -487,6 +489,12 @@ func (server *Server) graphAccess(writer http.ResponseWriter, request *http.Requ
 // 분기이므로 오류로 올리지 않되, 등급 판정 자체는 perm이 계속 담당한다.
 func (server *Server) hasGrade(ctx context.Context, graphID, accountID model.ID, required model.GraphGrade) (bool, error) {
 	err := perm.Require(ctx, server.graphs, graphID, accountID, required)
+	level, result, reason := "INFO", "completed", "completed"
+	if err != nil {
+		level, result, reason = "WARN", "rejected", "permission_denied"
+	}
+	fields := diagnostic.Fields{Identity: diagnostic.IdentityFields{AccountID: accountID.String()}}
+	diagnostic.Observe(server.config.Diagnostics, ctx, level, "permission", result, reason, true, fields)
 	if err == nil {
 		return true, nil
 	}
@@ -908,7 +916,23 @@ func localRedirect(value string) string {
 	return target.RequestURI()
 }
 
-func (server *Server) verifiedSession(request *http.Request) (model.ID, Session, error) {
+func (server *Server) verifiedSession(request *http.Request) (accountID model.ID, sessionResult Session, resultErr error) {
+	defer func() {
+		level, result, reason := "INFO", "completed", "completed"
+		fields := diagnostic.Fields{}
+		verified := resultErr == nil && accountID.IsV7()
+		if verified {
+			fields.Identity.AccountID = accountID.String()
+		}
+		if resultErr != nil {
+			level, result, reason = "WARN", "rejected", "invalid_credential"
+		}
+		if errors.Is(resultErr, ErrAuthenticationUnavailable) {
+			level, result, reason = "ERROR", "failed", "authentication_unavailable"
+		}
+		diagnostic.Observe(server.config.Diagnostics, request.Context(), level, "authentication", result, reason, verified, fields)
+	}()
+
 	if err := request.Context().Err(); err != nil {
 		return model.ID{}, Session{}, err
 	}

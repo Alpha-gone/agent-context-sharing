@@ -270,8 +270,8 @@ func TestPanicBecomesInternalError(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), "internal_error") {
 		t.Fatalf("panic 응답 본문 = %s", recorder.Body.String())
 	}
-	// 원인과 요청 흐름을 이을 상관 식별자가 로그에 남아야 한다.
-	for _, want := range []string{"요청 처리 중 panic", "처리기 내부 오류", "correlation_id"} {
+	// 고정 원인과 요청 흐름을 이을 상관 식별자가 남아야 한다.
+	for _, want := range []string{"요청 처리 중 panic", "handler_panic", "correlation_id"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Fatalf("로그에 %q가 없다: %s", want, logs.String())
 		}

@@ -14,6 +14,7 @@ import (
 
 	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/config"
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/index"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
@@ -75,6 +76,34 @@ func configureAndRun(env config.Environment, start func(config.Config) error) er
 }
 
 func runConfigured(cfg config.Config) (resultErr error) {
+	source, err := diagnostic.NewSource(cfg.Diagnostic.InstanceID)
+	if err != nil {
+		return err
+	}
+	recorder, err := diagnostic.NewRecorder(context.Background(), cfg.Diagnostic.Directory, source)
+	if err != nil {
+		return fmt.Errorf("진단 파일 준비: %w", err)
+	}
+	sink, _ := diagnostic.LevelSink(recorder, cfg.Diagnostic.Level)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, recorder.Close(ctx))
+	}()
+	reports := make(map[diagnostic.Kind]*diagnostic.Reporter, 6)
+	for _, kind := range []diagnostic.Kind{diagnostic.Request, diagnostic.Auth, diagnostic.Search, diagnostic.Index, diagnostic.Management, diagnostic.System} {
+		reports[kind], _ = diagnostic.NewReporter(kind, sink, source)
+	}
+	jobContext := diagnostic.WithTrace(context.Background(), diagnostic.Trace{}.NewJob())
+	reports[diagnostic.System].RecordFields(jobContext, "INFO", "startup", "pending", "completed", false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup"}})
+	defer func() {
+		result, reason, level := "completed", "completed", "INFO"
+		if resultErr != nil {
+			result, reason, level = "failed", "store_unavailable", "ERROR"
+		}
+		reports[diagnostic.System].RecordFields(jobContext, level, "shutdown", result, reason, false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "shutdown"}})
+	}()
+
 	database, err := store.New(context.Background(), cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
 		AdjacencyWindow:     cfg.RelationAdjacencyWindow,
 		SimilarityThreshold: cfg.RelationSimilarityThreshold,
@@ -88,6 +117,8 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	defer func() {
 		resultErr = errors.Join(resultErr, closeServerResources(context.Background(), slog.Default(), database.Close, poolCloseSafe, workers...))
 	}()
+	database.SetDiagnostics(reports[diagnostic.System])
+	database.SetOperationDiagnostics(reports[diagnostic.Management], reports[diagnostic.Index])
 	periodic, err := newPeriodicWorker(database, cfg.AccountPlans, slog.Default())
 	if err != nil {
 		return fmt.Errorf("주기 작업 준비: %w", err)
@@ -103,6 +134,8 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("색인 작업자 준비: %w", err)
 	}
+	indexer.SetDiagnostics(reports[diagnostic.Index])
+	periodic.diagnostics = reports[diagnostic.System]
 	// external도 질의용 제공자 transport를 소유하므로 시작 여부와 별개로 정리한다.
 	workers = append(workers, periodic, indexer)
 	if err := database.CheckEmbeddingSchema(context.Background(), cfg.EmbeddingVectorType, cfg.EmbeddingDimension); err != nil {
@@ -130,6 +163,7 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("인가 서버 준비: %w", err)
 	}
+	authorization.SetDiagnostics(reports[diagnostic.Auth])
 	transport := transportSecurity{
 		directTLS:      cfg.TLSMode == config.TLSModeDirect,
 		trustedProxies: cfg.TrustedProxies,
@@ -137,6 +171,7 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	webServer, err := web.New(webAuthentication{service: authorization}, database, web.Config{
 		Authorization: webAuthentication{service: authorization},
 		Connections:   webAuthentication{service: authorization},
+		Diagnostics:   reports[diagnostic.Request],
 		SecureCookie:  transport.isTLSRequest,
 		ClientAddress: transport.clientAddress,
 		Plans:         cfg.AccountPlans,
@@ -149,6 +184,7 @@ func runConfigured(cfg config.Config) (resultErr error) {
 		return fmt.Errorf("인가 서버 경로 준비: %w", err)
 	}
 	app := newApplication(database, slog.Default(), transport)
+	app.diagnostics = reports[diagnostic.Request]
 	app.web = webServer
 	app.publicKeys = authorizationHandler
 	app.oauthMetadata = authorizationHandler

@@ -26,7 +26,10 @@ type BearerPrincipal struct {
 }
 
 // VerifyBearer는 고정 resource·등록·공유 폐기를 확인한다. 등급은 다음 권한 경계가 조회한다.
-func (s *Service) VerifyBearer(ctx context.Context, raw string) (BearerPrincipal, error) {
+func (s *Service) VerifyBearer(ctx context.Context, raw string) (principal BearerPrincipal, resultErr error) {
+	defer func() {
+		s.authObservation(ctx, "token_validation", principal.AccountID, principal.ClientID, principal.GrantID, resultErr)
+	}()
 	if err := ctx.Err(); err != nil {
 		return BearerPrincipal{}, err
 	}
@@ -48,13 +51,34 @@ func (s *Service) VerifyBearer(ctx context.Context, raw string) (BearerPrincipal
 	if accountErr != nil || grantErr != nil || access.Scope == "" || !registered || !slices.Contains(client.Resources, s.oauth.Resource) || claims.Expiry.Time().Sub(claims.IssuedAt.Time()) > time.Hour {
 		return BearerPrincipal{}, ErrInvalidCredential
 	}
-	allowed, err := s.config.AccessTokens.OAuthAccessAllowed(ctx, store.OAuthAccessBinding{
+	binding := store.OAuthAccessBinding{
 		AccountID: account, GrantID: grant, ClientID: access.ClientID, Resource: s.oauth.Resource, Scope: access.Scope, TokenID: claims.ID, IssuedAt: claims.IssuedAt.Time(),
-	}, s.now().UTC())
+	}
+	var allowed bool
+	if classified, ok := s.config.AccessTokens.(interface {
+		OAuthAccessStatus(context.Context, store.OAuthAccessBinding, time.Time) (string, error)
+	}); ok {
+		reason, lookupErr := classified.OAuthAccessStatus(ctx, binding, s.now().UTC())
+		if lookupErr != nil {
+			return BearerPrincipal{}, &credentialFailure{ErrUnavailable, lookupErr}
+		}
+		if reason != "completed" {
+			if reason == "binding_violation" {
+				return BearerPrincipal{}, authRejected(reason)
+			}
+			return BearerPrincipal{}, &credentialFailure{ErrInvalidCredential, &store.OAuthRejection{Reason: reason, Binding: store.OAuthGrantBinding{ID: grant, AccountID: account, ClientID: access.ClientID}}}
+		}
+		allowed = true
+	} else {
+		allowed, err = s.config.AccessTokens.OAuthAccessAllowed(ctx, binding, s.now().UTC())
+	}
 	if err := ctx.Err(); err != nil {
 		return BearerPrincipal{}, err
 	}
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidOAuthGrant) {
+			return BearerPrincipal{}, &credentialFailure{ErrInvalidCredential, err}
+		}
 		return BearerPrincipal{}, &credentialFailure{ErrUnavailable, err}
 	}
 	if !allowed || !s.now().UTC().Before(claims.Expiry.Time()) {

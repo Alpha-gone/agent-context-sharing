@@ -78,6 +78,9 @@ func readTool(ctx context.Context, d Dependencies, principal Principal, tool str
 	}
 	graphID := argumentID(args, "graph_id")
 	if err := perm.Require(ctx, d.Grades, graphID, principal.AccountID, model.GraphGradeViewer); err != nil {
+		if d.Diagnostics != nil {
+			d.Diagnostics.RecordDiagnostic(ctx, "WARN", "permission", "rejected", "permission_denied")
+		}
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {

@@ -14,12 +14,16 @@ import (
 // 업무 판단·입력 병합·MCP 코드 사상은 internal/mcp가 소유한다.
 type mcpWriteStorage struct{ *store.Store }
 
-func newMCPWriteHandlers(database *store.Store, plans mcp.Plans) (map[string]mcp.ToolHandler, error) {
+func newMCPWriteHandlers(database *store.Store, plans mcp.Plans, observers ...mcp.Diagnostics) (map[string]mcp.ToolHandler, error) {
 	if database == nil {
 		return nil, &mcp.DependencyFailure{}
 	}
+	var observer mcp.Diagnostics
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
 	adapter := mcpWriteStorage{database}
-	return mcp.NewWriteHandlers(mcp.Dependencies{Grades: adapter, Plans: plans, Graphs: adapter, Nodes: adapter, Agents: adapter, GraphWrites: adapter, NodeWrites: adapter, RelationWrites: adapter, Writes: adapter, Rejections: adapter})
+	return mcp.NewWriteHandlers(mcp.Dependencies{Diagnostics: observer, Grades: adapter, Plans: plans, Graphs: adapter, Nodes: adapter, Agents: adapter, GraphWrites: adapter, NodeWrites: adapter, RelationWrites: adapter, Writes: adapter, Rejections: adapter})
 }
 
 func mcpWriteError(err error) error {

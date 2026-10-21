@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
 	"github.com/jackc/pgx/v5"
@@ -122,6 +123,11 @@ func TestWorkerPublicationSignalIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer worker.Close(t.Context())
+			sink := &obs05ProviderEvents{}
+			source, _ := diagnostic.NewSource("obs05")
+			reporter, _ := diagnostic.NewReporter(diagnostic.Index, sink, source)
+			worker.SetDiagnostics(reporter)
+
 			processed, err := worker.RunOnceInGraph(t.Context(), graph)
 			if err != nil || !processed {
 				t.Fatalf("작업자 회차=%t: %v", processed, err)
@@ -133,7 +139,19 @@ func TestWorkerPublicationSignalIntegration(t *testing.T) {
 			if calls != wantCalls {
 				t.Fatalf("관계 후보 신호=%d want=%d", calls, wantCalls)
 			}
-			output := logs.String()
+			if len(sink.events) != 1 {
+				t.Fatalf("제공자 진단 수: %d", len(sink.events))
+			}
+			e := sink.events[0]
+			wantStatus := uint16(200)
+			if mode == "provider_failure" {
+				wantStatus = 503
+			}
+			if e.Validate() != nil || e.CorrelationID != correlation.String() || e.JobID == "" || e.Fields.Index.TaskID != jobID || e.Fields.Index.Generation == 0 || e.Fields.Index.ProviderStatus != wantStatus {
+				t.Fatalf("실제 제공자 계측: %+v", e)
+			}
+			eventBytes, _ := json.Marshal(sink.events)
+			output := logs.String() + string(eventBytes)
 			for _, secret := range []string{"private proposal marker", "private response marker", "private-key-marker", "같은 의미의 사건", server.URL} {
 				if strings.Contains(output, secret) {
 					t.Errorf("진단에 비허용 원문 노출: %q", secret)
@@ -155,4 +173,11 @@ func TestWorkerPublicationSignalIntegration(t *testing.T) {
 			}
 		})
 	}
+}
+
+type obs05ProviderEvents struct{ events []diagnostic.Event }
+
+func (s *obs05ProviderEvents) Emit(_ context.Context, e diagnostic.Event) bool {
+	s.events = append(s.events, e)
+	return false
 }

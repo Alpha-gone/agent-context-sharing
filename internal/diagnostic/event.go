@@ -82,6 +82,19 @@ type Sink interface {
 	Emit(context.Context, Event) bool
 }
 
+// Observer는 안전한 값 필드만 받는 처리 경계의 주입 계약이다.
+type Observer interface {
+	RecordFields(context.Context, string, string, string, string, bool, Fields) bool
+}
+
+// Observe는 미주입 시에도 업무 처리를 그대로 수행한다. 반환은 저장 성공이 아닌 수락이다.
+func Observe(observer Observer, ctx context.Context, level, stage, result, reason string, verified bool, fields Fields) bool {
+	if observer == nil {
+		return false
+	}
+	return observer.RecordFields(ctx, level, stage, result, reason, verified, fields)
+}
+
 // Reporter는 종류를 고정하여 업무 패키지의 좁은 진단 인터페이스를 구현한다.
 type Reporter struct {
 	kind   Kind
@@ -118,4 +131,39 @@ func (reporter *Reporter) RecordFields(ctx context.Context, level, stage, result
 
 func validKind(kind Kind) bool {
 	return slices.Contains([]Kind{Request, Auth, Search, Index, Management, System}, kind)
+}
+
+// LevelSink는 검증된 이벤트의 수준을 구성된 최소 수준과 대조한다.
+// 수준 때문에 제외한 이벤트는 저장 실패·누락으로 집계하지 않는다.
+func LevelSink(sink Sink, minimum string) (Sink, error) {
+	if sink == nil || levelOrder(minimum) < 0 {
+		return nil, fmt.Errorf("진단 최소 수준이 올바르지 않다")
+	}
+	return levelSink{sink, levelOrder(minimum)}, nil
+}
+
+type levelSink struct {
+	sink    Sink
+	minimum int
+}
+
+func (s levelSink) Emit(ctx context.Context, event Event) bool {
+	if levelOrder(event.Level) < s.minimum {
+		return true
+	}
+	return s.sink.Emit(ctx, event)
+}
+func levelOrder(level string) int {
+	switch level {
+	case "DEBUG":
+		return 0
+	case "INFO":
+		return 1
+	case "WARN":
+		return 2
+	case "ERROR":
+		return 3
+	default:
+		return -1
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -50,8 +51,21 @@ func TestStartupFailureClosesWorkersIntegration(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer listener.Close()
+				directory, err := os.MkdirTemp(".", ".obs05-startup-")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer os.RemoveAll(directory)
+				absolute, err := filepath.Abs(filepath.Join(directory, "logs"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _, isolatedAddress := newServerContractDatabase(t)
+				resource := &url.URL{Scheme: "https", Host: "service.test", Path: "/mcp"}
 				cfg := config.Config{
-					DatabaseURL: databaseURL, GraphName: graphName, HTTPAddr: listener.Addr().String(),
+					MCPResourceURL: resource, OAuthClients: map[string]config.OAuthClient{"test": {RedirectURIs: []string{"http://127.0.0.1/callback"}, Resources: []string{resource.String()}, LoopbackPortPolicy: config.LoopbackExact}},
+					Diagnostic:  config.DiagnosticConfig{Directory: absolute, InstanceID: "startup_test", Level: "INFO"},
+					DatabaseURL: isolatedAddress, GraphName: graphName, HTTPAddr: listener.Addr().String(),
 					EmbeddingProvider: "gemini", GeminiAPIKey: "synthetic-key", EmbeddingBaseURL: embeddingURL, EmbeddingModel: "gemini-embedding-2", EmbeddingVectorType: "vector", EmbeddingDimension: dimension,
 					SearchExecution: config.SearchExecutionParallel, SearchCandidateLimit: 50, SearchSemanticThreshold: .5, SearchFoldThreshold: .9, SearchGraphStage: config.SearchGraphStageBaseline,
 					RelationAdjacencyWindow: time.Hour, RelationSimilarityThreshold: .8, RelationProposalLimit: 10,

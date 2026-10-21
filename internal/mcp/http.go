@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"agent_context_sharing/internal/diagnostic"
 	"bytes"
 	"context"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -23,6 +25,7 @@ type ToolHandler func(context.Context, Principal, *sdk.CallToolRequest) (*sdk.Ca
 // HTTPConfig는 cmd/server가 검증한 구성과 인증 경계를 주입한다.
 // Protect는 매 요청의 Bearer·scope·현재 폐기를 검사하고 실패 시 응답을 끝낸다.
 type HTTPConfig struct {
+	Diagnostics    diagnostic.Observer
 	AllowedOrigins []string
 	Protect        func(AuthenticatedHandler) http.Handler
 	Handlers       map[string]ToolHandler
@@ -64,11 +67,18 @@ func NewHandler(config HTTPConfig) (http.Handler, error) {
 			return nil, fmt.Errorf("MCP 업무 처리기가 필요하다")
 		}
 		handlers[name] = func(ctx context.Context, request *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+			started := time.Now()
 			principal, ok := ctx.Value(principalKey{}).(Principal)
 			if !ok {
 				return writeErrorResult(&DependencyFailure{})
 			}
+			diagnostic.Observe(config.Diagnostics, ctx, "INFO", "dispatch", "pending", "completed", true, diagnostic.Fields{Identity: diagnostic.IdentityFields{AccountID: principal.AccountID.String()}, Request: diagnostic.RequestFields{Route: "mcp", Tool: name}})
 			result, err := handler(ctx, principal, request)
+			outcome, reason, level := "completed", "completed", "INFO"
+			if err != nil || result == nil || result.IsError || ctx.Err() != nil {
+				outcome, reason, level = "failed", "constraint_violation", "WARN"
+			}
+			diagnostic.Observe(config.Diagnostics, ctx, level, "response", outcome, reason, true, diagnostic.Fields{Identity: diagnostic.IdentityFields{AccountID: principal.AccountID.String()}, Request: diagnostic.RequestFields{Route: "mcp", Tool: name, LatencyMS: uint64(time.Since(started).Milliseconds())}})
 			if ctx.Err() != nil {
 				return writeErrorResult(ctx.Err())
 			}

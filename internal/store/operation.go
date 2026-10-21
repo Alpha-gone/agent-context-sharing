@@ -195,7 +195,9 @@ func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contex
 	if id := model.CorrelationID(ctx); !id.IsZero() {
 		correlationID = new(id.String())
 	}
-	result, err := tx.Exec(ctx, `
+	var storedTask string
+	var generation time.Time
+	err = tx.QueryRow(ctx, `
 		INSERT INTO public.index_task (
 			task_id, context_id, graph_id, attempts, state, enqueued_at, next_attempt_at, correlation_id
 		) VALUES ($1, $2, $3, 0, 'pending', $4, $4, $5)
@@ -203,14 +205,29 @@ func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contex
 			attempts = 0, state = 'pending', last_error = NULL,
 			enqueued_at = EXCLUDED.enqueued_at, next_attempt_at = EXCLUDED.next_attempt_at,
 			correlation_id = EXCLUDED.correlation_id
-		WHERE index_task.graph_id = EXCLUDED.graph_id`,
-		taskID.String(), contextID.String(), graphID.String(), now, correlationID)
+		WHERE index_task.graph_id = EXCLUDED.graph_id
+ RETURNING task_id::text,enqueued_at`,
+		taskID.String(), contextID.String(), graphID.String(), now, correlationID).Scan(&storedTask, &generation)
 	if err != nil {
 		return fmt.Errorf("색인 작업 등록: %w", err)
 	}
-	if result.RowsAffected() != 1 {
-		return storageError("index_task_scope", fmt.Errorf("색인 작업의 그래프 범위가 일치하지 않는다"))
+	id, parseErr := model.ParseID(storedTask)
+	if parseErr != nil {
+		return storageError("index_task_identifier", parseErr)
 	}
+	task := IndexTask{ID: id, ContextID: contextID, GraphID: graphID, Generation: generation}
+	if observed, ok := tx.(*observedWriteTx); ok {
+		observed.callbacks = append(observed.callbacks, func(state string) {
+			result, reason := "pending", "completed"
+			if state != "committed" {
+				result, reason = "skipped", "commit_unknown"
+			}
+			s.indexObservation(ctx, task, "enqueue", result, reason, "")
+		})
+	} else {
+		s.indexObservation(ctx, task, "enqueue", "pending", "completed", "")
+	}
+
 	return nil
 }
 
@@ -219,6 +236,9 @@ type operationQueryer interface {
 }
 
 func (s *Store) insertOperation(ctx context.Context, queryer operationQueryer, operation OperationRecord, result, reason string) error {
+	if observation, ok := ctx.Value(managementObservationKey{}).(*managementObservation); ok {
+		observation.stage = "audit"
+	}
 	at := time.Now().UTC()
 	if err := operation.managementOperation(at, result, reason).Validate(); err != nil {
 		return err

@@ -67,6 +67,14 @@ func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation m
 // ConfirmRelation은 관계 정체성으로 후보를 확정하거나, 없는 관계를 에이전트 제안으로 만든다.
 // 같은 정체성의 재확정은 현재 관계를 돌려주는 멱등 연산이다.
 func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation model.Relation, operation *OperationRecord) (result model.Relation, err error) {
+	ctx, observation := beginManagement(ctx, "relation_confirm")
+	defer func() {
+		if result.ID.IsV7() {
+			observation.fields.Identity.RelationID = result.ID.String()
+		}
+		s.finishManagement(ctx, observation, err)
+	}()
+
 	if !graphID.IsV7() || relation.GraphID != graphID {
 		return model.Relation{}, fmt.Errorf("요청 graph_id와 관계 graph_id가 일치하지 않는다")
 	}
@@ -80,9 +88,11 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	if err := validateRelationOperation(operation, graphID, relation.ID, OperationAdd); err != nil {
 		return model.Relation{}, err
 	}
+	observation.stage = "actor_binding"
 	if operation != nil && (operation.AccountID != relation.ConfirmedBy || operation.AgentID != relation.ConfirmedByAgent) {
 		return model.Relation{}, model.FieldError{Field: "confirmed_by", Message: "관계 확정 주체와 관리 기록의 실행 주체가 일치해야 한다"}
 	}
+	observation.stage = "write"
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 확정 트랜잭션 시작: %w", err)
@@ -94,10 +104,13 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	// 검사도 서로의 미커밋 간선을 보지 못해 A→B와 B→A가 함께 통과한다. 「판정의
 	// 직렬화」가 같은 행을 이미 쓰기 경로의 직렬화 지점으로 두었으므로 새 경합 지점은
 	// 아니며, 이 트랜잭션도 외부 호출 없이 끝난다.
+	observation.stage = "permission"
 	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
 		return model.Relation{}, err
 	}
 
+	observation.fields.Identity.GraphID = graphID.String()
+	observation.stage = "endpoint_load"
 	from, err := s.context(ctx, tx, graphID, relation.FromContextID)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 시작 사건 조회: %w", err)
@@ -106,20 +119,37 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 대상 사건 조회: %w", err)
 	}
+	observation.fields.Identity.ContextID = from.ID.String()
+	observation.fields.Management.RelationType = string(relation.Type)
+	observation.stage = "layer_check"
+	observation.fields.Management.ExpectedLayer = "event"
+	if from.Layer != model.LayerEvent {
+		observation.fields.Management.ActualLayer = string(from.Layer)
+		return model.Relation{}, errors.Join(ErrInvalidRelation, model.FieldError{Field: "from_context_id", Message: "관계 양 끝은 사건이어야 한다"})
+	}
+	if to.Layer != model.LayerEvent {
+		observation.fields.Management.ActualLayer = string(to.Layer)
+		return model.Relation{}, errors.Join(ErrInvalidRelation, model.FieldError{Field: "to_context_id", Message: "관계 양 끝은 사건이어야 한다"})
+	}
+	observation.fields.Management.ActualLayer = "event"
+	observation.stage = "time_check"
 	if err := model.ValidateRelation(relation, from, to); err != nil {
 		return model.Relation{}, fmt.Errorf("관계 검증: %w", errors.Join(ErrInvalidRelation, err))
 	}
 
+	observation.stage = "endpoint_load"
 	existing, err := s.relationByIdentity(ctx, tx, graphID, relation.Type, relation.FromContextID, relation.ToContextID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return model.Relation{}, err
 	}
 	if errors.Is(err, ErrNotFound) {
+		observation.stage = "cycle_check"
 		if err := s.validateRelationCycle(ctx, tx, graphID, relation); err != nil {
 			return model.Relation{}, err
 		}
 		// 기존 후보의 출처는 보존하되, 후보 없이 직접 확정한 관계는 에이전트 제안이다.
 		relation.ProposedBy = model.ProposalSourceAgent
+		observation.stage = "write"
 		stored, err := s.createRelation(ctx, tx, graphID, relation)
 		if err != nil {
 			return model.Relation{}, err
@@ -127,6 +157,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		if err := bumpContentRevision(ctx, tx, graphID); err != nil {
 			return model.Relation{}, err
 		}
+		observation.stage = "audit"
 		if err := s.recordAppliedRelationOperation(ctx, tx, operation, stored.ID); err != nil {
 			return model.Relation{}, err
 		}
@@ -143,6 +174,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		// 폐기하거나 제안 상태인 관계를 확정으로 되돌리는 것도 새 확정 간선을 만드는
 		// 것과 같다. A→B를 폐기하고 B→A를 확정한 뒤 A→B를 재확정하면 순환이 확정되므로
 		// 새 관계와 같은 검사를 지나야 한다.
+		observation.stage = "cycle_check"
 		if err := s.validateRelationCycle(ctx, tx, graphID, relation); err != nil {
 			return model.Relation{}, err
 		}
@@ -151,6 +183,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		existing.ConfirmedBy = relation.ConfirmedBy
 		existing.ConfirmedByAgent = relation.ConfirmedByAgent
 		existing.ConfirmedAt = relation.ConfirmedAt
+		observation.stage = "write"
 		stored, err := s.updateRelation(ctx, tx, graphID, existing)
 		if err != nil {
 			return model.Relation{}, err
@@ -160,6 +193,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		}
 		existing = stored
 	}
+	observation.stage = "audit"
 	if err := s.recordAppliedRelationOperation(ctx, tx, operation, existing.ID); err != nil {
 		return model.Relation{}, err
 	}
@@ -174,12 +208,22 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 
 // DiscardRelation은 활성 관계를 폐기 상태로 바꾸고 관리 연산 기록을 함께 남긴다.
 func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.ID, operation *OperationRecord) (result model.Relation, err error) {
+	ctx, observation := beginManagement(ctx, "relation_discard")
+	defer func() {
+		if result.ID.IsV7() {
+			observation.fields.Identity.GraphID = result.GraphID.String()
+			observation.fields.Identity.RelationID = result.ID.String()
+		}
+		s.finishManagement(ctx, observation, err)
+	}()
+
 	if !graphID.IsV7() || !relationID.IsV7() {
 		return model.Relation{}, fmt.Errorf("그래프와 관계 식별자는 UUIDv7이어야 한다")
 	}
 	if err := validateRelationOperation(operation, graphID, relationID, OperationDiscard); err != nil {
 		return model.Relation{}, err
 	}
+	observation.stage = "write"
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("관계 폐기 트랜잭션 시작: %w", err)

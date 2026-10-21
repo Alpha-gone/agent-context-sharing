@@ -154,3 +154,11 @@ func stages(kind Kind) string {
 		return ""
 	}
 }
+
+// ValidationField는 기존 검증 오류의 필드 이름을 허용 목록으로 좁힌다. 입력값은 받지 않는다.
+func ValidationField(name string) string {
+	if listed(name, validationFields) {
+		return name
+	}
+	return "arguments"
+}

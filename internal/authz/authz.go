@@ -112,7 +112,8 @@ func New(source authStore, config Config) (*Service, error) {
 }
 
 // Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.
-func (s *Service) Register(ctx context.Context, loginID, password string) (model.ID, error) {
+func (s *Service) Register(ctx context.Context, loginID, password string) (accountID model.ID, resultErr error) {
+	defer func() { s.authObservation(ctx, "registration", accountID, "", model.ID{}, resultErr) }()
 	if !loginIDPattern.MatchString(loginID) || !validPassword(password) {
 		return model.ID{}, ErrInvalidAccountInput
 	}
@@ -145,7 +146,8 @@ func (s *Service) Register(ctx context.Context, loginID, password string) (model
 }
 
 // Authenticate는 저장된 해시와 비밀번호를 대조하고 이전 저장 형식은 성공 시 갱신한다.
-func (s *Service) Authenticate(ctx context.Context, loginID, password string) (model.ID, error) {
+func (s *Service) Authenticate(ctx context.Context, loginID, password string) (accountID model.ID, resultErr error) {
+	defer func() { s.authObservation(ctx, "login", accountID, "", model.ID{}, resultErr) }()
 	if err := s.passwords.acquire(ctx); err != nil {
 		return model.ID{}, err
 	}
@@ -242,7 +244,8 @@ func passwordMaterial(password string) string {
 }
 
 // WebSession은 웹 채널 전용 audience와 12시간 수명을 가진 서명 쿠키 값을 발급한다.
-func (s *Service) WebSession(ctx context.Context, accountID model.ID, audience string) (Token, error) {
+func (s *Service) WebSession(ctx context.Context, accountID model.ID, audience string) (result Token, resultErr error) {
+	defer func() { s.authObservation(ctx, "token_issue", accountID, "", model.ID{}, resultErr) }()
 	if err := ctx.Err(); err != nil {
 		return Token{}, err
 	}
@@ -261,20 +264,7 @@ func (s *Service) WebSession(ctx context.Context, accountID model.ID, audience s
 
 // Verify는 기대 audience, 서명, 필수 클레임, 만료와 폐기 목록을 한 경로에서 확인한다.
 func (s *Service) Verify(ctx context.Context, raw, audience string) (accountID model.ID, token Token, verifyErr error) {
-	defer func() {
-		if s.diagnostics == nil {
-			return
-		}
-		if verifyErr != nil {
-			level, reason := "WARN", "invalid_credential"
-			if errors.Is(verifyErr, ErrUnavailable) {
-				level, reason = "ERROR", "authentication_unavailable"
-			}
-			s.diagnostics.RecordDiagnostic(ctx, level, "web_session_validation", "failed", reason)
-			return
-		}
-		s.diagnostics.RecordDiagnostic(ctx, "INFO", "web_session_validation", "completed", "completed")
-	}()
+	defer func() { s.authObservation(ctx, "web_session_validation", accountID, "", model.ID{}, verifyErr) }()
 
 	claims, err := s.verifiedClaims(ctx, raw, audience)
 	if err != nil {
@@ -306,7 +296,7 @@ func (s *Service) verifiedClaims(ctx context.Context, raw, audience string) (jwt
 		return jwt.Claims{}, &credentialFailure{ErrUnavailable, err}
 	}
 	if revoked {
-		return jwt.Claims{}, ErrInvalidCredential
+		return jwt.Claims{}, authRejected("individually_revoked")
 	}
 	return claims, nil
 }
@@ -339,8 +329,14 @@ func (s *Service) signedClaims(ctx context.Context, raw, audience string, extra 
 	}
 	var claims jwt.Claims
 	now := s.now().UTC()
-	if parsed.Claims(public.Key, append([]any{&claims}, extra...)...) != nil || claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: now}, 0) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil || len(claims.Audience) != 1 {
+	if parsed.Claims(public.Key, append([]any{&claims}, extra...)...) != nil || claims.Subject == "" || claims.ID == "" || claims.IssuedAt == nil || claims.Expiry == nil || len(claims.Audience) != 1 {
 		return jwt.Claims{}, ErrInvalidCredential
+	}
+	if !now.Before(claims.Expiry.Time()) {
+		return jwt.Claims{}, authRejected("expired")
+	}
+	if claims.ValidateWithLeeway(jwt.Expected{Issuer: s.config.Issuer, AnyAudience: jwt.Audience{audience}, Time: now}, 0) != nil {
+		return jwt.Claims{}, authRejected("binding_violation")
 	}
 	// 공급자 검증은 exp와 현재 시각이 같은 순간을 허용하므로 반열린 수명을 별도로 확인한다.
 	issued, expires := claims.IssuedAt.Time(), claims.Expiry.Time()
@@ -351,7 +347,8 @@ func (s *Service) signedClaims(ctx context.Context, raw, audience string, extra 
 }
 
 // Revoke는 로그아웃에서 jti를 만료 시각까지 막는다.
-func (s *Service) Revoke(ctx context.Context, token Token) error {
+func (s *Service) Revoke(ctx context.Context, token Token) (resultErr error) {
+	defer func() { s.authObservation(ctx, "logout", model.ID{}, "", model.ID{}, resultErr) }()
 	if err := ctx.Err(); err != nil {
 		return err
 	}

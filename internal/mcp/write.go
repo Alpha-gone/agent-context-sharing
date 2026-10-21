@@ -11,9 +11,10 @@ import (
 
 // WriteRunner는 스키마·지문과 매 요청의 권한/행위자 재검사를 재생 경계에 결합한다.
 type WriteRunner struct {
-	executor WriteExecutor
-	agents   AgentRegistry
-	catalog  *toolCatalog
+	diagnostics Diagnostics
+	executor    WriteExecutor
+	agents      AgentRegistry
+	catalog     *toolCatalog
 }
 
 func NewWriteRunner(executor WriteExecutor, agents AgentRegistry) (*WriteRunner, error) {
@@ -65,6 +66,7 @@ func (runner *WriteRunner) Execute(ctx context.Context, principal Principal, too
 		}
 		if agent.IsV7() {
 			_, err := BindActor(checkCtx, runner.agents, principal, agent)
+			observeTool(runner.diagnostics, checkCtx, "actor_binding", tool, err)
 			return err
 		}
 		return checkCtx.Err()

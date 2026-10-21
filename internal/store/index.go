@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -41,6 +42,7 @@ type IndexTask struct {
 	Layer         model.Layer
 	Attempts      int
 	CorrelationID string
+	Generation    time.Time
 }
 
 // IndexTaskResult는 제공자 호출 결과와 저장·재시도 판단을 분리해 전달한다.
@@ -163,7 +165,7 @@ func (s *Store) claimIndexTask(ctx context.Context, scope model.ID) (task IndexT
 	if err != nil {
 		return IndexTask{}, indexTaskClaim{}, false, fmt.Errorf("색인 그래프 식별자 해석: %w", err)
 	}
-	task = IndexTask{ID: taskID, ContextID: contextID, GraphID: graphID, Attempts: attempts, CorrelationID: correlationID}
+	task = IndexTask{ID: taskID, ContextID: contextID, GraphID: graphID, Attempts: attempts, CorrelationID: correlationID, Generation: claim.enqueuedAt}
 	// 확보를 커밋하면서 대기 시각을 미뤄 다른 작업자가 같은 작업을 집지 않게 한다.
 	// 등록·만료 판정과 같은 DB 시계를 사용해 작업자 호스트의 시계 차이를 배제하고,
 	// 데이터베이스가 저장한 정밀도의 시각을 결과 대조에 그대로 사용한다.
@@ -186,6 +188,8 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 	if err != nil || !found {
 		return IndexProcessResult{}, err
 	}
+	ctx = diagnostic.ResumeJob(ctx, task.CorrelationID)
+	s.indexObservation(ctx, task, "acquire", "completed", "completed", "acquired")
 	value, err := s.context(ctx, s.pool, task.GraphID, task.ContextID)
 	if errors.Is(err, ErrNotFound) || (err == nil && (value.DeletedAt != nil || !s.indexTargets.indexes(value.Layer))) {
 		_, deleteErr := s.pool.Exec(ctx, `DELETE FROM public.index_task WHERE task_id = $1
@@ -217,6 +221,11 @@ func (s *Store) processNextIndexTask(ctx context.Context, scope model.ID, proces
 			return s.failIndexTask(ctx, task, claim, "임베딩 차원·수치·형식의 저장 계약 위반", false, err)
 		}
 		return s.failIndexTask(ctx, task, claim, "색인 결과 저장 실패", true, err)
+	}
+	if stored {
+		s.indexObservation(ctx, task, "apply", "committed", "completed", "released")
+	} else {
+		s.indexObservation(ctx, task, "apply", "skipped", "stale_generation", "stale")
 	}
 	return IndexProcessResult{Found: true, Succeeded: stored, Task: task}, nil
 }
@@ -279,16 +288,24 @@ func (s *Store) storeIndexFailure(ctx context.Context, task IndexTask, claim ind
 		return fmt.Errorf("색인 실패 트랜잭션 시작: %w", err)
 	}
 	defer finishWrite(ctx, tx, "storeIndexFailure", &err)
-	if err := s.recordIndexFailure(ctx, tx, task, claim, result); err != nil {
+	matched, err := s.recordIndexFailure(ctx, tx, task, claim, result)
+	if err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("색인 실패 커밋: %w", err)
 	}
+	if !matched {
+		s.indexObservation(ctx, task, "retry", "skipped", "stale_generation", "stale")
+	} else if !result.Retryable || task.Attempts+1 >= maxIndexAttempts {
+		s.indexObservation(ctx, task, "retry", "failed", "retry_exhausted", "released")
+	} else {
+		s.indexObservation(ctx, task, "retry", "pending", "provider_unavailable", "released")
+	}
 	return nil
 }
 
-func (s *Store) recordIndexFailure(ctx context.Context, tx pgx.Tx, task IndexTask, claim indexTaskClaim, result IndexTaskResult) error {
+func (s *Store) recordIndexFailure(ctx context.Context, tx pgx.Tx, task IndexTask, claim indexTaskClaim, result IndexTaskResult) (bool, error) {
 	attempts := task.Attempts + 1
 	state := "pending"
 	delay := indexRetryDelay(attempts)
@@ -298,15 +315,16 @@ func (s *Store) recordIndexFailure(ctx context.Context, tx pgx.Tx, task IndexTas
 	}
 	// 확보·기한 판정과 같은 DB 시계로 예약한다. 호스트 시계 차이 때문에
 	// 백오프가 사라지거나 과도하게 늘지 않게 한다.
-	if _, err := tx.Exec(ctx, `
+	updated, err := tx.Exec(ctx, `
 		UPDATE public.index_task
 		SET attempts = $2, state = $3, last_error = $4,
 		    next_attempt_at = statement_timestamp() + $5::bigint * interval '1 second'
 		WHERE task_id = $1 AND enqueued_at = $6 AND next_attempt_at = $7 AND state = 'pending'`,
-		task.ID.String(), attempts, state, result.Failure, int64(delay/time.Second), claim.enqueuedAt, claim.leasedUntil); err != nil {
-		return fmt.Errorf("색인 작업 실패 기록: %w", err)
+		task.ID.String(), attempts, state, result.Failure, int64(delay/time.Second), claim.enqueuedAt, claim.leasedUntil)
+	if err != nil {
+		return false, fmt.Errorf("색인 작업 실패 기록: %w", err)
 	}
-	return nil
+	return updated.RowsAffected() == 1, nil
 }
 
 func indexRetryDelay(attempt int) time.Duration {
@@ -510,6 +528,7 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 	if err != nil {
 		return fmt.Errorf("재색인 등록 트랜잭션 시작: %w", err)
 	}
+	tx = observeWriteTx(ctx, tx, false)
 	defer finishWrite(ctx, tx, "ReindexGraph", &err)
 	rows, err := tx.Query(ctx, `SELECT properties ->> 'context_id'::text, properties ->> 'layer'::text,
 		properties ->> 'deleted_at'::text IS NOT NULL

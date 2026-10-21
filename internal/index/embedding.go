@@ -89,8 +89,13 @@ func (worker *Worker) EmbedDocument(ctx context.Context, input string) ([]float6
 }
 
 func (worker *Worker) embed(ctx context.Context, input string, document bool) ([]float64, error) {
+	values, _, err := worker.embedResponse(ctx, input, document)
+	return values, err
+}
+
+func (worker *Worker) embedResponse(ctx context.Context, input string, document bool) (values []float64, status uint16, resultErr error) {
 	if !utf8.ValidString(input) || strings.TrimSpace(input) == "" || utf8.RuneCountInString(input) > 8000 {
-		return nil, ProviderError{Reason: "임베딩 입력이 비어 있거나 UTF-8·8000자 한도를 위반했다"}
+		return nil, status, ProviderError{Reason: "임베딩 입력이 비어 있거나 UTF-8·8000자 한도를 위반했다"}
 	}
 	endpoint := worker.config.BaseURL.Clone()
 	prefix := "task: search result | query: "
@@ -101,29 +106,30 @@ func (worker *Worker) embed(ctx context.Context, input string, document bool) ([
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/v1beta/models/" + worker.config.Model + ":embedContent"
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, ProviderError{Reason: "임베딩 요청 직렬화 실패"}
+		return nil, status, ProviderError{Reason: "임베딩 요청 직렬화 실패"}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
-		return nil, ProviderError{Reason: "임베딩 요청 생성 실패"}
+		return nil, status, ProviderError{Reason: "임베딩 요청 생성 실패"}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("x-goog-api-key", worker.config.APIKey)
 	response, err := worker.httpClient.Do(request)
 	if err != nil {
-		return nil, safeTransportError(ctx, err)
+		return nil, status, safeTransportError(ctx, err)
 	}
 	defer response.Body.Close()
+	status = uint16(response.StatusCode)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, ProviderError{Reason: fmt.Sprintf("임베딩 제공자 상태: %d", response.StatusCode), Retryable: response.StatusCode == 408 || response.StatusCode == 429 || (response.StatusCode >= 500 && response.StatusCode < 600)}
+		return nil, status, ProviderError{Reason: fmt.Sprintf("임베딩 제공자 상태: %d", response.StatusCode), Retryable: response.StatusCode == 408 || response.StatusCode == 429 || (response.StatusCode >= 500 && response.StatusCode < 600)}
 	}
 	// 전송 실패와 완전히 수신한 JSON의 계약 위반을 분리한다.
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxEmbeddingResponseBytes+1))
 	if len(raw) > maxEmbeddingResponseBytes {
-		return nil, ProviderError{Reason: "임베딩 응답이 크기 상한을 넘었다"}
+		return nil, status, ProviderError{Reason: "임베딩 응답이 크기 상한을 넘었다"}
 	}
 	if err != nil {
-		return nil, safeTransportError(ctx, err)
+		return nil, status, safeTransportError(ctx, err)
 	}
 	var decoded struct {
 		Embedding struct {
@@ -131,28 +137,28 @@ func (worker *Worker) embed(ctx context.Context, input string, document bool) ([
 		} `json:"embedding"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil, ProviderError{Reason: "임베딩 응답 해석 실패"}
+		return nil, status, ProviderError{Reason: "임베딩 응답 해석 실패"}
 	}
 	if len(decoded.Embedding.Values) != worker.config.Dimension {
-		return nil, DimensionError{Got: len(decoded.Embedding.Values), Want: worker.config.Dimension}
+		return nil, status, DimensionError{Got: len(decoded.Embedding.Values), Want: worker.config.Dimension}
 	}
 	embedding := make([]float64, worker.config.Dimension)
 	nonzero := false
 	for i, number := range decoded.Embedding.Values {
 		if number == nil {
-			return nil, ProviderError{Reason: "임베딩 응답에 숫자가 아닌 값이 있다"}
+			return nil, status, ProviderError{Reason: "임베딩 응답에 숫자가 아닌 값이 있다"}
 		}
 		value := *number
 		if math.IsNaN(value) || math.IsInf(value, 0) {
-			return nil, ProviderError{Reason: "임베딩 응답에 유한하지 않은 값이 있다"}
+			return nil, status, ProviderError{Reason: "임베딩 응답에 유한하지 않은 값이 있다"}
 		}
 		nonzero = nonzero || value != 0
 		embedding[i] = value
 	}
 	if !nonzero {
-		return nil, ProviderError{Reason: "임베딩 응답이 영벡터다"}
+		return nil, status, ProviderError{Reason: "임베딩 응답이 영벡터다"}
 	}
-	return embedding, nil
+	return embedding, status, nil
 }
 
 type geminiContent struct {

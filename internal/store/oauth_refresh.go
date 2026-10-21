@@ -65,8 +65,20 @@ func (s *Store) RotateOAuthRefreshToken(ctx context.Context, input OAuthRefreshE
 	if err != nil {
 		return storageError("oauth_refresh_token_lock", err)
 	}
-	if binding.ClientID != input.ClientID || binding.Resource != input.Resource || binding.Scope != "agent-context" || (input.Scope != "" && input.Scope != binding.Scope) || revoked != nil {
-		return ErrInvalidOAuthGrant
+	if binding.ClientID != input.ClientID || binding.Resource != input.Resource || binding.Scope != "agent-context" || (input.Scope != "" && input.Scope != binding.Scope) {
+		return &OAuthRejection{Reason: "binding_violation"}
+	}
+	binding.ID, err = model.ParseID(grantID)
+	if err != nil {
+		return storageError("oauth_refresh_grant_identifier", err)
+	}
+	binding.AccountID, err = model.ParseID(accountID)
+	if err != nil {
+		return storageError("oauth_refresh_account_identifier", err)
+	}
+	reject := func(reason string) error { return &OAuthRejection{Reason: reason, Binding: binding} }
+	if revoked != nil {
+		return reject("family_revoked")
 	}
 	now := clock().UTC().Truncate(time.Second)
 	if consumed != nil {
@@ -76,21 +88,22 @@ func (s *Store) RotateOAuthRefreshToken(ctx context.Context, input OAuthRefreshE
 		if err := tx.Commit(ctx); err != nil {
 			return storageError("oauth_refresh_reuse_commit", err)
 		}
-		return ErrInvalidOAuthGrant
+		return reject("reuse_detected")
 	}
 	// 현재 시각은 두 잠금을 모두 얻은 뒤 읽는다. 정리 지연이나 잘못된 저장 수명이 유효성을 늘리지 않는다.
 	if now.Before(authorized) || now.Before(rotated) || now.Before(issued) || issued.Before(authorized) || rotated.Before(authorized) ||
 		!absolute.Equal(authorized.Add(30*24*time.Hour)) || !idle.Equal(rotated.Add(7*24*time.Hour)) ||
-		!expires.Equal(minTime(absolute, idle)) || !now.Before(absolute) || !now.Before(idle) || !now.Before(expires) {
+		!expires.Equal(minTime(absolute, idle)) {
 		return ErrInvalidOAuthGrant
 	}
-	binding.ID, err = model.ParseID(grantID)
-	if err != nil {
-		return storageError("oauth_refresh_grant_identifier", err)
+	if !now.Before(absolute) {
+		return reject("expired")
 	}
-	binding.AccountID, err = model.ParseID(accountID)
-	if err != nil {
-		return storageError("oauth_refresh_account_identifier", err)
+	if !now.Before(idle) {
+		return reject("inactive_expired")
+	}
+	if !now.Before(expires) {
+		return reject("expired")
 	}
 	successor, err := issue(binding, now)
 	if err != nil {

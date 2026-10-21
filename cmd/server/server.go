@@ -8,12 +8,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/web"
 )
@@ -49,6 +49,7 @@ type oauthTokenRoutes interface {
 
 // application은 1단계 HTTP 상태 경로와 요청 로그를 관리한다.
 type application struct {
+	diagnostics   diagnostic.Observer
 	database      readiness
 	logger        *slog.Logger
 	transport     transportSecurity
@@ -135,8 +136,7 @@ func (app *application) recoverPanics(next http.Handler) http.Handler {
 			}
 			app.logger.Error("요청 처리 중 panic",
 				"correlation_id", requestID(request.Context()),
-				"method", request.Method, "path", request.URL.Path,
-				"panic", fmt.Sprint(cause), "stack", string(debug.Stack()))
+				"method", diagnosticMethod(request.Method), "route", diagnosticRoute(request.URL.Path), "reason_code", "handler_panic")
 			writeStatus(writer, http.StatusInternalServerError, "internal_error")
 		}()
 		next.ServeHTTP(writer, request)
@@ -309,21 +309,35 @@ func closeServerResources(ctx context.Context, logger *slog.Logger, closePool fu
 // logRequests는 본문·자격 증명·쿼리 문자열을 기록하지 않고 요청 결과만 남긴다.
 func (app *application) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		id, err := model.NewID()
+		trace := diagnostic.NewRequestTrace()
+		id, err := model.ParseID(trace.CorrelationID())
 		if err != nil {
 			app.logger.Error("상관 식별자 생성 실패", "error", err)
 			writeStatus(writer, http.StatusInternalServerError, "internal_error")
 			return
 		}
-		request = request.WithContext(context.WithValue(request.Context(), correlationIDKey{}, id.String()))
+		ctx, _ := model.WithCorrelationID(diagnostic.WithTrace(request.Context(), trace), id)
+		request = request.WithContext(context.WithValue(ctx, correlationIDKey{}, id.String()))
 		writer.Header().Set("X-Correlation-ID", id.String())
 		startedAt := time.Now()
 		recorder := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
+		fields := diagnostic.Fields{Request: diagnostic.RequestFields{Route: diagnosticRoute(request.URL.Path), Method: diagnosticMethod(request.Method)}}
+		diagnostic.Observe(app.diagnostics, request.Context(), "INFO", "receive", "pending", "completed", false, fields)
 		next.ServeHTTP(recorder, request)
+		fields.Request.Status = uint16(recorder.status)
+		fields.Request.LatencyMS = uint64(time.Since(startedAt).Milliseconds())
+		result, reason, level := "completed", "completed", "INFO"
+		if recorder.status >= 400 {
+			result, reason, level = "rejected", "invalid_argument", "WARN"
+		}
+		if recorder.status >= 500 {
+			result, reason, level = "failed", "store_unavailable", "ERROR"
+		}
+		diagnostic.Observe(app.diagnostics, request.Context(), level, "response", result, reason, false, fields)
 		app.logger.Info("HTTP 요청 완료",
 			"correlation_id", id.String(),
-			"method", request.Method,
-			"path", request.URL.Path,
+			"method", diagnosticMethod(request.Method),
+			"route", diagnosticRoute(request.URL.Path),
 			"status", recorder.status,
 			"duration", time.Since(startedAt),
 		)
@@ -343,10 +357,19 @@ func requestID(ctx context.Context) string {
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+	wrote  bool
 }
 
 // WriteHeader는 클라이언트로 보내는 상태와 로그에 남길 상태를 함께 기록한다.
 func (recorder *statusRecorder) WriteHeader(status int) {
+	if status >= 100 && status < 200 {
+		recorder.ResponseWriter.WriteHeader(status)
+		return
+	}
+	if recorder.wrote {
+		return
+	}
+	recorder.wrote = true
 	recorder.status = status
 	recorder.ResponseWriter.WriteHeader(status)
 }
@@ -359,3 +382,63 @@ func writeStatus(writer http.ResponseWriter, status int, value string) {
 		return
 	}
 }
+
+func diagnosticMethod(method string) string {
+	if slices.Contains([]string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"}, method) {
+		return method
+	}
+	return "unknown"
+}
+func diagnosticRoute(path string) string {
+	switch path {
+	case "/login":
+		return "login"
+	case "/register":
+		return "register"
+	case "/logout":
+		return "logout"
+	case "/authorize":
+		return "authorize"
+	case "/token":
+		return "token"
+	case "/operator/restores":
+		return "operator_restores"
+	case "/access":
+		return "graph_access"
+	case "/connections":
+		return "connections"
+	case "/graphs":
+		return "graphs"
+	case "/teams":
+		return "teams"
+	case "/mcp":
+		return "mcp"
+	case "/healthz", "/readyz":
+		return "health"
+	}
+	if strings.HasPrefix(path, "/.well-known/") || path == "/jwks.json" {
+		return "discovery"
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) >= 3 && parts[1] == "graphs" {
+		switch {
+		case len(parts) == 3:
+			return "graph_detail"
+		case len(parts) == 4 && parts[3] == "access":
+			return "graph_access"
+		case len(parts) == 4 && parts[3] == "deletion":
+			return "graph_deletion"
+		case len(parts) == 4 && parts[3] == "audit":
+			return "audit"
+		}
+	}
+	return "unknown"
+}
+
+func (recorder *statusRecorder) Write(data []byte) (int, error) {
+	if !recorder.wrote {
+		recorder.WriteHeader(http.StatusOK)
+	}
+	return recorder.ResponseWriter.Write(data)
+}
+func (recorder *statusRecorder) Unwrap() http.ResponseWriter { return recorder.ResponseWriter }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"sync"
+	"time"
 )
 
 const (
@@ -40,13 +41,20 @@ type DropCount struct {
 // RecorderStats의 대기량은 쓰는 중인 한 이벤트도 포함한다.
 // Written은 완전한 행의 append·sync 성공이며 업무 감사 성공을 뜻하지 않는다.
 type RecorderStats struct {
-	Accepted     uint64
-	Written      uint64
-	Dropped      uint64
-	QueuedEvents int
-	QueuedBytes  int
-	Writing      bool
-	Losses       []DropCount
+	Accepted            uint64
+	Written             uint64
+	Dropped             uint64
+	QueuedEvents        int
+	QueuedBytes         int
+	Writing             bool
+	Losses              []DropCount
+	MaintenanceFailures uint64
+}
+
+type recorderUpkeep struct {
+	run   func() error
+	ticks <-chan time.Time
+	stop  func()
 }
 
 type queueLimits struct{ events, bytes, eventBytes int }
@@ -58,30 +66,32 @@ type queuedLine struct {
 // Recorder는 인스턴스 하나의 공용 대기열과 단일 기록 루프를 소유한다.
 // 복사하지 않는다. 요청 context·Event·호출자 goroutine은 보관하지 않는다.
 type Recorder struct {
-	source    Source
-	limits    queueLimits
-	writeLine func(Kind, []byte) error
-	closeFile func() error
-	wake      chan struct{}
-	done      chan struct{}
-	mu        sync.Mutex
-	queue     []queuedLine
-	head      int
-	count     int
-	bytes     int
-	stopping  bool
-	writing   bool
-	accepted  uint64
-	written   uint64
-	dropped   uint64
-	losses    [len(fileKinds) + 1][lossReasonCount]uint64
-	firstErr  error
-	closeErr  error
+	source              Source
+	limits              queueLimits
+	writeLine           func(Kind, []byte) error
+	closeFile           func() error
+	wake                chan struct{}
+	done                chan struct{}
+	mu                  sync.Mutex
+	queue               []queuedLine
+	head                int
+	count               int
+	bytes               int
+	stopping            bool
+	writing             bool
+	accepted            uint64
+	written             uint64
+	dropped             uint64
+	losses              [len(fileKinds) + 1][lossReasonCount]uint64
+	firstErr            error
+	closeErr            error
+	upkeep              *recorderUpkeep
+	maintenanceFailures uint64
 }
 
-func newRecorder(source Source, limits queueLimits, writeLine func(Kind, []byte) error, closeFile func() error) *Recorder {
+func newRecorder(source Source, limits queueLimits, writeLine func(Kind, []byte) error, closeFile func() error, upkeep *recorderUpkeep) *Recorder {
 	recorder := &Recorder{source: source, limits: limits, writeLine: writeLine, closeFile: closeFile,
-		wake: make(chan struct{}, 1), done: make(chan struct{}), queue: make([]queuedLine, limits.events)}
+		wake: make(chan struct{}, 1), done: make(chan struct{}), queue: make([]queuedLine, limits.events), upkeep: upkeep}
 	go recorder.run()
 	return recorder
 }
@@ -180,7 +190,7 @@ func (recorder *Recorder) Stats() RecorderStats {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
 	stats := RecorderStats{Accepted: recorder.accepted, Written: recorder.written, Dropped: recorder.dropped,
-		QueuedEvents: recorder.count, QueuedBytes: recorder.bytes, Writing: recorder.writing}
+		QueuedEvents: recorder.count, QueuedBytes: recorder.bytes, Writing: recorder.writing, MaintenanceFailures: recorder.maintenanceFailures}
 	for i, counts := range recorder.losses {
 		kind := Kind("")
 		if i < len(fileKinds) {
@@ -197,7 +207,17 @@ func (recorder *Recorder) Stats() RecorderStats {
 
 func (recorder *Recorder) run() {
 	defer close(recorder.done)
+	var ticks <-chan time.Time
+	if recorder.upkeep != nil {
+		ticks = recorder.upkeep.ticks
+		defer recorder.upkeep.stop()
+	}
 	for {
+		select {
+		case <-ticks:
+			recorder.maintain()
+		default:
+		}
 		recorder.mu.Lock()
 		if recorder.count == 0 {
 			stopping := recorder.stopping
@@ -206,7 +226,11 @@ func (recorder *Recorder) run() {
 				recorder.closeErr = recorder.closeFile()
 				return
 			}
-			<-recorder.wake
+			select {
+			case <-recorder.wake:
+			case <-ticks:
+				recorder.maintain()
+			}
 			continue
 		}
 		item := recorder.queue[recorder.head]
@@ -228,6 +252,17 @@ func (recorder *Recorder) run() {
 			}
 		} else {
 			recorder.written++
+		}
+		recorder.mu.Unlock()
+	}
+}
+
+func (recorder *Recorder) maintain() {
+	if err := recorder.upkeep.run(); err != nil {
+		recorder.mu.Lock()
+		recorder.maintenanceFailures++
+		if recorder.firstErr == nil {
+			recorder.firstErr = err
 		}
 		recorder.mu.Unlock()
 	}

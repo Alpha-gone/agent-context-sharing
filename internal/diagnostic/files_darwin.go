@@ -7,6 +7,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func renameExclusive(directory int, oldName, newName string) error {
+	return unix.RenameatxNp(directory, oldName, directory, newName, unix.RENAME_EXCL)
+}
+
 func checkFilesystem(fd int) error {
 	var stat unix.Statfs_t
 	if err := unix.Fstatfs(fd, &stat); err != nil {

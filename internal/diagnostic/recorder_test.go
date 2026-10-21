@@ -101,7 +101,7 @@ func TestOBS03QueueCountIncludesInFlightAndDoesNotWaitForIO(t *testing.T) {
 		<-release
 		calls.Add(1)
 		return nil
-	}, func() error { return nil })
+	}, func() error { return nil }, nil)
 	t.Cleanup(func() { obs03Close(t, recorder) })
 	defer close(release)
 	event := obs03Event(t, source, Request)
@@ -143,7 +143,7 @@ func TestOBS03QueueByteLimitIsIndependentAndRecovers(t *testing.T) {
 	recorder := newRecorder(source, queueLimits{1024, len(line) * 2, maxEventBytes}, func(_ Kind, _ []byte) error {
 		once.Do(func() { close(entered); <-release })
 		return nil
-	}, func() error { return nil })
+	}, func() error { return nil }, nil)
 	defer func() { obs03Close(t, recorder) }()
 	if !recorder.Emit(t.Context(), event) {
 		t.Fatal("첫 이벤트 거부")
@@ -186,7 +186,7 @@ func TestOBS03FIFOAndOwnedSerializedSnapshot(t *testing.T) {
 		once.Do(func() { close(entered); <-release })
 		lines = append(lines, bytes.Clone(line))
 		return nil
-	}, func() error { return nil })
+	}, func() error { return nil }, nil)
 	event := obs03Event(t, source, Search)
 	event.Fields.Search.Candidates = 1
 	if !recorder.Emit(t.Context(), event) {
@@ -230,7 +230,7 @@ func TestOBS03ConcurrentEmitCloseAndLossAccounting(t *testing.T) {
 		}
 		writes.Add(1)
 		return nil
-	}, func() error { closes.Add(1); return nil })
+	}, func() error { closes.Add(1); return nil }, nil)
 	var wg sync.WaitGroup
 	for i := range 16 {
 		kind := fileKinds[i%len(fileKinds)]
@@ -276,7 +276,7 @@ func TestOBS03WriteFailureStaysLostAfterRecovery(t *testing.T) {
 			return failure
 		}
 		return nil
-	}, func() error { return nil })
+	}, func() error { return nil }, nil)
 	for _, kind := range []Kind{Index, Management} {
 		if !recorder.Emit(t.Context(), obs03Event(t, source, kind)) {
 			t.Fatal("이벤트 거부")
@@ -302,7 +302,7 @@ func TestOBS03RingReusePreservesOrderAndCloseFailure(t *testing.T) {
 		}
 		written <- event.Fields.Search.Candidates
 		return nil
-	}, func() error { return failure })
+	}, func() error { return failure }, nil)
 	defer obs03Close(t, recorder)
 	for i := uint64(1); i <= 32; i++ {
 		event := obs03Event(t, source, Search)
@@ -347,7 +347,7 @@ func TestOBS03InvalidForeignAndOversizedEnqueueLosses(t *testing.T) {
 			recorder := newRecorder(source, queueLimits{8, maxQueuedBytes, tc.limit}, func(_ Kind, _ []byte) error {
 				t.Error("거부한 이벤트를 파일로 전달했다")
 				return nil
-			}, func() error { return nil })
+			}, func() error { return nil }, nil)
 			candidate := event
 			tc.mutate(&candidate)
 			if recorder.Emit(t.Context(), candidate) {
@@ -371,7 +371,7 @@ func TestOBS03CloseDeadlineLeavesOwnedDrainAndRejectsNewEvents(t *testing.T) {
 		close(entered)
 		<-release
 		return nil
-	}, func() error { return nil })
+	}, func() error { return nil }, nil)
 	event := obs03Event(t, source, Request)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -455,16 +455,20 @@ func TestOBS03ActualFilesKindsLevelsRestartAndReporter(t *testing.T) {
 
 func TestOBS03ActualFileRefusesTruncatedTail(t *testing.T) {
 	directory := obs02Directory(t)
-	files := obs02Prepare(t, directory, "test_slot")
-	if _, err := files.active[Request].WriteString("{\"partial\":"); err != nil {
-		t.Fatal(err)
-	}
-	if err := files.Close(); err != nil {
-		t.Fatal(err)
-	}
 	source := testSource(t)
 	recorder, err := NewRecorder(t.Context(), directory, source)
 	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(filepath.Join(directory, source.instance, "request.jsonl"), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("{\"partial\":"); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
 	for _, kind := range []Kind{Request, Request, Auth} {

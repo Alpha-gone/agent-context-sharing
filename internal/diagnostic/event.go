@@ -1,5 +1,5 @@
 // Package diagnostic는 업무 타입·DB·HTTP 객체와 독립적인 진단 이벤트 경계를 소유한다.
-// 파일 준비·비동기 기록은 Files·Recorder가, 회전·보존은 후속 관측성 항목이 담당한다.
+// Files·Recorder는 파일 준비·비동기 기록·회전·보존을 담당한다.
 package diagnostic
 
 import (

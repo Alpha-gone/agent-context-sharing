@@ -2,6 +2,10 @@ package diagnostic
 
 import "golang.org/x/sys/unix"
 
+func renameExclusive(directory int, oldName, newName string) error {
+	return unix.Renameat2(directory, oldName, directory, newName, unix.RENAME_NOREPLACE)
+}
+
 func checkFilesystem(fd int) error {
 	var stat unix.Statfs_t
 	if err := unix.Fstatfs(fd, &stat); err != nil {

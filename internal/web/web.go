@@ -4,9 +4,6 @@ package web
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"embed"
-	"encoding/hex"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"errors"
@@ -31,14 +28,6 @@ const (
 	SessionAudience = "web"
 	sessionCookie   = "agent_context_session"
 )
-
-// webAssets에는 CDN에 의존하지 않는 시각화 자산을 보관한다.
-//
-//go:embed assets/cytoscape.min.js
-var webAssets embed.FS
-
-// visualizationAssetPath는 내장 자산의 경로이며 같은 값이 HTTP 경로의 뒤쪽이 된다.
-const visualizationAssetPath = "assets/cytoscape.min.js"
 
 // Session은 현재 요청 안에서만 쓰는 검증된 웹 세션의 최소 정보다.
 type Session struct {
@@ -106,27 +95,10 @@ type Server struct {
 	graphs      GraphStore
 	config      Config
 	templates   *template.Template
-	asset       staticAsset
+	assets      map[string]staticAsset
 	crossOrigin http.CrossOriginProtection
 	attempts    *authAttempts
 }
-
-// staticAsset은 빌드에 고정된 시각화 자산과 조건부 요청에 쓸 내용 해시다.
-//
-// embed.FS의 파일은 수정 시각이 제로 값이라 http.ServeFileFS가 Last-Modified를 싣지 않고
-// ETag도 붙지 않는다. 조건부 요청이 성립하지 않으므로 그래프 상세 화면을 열 때마다 자산
-// 전체가 다시 내려간다. 내용이 빌드에 고정되므로 해시를 한 번 계산해 두고 ETag로 쓴다.
-type staticAsset struct {
-	content []byte
-	etag    string
-	// modTime은 조건부 요청 비교에서 제외하려고 제로 값으로 둔다.
-	modTime time.Time
-}
-
-// assetCacheControl은 자산 경로에 판이 들어 있지 않으므로 무기한 보관을 지시하지 않는다.
-// 같은 경로가 다음 배포에서 다른 내용을 가리키기 때문이다. 하루 뒤부터는 ETag 재검증으로
-// 바뀐 자산이 브라우저에 닿고, 재검증은 304 응답 한 번이라 본문 전송이 없다.
-const assetCacheControl = "public, max-age=86400"
 
 // New는 웹 화면에 필요한 인가·조회 경계를 확인하고 템플릿을 준비한다.
 func New(auth Authentication, graphs GraphStore, config Config) (*Server, error) {
@@ -142,29 +114,14 @@ func New(auth Authentication, graphs GraphStore, config Config) (*Server, error)
 	if err != nil {
 		return nil, fmt.Errorf("웹 템플릿 해석: %w", err)
 	}
-	asset, err := loadAsset(visualizationAssetPath)
+	if _, err := templates.ParseFS(webFiles, "templates/*.html"); err != nil {
+		return nil, fmt.Errorf("공통 웹 템플릿 해석: %w", err)
+	}
+	assets, err := loadAssets()
 	if err != nil {
 		return nil, err
 	}
-	return &Server{auth: auth, graphs: graphs, config: config, templates: templates, asset: asset, attempts: newAuthAttempts()}, nil
-}
-
-// loadAsset은 내장 자산을 한 번 읽고 내용 해시로 ETag를 만든다.
-func loadAsset(name string) (staticAsset, error) {
-	content, err := webAssets.ReadFile(name)
-	if err != nil {
-		return staticAsset{}, fmt.Errorf("시각화 자산 읽기: %w", err)
-	}
-	digest := sha256.Sum256(content)
-	return staticAsset{content: content, etag: `"` + hex.EncodeToString(digest[:]) + `"`}, nil
-}
-
-// serveAsset은 내용 해시 ETag와 보관 지시를 실어 조건부 요청이 성립하게 한다.
-// http.ServeContent가 If-None-Match를 대조해 바뀌지 않았으면 304로 끝낸다.
-func (server *Server) serveAsset(writer http.ResponseWriter, request *http.Request, name string) {
-	writer.Header().Set("ETag", server.asset.etag)
-	writer.Header().Set("Cache-Control", assetCacheControl)
-	http.ServeContent(writer, request, name, server.asset.modTime, bytes.NewReader(server.asset.content))
+	return &Server{auth: auth, graphs: graphs, config: config, templates: templates, assets: assets, attempts: newAuthAttempts()}, nil
 }
 
 // ServeHTTP는 계약에 있는 로그인·등록·로그아웃과 웹 관리 경로를 처리한다.
@@ -179,13 +136,15 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		server.render(writer, http.StatusForbidden, "message", pageData{Title: "접근 제한", Error: "다른 출처에서 보낸 요청은 처리할 수 없습니다."})
 		return
 	}
+	if asset, ok := server.assets[request.URL.Path]; ok {
+		serveAsset(writer, request, asset)
+		return
+	}
 	switch request.URL.Path {
 	case "/connections":
 		server.connections(writer, request)
 	case "/authorize":
 		server.authorize(writer, request)
-	case "/" + visualizationAssetPath:
-		server.serveAsset(writer, request, visualizationAssetPath)
 	case "/login":
 		server.login(writer, request)
 	case "/register":
@@ -959,11 +918,15 @@ func (server *Server) render(writer http.ResponseWriter, status int, name string
 		}
 		value.VisualizationJSON = template.JS(data)
 	}
-	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	writer.WriteHeader(status)
-	if err := server.templates.ExecuteTemplate(writer, name, value); err != nil {
+	// 템플릿 실패가 성공 상태나 일부 본문으로 전송되지 않게 렌더링을 먼저 끝낸다.
+	var body bytes.Buffer
+	if err := server.templates.ExecuteTemplate(&body, name, value); err != nil {
+		http.Error(writer, "화면을 표시할 수 없습니다.", http.StatusInternalServerError)
 		return
 	}
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	writer.WriteHeader(status)
+	_, _ = writer.Write(body.Bytes())
 }
 
 type pageData struct {
@@ -1062,16 +1025,8 @@ func newVisualizationData(contexts []model.Context, edges []store.HopEdge) visua
 	return result
 }
 
-const pageTemplates = `{{define "head"}}<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Title}} · 에이전트 컨텍스트</title><style>
-:root { font-family: system-ui, sans-serif; color: #1f2933; background: #f7f8fa; }
-body { margin: 0; } main { max-width: 1120px; margin: 32px auto; padding: 0 16px; } h1 { margin: 0 0 16px; font-size: 24px; } section, form, table { margin: 16px 0; } .panel { padding: 16px; background: #fff; border: 1px solid #d9dee5; } label { display: block; margin: 8px 0; } input, select, button { box-sizing: border-box; padding: 8px; font: inherit; } input { width: 100%; } button { cursor: pointer; } .notice { padding: 8px; background: #e8f3ee; } .error { padding: 8px; background: #fdecec; } table { width: 100%; border-collapse: collapse; background: #fff; } th, td { padding: 8px; text-align: left; border: 1px solid #d9dee5; } nav { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; } .inline { display: inline; } .actions { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; } .actions label { min-width: 140px; flex: 1; } .graph-layout { display: grid; grid-template-columns: 1fr 260px; gap: 16px; } #context-graph { min-height: 540px; border: 1px solid #d9dee5; } #node-details { white-space: pre-wrap; } @media (max-width: 720px) { .graph-layout { grid-template-columns: 1fr; } #context-graph { min-height: 420px; } }
-#full-view:focus-visible, [data-context-id]:focus-visible, #hop-range:focus-visible, #details-link:focus-visible, #node-details-heading:focus { outline: 2px solid #2563eb; outline-offset: 4px; }
-[data-context-id][aria-pressed="true"] { border: 2px solid #2563eb; background: #e8f3ee; } #node-details, #node-evidence { white-space: pre-wrap; overflow-wrap: anywhere; }
-.grade-filter { margin: 0; padding: 0; border: 0; } .grade-options { display: flex; flex-wrap: wrap; } .grade-filter label { display: flex; align-items: center; gap: 8px; min-width: 0; flex: none; margin: 0; padding: 0 8px; min-height: 48px; } .grade-filter input { width: auto; } .grade-filter p { margin: 4px 0; font-size: .875rem; } .grade-filter input:focus-visible { outline: 2px solid #2563eb; outline-offset: 4px; }
-</style></head><body><main>{{if .Message}}<p class="notice">{{.Message}}</p>{{end}}{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{end}}
-{{define "foot"}}</main></body></html>{{end}}
-{{define "login"}}{{template "head" .}}<h1>로그인</h1><form class="panel" method="post" action="/login">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}<label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" required></label><label>비밀번호<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">로그인</button></form><p><a href="/register">계정 등록</a></p>{{template "foot" .}}{{end}}
-{{define "register"}}{{template "head" .}}<h1>계정 등록</h1><form class="panel" method="post" action="/register"><label>로그인 아이디<input name="login_id" value="{{.LoginID}}" autocomplete="username" pattern="[a-z0-9_]{3,32}" required></label><p>영문 소문자, 숫자, 밑줄을 사용해 3~32자로 입력합니다.</p><label>비밀번호<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="128" required></label><p>비밀번호는 8~128자입니다.</p><button type="submit">등록</button></form><p><a href="/login">로그인으로 돌아가기</a></p>{{template "foot" .}}{{end}}
+const pageTemplates = `{{define "login"}}{{template "head" .}}<h1>로그인</h1><form class="panel" method="post" action="/login">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}<label for="login-id">로그인 아이디 (필수)<input id="login-id" name="login_id" value="{{.LoginID}}" autocomplete="username" autocorrect="off" autocapitalize="off" spellcheck="false" required></label><label for="login-password">비밀번호 (필수)<input id="login-password" type="password" name="password" autocomplete="current-password" required></label><button type="submit">로그인</button></form><p><a href="/register">계정 등록</a></p>{{template "foot" .}}{{end}}
+{{define "register"}}{{template "head" .}}<h1>계정 등록</h1><form class="panel" method="post" action="/register"><label for="register-id">로그인 아이디 (필수)<input id="register-id" name="login_id" value="{{.LoginID}}" autocomplete="username" autocorrect="off" autocapitalize="off" spellcheck="false" pattern="[a-z0-9_]{3,32}" aria-describedby="register-id-help" required></label><p class="hint" id="register-id-help">영문 소문자, 숫자, 밑줄을 사용해 3~32자로 입력합니다.</p><label for="register-password">비밀번호 (필수)<input id="register-password" type="password" name="password" autocomplete="new-password" minlength="8" maxlength="128" aria-describedby="register-password-help" required></label><p class="hint" id="register-password-help">비밀번호는 8~128자입니다.</p><button type="submit">등록</button></form><p><a href="/login">로그인으로 돌아가기</a></p>{{template "foot" .}}{{end}}
 {{define "logout"}}{{template "head" .}}<h1>로그아웃</h1><form class="panel" method="post" action="/logout"><p>이 브라우저의 세션을 종료합니다.</p><button type="submit">로그아웃</button></form>{{template "foot" .}}{{end}}
 {{define "message"}}{{template "head" .}}<h1>{{.Title}}</h1><p><a href="/graphs">그래프 목록</a></p>{{template "foot" .}}{{end}}
 {{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/connections">연결 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav>
@@ -1084,7 +1039,7 @@ body { margin: 0; } main { max-width: 1120px; margin: 32px auto; padding: 0 16px
 </div><p id="grade-filter-help">선택하지 않으면 모든 등급을 조회합니다.</p></fieldset>
 <button type="submit">적용</button></form>
 {{if .Graphs}}<table><thead><tr><th>이름</th><th>설명</th><th>마지막 활동</th><th>내 등급</th></tr></thead><tbody>{{range .Graphs}}<tr><td><a href="/graphs/{{.ID}}">{{.Name}}</a></td><td>{{.Description}}</td><td>{{formatTime .LastActivityAt}}</td><td>{{.Grade}}</td></tr>{{end}}</tbody></table>{{else}}<p>접근 가능한 그래프가 없습니다.</p>{{end}}{{if .NextCursor}}<p><a href="{{.NextPage}}">더 보기</a></p>{{end}}{{if .DeletedGraphs}}<section class="panel"><h2>내가 삭제한 그래프</h2>{{range .DeletedGraphs}}<p><a href="/graphs/{{.ID}}/deletion">{{.Name}} 복구</a></p>{{end}}</section>{{end}}{{if .RestoreGraphs}}<section class="panel"><h2>자동 삭제된 그래프</h2>{{range .RestoreGraphs}}<form class="inline" method="post" action="/graphs"><input type="hidden" name="restore_graph_id" value="{{.ID}}"><button type="submit">{{.Name}} 복구 요청</button></form>{{end}}</section>{{end}}{{template "foot" .}}{{end}}
-{{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p>{{.Graph.Description}}</p><p id="scope-help">전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다. 빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다. 국소 보기에서도 목록에서 다른 노드를 선택할 수 있습니다. 목록의 노드 선택 버튼은 Enter 또는 Space로 선택·해제합니다.</p><button id="full-view" type="button">전체 보기</button> <a id="details-link" href="#node-details-heading">선택한 노드 상세로 이동</a><p id="scope-status" role="status" aria-atomic="true">전체 보기</p><label for="hop-range">국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}" aria-describedby="scope-help"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section><section class="graph-layout"><div id="context-graph" aria-label="컨텍스트 그래프"></div><aside class="panel"><h2 id="node-details-heading" tabindex="-1">선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p><h3>근거 경로</h3><p id="node-evidence">노드를 선택하면 표시된 부분 그래프의 근거 연결을 안내합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code> <button type="button" data-context-id="{{.ID}}" aria-label="{{.ID}} 노드 선택" aria-pressed="false" aria-controls="node-details node-evidence" aria-describedby="scope-help">노드 선택</button><p>{{.Body}}</p>{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){
+{{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p>{{.Graph.Description}}</p><p id="scope-help">전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다. 빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다. 국소 보기에서도 목록에서 다른 노드를 선택할 수 있습니다. 목록의 노드 선택 버튼은 Enter 또는 Space로 선택·해제합니다.</p><button id="full-view" type="button">전체 보기</button> <a id="details-link" href="#node-details-heading">선택한 노드 상세로 이동</a><p id="scope-status" role="status" aria-atomic="true">전체 보기</p><label for="hop-range">국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}" aria-describedby="scope-help"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section>{{template "layer-legend" .}}<section class="graph-layout"><div id="context-graph" aria-label="컨텍스트 그래프"></div><aside class="panel"><h2 id="node-details-heading" tabindex="-1">선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p><h3>근거 경로</h3><p id="node-evidence">노드를 선택하면 표시된 부분 그래프의 근거 연결을 안내합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code> <button type="button" data-context-id="{{.ID}}" aria-label="{{.ID}} 노드 선택" aria-pressed="false" aria-controls="node-details node-evidence" aria-describedby="scope-help">노드 선택</button><p>{{.Body}}</p>{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){
 const elements={{.VisualizationJSON}};
 const details=document.getElementById('node-details');
 const emptyDetails=details.textContent;
@@ -1093,7 +1048,7 @@ const emptyEvidence=evidence.textContent;
 const choices=document.querySelectorAll('[data-context-id]');
 const range=document.getElementById('hop-range');
 const status=document.getElementById('scope-status');
-const cy=cytoscape({container:document.getElementById('context-graph'),elements:elements,style:[{selector:'node',style:{'label':'data(label)','color':'#fff','text-valign':'center','text-halign':'center','width':42,'height':42,'font-size':10}},{selector:'node.source',style:{'background-color':'#2563eb'}},{selector:'node.derived',style:{'background-color':'#7c3aed'}},{selector:'node.event',style:{'background-color':'#047857'}},{selector:'node.disputed',style:{'border-width':4,'border-color':'#f59e0b'}},{selector:'node.evidence-invalidated',style:{'shape':'diamond'}},{selector:'edge',style:{'curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'#64748b','line-color':'#64748b','width':2,'label':'data(kind)','font-size':8,'text-rotation':'autorotate'}},{selector:'edge.evidence',style:{'line-color':'#dc2626','target-arrow-color':'#dc2626','width':5}}],layout:{name:'cose',animate:false}});
+const cy=cytoscape({container:document.getElementById('context-graph'),elements:elements,style:[{selector:'node',style:{'label':'data(label)','color':'#fff','text-valign':'center','text-halign':'center','width':42,'height':42,'font-size':10}},{selector:'node.source',style:{'background-color':'#1e3a8a'}},{selector:'node.derived',style:{'background-color':'#7c3aed'}},{selector:'node.event',style:{'background-color':'#2dd4bf','color':'#0f172a'}},{selector:'node.disputed',style:{'border-width':4,'border-color':'#92400e','border-style':'dashed'}},{selector:'node.evidence-invalidated',style:{'shape':'diamond'}},{selector:'edge',style:{'curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'#64748b','line-color':'#64748b','width':2,'label':'data(kind)','font-size':8,'text-rotation':'autorotate'}},{selector:'edge.evidence',style:{'line-color':'#dc2626','target-arrow-color':'#dc2626','width':5}}],layout:{name:'cose',animate:false}});
 let selected=null;
 function applyScope(){
   cy.elements().show();

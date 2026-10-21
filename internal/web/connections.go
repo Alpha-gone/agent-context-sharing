@@ -150,7 +150,6 @@ func connectionExpiry(grant store.OAuthGrantSummary) time.Time {
 
 const connectionTemplates = `
 {{define "connections"}}{{template "head" .}}
-<style>.connection-list { overflow-wrap: anywhere; } .connection-list button { min-height: 48px; } .connection-list dt { font-weight: bold; } .connection-list dd { margin-inline-start: 0; margin-block-end: 8px; }</style>
 <nav><h1>연결 관리</h1><a href="/graphs">그래프 목록</a><a href="/logout">로그아웃</a></nav>
 <div class="connection-list">
 <section aria-labelledby="grant-heading"><h2 id="grant-heading">클라이언트 연결</h2>

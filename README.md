@@ -148,6 +148,8 @@ INDEX_WORKER_PLACEMENT=external go run ./cmd/indexer
 
 에이전트 등록·현재 계정/client 결합 검사·소유자 폐기의 내부 API도 [MCP-04 검토](spec/service/agent-context/reviews/2026-10-20-mcp-04.md)에서 인수했습니다. [MCP-02 검토](spec/service/agent-context/reviews/2026-10-20-mcp-02.md)에서 보호 전송·발견·4 MiB 본문 상한·표준 외피와 실제 TLS/OAuth 결합을 인수했습니다. [MCP-05 검토](spec/service/agent-context/reviews/2026-10-20-mcp-05.md)에서 쓰기 키·24시간 결과 재생 실행 경계도 인수했습니다. [MCP-06 검토](spec/service/agent-context/reviews/2026-10-20-mcp-06.md)에서 여덟 쓰기 도구의 실제 도메인 연결·재생·오류 변환과 OAuth/TLS 표본을 인수했습니다. [MCP-07 검토](spec/service/agent-context/reviews/2026-10-20-mcp-07.md)에서 다섯 읽기 도구·목록 커서·평면 흐름·표준 완료 결과도 인수했습니다. [MCP-08 검토](spec/service/agent-context/reviews/2026-10-20-mcp-08.md)에서 오류 계층·요청 예산·HTTP 취소와 실제 자원 회복을 인수했습니다. [AUTH-10 검토](spec/service/agent-context/reviews/2026-10-20-auth-10.md)에서 `/connections`의 본인 계열·활성 등록 목록과 폐기를 인수했습니다. 계열 폐기는 접근·갱신을 차단하고 웹 세션을 유지하며 등록 폐기는 기존 기여·감사를 보존합니다. 기동 경로의 전체 MCP 조립과 실제 브라우저·호스트 인수는 후속 범위입니다.
 
+[WEB-01 검토](spec/service/agent-context/reviews/2026-10-21-web-01.md)에서 공통 레이아웃·내장 CSS·Pretendard·라이선스, 입력 이스케이프와 자산 ETag/304를 인수했습니다. 전체 69/124개 완료이며 다음은 WEB-02 요청 경계입니다. 웹 회귀 411건과 race·전체 정적 검사가 통과했으며 DB 권한 통합 2건은 건너뛰었습니다. 실제 브라우저·보조 기술 인수는 후속 범위입니다.
+
 ## 개발 환경 재생성
 
 개발 환경을 처음부터 만들 때는 기존 개발 볼륨을 제거한 뒤 기동합니다. 이 절차는 개발 DB와 WAL 데이터를 삭제하므로 보존할 데이터가 없는 개발 환경에 적용합니다. 마이그레이션을 승인된 개발 통합 예외로 `001_init.sql`에 합쳐 checksum이 달라진 경우에도 이전 개발·시험 DB를 재생성합니다. 적용 조건은 [마이그레이션 계약](migrations/AGENTS.md)을 따릅니다.

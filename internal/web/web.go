@@ -126,6 +126,13 @@ func New(auth Authentication, graphs GraphStore, config Config) (*Server, error)
 
 // ServeHTTP는 계약에 있는 로그인·등록·로그아웃과 웹 관리 경로를 처리한다.
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	// 공개 자산 외의 화면·거부 응답은 세션/계정 맥락으로 재사용하지 않는다.
+	if _, asset := server.assets[request.URL.Path]; !asset {
+		writer.Header().Set("Cache-Control", "no-store")
+	}
+	if request.Context().Err() != nil {
+		return
+	}
 	if request.URL.Path == "/authorize" || request.URL.Path == "/connections" {
 		setAuthorizationHeaders(writer)
 	}
@@ -308,6 +315,10 @@ func (server *Server) logout(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (server *Server) graphList(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodPost {
+		methodNotAllowed(writer, "GET, POST")
+		return
+	}
 	accountID, _, ok := server.session(writer, request)
 	if !ok {
 		return
@@ -334,10 +345,6 @@ func (server *Server) graphList(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 		http.Redirect(writer, request, "/graphs", http.StatusSeeOther)
-		return
-	}
-	if request.Method != http.MethodGet {
-		methodNotAllowed(writer, "GET, POST")
 		return
 	}
 	filter, err := graphFilter(request)
@@ -380,8 +387,11 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 	if !ok {
 		return
 	}
-	graph, err := server.graphs.Graph(request.Context(), graphID)
-	if err != nil || graph.DeletedAt != nil {
+	graph, ok := server.graphForPage(writer, request, graphID, "그래프")
+	if !ok {
+		return
+	}
+	if graph.DeletedAt != nil {
 		server.render(writer, http.StatusNotFound, "message", pageData{Title: "그래프", Error: "그래프를 찾을 수 없습니다."})
 		return
 	}
@@ -397,8 +407,15 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	hops, err := server.graphs.GraphVisualization(request.Context(), graphID, depth, maxNodes)
+	if request.Context().Err() != nil {
+		return
+	}
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "그래프", Error: "시각화 데이터를 읽을 수 없습니다."})
+		return
+	}
+	if !visualizationInGraph(graphID, hops) {
+		server.responseScopeError(writer)
 		return
 	}
 	maxHops := limits.MaxHops
@@ -422,6 +439,10 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 // 대로 소유자만 할 수 있고, 등급 표도 소유자에게만 보인다. 팀 동작의 관리자 판정은
 // store가 트랜잭션 안에서 한다.
 func (server *Server) graphAccess(writer http.ResponseWriter, request *http.Request, graphID model.ID) {
+	if request.Method != http.MethodGet && request.Method != http.MethodPost {
+		methodNotAllowed(writer, "GET, POST")
+		return
+	}
 	accountID, _, ok := server.session(writer, request)
 	if !ok {
 		return
@@ -436,10 +457,6 @@ func (server *Server) graphAccess(writer http.ResponseWriter, request *http.Requ
 	}
 	if request.Method == http.MethodPost {
 		server.changeGraphAccess(writer, request, graphID, accountID, owner)
-		return
-	}
-	if request.Method != http.MethodGet {
-		methodNotAllowed(writer, "GET, POST")
 		return
 	}
 	value := pageData{Title: "권한과 팀 관리", GraphID: graphID, Owner: owner}
@@ -628,13 +645,16 @@ func accessPath(graphID model.ID) string {
 // 넘겼기 때문이다. 삭제된 컨텍스트가 보이는 자리는 「화면 접근 제어」가 정한 대로 이
 // 복구 화면뿐이다. 그래프 삭제만 이름 입력을 받는 것은 FR-AGENT_CONTEXT-107이 확정했다.
 func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Request, graphID model.ID) {
+	if request.Method != http.MethodGet && request.Method != http.MethodPost {
+		methodNotAllowed(writer, "GET, POST")
+		return
+	}
 	accountID, ok := server.requireGrade(writer, request, graphID, model.GraphGradeOwner)
 	if !ok {
 		return
 	}
-	graph, err := server.graphs.Graph(request.Context(), graphID)
-	if err != nil {
-		server.render(writer, http.StatusNotFound, "message", pageData{Title: "삭제와 복구", Error: "그래프를 찾을 수 없습니다."})
+	graph, ok := server.graphForPage(writer, request, graphID, "삭제와 복구")
+	if !ok {
 		return
 	}
 	switch request.Method {
@@ -713,6 +733,10 @@ func (server *Server) renderDeletion(writer http.ResponseWriter, request *http.R
 		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "삭제된 컨텍스트 목록을 읽을 수 없습니다."})
 		return
 	}
+	if !contextsInGraph(graphID, active) || !contextsInGraph(graphID, deleted) {
+		server.responseScopeError(writer)
+		return
+	}
 	value := pageData{Title: "삭제와 복구", GraphID: graphID, Graph: graph, Impact: impact, ActiveContexts: active, DeletedContexts: deleted, ContextsTruncated: activeTruncated || deletedTruncated}
 	if raw := request.URL.Query().Get("context_id"); raw != "" {
 		contextID, err := model.ParseID(raw)
@@ -723,7 +747,22 @@ func (server *Server) renderDeletion(writer http.ResponseWriter, request *http.R
 		// 목록에 없어도 직접 읽는다. 목록은 상한으로 잘리므로 목록 안에서만 찾으면
 		// 그래프에 컨텍스트가 많을 때 화면에서 삭제도 복구도 할 수 없다.
 		selected, err := server.graphs.Context(ctx, graphID, contextID)
-		if err != nil || selected.DeletedAt != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			status, message := http.StatusInternalServerError, "컨텍스트를 읽을 수 없습니다."
+			if errors.Is(err, store.ErrNotFound) {
+				status, message = http.StatusNotFound, "활성 컨텍스트를 찾을 수 없습니다."
+			}
+			server.render(writer, status, "message", pageData{Title: "삭제와 복구", Error: message})
+			return
+		}
+		if selected.GraphID != graphID || selected.ID != contextID {
+			server.responseScopeError(writer)
+			return
+		}
+		if selected.DeletedAt != nil {
 			server.render(writer, http.StatusNotFound, "message", pageData{Title: "삭제와 복구", Error: "활성 컨텍스트를 찾을 수 없습니다."})
 			return
 		}
@@ -755,6 +794,10 @@ func (server *Server) graphAudit(writer http.ResponseWriter, request *http.Reque
 }
 
 func (server *Server) operatorRestores(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodPost {
+		methodNotAllowed(writer, "GET, POST")
+		return
+	}
 	accountID, _, ok := server.session(writer, request)
 	if !ok {
 		return
@@ -799,7 +842,11 @@ func (server *Server) requireGrade(writer http.ResponseWriter, request *http.Req
 	if !ok {
 		return model.ID{}, false
 	}
-	if err := perm.Require(request.Context(), server.graphs, graphID, accountID, required); err != nil {
+	err := perm.Require(request.Context(), server.graphs, graphID, accountID, required)
+	if request.Context().Err() != nil {
+		return model.ID{}, false
+	}
+	if err != nil {
 		if _, found := errors.AsType[perm.NotFoundError](err); found {
 			server.render(writer, http.StatusNotFound, "message", pageData{Title: "그래프", Error: "그래프를 찾을 수 없습니다."})
 		} else if _, found := errors.AsType[perm.DeniedError](err); found {
@@ -869,7 +916,14 @@ func (server *Server) verifiedSession(request *http.Request) (model.ID, Session,
 	if err != nil || cookie.Value == "" {
 		return model.ID{}, Session{}, http.ErrNoCookie
 	}
-	return server.auth.VerifyWebSession(request.Context(), cookie.Value, SessionAudience)
+	account, session, err := server.auth.VerifyWebSession(request.Context(), cookie.Value, SessionAudience)
+	if err != nil {
+		return model.ID{}, Session{}, err
+	}
+	if !account.IsV7() {
+		return model.ID{}, Session{}, http.ErrNoCookie
+	}
+	return account, session, nil
 }
 
 func (server *Server) session(writer http.ResponseWriter, request *http.Request) (model.ID, Session, bool) {

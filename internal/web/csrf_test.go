@@ -31,7 +31,7 @@ func (unreadableCSRFBody) Close() error { return nil }
 func TestWebRejectsCrossOriginMutationsBeforeAuthentication(t *testing.T) {
 	accountID, graphID := testID(t), testID(t)
 	for _, target := range []string{
-		"/login", "/register", "/logout", "/access", "/graphs",
+		"/login", "/register", "/logout", "/access", "/graphs", "/authorize", "/connections",
 		"/graphs/" + graphID.String() + "/access",
 		"/graphs/" + graphID.String() + "/deletion", "/operator/restores",
 	} {
@@ -54,7 +54,7 @@ func TestWebRejectsCrossOriginMutationsBeforeAuthentication(t *testing.T) {
 				request.Body = unreadableCSRFBody{t: t}
 				response := httptest.NewRecorder()
 				server.ServeHTTP(response, request)
-				if response.Code != http.StatusForbidden || len(response.Header().Values("Set-Cookie")) != 0 || authentication.calls != 0 || graphs.granted {
+				if response.Code != http.StatusForbidden || len(response.Header().Values("Set-Cookie")) != 0 || authentication.calls != 0 || graphs.granted || response.Header().Get("Cache-Control") != "no-store" {
 					t.Fatalf("출처 거부 = %d, 쿠키 %v, 세션 검증 %d, 등급 부여 %t", response.Code, response.Header().Values("Set-Cookie"), authentication.calls, graphs.granted)
 				}
 			})

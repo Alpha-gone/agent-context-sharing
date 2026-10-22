@@ -193,6 +193,8 @@ sh ./test-dev-compose.sh --runtime
 sh ./test-wal-archive.sh
 ```
 
+기록기 분야 인수는 macOS에서 `go test -race -count=1 -skip '^TestOBS08ContainerPersistence$' ./internal/diagnostic`, Linux 격리 환경에서는 `sh internal/diagnostic/test-linux.sh`로 실행합니다. Linux 스크립트는 기존 로컬 이미지 ID를 고정하며 `ACS_OBS08_IMAGE`로 이미 설치된 Linux arm64/amd64 이미지를 지정할 수 있습니다. Go 1.27.1과 Docker가 필요하고 이미지 다운로드·DB·네트워크는 사용하지 않습니다. 전용 볼륨에서 전체 파일·커널 쓰기 오류·컨테이너 재생성·슬롯 교체를 검증하고 자신이 만든 자원만 정리합니다. 결과 JSON·stderr는 출력한 임시 결과 경로에 남습니다. 상세 범위와 디스크 부족 주입의 제한은 [OBS-08 검토](spec/service/agent-context/reviews/2026-10-23-obs-08.md)를 따릅니다.
+
 그래프 불변식 감사는 `go run ./cmd/audit`, 검색 품질 평가는 `cmd/eval`이 담당합니다. 평가 표본과 실행 방법은 [테스트 설계](spec/service/agent-context/sdd/testing.md)와 [평가 검증 설계](spec/service/agent-context/sdd/evaluation.md#검증을-가능하게-하는-설계)를 확인하십시오.
 
 색인 시험은 기본 회귀에서 로컬 TLS 합성 제공자를 사용합니다. 실제 Gemini 전송은 `embedding_live` 태그의 별도 시험이며, 외부 전송·비용 허용과 키 주입이 필요합니다. 두 경로의 호출 상한·격리 DB·실행 조건은 [임베딩 실연결 시험 경계](spec/service/agent-context/sdd/testing.md#임베딩-제공자-실연결-테스트)를 따릅니다.
@@ -213,4 +215,6 @@ sh ./test-wal-archive.sh
 
 [OBS-06 검토](spec/service/agent-context/reviews/2026-10-22-obs-06.md)에서 소유자의 감사 통합 페이지와 기간·대상 필터, 직접/상속 소유자 및 복구 상태 근거의 보존을 인수했습니다. 관련 733건(하위 사례 포함), race와 전체 정적 검사가 통과했습니다. 당시 76/124개 완료였으며 다음은 OBS-07의 파일 장애·stderr·부분 쓰기·종료였습니다. 감사 필터·더 보기 UI는 WEB-08 범위입니다.
 
-[OBS-07 검토](spec/service/agent-context/reviews/2026-10-23-obs-07.md)에서 안전한 stderr 알림·부분 행 복구·최대 5초 종료를 인수했습니다. 관련 172건(하위 사례 포함), race·전체 정적 검사·Linux 교차 빌드가 통과했고 실제 DB에서 진단 파일 장애 뒤 관계와 업무 감사의 보존을 확인했습니다. 현재 77/124개 완료이며 다음은 OBS-08의 실제 파일·재시작·다중 instance 통합 인수입니다. 배포 stderr 수집·보관과 Linux 실행 인수는 후속 범위입니다.
+[OBS-07 검토](spec/service/agent-context/reviews/2026-10-23-obs-07.md)에서 안전한 stderr 알림·부분 행 복구·최대 5초 종료를 인수했습니다. 관련 172건(하위 사례 포함), race·전체 정적 검사·Linux 교차 빌드가 통과했고 실제 DB에서 진단 파일 장애 뒤 관계와 업무 감사의 보존을 확인했습니다. 당시 77/124개 완료였으며 다음은 OBS-08의 실제 파일·재시작·다중 instance 통합 인수였습니다. 배포 stderr 수집·보관과 Linux 실행 인수는 후속 범위입니다.
+
+[OBS-08 검토](spec/service/agent-context/reviews/2026-10-23-obs-08.md)에서 여섯 파일·흐름·권한·비밀 제외와 상한/보존·장애/누락, 컨테이너 재생성·슬롯 교체를 인수했습니다. macOS 진단 164건·HTTP/의존 2건(race 포함), Linux 174건과 전체 정적 검사가 통과했습니다. 현재 78/124개 완료이며 관측성 8개 항목을 마쳤습니다. 다음은 ARCH-06의 애플리케이션 전체 조립입니다. 운영 배포·다중 호스트·외부 stderr 영속 수집은 후속 범위입니다.

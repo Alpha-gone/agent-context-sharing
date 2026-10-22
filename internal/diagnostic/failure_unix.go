@@ -20,7 +20,7 @@ var failureCodes = [...]string{
 	"canceled", "close_failed", "directory_unavailable", "file_invalid", "file_unavailable", "instance_busy",
 	"ownership_invalid", "parent_unsafe", "path_changed", "path_invalid", "permissions_invalid",
 	"storage_lock_failed", "storage_lock_timeout", "storage_unlock_failed", "sync_failed",
-	"filesystem_unavailable", "storage_read_only", "volatile_storage", "event_expired", "log_invalid", "partial_write",
+	"filesystem_unavailable", "storage_read_only", "storage_full", "volatile_storage", "event_expired", "log_invalid", "partial_write",
 	"active_file_protected", "capacity_exceeded", "cleanup_capacity", "cleanup_failed", "cleanup_write_failed",
 	"event_capacity", "inventory_failed", "inventory_invalid", "inventory_limit", "rotation_failed", "writer_lock_failed",
 	"partial_recovered", "shutdown_timeout",

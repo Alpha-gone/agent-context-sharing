@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // NewRecorder는 파일 준비를 완료한 뒤 단일 기록 루프를 시작한다.
@@ -94,6 +96,12 @@ func (files *Files) appendLine(kind Kind, line []byte) error {
 			return fileFailure("canceled", err)
 		}
 		n, err := file.Write(line)
+		if n == 0 && errors.Is(err, unix.ENOSPC) {
+			return fileFailure("storage_full", err)
+		}
+		if n == 0 && errors.Is(err, unix.EROFS) {
+			return fileFailure("storage_read_only", err)
+		}
 		if n != len(line) {
 			if err == nil {
 				err = io.ErrShortWrite

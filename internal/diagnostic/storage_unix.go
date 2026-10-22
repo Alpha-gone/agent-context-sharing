@@ -41,6 +41,7 @@ type storedLog struct {
 	instance, name    string
 	kind              Kind
 	active, temporary bool
+	quarantined       bool
 	size              int64
 	stamp             time.Time
 }
@@ -55,6 +56,16 @@ func logName(name string) (kind Kind, active, temporary bool, stamp time.Time, o
 		parts := strings.Split(rest, ".")
 		if len(parts) == 2 && validKind(Kind(parts[0])) && validID(parts[1]) {
 			return Kind(parts[0]), false, true, time.Time{}, true
+		}
+		return
+	}
+	if rest, found := strings.CutPrefix(name, ".partial."); found {
+		parts := strings.Split(rest, ".")
+		if len(parts) == 3 && validKind(Kind(parts[0])) && validID(parts[2]) {
+			stamp, err := time.Parse(rotationTimeLayout, parts[1])
+			if err == nil {
+				return Kind(parts[0]), false, false, stamp, true
+			}
 		}
 		return
 	}
@@ -140,7 +151,7 @@ func (files *Files) inventory() ([]storedLog, error) {
 				if stat.Size < 0 {
 					return nil, fileFailure("inventory_invalid", nil)
 				}
-				result = append(result, storedLog{instance: instance, name: name, kind: kind, active: active, temporary: temporary, size: stat.Size, stamp: stamp})
+				result = append(result, storedLog{instance: instance, name: name, kind: kind, active: active, temporary: temporary, quarantined: strings.HasPrefix(name, ".partial."), size: stat.Size, stamp: stamp})
 			}
 			return result, nil
 		}()
@@ -478,6 +489,21 @@ func (files *Files) maintainLocked(now time.Time) error {
 			continue
 		}
 		err := files.withIdleSlot(item.instance, func() error {
+			if err := files.repairPartial(item, now); err != nil {
+				return err
+			}
+			// 복구가 크기를 바꿨으므로 이전 목록의 크기로 행을 읽지 않는다.
+			directory, err := files.logDirectory(item.instance)
+			if err != nil {
+				return err
+			}
+			var stat unix.Stat_t
+			err = unix.Fstatat(int(directory.Fd()), item.name, &stat, unix.AT_SYMLINK_NOFOLLOW)
+			directory.Close()
+			if err != nil {
+				return fileFailure("inventory_failed", err)
+			}
+			item.size = stat.Size
 			summary, err := files.inspectLog(item, cutoff)
 			if err != nil {
 				return err
@@ -520,6 +546,14 @@ func (files *Files) maintainLocked(now time.Time) error {
 		if item.active || item.temporary {
 			continue
 		}
+		if item.quarantined {
+			if !item.stamp.After(cutoff) {
+				if err := files.removeLog(item); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		summary, err := files.inspectLog(item, cutoff)
 		if err != nil {
 			return err
@@ -542,7 +576,11 @@ func (files *Files) maintainLocked(now time.Time) error {
 }
 
 func (files *Files) maintain() error {
-	return files.withStorageLock(context.Background(), func() error { return files.maintainLocked(files.policy.now().UTC()) })
+	ctx := files.ioContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return files.withStorageLock(ctx, func() error { return files.maintainLocked(files.policy.now().UTC()) })
 }
 
 func (files *Files) beforeAppend(kind Kind, size int, now time.Time) error {

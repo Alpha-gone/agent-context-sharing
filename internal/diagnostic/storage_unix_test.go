@@ -336,13 +336,13 @@ func TestOBS04StartupCleansOldSlotsAndOldestCount(t *testing.T) {
 }
 
 func TestOBS04StartupRejectsMalformedAndUnknownLogWithoutDisclosure(t *testing.T) {
-	for _, bad := range []string{"partial", "unknown", "symlink"} {
+	for _, bad := range []string{"complete_invalid", "unknown", "symlink"} {
 		t.Run(bad, func(t *testing.T) {
 			dir := obs02Directory(t)
 			files := obs04Files(t, dir, "slot")
 			var path string
-			if bad == "partial" {
-				obs04Raw(t, files, Request, []byte("{\"secret\":"), true, obs04Now)
+			if bad == "complete_invalid" {
+				obs04Raw(t, files, Request, []byte("{\"secret\":\n"), true, obs04Now)
 				path = filepath.Join(dir, "slot", "request.jsonl")
 			} else {
 				path = filepath.Join(dir, "slot", "secret-input")

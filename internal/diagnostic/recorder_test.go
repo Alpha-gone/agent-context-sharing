@@ -453,7 +453,7 @@ func TestOBS03ActualFilesKindsLevelsRestartAndReporter(t *testing.T) {
 	}
 }
 
-func TestOBS03ActualFileRefusesTruncatedTail(t *testing.T) {
+func TestOBS03ActualFileRepairsTruncatedTail(t *testing.T) {
 	directory := obs02Directory(t)
 	source := testSource(t)
 	recorder, err := NewRecorder(t.Context(), directory, source)
@@ -476,15 +476,15 @@ func TestOBS03ActualFileRefusesTruncatedTail(t *testing.T) {
 			t.Fatal("수락 실패")
 		}
 	}
-	if err := obs03Close(t, recorder); err == nil || strings.Contains(err.Error(), directory) {
-		t.Fatalf("부분 행 오류를 숨기거나 경로를 노출했다: %v", err)
+	if err := obs03Close(t, recorder); err != nil {
+		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(directory, source.instance, "request.jsonl"))
-	if err != nil || string(data) != "{\"partial\":" {
-		t.Fatal("잘린 행에 다음 JSON을 이어 썼다")
+	if err != nil || bytes.Count(data, []byte{'\n'}) != 2 || bytes.Contains(data, []byte("partial")) {
+		t.Fatal("불완전 행을 분리하고 정상 행만 이어 쓰지 못했다")
 	}
 	stats := recorder.Stats()
-	if stats.Written != 1 || stats.Dropped != 2 || stats.QueuedEvents != 0 {
+	if stats.Written != 3 || stats.Dropped != 0 || stats.QueuedEvents != 0 {
 		t.Fatalf("부분 행 누락: %+v", stats)
 	}
 }

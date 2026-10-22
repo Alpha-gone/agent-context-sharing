@@ -5,6 +5,8 @@ package diagnostic
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
+	"os"
 	"sync"
 	"time"
 )
@@ -25,10 +27,11 @@ const (
 	queueFull
 	recorderClosed
 	writeFailed
+	shutdownTimeout
 	lossReasonCount
 )
 
-var lossNames = [...]string{"invalid_event", "source_mismatch", "encoding_failed", "event_too_large", "queue_full", "closed", "write_failed"}
+var lossNames = [...]string{"invalid_event", "source_mismatch", "encoding_failed", "event_too_large", "queue_full", "closed", "write_failed", "shutdown_timeout"}
 
 // DropCount는 원문·임의 오류 없이 종류와 고정 원인별 누적 누락을 나타낸다.
 // 미지원 종류를 입력한 이벤트의 Kind는 빈 문자열이다.
@@ -49,12 +52,14 @@ type RecorderStats struct {
 	Writing             bool
 	Losses              []DropCount
 	MaintenanceFailures uint64
+	StderrFailures      uint64
 }
 
 type recorderUpkeep struct {
-	run   func() error
-	ticks <-chan time.Time
-	stop  func()
+	run    func() error
+	ticks  <-chan time.Time
+	stop   func()
+	cancel func()
 }
 
 type queueLimits struct{ events, bytes, eventBytes int }
@@ -87,11 +92,21 @@ type Recorder struct {
 	closeErr            error
 	upkeep              *recorderUpkeep
 	maintenanceFailures uint64
+	output              *failureOutput
+	flushTime           time.Duration
+	flushTimer          *time.Timer
+	deadline            chan struct{}
+	expired             bool
 }
 
 func newRecorder(source Source, limits queueLimits, writeLine func(Kind, []byte) error, closeFile func() error, upkeep *recorderUpkeep) *Recorder {
+	return startRecorder(source, limits, writeLine, closeFile, upkeep, newFailureOutput(source, os.Stderr, time.Now), flushBudget)
+}
+
+func startRecorder(source Source, limits queueLimits, writeLine func(Kind, []byte) error, closeFile func() error, upkeep *recorderUpkeep, output *failureOutput, budget time.Duration) *Recorder {
 	recorder := &Recorder{source: source, limits: limits, writeLine: writeLine, closeFile: closeFile,
-		wake: make(chan struct{}, 1), done: make(chan struct{}), queue: make([]queuedLine, limits.events), upkeep: upkeep}
+		wake: make(chan struct{}, 1), done: make(chan struct{}), queue: make([]queuedLine, limits.events), upkeep: upkeep,
+		output: output, flushTime: budget, deadline: make(chan struct{})}
 	go recorder.run()
 	return recorder
 }
@@ -175,15 +190,13 @@ func (recorder *Recorder) drop(kind Kind, reason lossReason) {
 }
 
 func (recorder *Recorder) dropLocked(kind Kind, reason lossReason) {
-	index := len(fileKinds)
-	for i, candidate := range fileKinds {
-		if kind == candidate {
-			index = i
-			break
-		}
-	}
+	recorder.lossLocked(kind, reason, lossNames[reason])
+}
+
+func (recorder *Recorder) lossLocked(kind Kind, reason lossReason, code string) {
 	recorder.dropped++
-	recorder.losses[index][reason]++
+	recorder.losses[kindIndex(kind)][reason]++
+	recorder.output.add(kind, code, true)
 }
 
 func (recorder *Recorder) Stats() RecorderStats {
@@ -191,6 +204,9 @@ func (recorder *Recorder) Stats() RecorderStats {
 	defer recorder.mu.Unlock()
 	stats := RecorderStats{Accepted: recorder.accepted, Written: recorder.written, Dropped: recorder.dropped,
 		QueuedEvents: recorder.count, QueuedBytes: recorder.bytes, Writing: recorder.writing, MaintenanceFailures: recorder.maintenanceFailures}
+	recorder.output.mu.Lock()
+	stats.StderrFailures = recorder.output.outputFailures
+	recorder.output.mu.Unlock()
 	for i, counts := range recorder.losses {
 		kind := Kind("")
 		if i < len(fileKinds) {
@@ -223,7 +239,14 @@ func (recorder *Recorder) run() {
 			stopping := recorder.stopping
 			recorder.mu.Unlock()
 			if stopping {
-				recorder.closeErr = recorder.closeFile()
+				err := recorder.closeFile()
+				recorder.mu.Lock()
+				recorder.closeErr = err
+				if err != nil {
+					recorder.output.add(System, failureCode(err), false)
+				}
+				recorder.mu.Unlock()
+				recorder.output.stop()
 				return
 			}
 			select {
@@ -240,13 +263,18 @@ func (recorder *Recorder) run() {
 		err := recorder.writeLine(item.kind, item.data)
 
 		recorder.mu.Lock()
+		if recorder.expired {
+			recorder.writing = false
+			recorder.mu.Unlock()
+			continue
+		}
 		recorder.queue[recorder.head] = queuedLine{}
 		recorder.head = (recorder.head + 1) % len(recorder.queue)
 		recorder.count--
 		recorder.bytes -= len(item.data)
 		recorder.writing = false
 		if err != nil {
-			recorder.dropLocked(item.kind, writeFailed)
+			recorder.lossLocked(item.kind, writeFailed, failureCode(err))
 			if recorder.firstErr == nil {
 				recorder.firstErr = err
 			}
@@ -261,6 +289,7 @@ func (recorder *Recorder) maintain() {
 	if err := recorder.upkeep.run(); err != nil {
 		recorder.mu.Lock()
 		recorder.maintenanceFailures++
+		recorder.output.add(System, failureCode(err), false)
 		if recorder.firstErr == nil {
 			recorder.firstErr = err
 		}
@@ -268,23 +297,62 @@ func (recorder *Recorder) maintain() {
 	}
 }
 
-// Close는 신규 수락을 막고 기존 대기열과 파일 수명 정리를 기다린다.
-// ctx 만료는 호출자의 대기만 끝낸다. 작업자는 소유한 자원 정리를 계속한다.
-// 5초 flush·잔여 누락·stderr 통지는 OBS-07의 종료 정책에서 구현한다.
+// Close는 최초 호출부터 최대 5초 동안 flush한다. 호출자 취소는 그 호출의
+// 대기만 끝내며 공통 마감을 다시 시작하지 않는다. OS I/O 정리는 소유 루프가 마친다.
 func (recorder *Recorder) Close(ctx context.Context) error {
 	recorder.mu.Lock()
-	recorder.stopping = true
+	if !recorder.stopping {
+		recorder.stopping = true
+		recorder.flushTimer = time.AfterFunc(recorder.flushTime, recorder.expire)
+	}
 	recorder.signal()
 	recorder.mu.Unlock()
 	select {
 	case <-recorder.done:
-		return recorder.finishError()
-	default:
-	}
-	select {
-	case <-recorder.done:
+		select {
+		case <-recorder.output.done:
+			recorder.flushTimer.Stop()
+			return recorder.finishError()
+		case <-recorder.deadline:
+			return recorder.finishError()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	case <-recorder.deadline:
 		return recorder.finishError()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (recorder *Recorder) expire() {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.expired {
+		return
+	}
+	select {
+	case <-recorder.done:
+		select {
+		case <-recorder.output.done:
+			return
+		default:
+		}
+	default:
+	}
+	recorder.expired = true
+	if recorder.upkeep != nil && recorder.upkeep.cancel != nil {
+		recorder.upkeep.cancel()
+	}
+	for i := range recorder.count {
+		index := (recorder.head + i) % len(recorder.queue)
+		recorder.dropLocked(recorder.queue[index].kind, shutdownTimeout)
+		recorder.queue[index] = queuedLine{}
+	}
+	recorder.count, recorder.bytes = 0, 0
+	recorder.firstErr = errors.Join(recorder.firstErr, fileFailure("shutdown_timeout", context.DeadlineExceeded))
+	recorder.output.add(System, "shutdown_timeout", false)
+	recorder.output.stop()
+	close(recorder.deadline)
+	recorder.signal()
 }

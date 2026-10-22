@@ -48,6 +48,9 @@ type Files struct {
 	gate        chan struct{}
 	closed      bool
 	policy      *storagePolicy
+	notice      func(Kind, string)
+	ioContext   context.Context
+	cancelIO    context.CancelFunc
 }
 
 // PrepareFiles는 요청 수신 전에 호출한다. 실패 시 열린 fd와 잠금을 반환하며
@@ -360,6 +363,9 @@ func (files *Files) Close() error {
 		return nil
 	}
 	files.closed = true
+	if files.cancelIO != nil {
+		files.cancelIO()
+	}
 	var failures []error
 	for _, file := range files.active {
 		if err := file.Close(); err != nil {

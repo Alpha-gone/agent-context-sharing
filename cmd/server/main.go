@@ -86,9 +86,8 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	}
 	sink, _ := diagnostic.LevelSink(recorder, cfg.Diagnostic.Level)
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		resultErr = errors.Join(resultErr, recorder.Close(ctx))
+		// 기록기의 공통 5초 마감이 잔여 누락을 확정하도록 별도 마감과 경합하지 않는다.
+		resultErr = errors.Join(resultErr, recorder.Close(context.Background()))
 	}()
 	reports := make(map[diagnostic.Kind]*diagnostic.Reporter, 6)
 	for _, kind := range []diagnostic.Kind{diagnostic.Request, diagnostic.Auth, diagnostic.Search, diagnostic.Index, diagnostic.Management, diagnostic.System} {

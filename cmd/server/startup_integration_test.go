@@ -63,7 +63,8 @@ func TestStartupFailureClosesWorkersIntegration(t *testing.T) {
 				_, _, isolatedAddress := newServerContractDatabase(t)
 				resource := &url.URL{Scheme: "https", Host: "service.test", Path: "/mcp"}
 				cfg := config.Config{
-					MCPResourceURL: resource, OAuthClients: map[string]config.OAuthClient{"test": {RedirectURIs: []string{"http://127.0.0.1/callback"}, Resources: []string{resource.String()}, LoopbackPortPolicy: config.LoopbackExact}},
+					MCPAllowedOrigins: []string{"https://service.test"},
+					MCPResourceURL:    resource, OAuthClients: map[string]config.OAuthClient{"test": {RedirectURIs: []string{"http://127.0.0.1/callback"}, Resources: []string{resource.String()}, LoopbackPortPolicy: config.LoopbackExact}},
 					Diagnostic:  config.DiagnosticConfig{Directory: absolute, InstanceID: "startup_test", Level: "INFO"},
 					DatabaseURL: isolatedAddress, GraphName: graphName, HTTPAddr: listener.Addr().String(),
 					EmbeddingProvider: "gemini", GeminiAPIKey: "synthetic-key", EmbeddingBaseURL: embeddingURL, EmbeddingModel: "gemini-embedding-2", EmbeddingVectorType: "vector", EmbeddingDimension: dimension,

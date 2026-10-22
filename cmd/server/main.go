@@ -12,13 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/config"
-	"agent_context_sharing/internal/diagnostic"
-	"agent_context_sharing/internal/index"
-	"agent_context_sharing/internal/model"
-	"agent_context_sharing/internal/store"
-	"agent_context_sharing/internal/web"
 )
 
 // shutdownTimeout은 종료 신호 뒤 진행 중인 요청을 기다리는 최대 시간이다.
@@ -76,118 +70,14 @@ func configureAndRun(env config.Environment, start func(config.Config) error) er
 }
 
 func runConfigured(cfg config.Config) (resultErr error) {
-	source, err := diagnostic.NewSource(cfg.Diagnostic.InstanceID)
+	assembly, err := assembleApplication(context.Background(), cfg, nil, slog.Default())
 	if err != nil {
 		return err
 	}
-	recorder, err := diagnostic.NewRecorder(context.Background(), cfg.Diagnostic.Directory, source)
-	if err != nil {
-		return fmt.Errorf("진단 파일 준비: %w", err)
-	}
-	sink, _ := diagnostic.LevelSink(recorder, cfg.Diagnostic.Level)
-	defer func() {
-		// 기록기의 공통 5초 마감이 잔여 누락을 확정하도록 별도 마감과 경합하지 않는다.
-		resultErr = errors.Join(resultErr, recorder.Close(context.Background()))
-	}()
-	reports := make(map[diagnostic.Kind]*diagnostic.Reporter, 6)
-	for _, kind := range []diagnostic.Kind{diagnostic.Request, diagnostic.Auth, diagnostic.Search, diagnostic.Index, diagnostic.Management, diagnostic.System} {
-		reports[kind], _ = diagnostic.NewReporter(kind, sink, source)
-	}
-	jobContext := diagnostic.WithTrace(context.Background(), diagnostic.Trace{}.NewJob())
-	reports[diagnostic.System].RecordFields(jobContext, "INFO", "startup", "pending", "completed", false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup"}})
-	defer func() {
-		result, reason, level := "completed", "completed", "INFO"
-		if resultErr != nil {
-			result, reason, level = "failed", "store_unavailable", "ERROR"
-		}
-		reports[diagnostic.System].RecordFields(jobContext, level, "shutdown", result, reason, false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "shutdown"}})
-	}()
-
-	database, err := store.New(context.Background(), cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
-		AdjacencyWindow:     cfg.RelationAdjacencyWindow,
-		SimilarityThreshold: cfg.RelationSimilarityThreshold,
-		Limit:               cfg.RelationProposalLimit,
-	}, func(accountID model.ID) int { return cfg.AccountPlans.For(accountID).GraceDays }, store.IndexTargets(cfg.IndexTargetLayers))
-	if err != nil {
-		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
-	}
 	poolCloseSafe := true
-	var workers []worker
-	defer func() {
-		resultErr = errors.Join(resultErr, closeServerResources(context.Background(), slog.Default(), database.Close, poolCloseSafe, workers...))
-	}()
-	database.SetDiagnostics(reports[diagnostic.System])
-	database.SetOperationDiagnostics(reports[diagnostic.Management], reports[diagnostic.Index])
-	periodic, err := newPeriodicWorker(database, cfg.AccountPlans, slog.Default())
-	if err != nil {
-		return fmt.Errorf("주기 작업 준비: %w", err)
-	}
-	indexer, err := index.New(database, index.Config{
-		Provider:   cfg.EmbeddingProvider,
-		APIKey:     cfg.GeminiAPIKey,
-		BaseURL:    cfg.EmbeddingBaseURL,
-		Model:      cfg.EmbeddingModel,
-		VectorType: cfg.EmbeddingVectorType,
-		Dimension:  cfg.EmbeddingDimension,
-	}, nil, slog.Default())
-	if err != nil {
-		return fmt.Errorf("색인 작업자 준비: %w", err)
-	}
-	indexer.SetDiagnostics(reports[diagnostic.Index])
-	periodic.diagnostics = reports[diagnostic.System]
-	// external도 질의용 제공자 transport를 소유하므로 시작 여부와 별개로 정리한다.
-	workers = append(workers, periodic, indexer)
-	if err := database.CheckEmbeddingSchema(context.Background(), cfg.EmbeddingVectorType, cfg.EmbeddingDimension); err != nil {
-		return fmt.Errorf("임베딩 DB 구성 확인: %w", err)
-	}
-	// 색인 작업자는 「배치 조합」이 배치를 선택으로 열어 두었으므로 내장일 때만 시작한다.
-	// 분리 배치에서는 다른 배포 단위가 작업 큐를 소비한다. 두 배치 모두 시작 전에
-	// 제공자 구성과 DB 임베딩 스키마의 정합성을 검사한다.
-	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
-	// 종료 책임은 풀 준비 직후 등록했다. 시작 전에 목록에 추가하고, 정상 종료에서 이미
-	// 종료를 시도한 목록은 비워 기동 실패 정리와 같은 경계를 쓰되 중복 호출하지 않는다.
-	if cfg.IndexWorkerPlacement == config.PlacementEmbedded {
-		indexer.Start(context.Background())
-	}
-	periodic.Start(context.Background())
-	authorization, err := authz.New(database, authz.Config{
-		Issuer:             cfg.AuthorizationServerURL.String(),
-		BcryptCost:         cfg.BcryptCost,
-		OAuth:              oauthConfiguration(cfg),
-		AuthorizationCodes: database,
-		AccessTokens:       database,
-		RefreshTokens:      database,
-		Connections:        database,
-	})
-	if err != nil {
-		return fmt.Errorf("인가 서버 준비: %w", err)
-	}
-	authorization.SetDiagnostics(reports[diagnostic.Auth])
-	transport := transportSecurity{
-		directTLS:      cfg.TLSMode == config.TLSModeDirect,
-		trustedProxies: cfg.TrustedProxies,
-	}
-	webServer, err := web.New(webAuthentication{service: authorization}, database, web.Config{
-		Authorization: webAuthentication{service: authorization},
-		Connections:   webAuthentication{service: authorization},
-		Diagnostics:   reports[diagnostic.Request],
-		SecureCookie:  transport.isTLSRequest,
-		ClientAddress: transport.clientAddress,
-		Plans:         cfg.AccountPlans,
-	})
-	if err != nil {
-		return fmt.Errorf("웹 서버 준비: %w", err)
-	}
-	authorizationHandler, err := authz.NewHandler(authorization)
-	if err != nil {
-		return fmt.Errorf("인가 서버 경로 준비: %w", err)
-	}
-	app := newApplication(database, slog.Default(), transport)
-	app.diagnostics = reports[diagnostic.Request]
-	app.web = webServer
-	app.publicKeys = authorizationHandler
-	app.oauthMetadata = authorizationHandler
-	app.oauthTokens = authorizationHandler
+	defer func() { resultErr = assembly.close(resultErr, poolCloseSafe) }()
+	assembly.startWorkers(context.Background())
+	app := assembly.app
 	server := newHTTPServer(cfg.HTTPAddr, app.handler())
 
 	stopSignals := make(chan os.Signal, 1)
@@ -214,8 +104,8 @@ func runConfigured(cfg config.Config) (resultErr error) {
 	// 멈추고, 둘 다 풀을 쓰지 않게 된 다음에 defer가 풀을 닫는다.
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	shutdownErr := shutdownInOrder(shutdownContext, context.Background(), app, server, slog.Default(), workers...)
-	workers = nil
+	shutdownErr := shutdownInOrder(shutdownContext, context.Background(), app, server, slog.Default(), assembly.workers...)
+	assembly.workers = nil
 	if shutdownErr != nil {
 		poolCloseSafe = false
 		return shutdownErr

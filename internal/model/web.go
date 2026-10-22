@@ -42,10 +42,19 @@ type RestoreRequest struct {
 
 // AuditEntry는 컨텍스트 관리와 웹 관리 기록을 시간순으로 함께 표시하는 값이다.
 type AuditEntry struct {
+	ID         ID
+	Source     string
 	Kind       string
 	Action     string
 	ActorID    ID
 	OccurredAt time.Time
 	Target     string
 	Detail     string
+}
+
+// AuditFilter는 UTC 시작 포함·끝 제외 기간과 선택 대상의 감사 범위다.
+// nil 시각과 영 ID는 해당 조건을 제한하지 않는다.
+type AuditFilter struct {
+	From, Until *time.Time
+	Target      ID
 }

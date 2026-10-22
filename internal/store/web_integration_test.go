@@ -337,7 +337,7 @@ func TestGraphGrantsAndDeletionImpactExecute(t *testing.T) {
 		t.Fatalf("그래프 삭제 영향 = %#v, want 컨텍스트 1개와 계정 2개", impact)
 	}
 
-	entries, err := store.ListAuditEntries(t.Context(), graphID, 50)
+	entries, _, err := store.ListAuditEntries(t.Context(), graphID, ownerID, model.AuditFilter{}, "", 50)
 	if err != nil {
 		t.Fatalf("감사 기록 조회: %v", err)
 	}

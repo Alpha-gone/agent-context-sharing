@@ -73,7 +73,7 @@ type GraphStore interface {
 	RequestGraphRestore(context.Context, model.ID, model.ID) error
 	PendingRestoreRequests(context.Context) ([]model.RestoreRequest, error)
 	OperatorRestoreGraph(context.Context, model.ID, model.ID) error
-	ListAuditEntries(context.Context, model.ID, int) ([]model.AuditEntry, error)
+	ListAuditEntries(context.Context, model.ID, model.ID, model.AuditFilter, string, int) ([]model.AuditEntry, string, error)
 }
 
 // Config는 웹 화면의 고정된 HTTP 경계를 모은다.
@@ -793,7 +793,7 @@ func (server *Server) graphAudit(writer http.ResponseWriter, request *http.Reque
 	if !ok {
 		return
 	}
-	entries, err := server.graphs.ListAuditEntries(request.Context(), graphID, server.config.Plans.For(accountID).GraphPage.Default)
+	entries, _, err := server.graphs.ListAuditEntries(request.Context(), graphID, accountID, model.AuditFilter{}, "", server.config.Plans.For(accountID).GraphPage.Default)
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "감사 기록", Error: "감사 기록을 읽을 수 없습니다."})
 		return

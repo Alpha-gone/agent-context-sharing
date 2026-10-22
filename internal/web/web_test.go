@@ -272,8 +272,8 @@ func (fakeGraphStore) PendingRestoreRequests(context.Context) ([]model.RestoreRe
 func (fake fakeGraphStore) OperatorRestoreGraph(context.Context, model.ID, model.ID) error {
 	return fake.operatorRestoreErr
 }
-func (fakeGraphStore) ListAuditEntries(context.Context, model.ID, int) ([]model.AuditEntry, error) {
-	return nil, nil
+func (fakeGraphStore) ListAuditEntries(context.Context, model.ID, model.ID, model.AuditFilter, string, int) ([]model.AuditEntry, string, error) {
+	return nil, "", nil
 }
 
 // TestAccessScreenHidesGrantsFromNonOwner는 등급 영역이 소유자에게만 보이고 팀 영역은

@@ -69,51 +69,56 @@ func configureAndRun(env config.Environment, start func(config.Config) error) er
 	return start(cfg)
 }
 
-func runConfigured(cfg config.Config) (resultErr error) {
-	assembly, err := assembleApplication(context.Background(), cfg, nil, slog.Default())
-	if err != nil {
-		return err
-	}
-	poolCloseSafe := true
-	defer func() { resultErr = assembly.close(resultErr, poolCloseSafe) }()
-	assembly.startWorkers(context.Background())
-	app := assembly.app
-	server := newHTTPServer(cfg.HTTPAddr, app.handler())
-
+func runConfigured(cfg config.Config) error {
 	stopSignals := make(chan os.Signal, 1)
 	signal.Notify(stopSignals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(stopSignals)
 
+	assembly, err := assembleApplication(context.Background(), cfg, nil, slog.Default())
+	if err != nil {
+		return err
+	}
+	server := newHTTPServer(cfg.HTTPAddr, assembly.app.handler())
+	return assembly.runHTTP(server, func() error { return serve(server, cfg) }, stopSignals)
+}
+
+// runHTTP는 수신 실패와 종료 신호에 같은 요청·작업자·풀·진단 정리를 적용한다.
+// 수신기의 반환만으로 진행 요청이 끝났다고 판단하지 않는다.
+func (assembly *serverAssembly) runHTTP(server *http.Server, listen func() error, stopSignals <-chan os.Signal) (resultErr error) {
+	poolCloseSafe := true
+	defer func() { resultErr = assembly.close(resultErr, poolCloseSafe) }()
+	assembly.startWorkers(context.Background())
 	serveErrors := make(chan error, 1)
 	// 수신 루프는 종료 신호를 기다리는 주 흐름과 독립적으로 실행하고 종료 결과를 한 번 전달한다.
 	go func() {
-		serveErrors <- serve(server, cfg)
+		serveErrors <- listen()
 	}()
 
+	var serveErr error
+	serveReturned := false
 	select {
 	case err := <-serveErrors:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("HTTP 서버 수신: %w", err)
-		}
-		return nil
+		serveErr, serveReturned = err, true
 	case signal := <-stopSignals:
-		slog.Info("종료 신호 수신", "signal", signal.String())
+		assembly.logger.Info("종료 신호 수신", "signal", signal.String())
 	}
 
 	// 순서는 shutdownInOrder가 고정한다. 트래픽을 끊고 진행 요청을 마친 뒤 작업자를
 	// 멈추고, 둘 다 풀을 쓰지 않게 된 다음에 defer가 풀을 닫는다.
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	shutdownErr := shutdownInOrder(shutdownContext, context.Background(), app, server, slog.Default(), assembly.workers...)
+	shutdownErr := shutdownInOrder(shutdownContext, context.Background(), assembly.app, server, assembly.logger, assembly.workers...)
 	assembly.workers = nil
-	if shutdownErr != nil {
-		poolCloseSafe = false
-		return shutdownErr
+	poolCloseSafe = shutdownErr == nil
+	if !serveReturned {
+		serveErr = <-serveErrors
 	}
-	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("HTTP 서버 종료: %w", err)
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = fmt.Errorf("HTTP 서버 수신: %w", serveErr)
+	} else {
+		serveErr = nil
 	}
-	return nil
+	return errors.Join(serveErr, shutdownErr)
 }
 
 // serve는 TLS 종단 배치에 맞는 HTTP 수신기를 시작한다.

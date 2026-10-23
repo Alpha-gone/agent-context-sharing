@@ -261,12 +261,19 @@ func TestARCH06AssemblyMCPProviderAndPlacementIntegration(t *testing.T) {
 
 func TestARCH06AssemblyFailureReleasesResourcesIntegration(t *testing.T) {
 	_, _, address := newServerContractDatabase(t)
-	for _, stage := range []string{"진단 수준 준비", "임베딩 DB 구성 확인", "검색 실행기 준비", "인가 서버 준비", "MCP 전송 준비"} {
+	for _, stage := range []string{"진단 파일 준비", "진단 수준 준비", "데이터베이스 풀 준비", "색인 작업자 준비", "임베딩 DB 구성 확인", "검색 실행기 준비", "인가 서버 준비", "MCP 전송 준비"} {
 		t.Run(stage, func(t *testing.T) {
 			cfg := arch06Configuration(t, address, "https://provider.invalid")
+			directory := cfg.Diagnostic.Directory
 			switch stage {
+			case "진단 파일 준비":
+				cfg.Diagnostic.Directory = ""
 			case "진단 수준 준비":
 				cfg.Diagnostic.Level = "TRACE"
+			case "데이터베이스 풀 준비":
+				cfg.DatabaseURL = "postgres://%zz"
+			case "색인 작업자 준비":
+				cfg.EmbeddingProvider = "unsupported"
 			case "임베딩 DB 구성 확인":
 				cfg.EmbeddingDimension = 128
 			case "검색 실행기 준비":
@@ -285,7 +292,7 @@ func TestARCH06AssemblyFailureReleasesResourcesIntegration(t *testing.T) {
 				t.Fatal("부분 조립 뒤 작업자 누수")
 			}
 			source, _ := diagnostic.NewSource(cfg.Diagnostic.InstanceID)
-			reopened, err := diagnostic.NewRecorder(t.Context(), cfg.Diagnostic.Directory, source)
+			reopened, err := diagnostic.NewRecorder(t.Context(), directory, source)
 			if err != nil {
 				t.Fatal("기동 실패 뒤 기록자 잠금 누수", err)
 			}

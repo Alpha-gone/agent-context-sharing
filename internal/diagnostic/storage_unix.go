@@ -233,6 +233,7 @@ func (files *Files) removeLog(item storedLog) error {
 	if err := unix.Unlinkat(int(dir.Fd()), item.name, 0); err != nil {
 		return fileFailure("cleanup_failed", err)
 	}
+	files.removed++
 	if err := dir.Sync(); err != nil {
 		return fileFailure("sync_failed", err)
 	}

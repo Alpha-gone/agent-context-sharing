@@ -56,10 +56,14 @@ type RecorderStats struct {
 }
 
 type recorderUpkeep struct {
-	run    func() error
-	ticks  <-chan time.Time
-	stop   func()
-	cancel func()
+	cancelMaintenance context.CancelFunc
+	context           context.Context
+	scope             int64
+	removed           func() uint64
+	run               func() error
+	ticks             <-chan time.Time
+	stop              func()
+	cancel            func()
 }
 
 type queueLimits struct{ events, bytes, eventBytes int }
@@ -71,6 +75,10 @@ type queuedLine struct {
 // Recorder는 인스턴스 하나의 공용 대기열과 단일 기록 루프를 소유한다.
 // 복사하지 않는다. 요청 context·Event·호출자 goroutine은 보관하지 않는다.
 type Recorder struct {
+	maintenanceStopped  bool
+	maintenanceDone     chan struct{}
+	maintenanceErr      error
+	maintenanceGuard    MaintenanceGuard
 	source              Source
 	limits              queueLimits
 	writeLine           func(Kind, []byte) error
@@ -286,15 +294,112 @@ func (recorder *Recorder) run() {
 }
 
 func (recorder *Recorder) maintain() {
-	if err := recorder.upkeep.run(); err != nil {
+	recorder.mu.Lock()
+	if recorder.stopping || recorder.maintenanceStopped {
+		recorder.mu.Unlock()
+		return
+	}
+	done := make(chan struct{})
+	recorder.maintenanceDone = done
+	guard := recorder.maintenanceGuard
+	recorder.mu.Unlock()
+	defer func() {
 		recorder.mu.Lock()
+		close(done)
+		recorder.maintenanceDone = nil
+		recorder.mu.Unlock()
+	}()
+	run := func() (int, error) {
+		var before uint64
+		if recorder.upkeep.removed != nil {
+			before = recorder.upkeep.removed()
+		}
+		err := recorder.upkeep.run()
+		if recorder.upkeep.removed != nil {
+			return int(recorder.upkeep.removed() - before), err
+		}
+		return 0, err
+	}
+	var err error
+	if guard != nil {
+		_, _, err = guard(recorder.upkeep.context, recorder.upkeep.scope, run)
+	} else {
+		_, err = run()
+	}
+	if err != nil {
+		recorder.mu.Lock()
+		if recorder.maintenanceStopped && onlyMaintenanceCancellation(err) {
+			recorder.mu.Unlock()
+			return
+		}
 		recorder.maintenanceFailures++
+		if recorder.maintenanceErr == nil {
+			recorder.maintenanceErr = err
+		}
 		recorder.output.add(System, failureCode(err), false)
 		if recorder.firstErr == nil {
 			recorder.firstErr = err
 		}
 		recorder.mu.Unlock()
 	}
+}
+
+// 취소와 잠금 해제/파일 오류가 함께 반환되면 취소만으로 실패를 숨기지 않는다.
+func onlyMaintenanceCancellation(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !onlyMaintenanceCancellation(cause) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return onlyMaintenanceCancellation(wrapped.Unwrap())
+	}
+	return errors.Is(err, context.Canceled)
+}
+
+// MaintenanceGuard는 파일 정리의 실행권을 저장소·인스턴스 범위로 주입한다.
+// callback의 건수는 제거한 회전 파일 수이며 실제 파일 잠금은 계속 적용된다.
+type MaintenanceGuard func(context.Context, int64, func() (int, error)) (int, bool, error)
+
+// SetMaintenanceGuard는 DB 조립 뒤 시간 기반 정리에만 실행권을 연결한다.
+// 기동·회전·새 기록의 정책 검사와 단일 기록 루프의 소유권은 유지한다.
+func (recorder *Recorder) SetMaintenanceGuard(guard MaintenanceGuard) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.maintenanceGuard = guard
+}
+
+// StopMaintenance는 DB 풀 종료 전에 시간 기반 정리를 취소하고 진행 회차를 기다린다.
+// 새 기록·파일 정책·flush는 계속 사용할 수 있으며 다시 시작하지 않는다.
+func (recorder *Recorder) StopMaintenance(ctx context.Context) error {
+	recorder.mu.Lock()
+	recorder.maintenanceStopped = true
+	done := recorder.maintenanceDone
+	var cancel context.CancelFunc
+	if recorder.upkeep != nil {
+		cancel = recorder.upkeep.cancelMaintenance
+	}
+	recorder.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return recorder.maintenanceErr
 }
 
 // Close는 최초 호출부터 최대 5초 동안 flush한다. 호출자 취소는 그 호출의

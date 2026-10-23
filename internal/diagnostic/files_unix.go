@@ -37,6 +37,7 @@ var fileKinds = [...]Kind{Request, Auth, Search, Index, Management, System}
 // Files는 준비된 파일과 잠금의 수명을 소유한다. 파일 fd·경로를 업무 패키지에
 // 공개하지 않는다. 저장 정책은 공유 잠금 안에서 실행하고 대기열·인코딩은 Recorder가 담당한다.
 type Files struct {
+	removed     uint64
 	parent      *os.File
 	root        *os.File
 	slot        *os.File

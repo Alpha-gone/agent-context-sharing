@@ -57,6 +57,7 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	if err != nil {
 		return nil, fmt.Errorf("진단 파일 준비: %w", err)
 	}
+	a.workers = append(a.workers, recorderMaintenance{a.recorder})
 	sink, err := diagnostic.LevelSink(a.recorder, cfg.Diagnostic.Level)
 	if err != nil {
 		return nil, fmt.Errorf("진단 수준 준비: %w", err)
@@ -85,6 +86,12 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	}
 	a.workers = append(a.workers, a.periodic)
 	a.periodic.diagnostics = a.system
+	a.recorder.SetMaintenanceGuard(func(ctx context.Context, scope int64, run func() (int, error)) (int, bool, error) {
+		ctx = diagnostic.ResumeJob(ctx, "")
+		count, acquired, err := a.database.WithTryAdvisoryLock(ctx, scope, func(context.Context) (int, error) { return run() })
+		a.periodic.reportTask(ctx, "diagnostic_cleanup", count, acquired, err)
+		return count, acquired, err
+	})
 	a.indexer, err = index.New(a.database, index.Config{
 		Provider: cfg.EmbeddingProvider, APIKey: cfg.GeminiAPIKey, BaseURL: cfg.EmbeddingBaseURL,
 		Model: cfg.EmbeddingModel, VectorType: cfg.EmbeddingVectorType, Dimension: cfg.EmbeddingDimension,
@@ -155,6 +162,12 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 		return nil, err
 	}
 	return a, nil
+}
+
+type recorderMaintenance struct{ recorder *diagnostic.Recorder }
+
+func (maintenance recorderMaintenance) Close(ctx context.Context) error {
+	return maintenance.recorder.StopMaintenance(ctx)
 }
 
 func (a *serverAssembly) startWorkers(ctx context.Context) {

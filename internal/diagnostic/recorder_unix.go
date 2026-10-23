@@ -4,8 +4,11 @@ package diagnostic
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -43,7 +46,16 @@ func prepareRecorderOutput(ctx context.Context, directory string, source Source,
 		return nil, errors.Join(err, files.Close())
 	}
 	ticker := time.NewTicker(policy.interval)
-	upkeep := &recorderUpkeep{run: files.maintain, ticks: ticker.C, stop: ticker.Stop, cancel: files.cancelIO}
+	var identity unix.Stat_t
+	if err := unix.Fstat(int(files.root.Fd()), &identity); err != nil {
+		ticker.Stop()
+		files.cancelIO()
+		return nil, errors.Join(fileFailure("inventory_failed", err), files.Close())
+	}
+	// 열린 저장소의 실체를 사용해 경로 별칭은 합치고 다른 디렉터리는 구분한다.
+	scope := sha256.Sum256(fmt.Appendf(nil, "diagnostic:%d:%d:%s", identity.Dev, identity.Ino, source.instance))
+	maintenanceContext, cancelMaintenance := context.WithCancel(files.ioContext)
+	upkeep := &recorderUpkeep{context: maintenanceContext, cancelMaintenance: cancelMaintenance, scope: int64(binary.BigEndian.Uint64(scope[:8])), removed: func() uint64 { return files.removed }, run: files.maintain, ticks: ticker.C, stop: ticker.Stop, cancel: files.cancelIO}
 	return startRecorder(source, queueLimits{maxQueuedEvents, maxQueuedBytes, maxEventBytes}, files.appendLine, files.Close, upkeep, output, flushBudget), nil
 }
 

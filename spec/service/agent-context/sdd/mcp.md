@@ -1,6 +1,6 @@
 # MCP 전송과 도구 계약
 
-목표 Streamable HTTP 전송, 도구 14종, 행위자 결합, 멱등성 외피, 입력·응답·오류의 정본이다. 보호 HTTP 전송 모듈은 구현했으며 기동 경로의 업무 연결·전체 서버/호스트 인수는 대기다.
+목표 Streamable HTTP 전송, 도구 14종, 행위자 결합, 멱등성 외피, 입력·응답·오류의 정본이다. 보호 HTTP 전송과 기동 경로의 업무 연결·공통 HTTP 경계는 구현·모듈 인수했으며 전체 도구 계약·호스트 인수는 대기다.
 
 [설계 전체](../SDD.md) · [요구사항과 설계 대응](traceability.md)
 
@@ -26,9 +26,9 @@
 
 전송 본문은 고정 SDK의 기본값인 4 MiB로 제한한다. 선언 길이가 초과하면 읽기 전에, 길이 미상·chunked·축소 선언은 제한된 읽기로 413·JSON-RPC -32600을 반환한다. 초과 요청은 인증·업무를 호출하지 않고 JSON 해석은 Bearer 뒤에 수행한다. 헤더로 확인할 수 있는 선행 거부는 본문을 읽지 않는다. 단일 JSON 이외의 Content-Type은 415, JSON·SSE를 함께 허용하지 않는 Accept는 400이다.
 
-발견·목록의 ttlMs=0·private와 별도로 모든 HTTP 응답에 no-store를 유지한다. 공개 Host를 loopback 프록시로 전달하는 보호 생성자는 SDK의 자동 localhost Host 거부를 해제하고 정확한 Origin·Bearer와 바깥 TLS 판정을 적용한다. 인증 없는 SDK 관찰 경계는 이 옵션을 사용하지 않는다. SDK의 PropagateRequestCancellation을 명시해 원래 요청의 context를 유지한다. 업무 시간 예산·커밋/재생·실제 단절의 모듈 경계는 [MCP-08 검토](../reviews/2026-10-20-mcp-08.md)에서 인수했다. 전체 기동·호스트 인수는 후속이다.
+발견·목록의 ttlMs=0·private와 별도로 모든 HTTP 응답에 no-store를 유지한다. 공개 Host를 loopback 프록시로 전달하는 보호 생성자는 SDK의 자동 localhost Host 거부를 해제하고 정확한 Origin·Bearer와 바깥 TLS 판정을 적용한다. 인증 없는 SDK 관찰 경계는 이 옵션을 사용하지 않는다. SDK의 PropagateRequestCancellation을 명시해 원래 요청의 context를 유지한다. 업무 시간 예산·커밋/재생·실제 단절의 모듈 경계는 [MCP-08 검토](../reviews/2026-10-20-mcp-08.md)에서 인수했다. 전체 기동의 의존 조립·공통 HTTP 경계는 아래 ARCH-06·07 근거를 따르며 운영 실패·호스트 인수는 후속이다.
 
-[MCP-02 인수](../reviews/2026-10-20-mcp-02.md)는 실제 OAuth/TLS와 서버 라우터 주입까지 검증했다. 현재 main에는 업무 13종을 대신할 임시 처리기를 넣지 않는다. MCP-06·07에서 여덟 쓰기·다섯 읽기 처리기 모듈을 인수했다. 기동 경로의 전체 주입은 ARCH-07, 전체 서버 계약은 MCP-09, 실제 호스트는 TEST-08에서 인수한다.
+[MCP-02 인수](../reviews/2026-10-20-mcp-02.md)는 실제 OAuth/TLS와 서버 라우터 주입까지 검증했다. MCP-06·07에서 여덟 쓰기·다섯 읽기 처리기 모듈을 인수했다. [ARCH-06](../reviews/2026-10-23-arch-06.md)의 기동 조립은 실제 등록과 읽기/쓰기 14종을 연결하고 [ARCH-07](../reviews/2026-10-23-arch-07.md)에서 공통 HTTP 경계를 인수했다. 전체 서버 도구 계약은 MCP-09, 실제 호스트는 TEST-08에서 인수한다.
 
 ## 공통 행위자·도구·쓰기 안전성
 
@@ -63,7 +63,7 @@ UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용
 
 [MCP-04 모듈 인수](../reviews/2026-10-20-mcp-04.md)에서 등록·현재 결합 검사·소유자 폐기 API를 구현했다. `store.RegisterAgent`와 `RevokeAgent`는 계정 행을 같은 순서로 잠그고 Read Committed의 별도 명령으로 현재 등록·개수를 대조한다. 활성 재조회는 상한에서도 ID·생성 시각을 유지하며 폐기 키는 복구하지 않는다. 모든 client의 활성 개수를 계정당 128개로 제한하고 소유 폐기로 빈자리를 회복한다. 폐기는 반복해도 최초 시각을 유지하며 다른 계정·없는 등록은 같은 오류다.
 
-`model.ValidateRegistrationKey`가 저장 방식과 독립적인 키 형식을 소유한다. `mcp.RegisterAgent`와 `BindActor`는 인증 경계가 주입한 Principal의 계정/client만 사용하며 저장소는 AgentRegistry 인터페이스로 주입한다. clientInfo·agent·등록 키로 그래프 등급을 만들지 않는다. BindActor는 매번 현재 활성 결합을 확인하고 검증한 계정·agent만 반환한다. 누적 상한은 plan.LimitError의 agent_registrations_per_account로 전달하고 저장 해석·조회 장애는 입력 거부와 구분한다. 보호 /mcp 전송·실제 Bearer와 등록의 결합 모듈은 MCP-02에서 인수했다. 기동 경로의 여섯 업무 쓰기·/connections 목록과 POST의 연결은 MCP-06·AUTH-10의 후속 범위다.
+`model.ValidateRegistrationKey`가 저장 방식과 독립적인 키 형식을 소유한다. `mcp.RegisterAgent`와 `BindActor`는 인증 경계가 주입한 Principal의 계정/client만 사용하며 저장소는 AgentRegistry 인터페이스로 주입한다. clientInfo·agent·등록 키로 그래프 등급을 만들지 않는다. BindActor는 매번 현재 활성 결합을 확인하고 검증한 계정·agent만 반환한다. 누적 상한은 plan.LimitError의 agent_registrations_per_account로 전달하고 저장 해석·조회 장애는 입력 거부와 구분한다. 보호 /mcp 전송·실제 Bearer와 등록의 결합 모듈은 MCP-02에서 인수했다. 여섯 행위자 결합 업무 쓰기와 /connections 목록·POST는 MCP-06·AUTH-10에서 구현했으며 ARCH-06·07의 실제 기동 조립·HTTP 모듈에서 연결했다. 전체 도구·호스트 인수는 후속 범위다.
 
 ## 요청 처리 순서
 
@@ -105,7 +105,7 @@ UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용
 
 ## 입력 검증
 
-아래 MCP 입력 검증 분담은 표준 전송 계층의 계약이다. 14종 도구의 스키마·표면 검증과 등록·쓰기·읽기 도메인 연결 모듈을 구현했으며 기동 경로의 전체 조립은 후속 대상이다. 모델·저장 계층의 검증과 웹 입력 검증은 유지한다.
+아래 MCP 입력 검증 분담은 표준 전송 계층의 계약이다. 14종 도구의 스키마·표면 검증과 등록·쓰기·읽기 도메인 연결 모듈을 구현했으며 기동 경로의 전체 조립·공통 HTTP 경계도 ARCH-06·07에서 인수했다. 모델·저장 계층의 검증과 웹 입력 검증은 유지한다.
 
 검증은 `model`과 `mcp`가 나눠 맡는다.
 
@@ -226,7 +226,7 @@ MCP 처리기는 `resultType: "complete"`와 표준 `content`, `structuredConten
 
 `FR-AGENT_CONTEXT-164`~`172`의 첫 구현은 공식 `github.com/modelcontextprotocol/go-sdk` `v1.8.0`을 사용한다. [공식 릴리스](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.8.0)가 `2026-07-28` 지원을 명시하며 `ServerOptions.SupportedProtocolVersions`를 해당 revision 하나로 제한한다. SDK의 추가 revision을 자동 노출하지 않고 stateful handler를 사용하지 않는다. 실제 Go 빌드·무상태 transport 동작·호스트 적합성은 인수 시험 대상이다.
 
-SDK의 지원 목록 제한만으로 이전 수명주기와 외피 없는 호출의 거부가 보장되지는 않는다. 서비스의 MCP 진입 경계는 SDK에 위임하기 전에 필수 외피·허용 revision과 메서드를 확인하고, SDK가 직접 처리하지 않는 표준 Base64 Mcp-Name의 해독·본문 대조를 보완한다. 오류는 위 표준 MCP 경계의 JSON-RPC 계약을 유지한다. SDK를 교체하거나 이전 revision을 허용하는 방식으로 우회하지 않는다. [MCP-01 검토](../reviews/2026-10-18-mcp-01.md#서비스-진입-경계-보완과-최종-인수)에서 최소 진입 경계와 SDK의 교환을 인수했다. 인증·Origin·서버 라우터 결합 모듈은 [MCP-02 검토](../reviews/2026-10-20-mcp-02.md)에서 인수했다. 기동 경로의 업무 13종 연결과 전체 서버 계약은 후속 구현 대상이다.
+SDK의 지원 목록 제한만으로 이전 수명주기와 외피 없는 호출의 거부가 보장되지는 않는다. 서비스의 MCP 진입 경계는 SDK에 위임하기 전에 필수 외피·허용 revision과 메서드를 확인하고, SDK가 직접 처리하지 않는 표준 Base64 Mcp-Name의 해독·본문 대조를 보완한다. 오류는 위 표준 MCP 경계의 JSON-RPC 계약을 유지한다. SDK를 교체하거나 이전 revision을 허용하는 방식으로 우회하지 않는다. [MCP-01 검토](../reviews/2026-10-18-mcp-01.md#서비스-진입-경계-보완과-최종-인수)에서 최소 진입 경계와 SDK의 교환을 인수했다. 인증·Origin·서버 라우터 결합 모듈은 [MCP-02 검토](../reviews/2026-10-20-mcp-02.md)에서 인수했다. 기동 경로의 업무 13종과 등록의 연결은 ARCH-06, 공통 HTTP 경계는 ARCH-07에서 인수했다. 전체 서버 도구 계약은 MCP-09의 후속 인수 대상이다.
 
 서버 정보·도구 설명은 고정 구성에서 만들며 사용자의 입력이나 자격 증명을 instructions에 넣지 않는다. 서버는 이전 요청·발견 결과·접속 인스턴스로 revision·기능을 추론하지 않는다. 표준 메타데이터·헤더·Origin·메시지 검증은 SDK 경계에 두고 인수 시험에서 발견을 생략한 호출과 다른 인스턴스로 이어지는 호출도 대조한다.
 
@@ -284,7 +284,7 @@ SDK의 HTTP 반환과 하위 작업의 롤백·연결 반환은 따로 관찰한
 
 MCP-06은 `NewWriteHandlers`에 현재 등급·플랜·그래프/노드 조회·등록·여덟 쓰기·거부 기록·재생 실행기를 주입한다. `cmd/server`의 저장 어댑터가 기존 Store API의 한도·관리 기록 형식을 맞추며 DB 핸들과 SDK 타입을 저장 계층으로 넘기지 않는다. 미사용 노드 폐기/복구 주입 계약의 기대 판 인자는 제거한다. 공개 입력은 바뀌지 않는다.
 
-인증 경계의 Principal을 받은 뒤 재생 잠금 후 현재 그래프의 활성 상태·편집자 등급, 이어 활성 agent 결합을 확인한다. 최초 적용은 현재 계정 플랜을 전달하며 저장 경계가 누적·빈도 한도를 원자적으로 검사한다. 재생에는 조회 결과의 판을 다시 적용하거나 한도를 소비하지 않는다. Bearer의 전송 오류·시간 예산과 단절 처리는 [MCP-08](../reviews/2026-10-20-mcp-08.md)에서 모듈 인수했다. 기동 경로의 전체 조립·계약은 후속 범위다.
+인증 경계의 Principal을 받은 뒤 재생 잠금 후 현재 그래프의 활성 상태·편집자 등급, 이어 활성 agent 결합을 확인한다. 최초 적용은 현재 계정 플랜을 전달하며 저장 경계가 누적·빈도 한도를 원자적으로 검사한다. 재생에는 조회 결과의 판을 다시 적용하거나 한도를 소비하지 않는다. Bearer의 전송 오류·시간 예산과 단절 처리는 [MCP-08](../reviews/2026-10-20-mcp-08.md)에서 모듈 인수했다. 기동 경로의 조립·공통 HTTP 경계는 ARCH-06·07에서 인수했으며 전체 도구 계약·호스트 인수는 후속 범위다.
 
 수정 입력은 생략과 명시한 빈 문자열·null을 구분하여 현재 값에 병합한다. 계층에 맞지 않는 수정 필드는 거부하고 원천 불변·keep·파생 대체·사건/관계 정체성과 복구 채널은 기존 저장 API에 위임한다. 판단 입력 생략 시 request_id를 제외한 정규화 도구·인자를 관리 기록에 남긴다. 생성/확정 거부는 대상을 비우며, 기존 노드의 거부 판은 조회한 현재 판 또는 충돌 오류의 판을 사용한다.
 

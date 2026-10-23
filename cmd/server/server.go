@@ -47,7 +47,7 @@ type oauthTokenRoutes interface {
 	Token(http.ResponseWriter, *http.Request)
 }
 
-// application은 1단계 HTTP 상태 경로와 요청 로그를 관리한다.
+// application은 HTTP 경로와 공통 요청 경계를 관리한다.
 type application struct {
 	diagnostics   diagnostic.Observer
 	database      readiness
@@ -83,39 +83,66 @@ func newApplication(database readiness, logger *slog.Logger, transport transport
 //
 // 등록되지 않은 경로도 판정 뒤에 둔다. 평문 요청에 어떤 경로가 있는지 알리지 않는다.
 func (app *application) handler() http.Handler {
-	// 업무 경로는 이후 단계에서 이 mux에 등록하며 모두 TLS 판정을 지난다.
-	gated := http.NewServeMux()
+	mux := http.NewServeMux()
+	handleHTTPMethods(mux, "/healthz", http.HandlerFunc(app.health), "GET", "HEAD")
+	handleHTTPMethods(mux, "/readyz", http.HandlerFunc(app.ready), "GET", "HEAD")
 	if app.publicKeys != nil {
-		gated.HandleFunc("GET /jwks.json", app.publicKeys.JWKS)
+		handleHTTPMethods(mux, "/jwks.json", http.HandlerFunc(app.publicKeys.JWKS), "GET", "HEAD")
 	}
 	if app.oauthMetadata != nil {
 		for path, handler := range map[string]http.HandlerFunc{
 			"/.well-known/oauth-protected-resource/mcp": app.oauthMetadata.ProtectedResourceMetadata,
 			"/.well-known/oauth-authorization-server":   app.oauthMetadata.AuthorizationServerMetadata,
 		} {
-			gated.HandleFunc("GET "+path, handler)
-			gated.HandleFunc(path, func(writer http.ResponseWriter, request *http.Request) {
-				writer.Header().Set("Cache-Control", "no-store")
-				writer.Header().Set("Allow", "GET, HEAD")
-				writer.WriteHeader(http.StatusMethodNotAllowed)
-			})
+			handleHTTPMethods(mux, path, handler, "GET", "HEAD")
 		}
 	}
 	if app.web != nil {
-		gated.Handle("/", app.web)
+		for _, path := range []string{"/login", "/register", "/logout", "/authorize", "/connections", "/graphs", "/access", "/graphs/{graph_id}/access", "/graphs/{graph_id}/deletion", "/operator/restores"} {
+			handleHTTPMethods(mux, path, app.web, "GET", "POST")
+		}
+		for _, path := range []string{"/graphs/{graph_id}", "/graphs/{graph_id}/audit"} {
+			handleHTTPMethods(mux, path, app.web, "GET")
+		}
+		for _, name := range []string{"app.css", "PretendardVariable.woff2", "cytoscape.min.js", "CYTOSCAPE-LICENSE.txt", "PRETENDARD-LICENSE.txt"} {
+			handleHTTPMethods(mux, "/assets/"+name, app.web, "GET", "HEAD")
+		}
 	}
 	if app.oauthTokens != nil {
-		gated.HandleFunc("/token", app.oauthTokens.Token)
+		// OAuth와 MCP는 메서드 거부의 채널별 외피·Origin 우선 순서를 소유한다.
+		mux.HandleFunc("POST /token", app.oauthTokens.Token)
+		mux.HandleFunc("/token", app.oauthTokens.Token)
 	}
 	if app.mcp != nil {
-		gated.Handle("/mcp", app.mcp)
+		mux.Handle("POST /mcp", app.mcp)
+		mux.Handle("/mcp", app.mcp)
 	}
+	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Cache-Control", "no-store")
+		http.NotFound(writer, request)
+	})
+	bounded := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// 채널이 더 좁은 제한·오류 순서를 적용하도록 여기서는 읽지 않는다.
+		request.Body = http.MaxBytesReader(writer, request.Body, 10<<20)
+		mux.ServeHTTP(writer, request)
+	})
+	return app.logRequests(app.recoverPanics(app.requireTLS(withRequestBudget(bounded, readTimeout, httpBudgetFailure))))
+}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", app.health)
-	mux.HandleFunc("GET /readyz", app.ready)
-	mux.Handle("/", gated)
-	return app.logRequests(app.recoverPanics(app.requireTLS(mux)))
+func handleHTTPMethods(mux *http.ServeMux, path string, handler http.Handler, methods ...string) {
+	reject := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("Allow", strings.Join(methods, ", "))
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+	})
+	mux.Handle(path, reject)
+	for _, method := range methods {
+		mux.Handle(method+" "+path, handler)
+	}
+	// ServeMux의 GET은 HEAD도 일치시키지만 기존 웹 계약은 GET만 받는다.
+	if slices.Contains(methods, "GET") && !slices.Contains(methods, "HEAD") {
+		mux.Handle("HEAD "+path, reject)
+	}
 }
 
 // recoverPanics는 처리기에서 빠져나온 panic을 500으로 바꾸고 원인을 로그에 남긴다.

@@ -179,15 +179,15 @@ DB는 해시 길이·소비 쌍의 NULL 조합·FK와 키 유일성을 검사한
 
 ## 목표 OAuth HTTP 경로
 
-두 메타데이터 경로는 AUTH-06, 인가·최초 코드 교환의 HTTP 처리는 AUTH-07에서 구현했다. Bearer 보호 인증은 AUTH-08, 갱신 grant는 AUTH-09, 본인 연결 관리는 AUTH-10에서 인수했다. 기동 경로의 전체 /mcp 조립과 실제 호스트 인수는 후속 작업이다.
+두 메타데이터 경로는 AUTH-06, 인가·최초 코드 교환의 HTTP 처리는 AUTH-07에서 구현했다. Bearer 보호 인증은 AUTH-08, 갱신 grant는 AUTH-09, 본인 연결 관리는 AUTH-10에서 인수했다. 기동 경로의 전체 /mcp 조립과 공통 HTTP 경계는 [ARCH-06](../reviews/2026-10-23-arch-06.md)·[ARCH-07](../reviews/2026-10-23-arch-07.md)에서 인수했다. 실제 호스트 인수는 후속 작업이다.
 
 | 경로 | 메서드 | 계약 |
 |---|---|---|
-| `/.well-known/oauth-protected-resource/mcp` | GET | 공개 HTTPS `/mcp` resource·issuer·단일 scope 메타데이터 |
-| `/.well-known/oauth-authorization-server` | GET | 고정 issuer, authorize·token·JWKS, PKCE S256·grant·공개 client·iss 지원 |
+| `/.well-known/oauth-protected-resource/mcp` | GET, HEAD | 공개 HTTPS `/mcp` resource·issuer·단일 scope 메타데이터 |
+| `/.well-known/oauth-authorization-server` | GET, HEAD | 고정 issuer, authorize·token·JWKS, PKCE S256·grant·공개 client·iss 지원 |
 | `/authorize` | GET, POST | 사전 등록·callback·resource 검증, 계정 로그인·명시적 동의, 단일 사용 코드 발급 |
 | `/token` | POST | 코드 또는 갱신 grant. form 본문 64 KiB, 성공 응답 `no-store`·`no-cache` |
-| `/jwks.json` | GET | 공개 키만 반환하며 개인 키 성분을 제외한다 |
+| `/jwks.json` | GET, HEAD | 공개 키만 반환하며 개인 키 성분을 제외한다 |
 | `/connections` | GET, POST | 본인 계열·활성 등록 목록과 명시적 폐기. 웹 세션·출처 검사 적용 |
 
 인가 성공·오류 리디렉션은 검증한 callback에만 전송하고 정확한 issuer의 `iss`를 포함한다. 등록하지 않은 URI의 오류는 그 URI로 리디렉션하지 않는다. `/authorize`의 상태 변경과 로그인·동의 양식은 기존 웹 출처·자원 보호를 적용하고 임의 `Host`로 issuer·resource를 만들지 않는다. 비밀 값이 담긴 응답을 모델 입력·도구 결과·진단 파일에 남기지 않는다.

@@ -32,7 +32,7 @@
 
 현재 외부 진입점은 사용자·운영자의 웹 브라우저다. 웹 계정 세션·그래프 관리가 저장 계층에 연결되고 색인 작업자는 임베딩 제공자를 호출한다. 검색·감사·평가는 내부 패키지와 실행기가 소유한다.
 
-목표 직접 연결에서는 에이전트 호스트의 내장 MCP 클라이언트가 표준 OAuth 인가 후 보호된 도구를 호출한다. 호스트별 별도 중계 프로그램은 두지 않는다. OAuth 발견·최초 인가·코드 교환 경로는 등록했으며 보호 MCP의 조립과 실제 호스트 인수는 후속 범위다.
+목표 직접 연결에서는 에이전트 호스트의 내장 MCP 클라이언트가 표준 OAuth 인가 후 보호된 도구를 호출한다. 호스트별 별도 중계 프로그램은 두지 않는다. OAuth 발견·최초 인가·코드 교환 경로는 등록했으며 보호 MCP의 조립과 공통 HTTP 경계는 ARCH-06·07에서 인수했으며 실제 호스트 인수는 후속 범위다.
 
 ## 배포 형상
 
@@ -186,19 +186,29 @@ AGE가 돌려주는 `agtype`은 PostgreSQL 기본 타입이 아니다. `store`�
 | 경로 | 메서드 | 소유 |
 |---|---|---|
 | `/login`, `/register` | GET, POST | 웹·계정 인증 |
-| `/logout` | POST | 웹 세션 |
-| `/jwks.json` | GET | 서명 공개 키 |
+| `/logout` | GET, POST | 로그아웃 확인·웹 세션 폐기 |
+| `/jwks.json` | GET, HEAD | 서명 공개 키 |
 | `/.well-known/oauth-protected-resource/mcp`, `/.well-known/oauth-authorization-server` | GET, HEAD | 고정 OAuth 발견 |
 | `/authorize` | GET, POST | 웹 세션·명시적 동의와 인가 코드 |
 | `/token` | POST | OAuth 최초 코드 교환과 갱신 회전 |
 | `/mcp` | POST | Bearer 보호 MCP 14종 도구 |
-| `/graphs`, `/graphs/{graph_id}` | GET | 웹 |
+| `/connections` | GET, POST | 본인 OAuth 계열·등록 목록과 폐기 |
+| `/graphs` | GET, POST | 그래프 목록·자동 삭제 복구 요청 |
+| `/graphs/{graph_id}` | GET | 그래프 상세 |
+| `/access` | GET, POST | 그래프 없는 계정의 팀 관리 |
 | `/graphs/{graph_id}/access`, `/graphs/{graph_id}/deletion` | GET, POST | 웹 |
 | `/graphs/{graph_id}/audit` | GET | 웹 |
 | `/operator/restores` | GET, POST | 웹 |
-| `/healthz`, `/readyz` | GET | 상태 확인·TLS 판정 밖 |
+| `/assets/app.css`, `/assets/PretendardVariable.woff2`, `/assets/cytoscape.min.js`, `/assets/CYTOSCAPE-LICENSE.txt`, `/assets/PRETENDARD-LICENSE.txt` | GET, HEAD | 바이너리에 포함된 공개 자산 허용 목록 |
+| `/healthz`, `/readyz` | GET, HEAD | 상태 확인·TLS 판정 밖 |
 
-보호 MCP의 경로 계약은 [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계)를 따른다. 인가 화면은 웹 인터페이스와 서버 어댑터를 통해 authz를 호출하며 `web`에서 `authz`를 import하지 않는다. 코드 교환·갱신 회전·Bearer 공유 폐기·본인 연결 관리는 별도의 좁은 저장 인터페이스로 주입하며 DB 핸들을 노출하지 않는다. AUTH-10의 `/connections`는 같은 웹 어댑터를 통해 authz를 호출하고 main에서 공유 저장소와 함께 조립한다. 입력·화면 계약은 [연결 관리 화면](web.md#목표-연결-관리-화면)을 따른다. Bearer 검증 결과 전달과 HTTP 오류 사상은 authz의 ProtectBearer가 제공한다. MCP-02의 newMCPHandler가 이를 MCP Principal로 옮기고 application의 선택 /mcp 슬롯을 TLS 판정 아래에 연결한다. mcp.NewHandler는 14종 처리기를 모두 요구하므로 ARCH-06의 기동 조립은 실제 등록·읽기·쓰기 14종과 보호 전송을 연결하며 MCP-06의 newMCPWriteHandlers는 여덟 쓰기에 현재 등급·플랜·저장/거부 기록·재생 실행기를 주입한다. MCP-07의 newMCPReadHandlers는 다섯 읽기에 현재 등급·플랜·그래프/노드/홉/관계와 검색기를 주입하고 저장 오류·구성원 참조 이름을 맞춘다. MCP-08의 서버 조립 어댑터는 본문·인증·도구 실행의 [요청 시간 예산과 오류 경계](mcp.md#요청-시간-예산과-오류-경계)를 적용한다. 기동 경로의 전체 의존 조립은 [ARCH-06 모듈 인수](../reviews/2026-10-23-arch-06.md)에서 확인했다. 전체 HTTP 경로·메서드·공통 보호의 인수는 ARCH-07, 전체 MCP 인수는 MCP-09에서 이어간다. 등록하지 않은 경로도 TLS 검사를 거치고 `404`를 반환한다.
+경로와 메서드를 ServeMux에 명시하며 표에 없는 웹 HEAD·OPTIONS 등은 405다. GET의 암묵적 HEAD 일치가 웹 처리기의 기존 메서드 계약을 넓히지 않게 한다. 미지원 메서드는 본문·세션·업무 호출 전에 거부하며 MCP의 Origin 우선 검사와 토큰의 OAuth 오류 외피는 각 채널 처리기가 유지한다. 미등록 경로는 웹 세션·출처 검사로 넘기지 않고 no-store 404를 반환한다. 정확한 상태 확인 GET·HEAD만 전송 판정을 생략하고 경로 정규화·메서드 안내도 전송 판정 뒤에 둔다.
+
+모든 요청은 서버가 새로 발급한 상관 ID를 응답 헤더·모델·진단 context에 공유한다. 외부 상관 헤더를 인증 정보나 내부 흐름 ID로 채택하지 않는다. 전송 판정 뒤 요청 처리·수신 본문에 30초의 공통 context·읽기 마감을 적용하며 호출자의 더 짧은 마감·취소를 보존한다. 요청이 끝나면 context를 정리하고 소켓 읽기 마감은 net/http가 응답 뒤 본문 정리와 다음 요청 경계까지 관리한다. 처리기 반환 때 읽기 마감을 지워 미완성 본문의 자동 drain을 무제한으로 기다리지 않는다. 하위 DB·제공자·세션 호출은 같은 context를 받으며 context를 무시하는 처리기의 강제 중단이나 응답 전송의 벽시계 상한을 보장하지 않는다. 이미 시작한 응답은 예산 소진 때 덧쓰지 않고 사전 취소 요청은 업무를 시작하지 않는다. 응답 없이 예산이 끝나면 no-store 500을 반환하며 MCP·토큰은 server_error, 나머지 공통 경계는 internal_error 상태 본문을 사용한다.
+
+공통 본문 읽기는 기존 Go 양식 해석 기본값과 같은 10 MiB로 제한하고 먼저 읽거나 JSON·폼을 해석하지 않는다. 로그인·등록·동의·연결 관리의 [8 KiB 양식](authentication.md#공개-로그인가입-자원-보호), [64 KiB 토큰](authentication.md#목표-oauth-http-경로), [4 MiB MCP](mcp.md#보호-http-구현-경계) 제한이 더 좁은 경계에서 우선하며 채널별 출처·인증·초과 오류의 순서를 유지한다. 일반 관리 양식의 초과는 기존 입력 오류 400이고 자격 양식·토큰·MCP의 바이트 초과는 각 채널의 413이다. 미등록·미지원 메서드의 본문은 애플리케이션에서 읽지 않는다.
+
+보호 MCP의 경로 계약은 [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계)를 따른다. 인가 화면은 웹 인터페이스와 서버 어댑터를 통해 authz를 호출하며 `web`에서 `authz`를 import하지 않는다. 코드 교환·갱신 회전·Bearer 공유 폐기·본인 연결 관리는 별도의 좁은 저장 인터페이스로 주입하며 DB 핸들을 노출하지 않는다. AUTH-10의 `/connections`는 같은 웹 어댑터를 통해 authz를 호출하고 main에서 공유 저장소와 함께 조립한다. 입력·화면 계약은 [연결 관리 화면](web.md#목표-연결-관리-화면)을 따른다. Bearer 검증 결과 전달과 HTTP 오류 사상은 authz의 ProtectBearer가 제공한다. MCP-02의 newMCPHandler가 이를 MCP Principal로 옮기고 application의 선택 /mcp 슬롯을 TLS 판정 아래에 연결한다. mcp.NewHandler는 14종 처리기를 모두 요구하므로 ARCH-06의 기동 조립은 실제 등록·읽기·쓰기 14종과 보호 전송을 연결하며 MCP-06의 newMCPWriteHandlers는 여덟 쓰기에 현재 등급·플랜·저장/거부 기록·재생 실행기를 주입한다. MCP-07의 newMCPReadHandlers는 다섯 읽기에 현재 등급·플랜·그래프/노드/홉/관계와 검색기를 주입하고 저장 오류·구성원 참조 이름을 맞춘다. MCP-08의 서버 조립 어댑터는 본문·인증·도구 실행의 [요청 시간 예산과 오류 경계](mcp.md#요청-시간-예산과-오류-경계)를 적용한다. 기동 경로의 전체 의존 조립은 [ARCH-06 모듈 인수](../reviews/2026-10-23-arch-06.md)에서 확인했다. 전체 HTTP 경로·메서드·공통 보호는 [ARCH-07 모듈 인수](../reviews/2026-10-23-arch-07.md)에서 확인했으며 전체 MCP 인수는 MCP-09에서 이어간다. 등록하지 않은 경로도 TLS 검사를 거치고 `404`를 반환한다.
 
 ## 버전 요구
 
@@ -239,7 +249,7 @@ DB 이미지의 재빌드에서도 같은 pgvector를 사용하도록 `Dockerfil
 
 ## 목표 추가 패키지와 조립
 
-직접 연결과 진단 파일 구현은 다음 두 패키지를 사용한다. MCP와 OBS-01~08의 진단 구현이 존재하며 파일 분야 인수와 ARCH-06의 전체 의존 조립을 완료했다. 전체 HTTP·운영·호스트 인수는 각 개발 항목에서 별도로 판정한다. 기존 아홉 업무 패키지와 함께 현재 애플리케이션 패키지는 열한 개다.
+직접 연결과 진단 파일 구현은 다음 두 패키지를 사용한다. MCP와 OBS-01~08의 진단 구현이 존재하며 파일 분야 인수와 ARCH-06의 전체 의존 조립을 완료했다. 공통 HTTP 경계는 ARCH-07에서 인수했으며 전체 운영·호스트 인수는 각 개발 항목에서 별도로 판정한다. 기존 아홉 업무 패키지와 함께 현재 애플리케이션 패키지는 열한 개다.
 
 | 패키지 | 책임 | 허용하는 프로젝트 내부 의존 |
 |---|---|---|

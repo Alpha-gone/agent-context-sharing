@@ -213,6 +213,30 @@ git rev-parse HEAD
 
 운영 WAL은 자동 삭제되지 않습니다. 검증된 기본 백업부터 모든 보존 대상 복구 시점까지 필요한 WAL과 timeline history를 확인한 뒤 보존 정책에 따라 정리합니다. 개발의 날짜 기준 `wal_cleanup`을 운영에 복사하거나 운영 `pg_wal` 내부 파일을 수동 삭제하지 않습니다. 자세한 도구 옵션은 [PostgreSQL 18 기본 백업 문서](https://www.postgresql.org/docs/18/app-pgbasebackup.html)를 참조하십시오.
 
+### 추가 tablespace가 있는 백업
+
+`EMBEDDING_COLD_TABLESPACE`를 사용하는 DB에서는 위의 표준 출력 `base.tar` 한 개 방식으로 백업하지 않습니다. `pg_tablespace`의 OID·이름·`pg_tablespace_location(oid)`와 실제 마운트를 먼저 기록하고, 모든 tablespace를 포함할 별도 백업 저장소를 준비합니다. plain 형식에서는 다음과 같이 **각 tablespace마다** 원본 절대 경로를 빈 백업 경로로 매핑합니다. `/secure`는 운영자가 준비한 보호된 마운트의 예시이며 실행 전에 실제 경로로 바꿉니다.
+
+```sh
+pg_basebackup -D /secure/backup/base --format=plain --wal-method=stream \
+  --checkpoint=fast \
+  --tablespace-mapping=/var/lib/postgresql/cold=/secure/backup/cold
+pg_verifybackup /secure/backup/base
+```
+
+명령은 DB와 같은 PostgreSQL 18 도구로 인증이 준비된 환경에서 실행합니다. `-X stream`은 기본 백업과 WAL 스트림에 두 개의 복제 연결을 사용합니다. 기본 디렉터리만 복사하면 cold 데이터가 빠지므로 매핑된 모든 경로·manifest·연속 WAL·timeline history를 함께 외부에 보관합니다. 복원 대상의 `pg_tblspc/<OID>` 링크는 원래의 절대 경로를 그대로 믿지 않고, 별도 복원 볼륨의 실제 tablespace 마운트를 가리키는지 확인합니다. `pg_verifybackup` 성공 후에도 아래 실제 복구를 수행해야 합니다.
+
+### 격리 복구 시험 실행
+
+저장소 루트에서 다음 모듈 시험을 실행할 수 있습니다. Docker 엔진·Compose와 Go 1.27.1이 필요하며 SDK가 PATH에 없으면 `GO_BINARY`에 지정합니다.
+
+```sh
+sh test-wal-archive.sh
+GO_BINARY=/path/to/go1.27.1/bin/go sh test-pitr.sh
+```
+
+두 실행기는 개발 `.env`와 기존 DB를 사용하지 않고 매번 새 프로젝트를 만듭니다. `test-pitr.sh`는 기본 데이터·별도 cold tablespace·WAL·백업과 복구본을 전용 볼륨에 만들고, 고정된 DB 이미지에서 물리 백업·manifest/손상 거부·이름 있는 복구 지점·목표 일시 정지·승격을 검사합니다. 원본과 복구본의 목표 전후 데이터, AGE·양쪽 HNSW·현재 모델·서명·큐·전체 감사를 대조한 뒤 이 실행의 합성 자원만 정리합니다. 외부 제공자 호출과 호스트 포트 공개는 없습니다. 실제 운영 백업이나 보관본 삭제를 수행하는 명령은 아닙니다.
+
 ### 격리 복구 리허설과 장애 복구
 
 첫 개방 전, 이후 중요한 스키마 변경 후와 백업 정책에 정한 주기로 리허설을 수행합니다. 원래 운영 볼륨을 덮어쓰지 않습니다. 다음은 운영자가 DB 복구 환경을 준비하여 실행할 점검 순서입니다.

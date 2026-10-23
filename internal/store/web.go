@@ -739,10 +739,12 @@ func (s *Store) RequestGraphRestore(ctx context.Context, graphID, actorID model.
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return fmt.Errorf("그래프 복구 요청 트랜잭션 시작: %w", err)
+		return connectionError(ctx, "그래프 복구 요청 트랜잭션 시작", err)
 	}
 	tx = observeWriteTx(ctx, tx, false)
-	defer tx.Rollback(ctx)
+	defer func() {
+		resultErr = errors.Join(connectionError(ctx, "그래프 복구 요청", resultErr), rollbackTransaction(ctx, tx))
+	}()
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
@@ -810,7 +812,9 @@ func (s *Store) OperatorRestoreGraph(ctx context.Context, graphID, operatorID mo
 		return fmt.Errorf("운영자 그래프 복구 트랜잭션 시작: %w", err)
 	}
 	tx = observeWriteTx(ctx, tx, false)
-	defer tx.Rollback(ctx)
+	defer func() {
+		resultErr = errors.Join(connectionError(ctx, "운영자 그래프 복구", resultErr), rollbackTransaction(ctx, tx))
+	}()
 	// 등급 변경과 같은 그래프 잠금을 쥔 뒤 요청을 읽어야 동시 복구와 회수가
 	// 서로의 미커밋 상태를 기준으로 처리되거나 이미 처리한 요청이 재사용되지 않는다.
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {

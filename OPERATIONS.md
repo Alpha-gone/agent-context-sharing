@@ -43,12 +43,16 @@ chmod 600 .env
 - `AUTHORIZATION_SERVER_URL=https://agent-context.example.com`
 - `MCP_RESOURCE_URL=https://agent-context.example.com/mcp`, `MCP_ALLOWED_ORIGINS=https://agent-context.example.com`: 실제 공개 주소를 사용합니다. 리소스와 issuer는 독립된 HTTPS 식별자입니다.
 - `OAUTH_CLIENT_REGISTRATIONS`: 예시의 합성 client ID를 실제 호스트에서 확인한 공개 ID로 바꾸고 callback·resource를 [등록 계약](spec/service/agent-context/sdd/operations.md#목표-추가-구성)에 맞춥니다. 첫 Codex 시험은 고정 `49152` callback과 `loopback_port_policy=exact`를 사용합니다.
-- `DIAGNOSTIC_INSTANCE_ID`: 재시작에도 유지하는 슬롯별 고유 ID입니다. `DIAGNOSTIC_LOG_DIR` 기본값은 `/var/log/agent-context`, 수준은 `INFO`입니다. 실제 영속 볼륨·파일 권한·잠금 준비는 후속 OPS-02·OBS-02에서 인수하며, 구성 검증만으로 파일 저장·직접 연결 지원이 완료되지는 않습니다.
+- `DIAGNOSTIC_INSTANCE_ID`: 운영 Compose에 필수인 안정적인 슬롯별 고유 ID입니다. `server-1`처럼 재시작에도 같은 값을 유지하고 동시 서버가 같은 슬롯을 공유하지 않게 합니다. Compose는 `DIAGNOSTIC_LOG_DIR=/var/log/agent-context`를 고정하고 `diagnostic_logs` 볼륨을 연결합니다. 수준 기본값은 `INFO`입니다.
 - `HTTP_PORT=80`: 커넥터의 원본 URL `http://localhost:80`과 맞춥니다. 기존 설정의 `8080` 또는 `443`을 그대로 두지 않습니다. 포트를 재정의하면 커넥터의 원본 URL도 함께 바꿉니다.
 
 Compose는 `.env`를 읽으며 서버 컨테이너의 `DATABASE_URL`, HTTP 수신 주소와 TLS 배치는 운영 구성에 맞게 덮어씁니다. `TLS_TERMINATION=proxy`, `TRUSTED_PROXY_CIDRS=10.203.0.1/32`를 고정합니다. 서버의 `TLS_CERT_FILE`·`TLS_KEY_FILE`은 빈 값이며 인증서·키를 마운트하지 않습니다. 이전 설정에 이 값이 남아 있어도 서버에서는 사용하지 않습니다. 개발용 `DATABASE_URL`을 복사하여 호스트 DB에 연결하려고 하지 마십시오. 이 절차에서는 `.env`를 셸에 내보낼 필요가 없습니다.
 
 `.env`, 백업과 개인 키는 버전 관리 및 공개 로그에 넣지 않습니다. `docker compose config`의 전체 출력은 비밀번호와 API 키를 포함할 수 있으므로 다음 검사처럼 `--quiet`를 사용합니다.
+
+빈 진단 볼륨은 이미지가 준비한 UID 10001 소유·0700 디렉터리로 초기화합니다. 기록기는 슬롯 디렉터리를 0700, 여섯 파일을 0600으로 준비하고 재생성 후 append합니다. 기존 볼륨은 새 이미지가 덮어쓰거나 권한을 자동 교정하지 않습니다. 권한이 잘못됐거나 같은 슬롯이 이미 잠겨 있으면 DB 연결·요청 수신 전에 기동을 거부하므로 원래 데이터·권한·실행 주체를 확인하십시오. 정상 자료를 삭제하거나 전체 볼륨을 재귀적으로 chown하지 않습니다.
+
+저장소의 `sh test-prod-compose.sh`는 실제 `.env`를 읽거나 컨테이너를 실행하지 않는 정적 검사입니다. `sh test-prod-runtime.sh`는 운영 예시와 합성 자격으로 공개 포트 없는 별도 프로젝트를 만들어 서버 이미지·기동 순서·진단 권한·중복/권한 거부·재생성 보존을 검사하고 시험 자원만 정리합니다. 실제 운영 DB·Cloudflare·외부 제공자를 호출하는 인수와 구분합니다.
 
 ### 터널과 원본 접근 준비
 

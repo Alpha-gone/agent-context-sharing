@@ -53,6 +53,7 @@ trap 'exit 143' TERM
 export POSTGRES_USER=dev_compose_test POSTGRES_PASSWORD=dev_compose_test POSTGRES_DB=dev_compose_test
 export WAL_ARCHIVE_RETENTION_DAYS=7
 unset POSTGRES_PORT COMPOSE_PROFILES
+unset DIAGNOSTIC_INSTANCE_ID
 
 check_config() {
     if ! jq -e --arg db_port "$2" '
@@ -108,7 +109,10 @@ jq -e '
     (.services.server.environment.TRUSTED_PROXY_CIDRS == "10.204.0.1/32") and
     (.services.server.environment.TLS_CERT_FILE == "") and
     (.services.server.environment.TLS_KEY_FILE == "") and
-    (.services.server.volumes // [] | length == 0) and
+    (.services.server.volumes | length == 1) and
+    (.services.server.volumes[0] | .type == "volume" and .source == "diagnostic_logs" and .target == "/var/log/agent-context") and
+    (.services.server.environment.DIAGNOSTIC_LOG_DIR == "/var/log/agent-context") and
+    (.services.server.environment.DIAGNOSTIC_INSTANCE_ID == "development") and
     (.services.server.environment.DATABASE_URL == "postgres://dev_compose_test:dev_compose_test@db:5432/dev_compose_test") and
     (.services.migrate.environment.DATABASE_URL == .services.server.environment.DATABASE_URL) and
     (.services.migrate.command == ["migrate", "up"]) and

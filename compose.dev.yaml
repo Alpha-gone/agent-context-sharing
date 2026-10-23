@@ -97,6 +97,10 @@ services:
       TRUSTED_PROXY_CIDRS: "10.204.0.1/32"
       TLS_CERT_FILE: ""
       TLS_KEY_FILE: ""
+      DIAGNOSTIC_LOG_DIR: /var/log/agent-context
+      DIAGNOSTIC_INSTANCE_ID: ${DIAGNOSTIC_INSTANCE_ID:-development}
+    volumes:
+      - diagnostic_logs:/var/log/agent-context
     ports:
       - "127.0.0.1:80:8080"
     networks:
@@ -125,3 +129,4 @@ networks:
 
 volumes:
   db_data:
+  diagnostic_logs:

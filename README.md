@@ -235,4 +235,6 @@ sh ./test-wal-archive.sh
 
 [OPS-02 검토](spec/service/agent-context/reviews/2026-10-24-ops-02.md)에서 운영 템플릿과 영속 진단 볼륨·안정 슬롯을 인수했습니다. DB 비공개·loopback·고정 신뢰와 서버 이미지의 실제 권한·중복/권한 거부·재생성 보존을 확인했습니다. 구성 303건·race·정적 검사와 격리 컨테이너 검증이 통과했습니다. 당시 85/124개 완료였으며 다음 권장은 OPS-08 실행 안내·전환·복귀 절차였습니다. 실제 운영 배포·Tunnel·외부 제공자 인수는 후속 범위입니다.
 
-[OPS-08 모듈 인수](spec/service/agent-context/reviews/2026-10-24-ops-08.md)에서 실행 안내와 도구 14종 스냅샷, 격리 배포의 정지·물리 백업·013 적용·감사·준비와 실패 파일 롤백·보관 이미지/새 복원본 복귀를 확인했습니다. 격리 실행·자원 정리, 도구 목록 17건·race·전체 Go 정적 검사가 통과했습니다. 현재 전체 **86/124개 완료**이며 다음 권장은 [WEB-03](spec/service/agent-context/development-plan/web.md#web-03)입니다. 실제 운영 배포·외부 공개·호스트·Tunnel 인수는 후속 범위입니다.
+[OPS-08 모듈 인수](spec/service/agent-context/reviews/2026-10-24-ops-08.md)에서 실행 안내와 도구 14종 스냅샷, 격리 배포의 정지·물리 백업·013 적용·감사·준비와 실패 파일 롤백·보관 이미지/새 복원본 복귀를 확인했습니다. 격리 실행·자원 정리, 도구 목록 17건·race·전체 Go 정적 검사가 통과했습니다. 당시 전체 **86/124개 완료**였으며 다음 권장은 [WEB-03](spec/service/agent-context/development-plan/web.md#web-03)입니다. 실제 운영 배포·외부 공개·호스트·Tunnel 인수는 후속 범위입니다.
+
+[WEB-03 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-03.md)에서 그래프 목록의 등급 정규화·커서 입력 오류·취소와 실제 DB/TLS의 정렬·페이지·현재 권한 및 본인 복구 요청 진입을 확인했습니다. 웹 642건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 현재 전체 **87/124개 완료**이며 다음 권장은 [WEB-04](spec/service/agent-context/development-plan/web.md#web-04)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.

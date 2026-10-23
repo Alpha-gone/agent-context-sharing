@@ -361,11 +361,21 @@ func (server *Server) graphList(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	graphs, cursor, err := server.graphs.ListGraphs(request.Context(), accountID, filter, request.URL.Query().Get("cursor"), pageSize)
+	if request.Context().Err() != nil {
+		return
+	}
 	if err != nil {
-		server.render(writer, http.StatusInternalServerError, "graphs", pageData{Title: "그래프", Error: "그래프 목록을 읽을 수 없습니다."})
+		status, message := http.StatusInternalServerError, "그래프 목록을 읽을 수 없습니다."
+		if errors.Is(err, store.ErrInvalidCursor) {
+			status, message = http.StatusBadRequest, "목록 커서가 올바르지 않습니다. 필터를 다시 적용해 주십시오."
+		}
+		server.render(writer, status, "graphs", pageData{Title: "그래프", Error: message, NameFilter: filter.Name, Grades: filter.Grades})
 		return
 	}
 	restoreGraphs, err := server.graphs.ListRestoreEligibleGraphs(request.Context(), accountID)
+	if request.Context().Err() != nil {
+		return
+	}
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "graphs", pageData{Title: "그래프", Error: "자동 삭제된 그래프 목록을 읽을 수 없습니다."})
 		return
@@ -373,6 +383,9 @@ func (server *Server) graphList(writer http.ResponseWriter, request *http.Reques
 	// 직접 삭제한 그래프는 목록 조회에서 빠지므로 복구 화면으로 가는 링크를 여기에 둔다.
 	// 「운영자 복구」가 이 경로의 복구를 소유자에게 맡겼고 다른 화면에는 진입점이 없다.
 	deletedGraphs, err := server.graphs.ListOwnedDeletedGraphs(request.Context(), accountID)
+	if request.Context().Err() != nil {
+		return
+	}
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "graphs", pageData{Title: "그래프", Error: "삭제한 그래프 목록을 읽을 수 없습니다."})
 		return
@@ -887,6 +900,7 @@ func graphListPage(filter model.GraphListFilter, cursor string) string {
 
 func graphFilter(request *http.Request) (model.GraphListFilter, error) {
 	filter := model.GraphListFilter{Name: strings.TrimSpace(request.URL.Query().Get("name"))}
+	var selected []model.GraphGrade
 	for _, value := range request.URL.Query()["grade"] {
 		// 기존 "모든 등급" URL의 빈 값도 등급 조건 없음으로 유지한다.
 		if value == "" {
@@ -896,7 +910,15 @@ func graphFilter(request *http.Request) (model.GraphListFilter, error) {
 		if !grade.Valid() {
 			return model.GraphListFilter{}, fmt.Errorf("등급 필터 %q가 올바르지 않다", value)
 		}
-		filter.Grades = append(filter.Grades, grade)
+		if !slices.Contains(selected, grade) {
+			selected = append(selected, grade)
+		}
+	}
+	// 양식 표시·실제 조회·다음 커서는 같은 선택 집합과 순서를 사용한다.
+	for _, grade := range []model.GraphGrade{model.GraphGradeOwner, model.GraphGradeEditor, model.GraphGradeViewer} {
+		if slices.Contains(selected, grade) {
+			filter.Grades = append(filter.Grades, grade)
+		}
 	}
 	return filter, nil
 }
@@ -1109,7 +1131,7 @@ const pageTemplates = `{{define "login"}}{{template "head" .}}<h1>로그인</h1>
 {{define "message"}}{{template "head" .}}<h1>{{.Title}}</h1><p><a href="/graphs">그래프 목록</a></p>{{template "foot" .}}{{end}}
 {{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/connections">연결 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav>
 <form class="panel actions" method="get" action="/graphs">
-<label for="graph-name">이름 필터<input id="graph-name" name="name" value="{{.NameFilter}}"></label>
+<label for="graph-name">이름 필터<input id="graph-name" type="search" name="name" value="{{.NameFilter}}" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"></label>
 <fieldset class="grade-filter" aria-describedby="grade-filter-help"><legend>등급</legend><div class="grade-options">
 <label for="grade-owner"><input id="grade-owner" type="checkbox" name="grade" value="owner"{{if .HasGrade "owner"}} checked{{end}}>소유자</label>
 <label for="grade-editor"><input id="grade-editor" type="checkbox" name="grade" value="editor"{{if .HasGrade "editor"}} checked{{end}}>편집자</label>

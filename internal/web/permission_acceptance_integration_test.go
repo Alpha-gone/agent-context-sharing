@@ -25,6 +25,10 @@ import (
 
 // 실제 서명 키를 쓰므로 공유 DB를 변경하지 않고 시험별 DB를 정식 적용한다.
 func permissionDatabase(t *testing.T) *store.Store {
+	return permissionDatabaseWithGrace(t, nil)
+}
+
+func permissionDatabaseWithGrace(t *testing.T, graceDays store.RetentionDays) *store.Store {
 	t.Helper()
 	address := os.Getenv("TEST_DATABASE_URL")
 	if address == "" {
@@ -82,7 +86,7 @@ func permissionDatabase(t *testing.T) *store.Store {
 		t.Fatal(err)
 	}
 	// 업무 호출에는 DB 핸들을 전달하지 않는다.
-	database, err := store.New(t.Context(), parsed.String(), "agent_context", nil, nil, "")
+	database, err := store.New(t.Context(), parsed.String(), "agent_context", nil, graceDays, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,14 +10,14 @@ AI 에이전트가 작업 중 얻은 지식과 맥락을 저장하고, 관계를
 - 의미 유사도·키워드·시간 필터 검색과 컨텍스트 관계 탐색
 - 그래프별 소유자·편집자·열람자 권한과 팀 관리
 - 웹 관리 화면의 컨텍스트 조회, 국소 그래프 보기와 운영자 복구
-- 호스트 내장 MCP 직접 연결 설계: 표준 OAuth·Bearer·회전형 갱신 토큰 (구현 대기)
+- 표준 OAuth·Bearer·회전형 갱신과 MCP 14종 서버 연결 (실제 호스트 호환성 인수 대기)
 - 비동기 임베딩 색인, 그래프 불변식 감사와 검색 품질 평가 도구
 
 현재는 검증 단계입니다. 인증된 모든 계정에 운영자 복구 자격이 있으므로 신뢰할 수 있는 시험 참여자로 접근 범위를 제한해야 합니다. 비밀번호 재설정, 계정 잠금, 2FA와 외부 인가 서버 연동은 현재 제공하지 않습니다. 공개 서비스 전환 여부는 [서비스 현황](spec/service/README.md)과 보안 요구사항을 함께 검토하십시오.
 
 ## 구성
 
-현재 서버는 웹 관리·계정 세션·그래프 저장·색인을 제공합니다. 검색과 감사·평가는 내부 패키지와 실행기로 검증합니다. 서버는 PostgreSQL의 Apache AGE로 그래프를, pgvector로 임베딩을 저장하며 임베딩 제공자는 Gemini만 지원하며 명시적으로 구성합니다.
+현재 서버는 웹 관리·계정 세션·OAuth·보호 MCP·그래프 저장·검색·색인을 제공합니다. 감사·평가는 별도 실행기로 실행합니다. 서버는 PostgreSQL의 Apache AGE로 그래프를, pgvector로 임베딩을 저장하며 임베딩 제공자는 Gemini를 명시적으로 구성합니다. MCP의 실제 호스트 호환성은 후속 인수 대상입니다.
 
 - 서버: 루트 Go 모듈의 `cmd/server`와 `internal/`
 - 개발 환경: 호스트에서 Go 프로그램을 실행하고 `compose.dev.yaml`로 DB를 기동하거나, `server` 프로필로 애플리케이션까지 컨테이너에서 실행
@@ -144,9 +144,11 @@ INDEX_WORKER_PLACEMENT=external go run ./cmd/indexer
 
 ### 3. 현재 제공 범위
 
-공개 OAuth 발견 메타데이터는 `/.well-known/oauth-protected-resource/mcp`와 `/.well-known/oauth-authorization-server`에서 제공합니다. `/authorize`의 로그인·명시적 동의·PKCE S256 코드 발급과 `/token`의 최초 코드 교환·갱신 회전, Bearer 검증·보호 인증 경계를 구현했습니다. 보호 `/mcp` 전송 생성자와 서버 라우터·Bearer 연결 모듈도 구현했습니다. 기동 경로의 업무 13종 연결·본인 연결 폐기와 호스트 인수는 후속 범위입니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다. [AUTH-09 검토](spec/service/agent-context/reviews/2026-10-20-auth-09.md)에서 현재 인증 경계의 인수 범위를 확인할 수 있습니다.
+OAuth 발견 메타데이터 두 경로와 `/authorize`의 로그인·동의·PKCE S256, `/token`의 최초 교환·갱신 회전, Bearer 보호 `/mcp`와 등록·읽기·쓰기 14종을 서버 기동 경로에 연결했습니다. [ARCH-06](spec/service/agent-context/reviews/2026-10-23-arch-06.md)·[ARCH-07](spec/service/agent-context/reviews/2026-10-23-arch-07.md)의 조립·요청 경계 인수와 실제 호스트 지원은 구분합니다. 전체 도구 결과·호스트 호환성 인수는 MCP-09·TEST-07/08에서 수행합니다.
 
-에이전트 등록·현재 계정/client 결합 검사·소유자 폐기의 내부 API도 [MCP-04 검토](spec/service/agent-context/reviews/2026-10-20-mcp-04.md)에서 인수했습니다. [MCP-02 검토](spec/service/agent-context/reviews/2026-10-20-mcp-02.md)에서 보호 전송·발견·4 MiB 본문 상한·표준 외피와 실제 TLS/OAuth 결합을 인수했습니다. [MCP-05 검토](spec/service/agent-context/reviews/2026-10-20-mcp-05.md)에서 쓰기 키·24시간 결과 재생 실행 경계도 인수했습니다. [MCP-06 검토](spec/service/agent-context/reviews/2026-10-20-mcp-06.md)에서 여덟 쓰기 도구의 실제 도메인 연결·재생·오류 변환과 OAuth/TLS 표본을 인수했습니다. [MCP-07 검토](spec/service/agent-context/reviews/2026-10-20-mcp-07.md)에서 다섯 읽기 도구·목록 커서·평면 흐름·표준 완료 결과도 인수했습니다. [MCP-08 검토](spec/service/agent-context/reviews/2026-10-20-mcp-08.md)에서 오류 계층·요청 예산·HTTP 취소와 실제 자원 회복을 인수했습니다. [AUTH-10 검토](spec/service/agent-context/reviews/2026-10-20-auth-10.md)에서 `/connections`의 본인 계열·활성 등록 목록과 폐기를 인수했습니다. 계열 폐기는 접근·갱신을 차단하고 웹 세션을 유지하며 등록 폐기는 기존 기여·감사를 보존합니다. 기동 경로의 전체 MCP 조립과 실제 브라우저·호스트 인수는 후속 범위입니다.
+로그인 후 `/connections`에서 본인 OAuth 계열·활성 등록 목록과 폐기를 처리합니다. 계열 폐기는 접근·갱신을 차단하고 웹 세션을 유지하며 등록 폐기는 기존 기여·감사를 보존합니다. [현재 도구 스냅샷](internal/mcp/testdata/tools.json)은 protocol revision·instructions·14종 설명/입력 스키마/annotations를 담으며 `go test ./internal/mcp -run '^TestOPS08ToolSnapshot$'`로 대조합니다. 계약 변경을 검토한 경우에만 `UPDATE_TOOL_SNAPSHOT=1`을 함께 지정하여 갱신하고 diff를 검토합니다.
+
+전환과 복귀는 [운영 절차](OPERATIONS.md#7-변경-및-복귀)를 따릅니다. `GO_BINARY=/path/to/go1.27.1/bin/go sh test-transition.sh`는 합성 이전 스키마의 정지·백업·새 번호 적용·전체 감사·준비 확인과 실패 파일 롤백·별도 볼륨/보관 이미지 복귀를 검증합니다. 실제 운영 배포나 외부 공개를 실행하지 않습니다.
 
 [WEB-01 검토](spec/service/agent-context/reviews/2026-10-21-web-01.md)에서 공통 레이아웃·내장 CSS·Pretendard·라이선스, 입력 이스케이프와 자산 ETag/304를 인수했습니다. 당시 69/124개 완료였으며 다음은 WEB-02 요청 경계였습니다. 웹 회귀 411건과 race·전체 정적 검사가 통과했으며 DB 권한 통합 2건은 건너뛰었습니다. 실제 브라우저·보조 기술 인수는 후속 범위입니다.
 
@@ -231,4 +233,6 @@ sh ./test-wal-archive.sh
 
 [OPS-07 검토](spec/service/agent-context/reviews/2026-10-23-ops-07.md)에서 WAL 보관 회귀와 cold tablespace를 포함한 물리 백업·시점 복구를 인수했습니다. 목표 일시 정지·승격, AGE·양쪽 HNSW·기존 세션 서명·큐 소비·전체 감사와 생성 자원 정리를 확인했습니다. 격리 시험과 전체 정적 검사가 통과했습니다. 당시 84/124개 완료였으며 다음 권장은 OPS-02였습니다. 실제 운영 백업·외부 보관·보관본 삭제·배포는 후속 범위입니다.
 
-[OPS-02 검토](spec/service/agent-context/reviews/2026-10-24-ops-02.md)에서 운영 템플릿과 영속 진단 볼륨·안정 슬롯을 인수했습니다. DB 비공개·loopback·고정 신뢰와 서버 이미지의 실제 권한·중복/권한 거부·재생성 보존을 확인했습니다. 구성 303건·race·정적 검사와 격리 컨테이너 검증이 통과했습니다. 현재 85/124개 완료이며 다음 권장은 OPS-08 실행 안내·전환·복귀 절차입니다. 실제 운영 배포·Tunnel·외부 제공자 인수는 후속 범위입니다.
+[OPS-02 검토](spec/service/agent-context/reviews/2026-10-24-ops-02.md)에서 운영 템플릿과 영속 진단 볼륨·안정 슬롯을 인수했습니다. DB 비공개·loopback·고정 신뢰와 서버 이미지의 실제 권한·중복/권한 거부·재생성 보존을 확인했습니다. 구성 303건·race·정적 검사와 격리 컨테이너 검증이 통과했습니다. 당시 85/124개 완료였으며 다음 권장은 OPS-08 실행 안내·전환·복귀 절차였습니다. 실제 운영 배포·Tunnel·외부 제공자 인수는 후속 범위입니다.
+
+[OPS-08 모듈 인수](spec/service/agent-context/reviews/2026-10-24-ops-08.md)에서 실행 안내와 도구 14종 스냅샷, 격리 배포의 정지·물리 백업·013 적용·감사·준비와 실패 파일 롤백·보관 이미지/새 복원본 복귀를 확인했습니다. 격리 실행·자원 정리, 도구 목록 17건·race·전체 Go 정적 검사가 통과했습니다. 현재 전체 **86/124개 완료**이며 다음 권장은 [WEB-03](spec/service/agent-context/development-plan/web.md#web-03)입니다. 실제 운영 배포·외부 공개·호스트·Tunnel 인수는 후속 범위입니다.

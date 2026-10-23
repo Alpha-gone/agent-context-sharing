@@ -121,7 +121,11 @@ curl --fail --show-error --output /dev/null https://agent-context.example.com/lo
 
 ## 4. 참여자 연결과 개방 확인
 
-현재 개방 범위는 웹 로그인·관리 화면입니다. HTTPS `/login`을 확인하고 시험 계정의 권한 범위를 점검합니다. 표준 MCP·OAuth 직접 연결과 호스트 등록은 구현·호환성 인수 전까지 개방하지 않습니다.
+웹 로그인·관리 화면과 본인 연결 목록·폐기, OAuth 발견·인가·코드 교환·갱신, Bearer로 보호하는 `/mcp`와 14종 처리가 구현되어 있습니다. HTTPS `/login`과 시험 계정의 권한 범위를 점검합니다. 실제 호스트 호환성·브라우저 전체·운영 장애 인수는 아직 완료되지 않았으므로 서버 구현만으로 특정 호스트의 연결 지원을 선언하지 않습니다.
+
+[도구 목록 스냅샷](internal/mcp/testdata/tools.json)은 protocol revision·공통 instructions·14종의 설명·입력 스키마·annotations를 담습니다. 등록은 `agent_register`, 읽기는 `graph_list`·`graph_get`·`node_get`·`context_flow_get`·`relation_list`, 쓰기는 `graph_create`·`graph_update`·`node_create`·`node_update`·`node_discard`·`node_restore`·`relation_confirm`·`relation_discard`입니다. 본인 연결 폐기는 웹 `/connections`에서 처리하며 전용 클라이언트·독자 연결 엔드포인트를 추가하지 않습니다. 도구 성공·도메인 실패·부분 결과와 실제 호스트 전체 계약은 MCP-09·TEST-07/08의 인수 범위입니다.
+
+실행기는 `cmd/server`, 별도 색인 `cmd/indexer`, 스키마 `cmd/migrate status|up`, 전체 감사 `cmd/audit`, 평가 `cmd/eval`입니다. 운영 이미지에는 `server`·`migrate`·`audit`만 들어 있으며 `indexer`·`eval`은 호스트에서 각각 `go build -o indexer ./cmd/indexer`, `go build -o eval ./cmd/eval`로 빌드합니다. external 배치의 색인 실행은 [README](README.md#색인-작업자-분리-실행)를 따릅니다. `/metrics`·재색인 공개 CLI·마이그레이션 `down`은 제공하지 않습니다.
 
 ## 5. 일상 점검
 
@@ -261,24 +265,58 @@ recovery_target_action = 'pause'
 7. `SELECT pg_is_wal_replay_paused();`와 목표 데이터의 존재·삭제 상태를 확인합니다. 목표를 확인한 운영자만 `SELECT pg_wal_replay_resume();`로 복구를 완료하고 `SELECT pg_is_in_recovery();`가 `false`인지 확인합니다. 기본 백업 완료 시점보다 앞선 목표는 그 백업으로 복구할 수 없습니다. 목표 설정과 일시 정지 동작은 [PostgreSQL 복구 목표 설정](https://www.postgresql.org/docs/18/runtime-config-wal.html#RUNTIME-CONFIG-WAL-RECOVERY-TARGET)을 참조하십시오.
 8. 복원한 스키마와 일치하는 애플리케이션 판으로 전체 `audit`를 실행합니다. 격리 Compose에서 `run --rm --no-deps server audit`가 **복원 DB만** 가리키는지 확인합니다. 아직 새 판의 `migrate up`을 자동 실행하지 않습니다.
 9. 감사 종료 코드 `0`, 그래프 조회, 권한 검사와 의미·키워드 검색을 확인합니다. 리허설에서 서버를 켜면 주기 작업과 외부 임베딩 요청이 실행될 수 있으므로 시험 계정·데이터로 제한하고 외부 전송을 통제합니다.
-10. 실제 장애 복구에서는 최종 복구 승인 후에만 새 DB로 배치를 전환하고 원본 접속을 다시 허용합니다. `/readyz`, 외부 로그인과 웹 관리 화면를 확인합니다. 복구 후 새 기본 백업을 받아 새 timeline의 보관을 시작하고 실제 손실 범위·복구 시간을 기록합니다.
+10. 실제 장애 복구에서는 최종 복구 승인 후에만 새 DB로 배치를 전환하고 원본 접속을 다시 허용합니다. `/readyz`, 외부 로그인과 웹 관리 화면을 확인합니다. 복구 후 새 기본 백업을 받아 새 timeline의 보관을 시작하고 실제 손실 범위·복구 시간을 기록합니다.
 
 리허설용 복사본의 회수·삭제는 볼륨 이름과 보존 대상이 확인된 후 별도 승인된 정리로 수행합니다. 서명 키가 유실되거나 이전 상태로 돌아오면 기존 토큰·웹 세션이 무효가 될 수 있으므로 참여자에게 재인증을 안내합니다. 그래프 감사가 실패하면 개방하지 않습니다. 시점 복구의 상세 설정과 WAL 처리 기준은 [PostgreSQL 18 복구 문서](https://www.postgresql.org/docs/18/continuous-archiving.html)를 따릅니다.
 
 ## 7. 변경 및 복귀
 
-변경 창을 알리고 새 판의 요구사항·마이그레이션·임베딩 구성 변화와 현재 스키마의 호환성을 검토합니다. 변경 전 commit, 이미지 ID, 보호된 설정 사본과 복구가 검증된 물리 백업을 확보합니다. 운영 체크아웃에서 자동 `pull`을 전제로 하지 않으며 승인된 판을 명시적으로 선택합니다.
+변경 창을 알리고 새 판의 요구사항·마이그레이션·임베딩 구성 변화와 현재 스키마의 호환성을 검토합니다. 먼저 아래 격리 리허설을 통과하고 실제 실행 대상·백업·복귀 승인 조건을 검토합니다. 운영 체크아웃에서 자동 `pull`을 전제로 하지 않으며 승인된 판을 명시적으로 선택합니다.
+
+### 실행 전 검토 자료
+
+- 대상 호스트·Compose 프로젝트·DB/진단/WAL/tablespace 볼륨과 현재/목표 commit·DB 확장 판을 기록합니다. 이전 애플리케이션의 이미지 ID와 보관 태그 또는 `docker image save` 사본을 확보한 뒤 새 이미지를 빌드합니다. 같은 태그를 덮어쓴 뒤 이전 이미지가 남아 있으리라 가정하지 않습니다.
+- 보호된 환경 설정 사본과 실제 키의 존재를 확인하고 기록에는 구성 항목·비밀을 제외한 변경점만 남깁니다. 공개 resource·issuer·Origin·호스트 callback, 안정 진단 슬롯·볼륨 권한과 embedded/external 배치를 대조합니다.
+- 적용 파일 번호·checksum·render_config와 현재/목표 벡터 형상을 보존합니다. 현재 배포 SQL은 001→009→010→011→012→013입니다. `migrate status`도 이력 준비를 할 수 있으므로 완전한 무변경 조사 명령으로 취급하지 않습니다.
+- 모든 서버·외부 색인 작업자의 정지 방법, 30/10/5초 정리·50초 컨테이너 유예와 검증·복귀 담당자를 지정합니다. 정지 후 물리 백업·필요 WAL·tablespace·manifest, 복구 표본과 손실 승인 조건을 확보합니다. 진단 파일은 DB 백업과 별도로 보존합니다.
+- 전체 감사 0·반복 적용 무변경·원본/권한/키/등록/완료 결과 대조·`/readyz`·대상 기능 인수의 기대 결과와 중단 조건을 적습니다. `/healthz`·Compose healthy·스냅샷 일치만으로 서비스 개방을 승인하지 않습니다.
+
+### 정지부터 인수까지
+
+외부 입력을 중단하고 모든 서버·별도 색인 작업자를 정상 종료합니다. 아래 명령은 현재 Compose의 서버 한 서비스만 멈추므로 다른 인스턴스·호스트 실행기에도 정지 절차를 적용합니다.
 
 ```sh
 docker compose -f compose.prod.yaml stop server
+```
+
+쓰기 중단을 확인한 뒤 [물리 백업](#6-백업과-복구)과 이미지·설정·적용 이력 보존을 완료합니다. DB는 백업을 위해 실행 상태를 유지합니다. 그 뒤 준비한 목표 판에서 다음을 한 단계씩 실행합니다. 감사가 성공하기 전에는 서버·작업자를 재기동하지 않습니다.
+
+```sh
 docker compose -f compose.prod.yaml build db migrate server
 docker compose -f compose.prod.yaml run --rm --no-deps migrate migrate status
 docker compose -f compose.prod.yaml run --rm --no-deps migrate migrate up
 docker compose -f compose.prod.yaml run --rm --no-deps server audit
-docker compose -f compose.prod.yaml up -d --wait server
+docker compose -f compose.prod.yaml up -d --no-deps --force-recreate --wait server
+curl --fail --show-error http://127.0.0.1:80/readyz
 ```
 
-위 예시는 **DB 이미지가 바뀌지 않는 애플리케이션 변경**입니다. `build db`는 실행 중인 DB를 자동 교체하지 않습니다. PostgreSQL·AGE·pgvector 버전이나 DB 이미지를 바꾸는 작업은 별도 검증과 업그레이드 계획이 필요합니다. 각 단계가 성공한 경우에만 진행하고 마지막에 내부·외부 준비 확인과 기능 점검을 반복합니다.
+위 예시는 **DB 이미지가 바뀌지 않는 애플리케이션 변경**입니다. `build db`는 실행 중인 DB를 자동 교체하지 않습니다. PostgreSQL·AGE·pgvector 버전이나 DB 이미지를 바꾸는 작업은 별도 검증과 업그레이드 계획이 필요합니다. 각 단계가 성공한 경우에만 진행하고 새 서버의 실제 이미지 ID를 검토 자료와 대조합니다. 외부 입력을 열기 전에 내부·외부 준비 확인, 로그인·권한과 대상 기능 인수를 반복합니다. 별도 색인 작업자는 설정·비용·대상 인수가 허용된 시점에 다시 시작합니다.
+
+### 실패 경계와 복귀
+
+`migrate up`은 파일마다 하나의 트랜잭션을 사용합니다. 실패 파일의 DDL·데이터·적용 이력은 롤백되지만 앞서 성공한 파일은 남습니다. 실패 파일이 롤백됐다는 이유만으로 배포 전체가 이전 상태라고 판단하지 않습니다. 적용 이력·업무 상태를 확인하고 원인을 해결하거나 검증된 복귀를 완료하기 전까지 서버·작업자를 정지합니다.
+
+이미 적용·사용한 스키마와 데이터를 이전 상태로 돌릴 때는 이미지 교체나 이력 삭제로 되돌리지 않습니다. 이전 백업을 별도 빈 DB 볼륨에 복원하고 보관한 동일 DB·애플리케이션 이미지와 이전 설정으로 전체 감사를 실행합니다. 감사·원본/권한/키/기존 세션·적용 이력·준비 확인 후 손실 범위를 승인받아 새 DB로 전환합니다. 제거한 전용 클라이언트 경로를 복귀 경로로 다시 만들지 않습니다.
+
+복귀 실행은 복원 DB를 가리키는 별도 Compose override에 `server.image`를 보관 이미지 ID/태그로, `server.environment.DATABASE_URL`을 복원 DB로 지정합니다. 감사는 `run --rm --no-deps server audit`, 기동은 `up -d --no-deps --force-recreate --wait server`로 수행하여 `migrate` 의존 서비스가 새 스키마를 자동 적용하지 않게 합니다. 전체 구성 출력에 비밀을 남기지 말고 대상 DB·이미지 ID만 대조합니다. 원본 볼륨은 조사·재시도용으로 보존합니다.
+
+### 격리 전환·복귀 리허설
+
+```sh
+GO_BINARY=/path/to/go1.27.1/bin/go sh test-transition.sh
+```
+
+실행기는 실제 `.env`를 읽지 않고 예시 구성·합성 자격·별도 프로젝트·빈 볼륨을 사용합니다. 호스트 포트 공개와 외부 네트워크를 차단하고 색인은 external로 둡니다. 현재 소스에서 013만 제외해 만든 합성 이전 이미지는 과거 출시 이미지의 호환성을 보장하는 자료가 아닙니다. 012 기동→정상 정지→물리 백업/manifest 검증→013 적용/반복 무변경→전체 감사→새 이미지 준비 확인→013을 사용하는 파생 생성/감사와 실패 파일 롤백을 확인합니다. 이후 별도 볼륨에 백업을 복원하고 자동 적용 없이 보관한 합성 이전 이미지로 감사·이전 세션/권한/원본·준비를 확인합니다. 시험이 만든 자원만 정리하며 실제 운영 배포·Tunnel·외부 제공자·실제 호스트 인수와 구분합니다.
 
 벡터 타입·차원을 변경하려면 다음 번호의 마이그레이션과 재색인 계획이 필요합니다. 적용된 `001_init.sql` 수정, checksum 덮어쓰기나 `.env`만 변경하는 전환은 하지 않습니다. 같은 차원의 모델 변경도 재색인 중 검색 품질과 외부 API 사용량을 확인합니다.
 
@@ -323,6 +361,6 @@ DB가 실행 중인 상태에서 「백업과 복구」의 최종 물리 백업,
 docker compose -f compose.prod.yaml stop db
 ```
 
-서버는 요청에 최대 30초, 작업자 종료에 10초를 기다리며 Compose 종료 유예는 50초입니다. 정상 종료를 기다리고 불필요한 강제 종료를 피합니다. 컨테이너·네트워크만 제거하려면 백업 확인 후 `docker compose -f compose.prod.yaml down`을 사용할 수 있으며 명명된 볼륨은 남습니다.
+서버는 요청에 최대 30초, 작업자 종료에 독립된 10초, 진단 flush에 최대 5초를 기다리며 Compose 종료 유예는 50초입니다. 정상 종료를 기다리고 불필요한 강제 종료를 피합니다. 컨테이너·네트워크만 제거하려면 백업 확인 후 `docker compose -f compose.prod.yaml down`을 사용할 수 있으며 명명된 볼륨은 남습니다.
 
 **운영 환경에서 `down -v`를 실행하지 마십시오.** 개발 초기화용 명령이며 운영 DB와 WAL 볼륨을 삭제합니다. 데이터·볼륨·백업의 영구 삭제와 API 키 폐기는 보존 기간과 대상이 확인된 별도 승인 절차로 수행합니다.

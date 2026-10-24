@@ -126,6 +126,7 @@ try {
     expectSelection(derived);
     assert.deepEqual(visibleNodes(), ['선택 파생']);
     assert.match(details.textContent, /선택 파생/);
+    assert.doesNotMatch(details.textContent, /상충|근거 무효/, '표식 없는 노드에 상태를 붙이면 안 된다');
     assert.equal(range.value, '0');
     assert.equal(cy.edges('.evidence').length, 1);
     assert.equal(cy.edges('.evidence').source().id(), derived.id(), '들어오는 파생 후손은 근거가 아니다');
@@ -147,6 +148,7 @@ try {
     expectFullView();
     const descendant = choose('파생 후손');
     expectSelection(descendant);
+    assert.match(details.textContent, /^derived · [^\n]+ · 상충\n파생 후손$/, '선택 상세에 상태 표식을 텍스트로 붙인다');
     assert.equal(cy.edges('.evidence').length, 2, '반복 선택에서도 원천까지의 근거 경로를 강조한다');
     assert.equal(evidence.textContent.split('\n').length, 2, '텍스트 근거와 강조 간선이 같아야 한다');
     choose('파생 후손');

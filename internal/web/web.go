@@ -439,12 +439,24 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 		// 모두 0일 수 있으므로 거리의 최댓값 대신 노드 수를 쓴다.
 		maxHops = max(0, len(hops.Contexts)-1)
 	}
-	value := pageData{Title: graph.Name, AccountID: accountID, Graph: graph, Contexts: hops.Contexts, Edges: hops.Edges, MaxHops: maxHops}
+	value := pageData{Title: graph.Name, AccountID: accountID, Graph: graph, Contexts: hops.Contexts, Edges: hops.Edges, MaxHops: maxHops, GlobalSummaries: globalSummaries(hops.Contexts)}
 	// 상한이 자른 경계는 오류가 아니라 「정상 응답의 부분 상태」의 표시다.
 	if hops.Truncated {
 		value.HopBoundary = &hops.Boundary
 	}
 	server.render(writer, http.StatusOK, "graph_detail", value)
+}
+
+// globalSummaries는 시각화 시작점인 전역 요약 파생을 반환 노드에서 고른다. 비어 있으면
+// 저장소가 활성 컨텍스트를 시작점으로 썼다는 뜻이다.
+func globalSummaries(contexts []model.Context) []model.Context {
+	var summaries []model.Context
+	for _, value := range contexts {
+		if value.Derived != nil && value.Derived.Kind == model.DerivationKindSummary && value.Derived.SummaryScope == model.SummaryScopeGlobal {
+			summaries = append(summaries, value)
+		}
+	}
+	return summaries
 }
 
 // graphAccess는 등급 부여·회수와 팀 관리를 한 화면에 둔다.
@@ -1159,6 +1171,8 @@ type pageData struct {
 	RestoreRequest *model.RestoreRequest
 	// RestoreTab에는 삭제와 복구 화면이 복구 대상 보기인지를 둔다.
 	RestoreTab bool
+	// GlobalSummaries에는 그래프 상세의 시작점이 된 전역 요약 파생을 둔다.
+	GlobalSummaries []model.Context
 }
 
 // HasGrade는 현재 등급 필터의 선택 상태를 양식에 반영한다.
@@ -1184,7 +1198,8 @@ type visualizationNodeData struct {
 }
 
 type visualizationEdge struct {
-	Data visualizationEdgeData `json:"data"`
+	Data    visualizationEdgeData `json:"data"`
+	Classes string                `json:"classes,omitempty"`
 }
 
 type visualizationEdgeData struct {
@@ -1207,7 +1222,13 @@ func newVisualizationData(contexts []model.Context, edges []store.HopEdge) visua
 		result.Nodes = append(result.Nodes, visualizationNode{Data: visualizationNodeData{ID: context.ID.String(), Label: string(context.Layer), Layer: string(context.Layer), Body: context.Body}, Classes: classes})
 	}
 	for index, edge := range edges {
-		result.Edges = append(result.Edges, visualizationEdge{Data: visualizationEdgeData{ID: fmt.Sprintf("%d-%s", index, edge.Kind), Source: edge.FromID.String(), Target: edge.ToID.String(), Kind: edge.Kind}})
+		// 「시각 표현 규칙」이 확정된 참조와 사건 관계를 연결선 종류로 나누라고 했다.
+		classes := "reference"
+		switch model.RelationType(edge.Kind) {
+		case model.RelationTypePrecedes, model.RelationTypeCauses, model.RelationTypePartOf, model.RelationTypeRelatesTo:
+			classes = "relation"
+		}
+		result.Edges = append(result.Edges, visualizationEdge{Data: visualizationEdgeData{ID: fmt.Sprintf("%d-%s", index, edge.Kind), Source: edge.FromID.String(), Target: edge.ToID.String(), Kind: edge.Kind}, Classes: classes})
 	}
 	return result
 }
@@ -1226,7 +1247,7 @@ const pageTemplates = `{{define "login"}}{{template "head" .}}<h1>로그인</h1>
 </div><p id="grade-filter-help">선택하지 않으면 모든 등급을 조회합니다.</p></fieldset>
 <button type="submit">적용</button></form>
 {{if .Graphs}}<table><thead><tr><th>이름</th><th>설명</th><th>마지막 활동</th><th>내 등급</th></tr></thead><tbody>{{range .Graphs}}<tr><td><a href="/graphs/{{.ID}}">{{.Name}}</a></td><td>{{.Description}}</td><td>{{formatTime .LastActivityAt}}</td><td>{{.Grade}}</td></tr>{{end}}</tbody></table>{{else}}<p>접근 가능한 그래프가 없습니다.</p>{{end}}{{if .NextCursor}}<p><a href="{{.NextPage}}">더 보기</a></p>{{end}}{{if .DeletedGraphs}}<section class="panel"><h2>내가 삭제한 그래프</h2>{{range .DeletedGraphs}}<p><a href="/graphs/{{.ID}}/deletion">{{.Name}} 복구</a></p>{{end}}</section>{{end}}{{if .RestoreGraphs}}<section class="panel"><h2>자동 삭제된 그래프</h2>{{range .RestoreGraphs}}<form class="inline" method="post" action="/graphs"><input type="hidden" name="restore_graph_id" value="{{.ID}}"><button type="submit">{{.Name}} 복구 요청</button></form>{{end}}</section>{{end}}{{template "foot" .}}{{end}}
-{{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p>{{.Graph.Description}}</p><p id="scope-help">전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다. 빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다. 국소 보기에서도 목록에서 다른 노드를 선택할 수 있습니다. 목록의 노드 선택 버튼은 Enter 또는 Space로 선택·해제합니다.</p><button id="full-view" type="button">전체 보기</button> <a id="details-link" href="#node-details-heading">선택한 노드 상세로 이동</a><p id="scope-status" role="status" aria-atomic="true">전체 보기</p><label for="hop-range">국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}" aria-describedby="scope-help"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section>{{template "layer-legend" .}}<section class="graph-layout"><div id="context-graph" aria-label="컨텍스트 그래프"></div><aside class="panel"><h2 id="node-details-heading" tabindex="-1">선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p><h3>근거 경로</h3><p id="node-evidence">노드를 선택하면 표시된 부분 그래프의 근거 연결을 안내합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code> <button type="button" data-context-id="{{.ID}}" aria-label="{{.ID}} 노드 선택" aria-pressed="false" aria-controls="node-details node-evidence" aria-describedby="scope-help">노드 선택</button><p>{{.Body}}</p>{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){
+{{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p id="scope-help">전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다. 빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다. 국소 보기에서도 목록에서 다른 노드를 선택할 수 있습니다. 목록의 노드 선택 버튼은 Enter 또는 Space로 선택·해제합니다.</p><button id="full-view" type="button">전체 보기</button> <a id="details-link" href="#node-details-heading">선택한 노드 상세로 이동</a><p id="scope-status" role="status" aria-atomic="true">전체 보기</p><label for="hop-range">국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}" aria-describedby="scope-help"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section>{{template "layer-legend" .}}<section class="graph-layout"><aside class="panel"><h2>그래프 속성</h2><dl class="connection-list"><dt>식별자</dt><dd><code>{{.Graph.ID}}</code></dd><dt>설명</dt><dd>{{or .Graph.Description "없음"}}</dd><dt>생성 시각</dt><dd>{{formatTime .Graph.CreatedAt}}</dd><dt>마지막 활동</dt><dd>{{formatTime .Graph.LastActivityAt}}</dd><dt>표시 범위</dt><dd>노드 {{len .Contexts}}개 · 연결 {{len .Edges}}개</dd></dl><h3>전역 요약</h3>{{range .GlobalSummaries}}<article><code>{{.ID}}</code><p>{{.Body}}</p></article>{{else}}<p>전역 요약 파생이 없어 활성 컨텍스트를 시작점으로 표시했습니다.</p>{{end}}</aside><div id="context-graph" aria-label="컨텍스트 그래프"></div><aside class="panel"><h2 id="node-details-heading" tabindex="-1">선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p><h3>근거 경로</h3><p id="node-evidence">노드를 선택하면 표시된 부분 그래프의 근거 연결을 안내합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code> <button type="button" data-context-id="{{.ID}}" aria-label="{{.ID}} 노드 선택" aria-pressed="false" aria-controls="node-details node-evidence" aria-describedby="scope-help">노드 선택</button><p>{{.Body}}</p>{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){
 const elements={{.VisualizationJSON}};
 const details=document.getElementById('node-details');
 const emptyDetails=details.textContent;
@@ -1235,7 +1256,7 @@ const emptyEvidence=evidence.textContent;
 const choices=document.querySelectorAll('[data-context-id]');
 const range=document.getElementById('hop-range');
 const status=document.getElementById('scope-status');
-const cy=cytoscape({container:document.getElementById('context-graph'),elements:elements,style:[{selector:'node',style:{'label':'data(label)','color':'#fff','text-valign':'center','text-halign':'center','width':42,'height':42,'font-size':10}},{selector:'node.source',style:{'background-color':'#1e3a8a'}},{selector:'node.derived',style:{'background-color':'#7c3aed'}},{selector:'node.event',style:{'background-color':'#2dd4bf','color':'#0f172a'}},{selector:'node.disputed',style:{'border-width':4,'border-color':'#92400e','border-style':'dashed'}},{selector:'node.evidence-invalidated',style:{'shape':'diamond'}},{selector:'edge',style:{'curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'#64748b','line-color':'#64748b','width':2,'label':'data(kind)','font-size':8,'text-rotation':'autorotate'}},{selector:'edge.evidence',style:{'line-color':'#dc2626','target-arrow-color':'#dc2626','width':5}}],layout:{name:'cose',animate:false}});
+const cy=cytoscape({container:document.getElementById('context-graph'),elements:elements,style:[{selector:'node',style:{'label':'data(label)','color':'#fff','text-valign':'center','text-halign':'center','width':42,'height':42,'font-size':10}},{selector:'node.source',style:{'background-color':'#1e3a8a'}},{selector:'node.derived',style:{'background-color':'#7c3aed'}},{selector:'node.event',style:{'background-color':'#2dd4bf','color':'#0f172a'}},{selector:'node.disputed',style:{'border-width':4,'border-color':'#92400e','border-style':'dashed'}},{selector:'node.evidence-invalidated',style:{'shape':'diamond'}},{selector:'edge',style:{'curve-style':'bezier','target-arrow-shape':'triangle','target-arrow-color':'#64748b','line-color':'#64748b','width':2,'label':'data(kind)','font-size':8,'text-rotation':'autorotate'}},{selector:'edge.relation',style:{'line-style':'dashed'}},{selector:'edge.evidence',style:{'line-color':'#dc2626','target-arrow-color':'#dc2626','width':5}}],layout:{name:'cose',animate:false}});
 let selected=null;
 function applyScope(){
   cy.elements().show();
@@ -1290,7 +1311,10 @@ function showDetails(node){
       return true;
     });
   }
-  details.textContent=node.data('layer')+' · '+node.id()+'\n'+node.data('body');
+  const marks=[];
+  if(node.hasClass('disputed'))marks.push('상충');
+  if(node.hasClass('evidence-invalidated'))marks.push('근거 무효');
+  details.textContent=node.data('layer')+' · '+node.id()+(marks.length?' · '+marks.join(' · '):'')+'\n'+node.data('body');
   const links=cy.edges('.evidence').map(function(edge){
     return '파생 '+edge.source().id()+' → 근거 '+edge.target().id()+' (derived_from)';
   });

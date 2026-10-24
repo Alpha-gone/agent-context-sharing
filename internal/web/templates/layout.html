@@ -28,11 +28,14 @@
 </html>{{end}}
 
 {{define "layer-legend"}}
-<ul class="graph-legend" role="list" aria-label="계층과 상태 범례">
+<ul class="graph-legend" role="list" aria-label="계층·상태·연결 범례">
   <li><span class="layer-marker layer-source" aria-hidden="true"></span>원천 · source</li>
   <li><span class="layer-marker layer-derived" aria-hidden="true"></span>파생 · derived</li>
   <li><span class="layer-marker layer-event" aria-hidden="true"></span>사건 · event</li>
   <li><span class="state-marker disputed" aria-hidden="true"></span>상충 · 점선 테두리</li>
   <li><span class="state-marker evidence-invalidated" aria-hidden="true"></span>근거 무효 · 마름모</li>
+  <li><span class="edge-marker reference" aria-hidden="true"></span>참조 · 실선 화살표</li>
+  <li><span class="edge-marker relation" aria-hidden="true"></span>사건 관계 · 점선 화살표</li>
+  <li><span class="edge-marker evidence" aria-hidden="true"></span>근거 경로 · 굵은 빨간 선</li>
 </ul>
 {{end}}

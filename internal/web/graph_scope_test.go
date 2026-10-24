@@ -31,6 +31,7 @@ func TestGraphDetailScopeControls(t *testing.T) {
 				}
 				graphs.result.Contexts[2].Layer = model.LayerDerived
 				graphs.result.Contexts[3].Layer = model.LayerDerived
+				graphs.result.Contexts[3].Derived = &model.DerivedAttributes{ConfidenceState: model.ConfidenceStateDisputed}
 				graphs.result.Contexts[4].Layer = model.LayerEvent
 				nodes := graphs.result.Contexts
 				graphs.result.Edges = []store.HopEdge{

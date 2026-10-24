@@ -65,7 +65,7 @@ nav a[aria-current="page"] { font-weight: bold; text-decoration-thickness: var(-
 .grade-options { display: flex; flex-wrap: wrap; }
 .grade-filter label { display: flex; align-items: center; gap: var(--space-2); min-inline-size: 0; flex: none; margin: 0; padding-inline: var(--space-2); min-block-size: 48px; }
 .grade-filter p { margin-block: var(--space-1); font-size: .875rem; }
-.graph-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: var(--space-4); }
+.graph-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr) 260px; gap: var(--space-4); }
 #context-graph { min-height: 540px; border: 1px solid #d9dee5; }
 #node-details, #node-evidence { white-space: pre-wrap; overflow-wrap: anywhere; }
 [data-context-id][aria-pressed="true"] { border: 2px solid #1e40af; background: #e8f3ee; }
@@ -79,13 +79,18 @@ nav a[aria-current="page"] { font-weight: bold; text-decoration-thickness: var(-
 .state-marker { border: 2px solid currentColor; }
 .state-marker.disputed { border-style: dashed; }
 .state-marker.evidence-invalidated { transform: rotate(45deg); }
+.edge-marker { display: inline-block; inline-size: 24px; flex-shrink: 0; border-block-start: 2px solid #64748b; }
+.edge-marker.relation { border-block-start-style: dashed; }
+.edge-marker.evidence { border-block-start: 4px solid #dc2626; }
 .connection-list { overflow-wrap: anywhere; }
 .connection-list dt { font-weight: bold; }
 .connection-list dd { margin-inline-start: 0; margin-block-end: var(--space-2); }
 .skip-link { position: fixed; inset-block-start: var(--space-2); inset-inline-start: var(--space-2); padding: var(--space-3); background: #fff; z-index: 1; }
 .skip-link:not(:focus) { clip-path: inset(50%); inline-size: 1px; block-size: 1px; overflow: hidden; white-space: nowrap; }
-@media (max-width: 720px) {
+@media (max-width: 960px) {
   .graph-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
   #context-graph { min-height: 420px; }
   .actions label { min-inline-size: 0; flex-basis: 100%; }
 }

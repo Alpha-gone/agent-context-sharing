@@ -315,6 +315,9 @@ func TestDerivedLifecycleKeepWaitIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer rollbackTransaction(t.Context(), first)
+			if err := requireActiveGraph(ctx, first, graph); err != nil {
+				t.Fatal(err)
+			}
 			if err := database.lockContext(ctx, first, graph, value.ID); err != nil {
 				t.Fatal(err)
 			}

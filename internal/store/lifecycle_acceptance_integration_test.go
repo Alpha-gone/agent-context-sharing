@@ -324,7 +324,7 @@ func TestLifeCurrentStateReadFailureIntegration(t *testing.T) {
 				defer cancel(nil)
 				cause := errors.New("current state canceled")
 				failure := &lifeCurrentReadFailure{at: 2, cause: &pgconn.PgError{Code: "XX000", Message: "synthetic current state failure"}}
-				if action == "event_update" {
+				if action == "event_update" || action == "keep" {
 					failure.at = 1
 				}
 				if canceled {

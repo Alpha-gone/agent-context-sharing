@@ -36,7 +36,7 @@ func TestLifeGraphCreationValidation(t *testing.T) {
 		t.Run(sample.name, func(t *testing.T) {
 			graph := base
 			sample.change(&graph)
-			var database *Store // DB 연결 전에 입력을 거부해야 한다.
+			database := &Store{} // DB 연결 전에 입력을 거부해야 한다.
 			_, err := database.CreateGraphWithOwner(t.Context(), graph, WriteLimits{})
 			if field, ok := errors.AsType[model.FieldError](err); !ok || field.Field != sample.field {
 				t.Fatalf("입력 오류=%v, want %s", err, sample.field)

@@ -403,6 +403,9 @@ func TestLifeWebNodePreservesMCPLockOrderIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rollbackTransaction(ctx, tx)
+	if _, err := lockGraphs(ctx, tx, []model.ID{graph}); err != nil {
+		t.Fatal(err)
+	}
 	var pid int
 	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid() FROM `+database.contextTable()+` WHERE properties->>'context_id'::text=$1 FOR UPDATE`, node.ID.String()).Scan(&pid); err != nil {
 		t.Fatal(err)

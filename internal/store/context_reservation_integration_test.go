@@ -56,9 +56,9 @@ func TestContextWritesReserveBeforeTransactionIntegration(t *testing.T) {
 	}
 }
 
-// TestContextAGEConflictsDoNotStarveSmallPoolIntegration은 풀 밖의 선행 갱신으로
+// TestContextWriteConflictsDoNotStarveSmallPoolIntegration은 풀 밖의 선행 갱신으로
 // 시작한 쓰기를 모두 옛 판에서 기다리게 한 뒤 커밋해 충돌 재조회 경로를 실행한다.
-func TestContextAGEConflictsDoNotStarveSmallPoolIntegration(t *testing.T) {
+func TestContextWriteConflictsDoNotStarveSmallPoolIntegration(t *testing.T) {
 	for _, action := range []string{"update", "discard", "restore"} {
 		t.Run(action, func(t *testing.T) {
 			database := newIntegrationStore(t)
@@ -114,7 +114,7 @@ func TestContextAGEConflictsDoNotStarveSmallPoolIntegration(t *testing.T) {
 			for range requests {
 				group.Go(func() { results <- run(small, ctx) })
 			}
-			// 두 요청이 실제 AGE 행 잠금을 기다릴 때까지 관측한다. 예약하지 않는 구현은
+			// 두 요청이 실제 쓰기 잠금을 기다릴 때까지 관측한다. 예약하지 않는 구현은
 			// 이 구간에서 풀 상한 네 연결을 모두 쓰기 트랜잭션에 내준다.
 			ticker := time.NewTicker(10 * time.Millisecond)
 			defer ticker.Stop()

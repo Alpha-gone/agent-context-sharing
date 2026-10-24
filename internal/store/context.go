@@ -135,12 +135,12 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if err := consumeWriteRate(ctx, tx, limits); err != nil {
 		return model.Context{}, err
 	}
-	// 사건 폐기와 같은 순서로 그래프를 먼저 잠근다. 정점부터 갱신하면 그래프를
-	// 쥔 폐기와 정점·그래프 잠금을 서로 기다리는 교착이 생길 수 있다.
+	// 관계 처리와 같은 순서로 모든 계층의 그래프를 먼저 잠근다. 파생 갱신도
+	// AGE label 잠금을 쥔 뒤 그래프를 기다리면 관계 생성과 교착할 수 있다.
+	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return model.Context{}, err
+	}
 	if value.Layer == model.LayerEvent {
-		if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
-			return model.Context{}, err
-		}
 		if err := s.lockContext(ctx, tx, graphID, value.ID); err != nil {
 			return model.Context{}, err
 		}
@@ -270,24 +270,13 @@ func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, ex
 		return model.Context{}, fmt.Errorf("컨텍스트 유지 트랜잭션 시작: %w", err)
 	}
 	defer finishWrite(ctx, tx, "KeepContext", &err)
-	stored, err := s.context(ctx, tx, graphID, contextID)
-	if err != nil {
+	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
 		return model.Context{}, err
-	}
-	// 갱신·폐기와 잠금 순서를 맞춘다. 원천·파생은 정점→그래프,
-	// 사건은 그래프→정점이며, 판 검사는 정점 잠금 대기 뒤 다시 읽는다.
-	if stored.Layer == model.LayerEvent {
-		if err := requireActiveGraph(ctx, tx, graphID); err != nil {
-			return model.Context{}, err
-		}
 	}
 	if err := s.lockContext(ctx, tx, graphID, contextID); err != nil {
 		return model.Context{}, err
 	}
-	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
-		return model.Context{}, err
-	}
-	stored, err = s.context(ctx, tx, graphID, contextID)
+	stored, err := s.context(ctx, tx, graphID, contextID)
 	if err != nil {
 		return model.Context{}, err
 	}
@@ -378,16 +367,13 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	if err := lockReferenceChanges(ctx, tx, graphID); err != nil {
 		return model.Context{}, err
 	}
+	// 모든 계층에서 관계 처리와 같은 그래프→정점 순서를 사용한다.
+	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return model.Context{}, err
+	}
 	previous, err := s.context(ctx, tx, graphID, contextID)
 	if err != nil {
 		return model.Context{}, err
-	}
-	if previous.Layer == model.LayerEvent {
-		// 관계 확정·폐기와 같은 그래프 잠금으로 상태 확인부터 직렬화한다.
-		// 잠금 대기 중 사건이 바뀔 수 있으므로 현재 판을 다시 읽어야 한다.
-		if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
-			return model.Context{}, err
-		}
 	}
 	// 원천의 판은 1로 고정된다. 현재 삭제와 그 기록을 판정하는 동안 웹 복구·재삭제가
 	// 끼어들지 않도록 모든 계층의 정점을 잠그고, 잠금 대기 뒤 상태를 다시 읽는다.
@@ -475,11 +461,6 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 		delta = -delta
 	}
 	if webAudit != nil {
-		// 원천·파생은 MCP 갱신과 같은 정점→그래프 순서를 유지한다. 웹만 먼저
-		// 그래프를 쥐면 정점을 쥔 MCP 갱신의 활동 기록과 서로 기다리게 된다.
-		if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
-			return model.Context{}, err
-		}
 		if err := requireGraphOwner(ctx, tx, graphID, webAudit.ActorID); err != nil {
 			return model.Context{}, err
 		}
@@ -662,6 +643,9 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 		}
 	}
 	if err := consumeWriteRate(ctx, tx, limits); err != nil {
+		return model.Context{}, err
+	}
+	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return model.Context{}, err
 	}
 	var replaced *model.Context

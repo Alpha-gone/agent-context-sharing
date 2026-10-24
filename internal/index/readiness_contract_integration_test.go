@@ -23,6 +23,9 @@ func readinessGraph(t *testing.T, database *store.Store, pool *pgxpool.Pool) (mo
 	t.Helper()
 	actor, graph := integrationID(t), integrationID(t)
 	now := time.Now().UTC()
+	if err := database.CreateAccount(t.Context(), store.Account{ID: actor, LoginID: strings.ReplaceAll(actor.String(), "-", ""), PasswordHash: "synthetic-password-hash", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.CreateGraph(t.Context(), model.Graph{ID: graph, Name: "색인 준비 합성", CreatedBy: actor, CreatedAt: now, LastActivityAt: now, Version: 1}); err != nil {
 		t.Fatal(err)
 	}

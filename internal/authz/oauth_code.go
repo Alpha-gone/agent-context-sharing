@@ -49,7 +49,14 @@ func (s *Service) ValidateAuthorizationRequest(input AuthorizationRequest) error
 }
 
 // IssueAuthorizationCode는 검증된 웹 계정·명시적 동의가 전달된 뒤에만 호출한다.
-func (s *Service) IssueAuthorizationCode(ctx context.Context, account model.ID, input AuthorizationRequest) (string, error) {
+func (s *Service) IssueAuthorizationCode(ctx context.Context, account model.ID, input AuthorizationRequest) (code string, resultErr error) {
+	defer func() {
+		id := model.ID{}
+		if resultErr == nil {
+			id = account
+		}
+		s.authObservation(ctx, "authorization", id, input.ClientID, model.ID{}, resultErr)
+	}()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -89,7 +96,11 @@ type OAuthTokens struct {
 }
 
 // ExchangeAuthorizationCode는 키를 미리 읽어 잠금 중 추가 연결 확보를 피한다.
-func (s *Service) ExchangeAuthorizationCode(ctx context.Context, raw, client, callback, resource, verifier string) (OAuthTokens, error) {
+func (s *Service) ExchangeAuthorizationCode(ctx context.Context, raw, client, callback, resource, verifier string) (tokens OAuthTokens, resultErr error) {
+	var verified store.OAuthGrantBinding
+	defer func() {
+		s.authObservation(ctx, "code_exchange", verified.AccountID, verified.ClientID, verified.ID, resultErr)
+	}()
 	if err := ctx.Err(); err != nil {
 		return OAuthTokens{}, err
 	}
@@ -113,6 +124,7 @@ func (s *Service) ExchangeAuthorizationCode(ctx context.Context, raw, client, ca
 			if err != nil {
 				return store.OAuthInitialGrant{}, err
 			}
+			verified = store.OAuthGrantBinding{ID: grantID, AccountID: code.AccountID, ClientID: code.ClientID}
 			var hash [32]byte
 			result, hash, err = s.issueOAuthTokens(signer, store.OAuthGrantBinding{ID: grantID, AccountID: code.AccountID, ClientID: code.ClientID, Resource: code.Resource, Scope: code.Scope}, now)
 			if err != nil {

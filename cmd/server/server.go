@@ -8,12 +8,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/web"
 )
@@ -47,8 +47,9 @@ type oauthTokenRoutes interface {
 	Token(http.ResponseWriter, *http.Request)
 }
 
-// application은 1단계 HTTP 상태 경로와 요청 로그를 관리한다.
+// application은 HTTP 경로와 공통 요청 경계를 관리한다.
 type application struct {
+	diagnostics   diagnostic.Observer
 	database      readiness
 	logger        *slog.Logger
 	transport     transportSecurity
@@ -82,39 +83,66 @@ func newApplication(database readiness, logger *slog.Logger, transport transport
 //
 // 등록되지 않은 경로도 판정 뒤에 둔다. 평문 요청에 어떤 경로가 있는지 알리지 않는다.
 func (app *application) handler() http.Handler {
-	// 업무 경로는 이후 단계에서 이 mux에 등록하며 모두 TLS 판정을 지난다.
-	gated := http.NewServeMux()
+	mux := http.NewServeMux()
+	handleHTTPMethods(mux, "/healthz", http.HandlerFunc(app.health), "GET", "HEAD")
+	handleHTTPMethods(mux, "/readyz", http.HandlerFunc(app.ready), "GET", "HEAD")
 	if app.publicKeys != nil {
-		gated.HandleFunc("GET /jwks.json", app.publicKeys.JWKS)
+		handleHTTPMethods(mux, "/jwks.json", http.HandlerFunc(app.publicKeys.JWKS), "GET", "HEAD")
 	}
 	if app.oauthMetadata != nil {
 		for path, handler := range map[string]http.HandlerFunc{
 			"/.well-known/oauth-protected-resource/mcp": app.oauthMetadata.ProtectedResourceMetadata,
 			"/.well-known/oauth-authorization-server":   app.oauthMetadata.AuthorizationServerMetadata,
 		} {
-			gated.HandleFunc("GET "+path, handler)
-			gated.HandleFunc(path, func(writer http.ResponseWriter, request *http.Request) {
-				writer.Header().Set("Cache-Control", "no-store")
-				writer.Header().Set("Allow", "GET, HEAD")
-				writer.WriteHeader(http.StatusMethodNotAllowed)
-			})
+			handleHTTPMethods(mux, path, handler, "GET", "HEAD")
 		}
 	}
 	if app.web != nil {
-		gated.Handle("/", app.web)
+		for _, path := range []string{"/login", "/register", "/logout", "/authorize", "/connections", "/graphs", "/access", "/graphs/{graph_id}/access", "/graphs/{graph_id}/deletion", "/operator/restores"} {
+			handleHTTPMethods(mux, path, app.web, "GET", "POST")
+		}
+		for _, path := range []string{"/graphs/{graph_id}", "/graphs/{graph_id}/audit"} {
+			handleHTTPMethods(mux, path, app.web, "GET")
+		}
+		for _, name := range []string{"app.css", "PretendardVariable.woff2", "cytoscape.min.js", "CYTOSCAPE-LICENSE.txt", "PRETENDARD-LICENSE.txt"} {
+			handleHTTPMethods(mux, "/assets/"+name, app.web, "GET", "HEAD")
+		}
 	}
 	if app.oauthTokens != nil {
-		gated.HandleFunc("/token", app.oauthTokens.Token)
+		// OAuth와 MCP는 메서드 거부의 채널별 외피·Origin 우선 순서를 소유한다.
+		mux.HandleFunc("POST /token", app.oauthTokens.Token)
+		mux.HandleFunc("/token", app.oauthTokens.Token)
 	}
 	if app.mcp != nil {
-		gated.Handle("/mcp", app.mcp)
+		mux.Handle("POST /mcp", app.mcp)
+		mux.Handle("/mcp", app.mcp)
 	}
+	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Cache-Control", "no-store")
+		http.NotFound(writer, request)
+	})
+	bounded := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// 채널이 더 좁은 제한·오류 순서를 적용하도록 여기서는 읽지 않는다.
+		request.Body = http.MaxBytesReader(writer, request.Body, 10<<20)
+		mux.ServeHTTP(writer, request)
+	})
+	return app.logRequests(app.recoverPanics(app.requireTLS(withRequestBudget(bounded, readTimeout, httpBudgetFailure))))
+}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", app.health)
-	mux.HandleFunc("GET /readyz", app.ready)
-	mux.Handle("/", gated)
-	return app.logRequests(app.recoverPanics(app.requireTLS(mux)))
+func handleHTTPMethods(mux *http.ServeMux, path string, handler http.Handler, methods ...string) {
+	reject := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("Allow", strings.Join(methods, ", "))
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+	})
+	mux.Handle(path, reject)
+	for _, method := range methods {
+		mux.Handle(method+" "+path, handler)
+	}
+	// ServeMux의 GET은 HEAD도 일치시키지만 기존 웹 계약은 GET만 받는다.
+	if slices.Contains(methods, "GET") && !slices.Contains(methods, "HEAD") {
+		mux.Handle("HEAD "+path, reject)
+	}
 }
 
 // recoverPanics는 처리기에서 빠져나온 panic을 500으로 바꾸고 원인을 로그에 남긴다.
@@ -135,8 +163,7 @@ func (app *application) recoverPanics(next http.Handler) http.Handler {
 			}
 			app.logger.Error("요청 처리 중 panic",
 				"correlation_id", requestID(request.Context()),
-				"method", request.Method, "path", request.URL.Path,
-				"panic", fmt.Sprint(cause), "stack", string(debug.Stack()))
+				"method", diagnosticMethod(request.Method), "route", diagnosticRoute(request.URL.Path), "reason_code", "handler_panic")
 			writeStatus(writer, http.StatusInternalServerError, "internal_error")
 		}()
 		next.ServeHTTP(writer, request)
@@ -309,21 +336,35 @@ func closeServerResources(ctx context.Context, logger *slog.Logger, closePool fu
 // logRequests는 본문·자격 증명·쿼리 문자열을 기록하지 않고 요청 결과만 남긴다.
 func (app *application) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		id, err := model.NewID()
+		trace := diagnostic.NewRequestTrace()
+		id, err := model.ParseID(trace.CorrelationID())
 		if err != nil {
 			app.logger.Error("상관 식별자 생성 실패", "error", err)
 			writeStatus(writer, http.StatusInternalServerError, "internal_error")
 			return
 		}
-		request = request.WithContext(context.WithValue(request.Context(), correlationIDKey{}, id.String()))
+		ctx, _ := model.WithCorrelationID(diagnostic.WithTrace(request.Context(), trace), id)
+		request = request.WithContext(context.WithValue(ctx, correlationIDKey{}, id.String()))
 		writer.Header().Set("X-Correlation-ID", id.String())
 		startedAt := time.Now()
 		recorder := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
+		fields := diagnostic.Fields{Request: diagnostic.RequestFields{Route: diagnosticRoute(request.URL.Path), Method: diagnosticMethod(request.Method)}}
+		diagnostic.Observe(app.diagnostics, request.Context(), "INFO", "receive", "pending", "completed", false, fields)
 		next.ServeHTTP(recorder, request)
+		fields.Request.Status = uint16(recorder.status)
+		fields.Request.LatencyMS = uint64(time.Since(startedAt).Milliseconds())
+		result, reason, level := "completed", "completed", "INFO"
+		if recorder.status >= 400 {
+			result, reason, level = "rejected", "invalid_argument", "WARN"
+		}
+		if recorder.status >= 500 {
+			result, reason, level = "failed", "store_unavailable", "ERROR"
+		}
+		diagnostic.Observe(app.diagnostics, request.Context(), level, "response", result, reason, false, fields)
 		app.logger.Info("HTTP 요청 완료",
 			"correlation_id", id.String(),
-			"method", request.Method,
-			"path", request.URL.Path,
+			"method", diagnosticMethod(request.Method),
+			"route", diagnosticRoute(request.URL.Path),
 			"status", recorder.status,
 			"duration", time.Since(startedAt),
 		)
@@ -343,10 +384,19 @@ func requestID(ctx context.Context) string {
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+	wrote  bool
 }
 
 // WriteHeader는 클라이언트로 보내는 상태와 로그에 남길 상태를 함께 기록한다.
 func (recorder *statusRecorder) WriteHeader(status int) {
+	if status >= 100 && status < 200 {
+		recorder.ResponseWriter.WriteHeader(status)
+		return
+	}
+	if recorder.wrote {
+		return
+	}
+	recorder.wrote = true
 	recorder.status = status
 	recorder.ResponseWriter.WriteHeader(status)
 }
@@ -359,3 +409,63 @@ func writeStatus(writer http.ResponseWriter, status int, value string) {
 		return
 	}
 }
+
+func diagnosticMethod(method string) string {
+	if slices.Contains([]string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"}, method) {
+		return method
+	}
+	return "unknown"
+}
+func diagnosticRoute(path string) string {
+	switch path {
+	case "/login":
+		return "login"
+	case "/register":
+		return "register"
+	case "/logout":
+		return "logout"
+	case "/authorize":
+		return "authorize"
+	case "/token":
+		return "token"
+	case "/operator/restores":
+		return "operator_restores"
+	case "/access":
+		return "graph_access"
+	case "/connections":
+		return "connections"
+	case "/graphs":
+		return "graphs"
+	case "/teams":
+		return "teams"
+	case "/mcp":
+		return "mcp"
+	case "/healthz", "/readyz":
+		return "health"
+	}
+	if strings.HasPrefix(path, "/.well-known/") || path == "/jwks.json" {
+		return "discovery"
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) >= 3 && parts[1] == "graphs" {
+		switch {
+		case len(parts) == 3:
+			return "graph_detail"
+		case len(parts) == 4 && parts[3] == "access":
+			return "graph_access"
+		case len(parts) == 4 && parts[3] == "deletion":
+			return "graph_deletion"
+		case len(parts) == 4 && parts[3] == "audit":
+			return "audit"
+		}
+	}
+	return "unknown"
+}
+
+func (recorder *statusRecorder) Write(data []byte) (int, error) {
+	if !recorder.wrote {
+		recorder.WriteHeader(http.StatusOK)
+	}
+	return recorder.ResponseWriter.Write(data)
+}
+func (recorder *statusRecorder) Unwrap() http.ResponseWriter { return recorder.ResponseWriter }

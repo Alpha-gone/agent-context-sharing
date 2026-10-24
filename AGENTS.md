@@ -11,6 +11,9 @@
 - `check-go.sh`는 공통 Go 도구 체인·의존성 빌드·정적 검사를, `.github/workflows/go.yml`은 같은 검사의 CI 실행을 소유한다.
 - 서버는 루트 `agent_context_sharing` Go 모듈이며 구현은 `cmd/`·`internal/`, SQL은 `migrations/`, Markdown 명세는 `spec/`에 둔다.
 - [README.md](README.md)는 개요·개발 시작, [OPERATIONS.md](OPERATIONS.md)는 운영 구성 기반 시험 운영 절차를 소유한다. 동작의 정본은 서비스 SRS·분야별 SDD다.
+- `test-wal-archive.sh`·`compose.wal-test.yaml`은 개발 WAL 회귀를, `test-pitr.sh`·`compose.pitr-test.yaml`은 별도 합성 클러스터의 물리 백업·tablespace·시점 복구 인수를 소유한다. 시험은 자신이 생성한 자원만 정리한다.
+- `test-prod-compose.sh`는 운영 구성의 정적 검사를, `test-prod-runtime.sh`는 예시 구성 기반 격리 애플리케이션 기동·진단 볼륨 인수를 소유한다. 실제 운영 배포·Tunnel 인수와 구분한다.
+- `test-transition.sh`는 합성 이전 형상의 정지·물리 백업·스키마 적용·감사·준비 확인과 파일 롤백·별도 복원본/보관 이미지 복귀를 소유한다. 기존 운영 DB·적용 이력·배포 이미지를 변경하지 않는다.
 
 ## 로컬 계약
 

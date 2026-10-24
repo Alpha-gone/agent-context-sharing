@@ -1,0 +1,41 @@
+{{define "head"}}<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · 에이전트 컨텍스트</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<a class="skip-link" href="#content">본문으로 이동</a>
+<main id="content" tabindex="-1">
+{{template "feedback" .}}
+{{end}}
+
+{{define "feedback"}}
+{{if .Message}}<p class="notice">{{.Message}}</p>{{end}}
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{end}}
+
+{{define "foot"}}
+</main>
+<footer class="site-footer">
+  <span>에이전트 컨텍스트</span>
+  <a href="/assets/PRETENDARD-LICENSE.txt">Pretendard 라이선스</a>
+  <a href="/assets/CYTOSCAPE-LICENSE.txt">Cytoscape.js 라이선스</a>
+</footer>
+</body>
+</html>{{end}}
+
+{{define "layer-legend"}}
+<ul class="graph-legend" role="list" aria-label="계층·상태·연결 범례">
+  <li><span class="layer-marker layer-source" aria-hidden="true"></span>원천 · source</li>
+  <li><span class="layer-marker layer-derived" aria-hidden="true"></span>파생 · derived</li>
+  <li><span class="layer-marker layer-event" aria-hidden="true"></span>사건 · event</li>
+  <li><span class="state-marker disputed" aria-hidden="true"></span>상충 · 점선 테두리</li>
+  <li><span class="state-marker evidence-invalidated" aria-hidden="true"></span>근거 무효 · 마름모</li>
+  <li><span class="edge-marker reference" aria-hidden="true"></span>참조 · 실선 화살표</li>
+  <li><span class="edge-marker relation" aria-hidden="true"></span>사건 관계 · 점선 화살표</li>
+  <li><span class="edge-marker evidence" aria-hidden="true"></span>근거 경로 · 굵은 빨간 선</li>
+</ul>
+{{end}}

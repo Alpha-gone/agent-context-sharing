@@ -133,12 +133,16 @@ func indexPlacementDatabase(t *testing.T, count int) (*pgx.Conn, string) {
 	}
 	defer pool.Close()
 	cfg := migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: 128, IndexTargetLayers: "all_layers"}
-	for _, want := range []int{5, 0} {
+	for pass := range 2 {
+		want := 0
 		appliedCount := 0
 		err := migrate.WithLock(t.Context(), pool, func(ctx context.Context, conn *pgxpool.Conn) error {
 			loaded, applied, err := migrate.Prepare(ctx, conn, migrations.FS, ".", cfg)
 			if err != nil {
 				return err
+			}
+			if pass == 0 {
+				want = len(loaded)
 			}
 			pending, err := migrate.Pending(loaded, applied)
 			if err != nil {
@@ -169,6 +173,9 @@ func indexPlacementDatabase(t *testing.T, count int) (*pgx.Conn, string) {
 	actor, _ := model.NewID()
 	graph, _ := model.NewID()
 	now := time.Now().UTC().Truncate(time.Second)
+	if err := database.CreateAccount(t.Context(), store.Account{ID: actor, LoginID: strings.ReplaceAll(actor.String(), "-", ""), PasswordHash: "synthetic-password-hash", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.CreateGraph(t.Context(), model.Graph{ID: graph, Name: "consumer fixture", CreatedBy: actor, CreatedAt: now, LastActivityAt: now, Version: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -264,6 +271,21 @@ func TestIndexWorkerPlacementsIntegration(t *testing.T) {
 				return n
 			}
 			start := func(name string) *indexProcess {
+				// 각 프로세스의 기록자 잠금과 파일을 분리하고 시험이 만든 경로만 정리한다.
+				directory, err := os.MkdirTemp(".", ".index-placement-")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := os.RemoveAll(directory); err != nil {
+						t.Error(err)
+					}
+				})
+				absolute, err := filepath.Abs(directory)
+				if err != nil {
+					t.Fatal(err)
+				}
+				values["DIAGNOSTIC_LOG_DIR"] = filepath.Join(absolute, "logs")
 				return startIndexProcess(t, filepath.Join(binaries, name), values, certificate)
 			}
 			if mode == "embedded" || mode == "external" {

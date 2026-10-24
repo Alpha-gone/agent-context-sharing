@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"agent_context_sharing/internal/model"
 	"errors"
 	"net/http"
 	"net/url"
@@ -15,15 +16,18 @@ func (h *Handler) ProtectBearer(next func(http.ResponseWriter, *http.Request, Be
 			return
 		}
 		if h.service.oauth == nil || h.service.config.AccessTokens == nil || next == nil {
+			h.service.authObservation(request.Context(), "token_validation", model.ID{}, "", model.ID{}, ErrUnavailable)
 			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "server_error"})
 			return
 		}
 		values := request.Header.Values("Authorization")
 		if len(values) == 0 {
+			h.service.authObservation(request.Context(), "token_validation", model.ID{}, "", model.ID{}, ErrInvalidCredential)
 			h.bearerFailure(writer, http.StatusUnauthorized, "")
 			return
 		}
 		if len(values) != 1 {
+			h.service.authObservation(request.Context(), "token_validation", model.ID{}, "", model.ID{}, ErrInvalidCredential)
 			h.bearerFailure(writer, http.StatusUnauthorized, "invalid_token")
 			return
 		}
@@ -31,6 +35,7 @@ func (h *Handler) ProtectBearer(next func(http.ResponseWriter, *http.Request, Be
 		// RFC 6750의 1*SP를 허용하고 탭·목록·후행 공백은 토큰으로 받지 않는다.
 		raw = strings.TrimLeft(raw, " ")
 		if !ok || !strings.EqualFold(scheme, "Bearer") || raw == "" || strings.ContainsAny(raw, " \t\r\n,") {
+			h.service.authObservation(request.Context(), "token_validation", model.ID{}, "", model.ID{}, ErrInvalidCredential)
 			h.bearerFailure(writer, http.StatusUnauthorized, "invalid_token")
 			return
 		}

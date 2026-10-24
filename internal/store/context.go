@@ -100,6 +100,15 @@ func (s *Store) UpdateContext(ctx context.Context, graphID model.ID, expectedVer
 
 // UpdateContextWithOperation은 갱신과 적용 기록을 같은 트랜잭션에 남긴다.
 func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID, expectedVersion int64, value model.Context, operation *OperationRecord, limits WriteLimits) (result model.Context, err error) {
+	ctx, observation := beginManagement(ctx, "node_update")
+	defer func() {
+		if result.ID.IsV7() {
+			observation.fields.Identity.GraphID = result.GraphID.String()
+			observation.fields.Identity.ContextID = result.ID.String()
+		}
+		s.finishManagement(ctx, observation, err)
+	}()
+
 	if !graphID.IsV7() || !value.ID.IsV7() || value.GraphID != graphID || expectedVersion < 1 {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 인자가 올바르지 않다")
 	}
@@ -111,6 +120,7 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 		return model.Context{}, err
 	}
 	defer release()
+	observation.stage = "write"
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 갱신 트랜잭션 시작: %w", err)
@@ -242,9 +252,19 @@ func (s *Store) RestoreContext(ctx context.Context, graphID, contextID model.ID,
 // KeepContext는 대상 판 번호를 확인하고 상태를 바꾸지 않은 유지 판단을 기록한다.
 // operation은 필수이며 실제 대상의 keep 기록이어야 한다.
 func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, expectedVersion int64, operation *OperationRecord) (result model.Context, err error) {
+	ctx, observation := beginManagement(ctx, "node_keep")
+	defer func() {
+		if result.ID.IsV7() {
+			observation.fields.Identity.GraphID = result.GraphID.String()
+			observation.fields.Identity.ContextID = result.ID.String()
+		}
+		s.finishManagement(ctx, observation, err)
+	}()
+
 	if !graphID.IsV7() || !contextID.IsV7() || expectedVersion < 1 {
 		return model.Context{}, fmt.Errorf("컨텍스트 유지 인자가 올바르지 않다")
 	}
+	observation.stage = "write"
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 유지 트랜잭션 시작: %w", err)
@@ -316,6 +336,18 @@ func validateContextOperation(operation *OperationRecord, graphID, contextID mod
 // webAudit이 있으면 상태 변경과 같은 트랜잭션에 웹 감사 기록을 남긴다. 따로 커밋하면
 // 그 사이의 취소나 오류로 변경만 남고 기록이 사라진다.
 func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID model.ID, operation *OperationRecord, webAudit *webAuditRecord, limits WriteLimits, discard bool) (result model.Context, err error) {
+	ctx, observation := beginManagement(ctx, "node_discard")
+	if !discard {
+		observation.fields.Management.Operation = "node_restore"
+	}
+	defer func() {
+		if result.ID.IsV7() {
+			observation.fields.Identity.GraphID = result.GraphID.String()
+			observation.fields.Identity.ContextID = result.ID.String()
+		}
+		s.finishManagement(ctx, observation, err)
+	}()
+
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return model.Context{}, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
 	}
@@ -337,6 +369,7 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 		return model.Context{}, err
 	}
 	defer release()
+	observation.stage = "write"
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 상태 전이 트랜잭션 시작: %w", err)
@@ -572,6 +605,15 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 
 // createContext은 원천 중복 확인과 그래프 활동 갱신을 포함한 실제 쓰기 트랜잭션이다.
 func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits) (result model.Context, err error) {
+	ctx, observation := beginManagement(ctx, "node_create")
+	defer func() {
+		if result.ID.IsV7() {
+			observation.fields.Identity.GraphID = result.GraphID.String()
+			observation.fields.Identity.ContextID = result.ID.String()
+		}
+		s.finishManagement(ctx, observation, err)
+	}()
+
 	if err := limits.validateContextWrite(); err != nil {
 		return model.Context{}, err
 	}
@@ -592,6 +634,7 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 		return model.Context{}, err
 	}
 	defer release()
+	observation.stage = "write"
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Context{}, fmt.Errorf("컨텍스트 생성 트랜잭션 시작: %w", err)

@@ -38,6 +38,14 @@ func (s *Store) CreateGraph(ctx context.Context, graph model.Graph) (model.Graph
 
 // CreateGraphWithOwner는 그래프 생성과 생성 계정의 소유자 등급 부여를 한 트랜잭션에 묶는다.
 func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, limits WriteLimits) (result model.Graph, err error) {
+	ctx, observation := beginManagement(ctx, "graph_create")
+	defer func() {
+		if result.ID.IsV7() {
+			observation.fields.Identity.GraphID = result.ID.String()
+		}
+		s.finishManagement(ctx, observation, err)
+	}()
+
 	if err := limits.validate(); err != nil {
 		return model.Graph{}, err
 	}
@@ -53,6 +61,7 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 	if graph.DeletedAt != nil || graph.GraceStartedAt != nil {
 		return model.Graph{}, model.FieldError{Field: "graph_id", Message: "새 그래프는 삭제·보관 유예 상태일 수 없다"}
 	}
+	observation.stage = "write"
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 생성 트랜잭션 시작: %w", err)
@@ -241,12 +250,21 @@ func likeContains(value string) any {
 
 // UpdateGraph는 활성 그래프를 잠근 뒤 현재 판을 비교하고 이름·설명만 갱신한다.
 func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersion int64, name, description string) (result model.Graph, err error) {
+	ctx, observation := beginManagement(ctx, "graph_update")
+	defer func() {
+		if result.ID.IsV7() {
+			observation.fields.Identity.GraphID = result.ID.String()
+		}
+		s.finishManagement(ctx, observation, err)
+	}()
+
 	if !graphID.IsV7() {
 		return model.Graph{}, model.FieldError{Field: "graph_id", Message: "그래프 식별자는 UUIDv7이어야 한다"}
 	}
 	if expectedVersion < 1 {
 		return model.Graph{}, model.FieldError{Field: "expected_version", Message: "기대 판 번호는 1 이상이어야 한다"}
 	}
+	observation.stage = "write"
 	tx, err := s.writeTransaction(ctx)
 	if err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 갱신 트랜잭션 시작: %w", err)

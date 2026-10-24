@@ -12,12 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/config"
-	"agent_context_sharing/internal/index"
-	"agent_context_sharing/internal/model"
-	"agent_context_sharing/internal/store"
-	"agent_context_sharing/internal/web"
 )
 
 // shutdownTimeout은 종료 신호 뒤 진행 중인 요청을 기다리는 최대 시간이다.
@@ -74,121 +69,56 @@ func configureAndRun(env config.Environment, start func(config.Config) error) er
 	return start(cfg)
 }
 
-func runConfigured(cfg config.Config) (resultErr error) {
-	database, err := store.New(context.Background(), cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
-		AdjacencyWindow:     cfg.RelationAdjacencyWindow,
-		SimilarityThreshold: cfg.RelationSimilarityThreshold,
-		Limit:               cfg.RelationProposalLimit,
-	}, func(accountID model.ID) int { return cfg.AccountPlans.For(accountID).GraceDays }, store.IndexTargets(cfg.IndexTargetLayers))
-	if err != nil {
-		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
-	}
-	poolCloseSafe := true
-	var workers []worker
-	defer func() {
-		resultErr = errors.Join(resultErr, closeServerResources(context.Background(), slog.Default(), database.Close, poolCloseSafe, workers...))
-	}()
-	periodic, err := newPeriodicWorker(database, cfg.AccountPlans, slog.Default())
-	if err != nil {
-		return fmt.Errorf("주기 작업 준비: %w", err)
-	}
-	indexer, err := index.New(database, index.Config{
-		Provider:   cfg.EmbeddingProvider,
-		APIKey:     cfg.GeminiAPIKey,
-		BaseURL:    cfg.EmbeddingBaseURL,
-		Model:      cfg.EmbeddingModel,
-		VectorType: cfg.EmbeddingVectorType,
-		Dimension:  cfg.EmbeddingDimension,
-	}, nil, slog.Default())
-	if err != nil {
-		return fmt.Errorf("색인 작업자 준비: %w", err)
-	}
-	// external도 질의용 제공자 transport를 소유하므로 시작 여부와 별개로 정리한다.
-	workers = append(workers, periodic, indexer)
-	if err := database.CheckEmbeddingSchema(context.Background(), cfg.EmbeddingVectorType, cfg.EmbeddingDimension); err != nil {
-		return fmt.Errorf("임베딩 DB 구성 확인: %w", err)
-	}
-	// 색인 작업자는 「배치 조합」이 배치를 선택으로 열어 두었으므로 내장일 때만 시작한다.
-	// 분리 배치에서는 다른 배포 단위가 작업 큐를 소비한다. 두 배치 모두 시작 전에
-	// 제공자 구성과 DB 임베딩 스키마의 정합성을 검사한다.
-	// 오래된 모델의 재색인 등록은 작업자가 시작하면서 스스로 한다.
-	// 종료 책임은 풀 준비 직후 등록했다. 시작 전에 목록에 추가하고, 정상 종료에서 이미
-	// 종료를 시도한 목록은 비워 기동 실패 정리와 같은 경계를 쓰되 중복 호출하지 않는다.
-	if cfg.IndexWorkerPlacement == config.PlacementEmbedded {
-		indexer.Start(context.Background())
-	}
-	periodic.Start(context.Background())
-	authorization, err := authz.New(database, authz.Config{
-		Issuer:             cfg.AuthorizationServerURL.String(),
-		BcryptCost:         cfg.BcryptCost,
-		OAuth:              oauthConfiguration(cfg),
-		AuthorizationCodes: database,
-		AccessTokens:       database,
-		RefreshTokens:      database,
-		Connections:        database,
-	})
-	if err != nil {
-		return fmt.Errorf("인가 서버 준비: %w", err)
-	}
-	transport := transportSecurity{
-		directTLS:      cfg.TLSMode == config.TLSModeDirect,
-		trustedProxies: cfg.TrustedProxies,
-	}
-	webServer, err := web.New(webAuthentication{service: authorization}, database, web.Config{
-		Authorization: webAuthentication{service: authorization},
-		Connections:   webAuthentication{service: authorization},
-		SecureCookie:  transport.isTLSRequest,
-		ClientAddress: transport.clientAddress,
-		Plans:         cfg.AccountPlans,
-	})
-	if err != nil {
-		return fmt.Errorf("웹 서버 준비: %w", err)
-	}
-	authorizationHandler, err := authz.NewHandler(authorization)
-	if err != nil {
-		return fmt.Errorf("인가 서버 경로 준비: %w", err)
-	}
-	app := newApplication(database, slog.Default(), transport)
-	app.web = webServer
-	app.publicKeys = authorizationHandler
-	app.oauthMetadata = authorizationHandler
-	app.oauthTokens = authorizationHandler
-	server := newHTTPServer(cfg.HTTPAddr, app.handler())
-
+func runConfigured(cfg config.Config) error {
 	stopSignals := make(chan os.Signal, 1)
 	signal.Notify(stopSignals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(stopSignals)
 
+	assembly, err := assembleApplication(context.Background(), cfg, nil, slog.Default())
+	if err != nil {
+		return err
+	}
+	server := newHTTPServer(cfg.HTTPAddr, assembly.app.handler())
+	return assembly.runHTTP(server, func() error { return serve(server, cfg) }, stopSignals)
+}
+
+// runHTTP는 수신 실패와 종료 신호에 같은 요청·작업자·풀·진단 정리를 적용한다.
+// 수신기의 반환만으로 진행 요청이 끝났다고 판단하지 않는다.
+func (assembly *serverAssembly) runHTTP(server *http.Server, listen func() error, stopSignals <-chan os.Signal) (resultErr error) {
+	poolCloseSafe := true
+	defer func() { resultErr = assembly.close(resultErr, poolCloseSafe) }()
+	assembly.startWorkers(context.Background())
 	serveErrors := make(chan error, 1)
 	// 수신 루프는 종료 신호를 기다리는 주 흐름과 독립적으로 실행하고 종료 결과를 한 번 전달한다.
 	go func() {
-		serveErrors <- serve(server, cfg)
+		serveErrors <- listen()
 	}()
 
+	var serveErr error
+	serveReturned := false
 	select {
 	case err := <-serveErrors:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("HTTP 서버 수신: %w", err)
-		}
-		return nil
+		serveErr, serveReturned = err, true
 	case signal := <-stopSignals:
-		slog.Info("종료 신호 수신", "signal", signal.String())
+		assembly.logger.Info("종료 신호 수신", "signal", signal.String())
 	}
 
 	// 순서는 shutdownInOrder가 고정한다. 트래픽을 끊고 진행 요청을 마친 뒤 작업자를
 	// 멈추고, 둘 다 풀을 쓰지 않게 된 다음에 defer가 풀을 닫는다.
 	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	shutdownErr := shutdownInOrder(shutdownContext, context.Background(), app, server, slog.Default(), workers...)
-	workers = nil
-	if shutdownErr != nil {
-		poolCloseSafe = false
-		return shutdownErr
+	shutdownErr := shutdownInOrder(shutdownContext, context.Background(), assembly.app, server, assembly.logger, assembly.workers...)
+	assembly.workers = nil
+	poolCloseSafe = shutdownErr == nil
+	if !serveReturned {
+		serveErr = <-serveErrors
 	}
-	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("HTTP 서버 종료: %w", err)
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = fmt.Errorf("HTTP 서버 수신: %w", serveErr)
+	} else {
+		serveErr = nil
 	}
-	return nil
+	return errors.Join(serveErr, shutdownErr)
 }
 
 // serve는 TLS 종단 배치에 맞는 HTTP 수신기를 시작한다.

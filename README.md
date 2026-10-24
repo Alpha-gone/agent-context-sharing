@@ -10,14 +10,14 @@ AI 에이전트가 작업 중 얻은 지식과 맥락을 저장하고, 관계를
 - 의미 유사도·키워드·시간 필터 검색과 컨텍스트 관계 탐색
 - 그래프별 소유자·편집자·열람자 권한과 팀 관리
 - 웹 관리 화면의 컨텍스트 조회, 국소 그래프 보기와 운영자 복구
-- 호스트 내장 MCP 직접 연결 설계: 표준 OAuth·Bearer·회전형 갱신 토큰 (구현 대기)
+- 표준 OAuth·Bearer·회전형 갱신과 MCP 14종 서버 연결 (실제 호스트 호환성 인수 대기)
 - 비동기 임베딩 색인, 그래프 불변식 감사와 검색 품질 평가 도구
 
 현재는 검증 단계입니다. 인증된 모든 계정에 운영자 복구 자격이 있으므로 신뢰할 수 있는 시험 참여자로 접근 범위를 제한해야 합니다. 비밀번호 재설정, 계정 잠금, 2FA와 외부 인가 서버 연동은 현재 제공하지 않습니다. 공개 서비스 전환 여부는 [서비스 현황](spec/service/README.md)과 보안 요구사항을 함께 검토하십시오.
 
 ## 구성
 
-현재 서버는 웹 관리·계정 세션·그래프 저장·색인을 제공합니다. 검색과 감사·평가는 내부 패키지와 실행기로 검증합니다. 서버는 PostgreSQL의 Apache AGE로 그래프를, pgvector로 임베딩을 저장하며 임베딩 제공자는 Gemini만 지원하며 명시적으로 구성합니다.
+현재 서버는 웹 관리·계정 세션·OAuth·보호 MCP·그래프 저장·검색·색인을 제공합니다. 감사·평가는 별도 실행기로 실행합니다. 서버는 PostgreSQL의 Apache AGE로 그래프를, pgvector로 임베딩을 저장하며 임베딩 제공자는 Gemini를 명시적으로 구성합니다. MCP의 실제 호스트 호환성은 후속 인수 대상입니다.
 
 - 서버: 루트 Go 모듈의 `cmd/server`와 `internal/`
 - 개발 환경: 호스트에서 Go 프로그램을 실행하고 `compose.dev.yaml`로 DB를 기동하거나, `server` 프로필로 애플리케이션까지 컨테이너에서 실행
@@ -144,9 +144,23 @@ INDEX_WORKER_PLACEMENT=external go run ./cmd/indexer
 
 ### 3. 현재 제공 범위
 
-공개 OAuth 발견 메타데이터는 `/.well-known/oauth-protected-resource/mcp`와 `/.well-known/oauth-authorization-server`에서 제공합니다. `/authorize`의 로그인·명시적 동의·PKCE S256 코드 발급과 `/token`의 최초 코드 교환·갱신 회전, Bearer 검증·보호 인증 경계를 구현했습니다. 보호 `/mcp` 전송 생성자와 서버 라우터·Bearer 연결 모듈도 구현했습니다. 기동 경로의 업무 13종 연결·본인 연결 폐기와 호스트 인수는 후속 범위입니다. 호스트 등록은 직접 연결 구현과 호환성 인수 후 안내합니다. [AUTH-09 검토](spec/service/agent-context/reviews/2026-10-20-auth-09.md)에서 현재 인증 경계의 인수 범위를 확인할 수 있습니다.
+OAuth 발견 메타데이터 두 경로와 `/authorize`의 로그인·동의·PKCE S256, `/token`의 최초 교환·갱신 회전, Bearer 보호 `/mcp`와 등록·읽기·쓰기 14종을 서버 기동 경로에 연결했습니다. [ARCH-06](spec/service/agent-context/reviews/2026-10-23-arch-06.md)·[ARCH-07](spec/service/agent-context/reviews/2026-10-23-arch-07.md)의 조립·요청 경계 인수와 실제 호스트 지원은 구분합니다. 전체 도구 결과·호스트 호환성 인수는 MCP-09·TEST-07/08에서 수행합니다.
 
-에이전트 등록·현재 계정/client 결합 검사·소유자 폐기의 내부 API도 [MCP-04 검토](spec/service/agent-context/reviews/2026-10-20-mcp-04.md)에서 인수했습니다. [MCP-02 검토](spec/service/agent-context/reviews/2026-10-20-mcp-02.md)에서 보호 전송·발견·4 MiB 본문 상한·표준 외피와 실제 TLS/OAuth 결합을 인수했습니다. [MCP-05 검토](spec/service/agent-context/reviews/2026-10-20-mcp-05.md)에서 쓰기 키·24시간 결과 재생 실행 경계도 인수했습니다. [MCP-06 검토](spec/service/agent-context/reviews/2026-10-20-mcp-06.md)에서 여덟 쓰기 도구의 실제 도메인 연결·재생·오류 변환과 OAuth/TLS 표본을 인수했습니다. [MCP-07 검토](spec/service/agent-context/reviews/2026-10-20-mcp-07.md)에서 다섯 읽기 도구·목록 커서·평면 흐름·표준 완료 결과도 인수했습니다. [MCP-08 검토](spec/service/agent-context/reviews/2026-10-20-mcp-08.md)에서 오류 계층·요청 예산·HTTP 취소와 실제 자원 회복을 인수했습니다. [AUTH-10 검토](spec/service/agent-context/reviews/2026-10-20-auth-10.md)에서 `/connections`의 본인 계열·활성 등록 목록과 폐기를 인수했습니다. 계열 폐기는 접근·갱신을 차단하고 웹 세션을 유지하며 등록 폐기는 기존 기여·감사를 보존합니다. 기동 경로의 전체 MCP 조립과 실제 브라우저·호스트 인수는 후속 범위입니다.
+로그인 후 `/connections`에서 본인 OAuth 계열·활성 등록 목록과 폐기를 처리합니다. 계열 폐기는 접근·갱신을 차단하고 웹 세션을 유지하며 등록 폐기는 기존 기여·감사를 보존합니다. [현재 도구 스냅샷](internal/mcp/testdata/tools.json)은 protocol revision·instructions·14종 설명/입력 스키마/annotations를 담으며 `go test ./internal/mcp -run '^TestOPS08ToolSnapshot$'`로 대조합니다. 계약 변경을 검토한 경우에만 `UPDATE_TOOL_SNAPSHOT=1`을 함께 지정하여 갱신하고 diff를 검토합니다.
+
+전환과 복귀는 [운영 절차](OPERATIONS.md#7-변경-및-복귀)를 따릅니다. `GO_BINARY=/path/to/go1.27.1/bin/go sh test-transition.sh`는 합성 이전 스키마의 정지·백업·새 번호 적용·전체 감사·준비 확인과 실패 파일 롤백·별도 볼륨/보관 이미지 복귀를 검증합니다. 실제 운영 배포나 외부 공개를 실행하지 않습니다.
+
+[WEB-01 검토](spec/service/agent-context/reviews/2026-10-21-web-01.md)에서 공통 레이아웃·내장 CSS·Pretendard·라이선스, 입력 이스케이프와 자산 ETag/304를 인수했습니다. 당시 69/124개 완료였으며 다음은 WEB-02 요청 경계였습니다. 웹 회귀 411건과 race·전체 정적 검사가 통과했으며 DB 권한 통합 2건은 건너뛰었습니다. 실제 브라우저·보조 기술 인수는 후속 범위입니다.
+
+[WEB-02 검토](spec/service/agent-context/reviews/2026-10-21-web-02.md)에서 출처·세션·계정 요청 경계와 응답 범위를 인수했습니다. 저장 장애를 404로 숨기지 않고 다른 그래프·잘못된 간선을 렌더링 전에 차단합니다. 실제 격리 DB·TLS를 포함한 717건·race·전체 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 70/124개 완료였으며 서버 조립을 위한 다음 선행은 OBS-01→OBS-02였습니다.
+
+[OBS-01 검토](spec/service/agent-context/reviews/2026-10-21-obs-01.md)에서 여섯 진단 종류·안전 필드·고정 코드와 요청/인가/작업/시험 식별자 계약을 인수했습니다. 미확인 ID·임의 코드·원문 URI를 거부하며 요청에서 비동기 작업으로의 연결과 기동 회차를 구분합니다. 진단 57건·패키지 의존 1건, 총 58건·race·전체 정적 검사가 통과했습니다. 당시 71/124개 완료였으며 다음은 OBS-02의 영속 파일·권한·잠금이었습니다. 실제 파일 기록과 업무 계측은 후속 범위입니다.
+
+[OBS-02 검토](spec/service/agent-context/reviews/2026-10-21-obs-02.md)에서 여섯 append 파일·0700/0600·소유권과 실제 프로세스 잠금을 인수했습니다. 기존 파일을 보존하며 기동 실패·강제 종료 뒤 잠금을 회복하고, 심볼릭/하드 링크·경로 교체·tmpfs·읽기 전용 저장소를 거부합니다. macOS 98건(race 포함)·Linux 100건·서버 의존 1건과 전체 정적 검사가 통과했습니다. 당시 72/124개 완료였으며 다음은 OBS-03의 대기열·JSON Lines·이벤트 크기였습니다. 회전·보존·총상한과 배포 영속성 인수는 후속 범위입니다.
+
+[OBS-03 검토](spec/service/agent-context/reviews/2026-10-21-obs-03.md)에서 공용 대기열의 1024건·16 MiB 제한, 개행 포함 16 KiB JSON Lines·선택 필드 생략과 누락 집계를 인수했습니다. 실제 파일 쓰기를 단일 작업자로 직렬화하며 대기 포화·OS 잠금 장애가 enqueue를 기다리게 하지 않습니다. macOS 진단 122건·서버 의존 1건(race 포함), Linux OBS-03 24건과 전체 정적 검사가 통과했습니다. 당시 73/124개 완료였으며 다음은 OBS-04의 회전·보존·총상한이었습니다. stderr 통지·부분 행 격리·5초 종료와 전체 서버 조립은 후속 범위입니다.
+
+[OBS-04 검토](spec/service/agent-context/reviews/2026-10-21-obs-04.md)에서 UTC 날짜·크기 회전과 7일 보존, 종류별·인스턴스별·저장소 전체 상한을 인수했습니다. 공유 잠금 아래 이전 슬롯까지 합산하고, 혼합 만료 파일은 임시 공간까지 예약한 뒤 유효 행을 보존해 교체합니다. macOS 진단 145건·서버 의존 1건(race 포함), Linux OBS-03/04 47건과 전체 정적 검사가 통과했습니다. 당시 74/124개 완료였으며 다음은 OBS-05의 처리 흐름 계측이었습니다. 실제 배포·전체 파일 통합과 stderr·부분 행 격리·5초 종료는 후속 범위입니다.
 
 ## 개발 환경 재생성
 
@@ -181,6 +195,8 @@ sh ./test-dev-compose.sh --runtime
 sh ./test-wal-archive.sh
 ```
 
+기록기 분야 인수는 macOS에서 `go test -race -count=1 -skip '^TestOBS08ContainerPersistence$' ./internal/diagnostic`, Linux 격리 환경에서는 `sh internal/diagnostic/test-linux.sh`로 실행합니다. Linux 스크립트는 기존 로컬 이미지 ID를 고정하며 `ACS_OBS08_IMAGE`로 이미 설치된 Linux arm64/amd64 이미지를 지정할 수 있습니다. Go 1.27.1과 Docker가 필요하고 이미지 다운로드·DB·네트워크는 사용하지 않습니다. 전용 볼륨에서 전체 파일·커널 쓰기 오류·컨테이너 재생성·슬롯 교체를 검증하고 자신이 만든 자원만 정리합니다. 결과 JSON·stderr는 출력한 임시 결과 경로에 남습니다. 상세 범위와 디스크 부족 주입의 제한은 [OBS-08 검토](spec/service/agent-context/reviews/2026-10-23-obs-08.md)를 따릅니다.
+
 그래프 불변식 감사는 `go run ./cmd/audit`, 검색 품질 평가는 `cmd/eval`이 담당합니다. 평가 표본과 실행 방법은 [테스트 설계](spec/service/agent-context/sdd/testing.md)와 [평가 검증 설계](spec/service/agent-context/sdd/evaluation.md#검증을-가능하게-하는-설계)를 확인하십시오.
 
 색인 시험은 기본 회귀에서 로컬 TLS 합성 제공자를 사용합니다. 실제 Gemini 전송은 `embedding_live` 태그의 별도 시험이며, 외부 전송·비용 허용과 키 주입이 필요합니다. 두 경로의 호출 상한·격리 DB·실행 조건은 [임베딩 실연결 시험 경계](spec/service/agent-context/sdd/testing.md#임베딩-제공자-실연결-테스트)를 따릅니다.
@@ -196,3 +212,41 @@ sh ./test-wal-archive.sh
 - [작업 계약](AGENTS.md): 변경 시 따라야 할 DOX 계층과 검증 기준
 
 `cmd/`에는 서버·마이그레이션·감사·평가 실행기가, `internal/`에는 서버 구현이, `migrations/`에는 스키마가 있습니다. `spec/`은 요구사항·설계와 프로젝트 용어를 소유합니다.
+
+[OBS-05 검토](spec/service/agent-context/reviews/2026-10-21-obs-05.md)에서 요청·인증·검색·색인·관리·시스템 처리 지점에 안전한 계측을 연결했습니다. 실제 상관 ID·색인 세대·계열 흐름과 커밋/롤백/미확인 결과를 구분합니다. 관련 모듈·회귀 2753건(하위 사례 포함), race와 전체 정적 검사가 통과했습니다. 기존 색인 시험 3개 그룹의 실패는 [후속 수정](spec/service/agent-context/reviews/2026-10-21-obs-05.md#기존-시험-실패-수정)으로 해결했으며, 제외 없이 색인·서버 두 패키지 479건이 통과했습니다. 당시 75/124개 완료였으며 다음은 OBS-06의 감사 통합 조회였습니다. 전체 서버·호스트·배포 및 OBS-07/08의 파일 장애·종료·통합 인수는 후속 범위입니다.
+
+[OBS-06 검토](spec/service/agent-context/reviews/2026-10-22-obs-06.md)에서 소유자의 감사 통합 페이지와 기간·대상 필터, 직접/상속 소유자 및 복구 상태 근거의 보존을 인수했습니다. 관련 733건(하위 사례 포함), race와 전체 정적 검사가 통과했습니다. 당시 76/124개 완료였으며 다음은 OBS-07의 파일 장애·stderr·부분 쓰기·종료였습니다. 감사 필터·더 보기 UI는 WEB-08 범위입니다.
+
+[OBS-07 검토](spec/service/agent-context/reviews/2026-10-23-obs-07.md)에서 안전한 stderr 알림·부분 행 복구·최대 5초 종료를 인수했습니다. 관련 172건(하위 사례 포함), race·전체 정적 검사·Linux 교차 빌드가 통과했고 실제 DB에서 진단 파일 장애 뒤 관계와 업무 감사의 보존을 확인했습니다. 당시 77/124개 완료였으며 다음은 OBS-08의 실제 파일·재시작·다중 instance 통합 인수였습니다. 배포 stderr 수집·보관과 Linux 실행 인수는 후속 범위입니다.
+
+[OBS-08 검토](spec/service/agent-context/reviews/2026-10-23-obs-08.md)에서 여섯 파일·흐름·권한·비밀 제외와 상한/보존·장애/누락, 컨테이너 재생성·슬롯 교체를 인수했습니다. macOS 진단 164건·HTTP/의존 2건(race 포함), Linux 174건과 전체 정적 검사가 통과했습니다. 당시 78/124개 완료로 관측성 8개 항목을 마쳤으며 다음은 ARCH-06의 애플리케이션 전체 조립이었습니다. 운영 배포·다중 호스트·외부 stderr 영속 수집은 후속 범위입니다.
+
+[ARCH-06 검토](spec/service/agent-context/reviews/2026-10-23-arch-06.md)에서 기록기·저장소·인가/웹·스냅숏 검색·색인 제공자와 실제 14종 MCP 업무의 기동 조립을 인수했습니다. 조립 성공 후에만 작업자를 시작하며 부분 실패와 정상 종료의 정리를 공유합니다. 실제 DB·TLS 제공자·Bearer 요청과 기존 배치 프로세스를 포함한 서버 369건·MCP 433건, 총 802건(하위 사례 포함)과 race·전체 정적 검사가 통과했습니다. 당시 79/124개 완료였으며 다음은 ARCH-07의 HTTP 진입점·공통 요청 경계였습니다. 전체 운영·호스트·배포 인수는 후속 범위입니다.
+
+[ARCH-07 검토](spec/service/agent-context/reviews/2026-10-23-arch-07.md)에서 24개 HTTP 경로·메서드·TLS 선행 판정과 상관 ID·공통 시간/본문 제한·취소를 인수했습니다. 미완성 본문 정리의 읽기 마감 수명을 보완하고 실제 느린 수신·단절·keep-alive 재사용을 확인했습니다. 신규 204건을 포함한 서버 전체 573건(하위 사례 포함), race·전체 정적 검사가 통과했습니다. 당시 80/124개 완료였으며 다음 권장은 OPS-04의 주기 작업·실행권·보존 조건이었습니다. 전체 운영 실패·MCP/호스트·배포 인수는 후속 범위입니다.
+
+[OPS-04 검토](spec/service/agent-context/reviews/2026-10-23-ops-04.md)에서 여덟 DB 작업과 기록기 소유의 시간별 파일 정리를 연결했습니다. OAuth 상태의 보존 재검사·원자적 정리와 저장소/instance별 진단 실행권, 정리 중단 뒤 기록/flush 유지를 확인했습니다. 서버 580건·진단 168건·저장 6건·인증 48건, 총 802건(하위 사례 포함), race·전체 정적 검사·Linux 대상 빌드가 통과했습니다. 당시 81/124개 완료였으며 다음 권장은 OPS-05였습니다. 전체 운영 실패·Linux runtime·배포 인수는 후속 범위입니다.
+
+[OPS-05 검토](spec/service/agent-context/reviews/2026-10-23-ops-05.md)에서 기동·수신 실패·정상 종료의 공통 정리와 원인 보존을 인수했습니다. 실제 HTTP·DB 연결과 파일 잠금으로 요청 30초·작업자 10초·진단 flush 5초를 확인하고 Compose의 50초 구성과 대조했습니다. 서버 595건·진단 168건, 총 763건(하위 사례 포함), race·전체 정적 검사·Linux 대상 빌드가 통과했습니다. 당시 82/124개 완료였으며 다음 권장은 OPS-06이었습니다. 컨테이너 강제 종료·전체 운영 장애·Linux runtime·배포 인수는 후속 범위입니다.
+
+[OPS-06 검토](spec/service/agent-context/reviews/2026-10-23-ops-06.md)에서 자동 삭제 그래프의 복구 요청·운영자 처리와 취소 시 롤백을 인수했습니다. 요청 자격·선택 순서·저장 실패의 원자성·두 인스턴스의 단일 적용·감사 정리와 실제 세션 주체를 확인했습니다. 관련 시험 53건(하위 사례 포함), race·전체 정적 검사·Linux 대상 빌드가 통과했습니다. 당시 83/124개 완료였으며 다음 권장은 OPS-07이었습니다. 실제 브라우저·Linux runtime·전체 운영 장애·배포 인수는 후속 범위입니다.
+
+[OPS-07 검토](spec/service/agent-context/reviews/2026-10-23-ops-07.md)에서 WAL 보관 회귀와 cold tablespace를 포함한 물리 백업·시점 복구를 인수했습니다. 목표 일시 정지·승격, AGE·양쪽 HNSW·기존 세션 서명·큐 소비·전체 감사와 생성 자원 정리를 확인했습니다. 격리 시험과 전체 정적 검사가 통과했습니다. 당시 84/124개 완료였으며 다음 권장은 OPS-02였습니다. 실제 운영 백업·외부 보관·보관본 삭제·배포는 후속 범위입니다.
+
+[OPS-02 검토](spec/service/agent-context/reviews/2026-10-24-ops-02.md)에서 운영 템플릿과 영속 진단 볼륨·안정 슬롯을 인수했습니다. DB 비공개·loopback·고정 신뢰와 서버 이미지의 실제 권한·중복/권한 거부·재생성 보존을 확인했습니다. 구성 303건·race·정적 검사와 격리 컨테이너 검증이 통과했습니다. 당시 85/124개 완료였으며 다음 권장은 OPS-08 실행 안내·전환·복귀 절차였습니다. 실제 운영 배포·Tunnel·외부 제공자 인수는 후속 범위입니다.
+
+[OPS-08 모듈 인수](spec/service/agent-context/reviews/2026-10-24-ops-08.md)에서 실행 안내와 도구 14종 스냅샷, 격리 배포의 정지·물리 백업·013 적용·감사·준비와 실패 파일 롤백·보관 이미지/새 복원본 복귀를 확인했습니다. 격리 실행·자원 정리, 도구 목록 17건·race·전체 Go 정적 검사가 통과했습니다. 당시 전체 **86/124개 완료**였으며 다음 권장은 [WEB-03](spec/service/agent-context/development-plan/web.md#web-03)입니다. 실제 운영 배포·외부 공개·호스트·Tunnel 인수는 후속 범위입니다.
+
+[WEB-03 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-03.md)에서 그래프 목록의 등급 정규화·커서 입력 오류·취소와 실제 DB/TLS의 정렬·페이지·현재 권한 및 본인 복구 요청 진입을 확인했습니다. 웹 642건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **87/124개 완료**이며 다음 권장은 [WEB-04](spec/service/agent-context/development-plan/web.md#web-04)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.
+
+[WEB-04 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-04.md)에서 권한 회수의 본문 설명·팀별 그래프 등급·관리자 범위와 실제 DB/TLS의 회수/부여·현재 권한 재검사를 확인했습니다. 웹 662건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **88/124개 완료**이며 다음 권장은 [WEB-05](spec/service/agent-context/development-plan/web.md#web-05)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.
+
+[WEB-05 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-05.md)에서 삭제/복구 대상 보기·계층별 영향·운영자 처리 확인과 실제 DB/TLS의 저장량 한도·등급 상실 재판정·요청자 직접 소유자 복원을 확인했습니다. 웹 743건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **89/124개 완료**이며 다음 권장은 [WEB-06](spec/service/agent-context/development-plan/web.md#web-06)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.
+
+[WEB-06 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-06.md)에서 그래프 속성·전역 요약 영역·연결 종류 구분과 실제 DB/TLS의 시작점·슬라이더·절단·삭제 노드 제외를 확인했습니다. 웹 751건·race·Node.js 상태 전이·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **90/124개 완료**이며 다음 권장은 [WEB-07](spec/service/agent-context/development-plan/web.md#web-07)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.
+
+[WEB-07 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-07.md)에서 키보드 선택 수단·홉 값 안내·숨겨진 근거 유지·시각화 영역 역할을 확인했습니다. 웹 752건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **91/124개 완료**이며 다음 권장은 [WEB-08](spec/service/agent-context/development-plan/web.md#web-08)입니다. 실제 브라우저 키보드·포커스와 음성은 후속 범위입니다.
+
+[WEB-08 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-08.md)에서 감사 필터·커서 페이지와 연결 화면의 본인 범위·폐기 효과 구분·웹 세션 유지를 확인했습니다. 웹 770건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **92/124개 완료**이며 다음 권장은 [WEB-09](spec/service/agent-context/development-plan/web.md#web-09)입니다. 실제 브라우저 인수는 WEB-09 범위입니다.
+
+[WEB-09 분야 인수](spec/service/agent-context/reviews/2026-10-24-web-09.md)에서 39개 화면 상태 표본과 CDP로 조작한 Chrome 155의 15개 실제 브라우저 시나리오를 저장소 상태와 대조해 웹 분야를 완료했습니다. 현재 전체 **93/124개 완료**이며 Safari와 실제 스크린리더 음성은 [TEST-06](spec/service/agent-context/development-plan/testing.md#test-06) 범위입니다.

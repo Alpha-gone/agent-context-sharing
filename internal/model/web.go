@@ -21,6 +21,14 @@ type Team struct {
 	DeletedAt        *time.Time
 	// MemberLoginIDs는 관리 팀 조회에서만 채우는 현재 구성원의 로그인 아이디다.
 	MemberLoginIDs []string
+	// GraphGrants는 관리 팀 조회에서만 채우며 그래프 내용·접근 권한을 포함하지 않는다.
+	GraphGrants []TeamGraphGrant
+}
+
+// TeamGraphGrant는 팀에 보존된 그래프별 부여 등급이다. 삭제된 팀의 상속은 무효다.
+type TeamGraphGrant struct {
+	GraphID ID
+	Grade   GraphGrade
 }
 
 // DeletionImpact는 삭제 전에 안내할 연결된 대상의 수를 담는다.
@@ -42,10 +50,19 @@ type RestoreRequest struct {
 
 // AuditEntry는 컨텍스트 관리와 웹 관리 기록을 시간순으로 함께 표시하는 값이다.
 type AuditEntry struct {
+	ID         ID
+	Source     string
 	Kind       string
 	Action     string
 	ActorID    ID
 	OccurredAt time.Time
 	Target     string
 	Detail     string
+}
+
+// AuditFilter는 UTC 시작 포함·끝 제외 기간과 선택 대상의 감사 범위다.
+// nil 시각과 영 ID는 해당 조건을 제한하지 않는다.
+type AuditFilter struct {
+	From, Until *time.Time
+	Target      ID
 }

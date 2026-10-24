@@ -25,6 +25,8 @@
 
 `mcp`·`diagnostic`의 주입 계약과 목표 구현의 경계는 [목표 추가 패키지](../spec/service/agent-context/sdd/architecture.md#목표-추가-패키지와-조립), 동작은 [MCP](../spec/service/agent-context/sdd/mcp.md)·[관측성](../spec/service/agent-context/sdd/observability.md)을 따른다. `migrate`는 애플리케이션 업무 패키지 밖의 도구다.
 
+`diagnostic/test-linux.sh`는 기록기의 Linux 격리 파일 인수 실행을 소유한다. 시험 바이너리·자신이 만든 컨테이너/볼륨만 사용하며 실행 범위·장애 주입·근거는 [파일 저장 인수](../spec/service/agent-context/sdd/observability.md#파일-저장-인수)를 따른다.
+
 ## 로컬 계약
 
 - 저장 방식과 무관한 타입·논리 검증은 `model`에 두고 저장·임베딩·등급 기능은 아키텍처가 정한 주입 인터페이스를 사용한다.

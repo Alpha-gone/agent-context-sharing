@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
 )
@@ -54,15 +55,16 @@ const maxEmbeddingResponseBytes = 8 << 20
 
 // Worker는 짧은 확보·저장 트랜잭션 사이에서 제공자를 호출하는 비동기 소비자다.
 type Worker struct {
-	store      *store.Store
-	proposer   RelationProposer
-	config     Config
-	httpClient *http.Client
-	logger     *slog.Logger
-	cancel     context.CancelFunc
-	done       chan struct{}
-	startOnce  sync.Once
-	stopOnce   sync.Once
+	diagnostics diagnostic.Observer
+	store       *store.Store
+	proposer    RelationProposer
+	config      Config
+	httpClient  *http.Client
+	logger      *slog.Logger
+	cancel      context.CancelFunc
+	done        chan struct{}
+	startOnce   sync.Once
+	stopOnce    sync.Once
 }
 
 // RelationProposer는 사건의 색인 공개 커밋 뒤 관계 후보 생성을 알리는 경계다.
@@ -151,6 +153,7 @@ func (worker *Worker) Close(ctx context.Context) error {
 }
 
 func (worker *Worker) run(ctx context.Context) {
+	ctx = diagnostic.ResumeJob(ctx, "")
 	if ctx.Err() != nil {
 		return
 	}
@@ -224,6 +227,7 @@ func (worker *Worker) RunOnceInGraph(ctx context.Context, graphID model.ID) (boo
 }
 
 func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error) {
+	ctx = diagnostic.ResumeJob(ctx, "")
 	acquire := worker.store.ProcessNextIndexTask
 	if scope.IsV7() {
 		acquire = func(ctx context.Context, processor store.IndexTaskProcessor) (store.IndexProcessResult, error) {
@@ -231,7 +235,13 @@ func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error)
 		}
 	}
 	result, err := acquire(ctx, func(ctx context.Context, task store.IndexTask) store.IndexTaskResult {
-		embedding, err := worker.EmbedDocument(ctx, task.Body)
+		started := time.Now()
+		embedding, status, err := worker.embedResponse(ctx, task.Body, true)
+		result, reason, level := "completed", "completed", "INFO"
+		if err != nil {
+			result, reason, level = "failed", "provider_unavailable", "WARN"
+		}
+		diagnostic.Observe(worker.diagnostics, ctx, level, "provider", result, reason, true, diagnostic.Fields{Identity: diagnostic.IdentityFields{GraphID: task.GraphID.String(), ContextID: task.ContextID.String()}, Index: diagnostic.IndexFields{TaskID: task.ID.String(), Generation: uint64(task.Generation.UnixMicro()), Attempts: uint64(task.Attempts), ProviderStatus: status, LatencyMS: uint64(time.Since(started).Milliseconds())}})
 		if err != nil {
 			// 사유를 그대로 남긴다. 고정 문구만 남기면 「색인 재시도」가 운영자 개입이
 			// 필요하다고 한 차원 불일치를 실패한 행에서 구분할 수 없다.
@@ -274,3 +284,6 @@ func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error)
 	}
 	return result.Found, nil
 }
+
+// SetDiagnostics는 Start 전에 주입한다. 진단 실패는 색인 공개 결과를 바꾸지 않는다.
+func (worker *Worker) SetDiagnostics(observer diagnostic.Observer) { worker.diagnostics = observer }

@@ -31,6 +31,7 @@ func TestGraphDetailScopeControls(t *testing.T) {
 				}
 				graphs.result.Contexts[2].Layer = model.LayerDerived
 				graphs.result.Contexts[3].Layer = model.LayerDerived
+				graphs.result.Contexts[3].Derived = &model.DerivedAttributes{ConfidenceState: model.ConfidenceStateDisputed}
 				graphs.result.Contexts[4].Layer = model.LayerEvent
 				nodes := graphs.result.Contexts
 				graphs.result.Edges = []store.HopEdge{
@@ -56,6 +57,9 @@ func TestGraphDetailScopeControls(t *testing.T) {
 				`id="node-details-heading" tabindex="-1"`,
 				`id="details-link" href="#node-details-heading"`,
 				`id="node-evidence"`,
+				`id="context-graph" role="img" aria-label="컨텍스트 그래프 시각화" aria-describedby="scope-help"`,
+				`aria-valuetext="`,
+				"국소 홉 범위로 숨겨진 근거도 포함하며",
 				"빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다.",
 			} {
 				if !strings.Contains(html, markup) {

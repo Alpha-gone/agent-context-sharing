@@ -142,18 +142,18 @@ AGE 그래프는 하나만 만든다. 이름은 배포 구성으로 두되 인�
 | `actor_account_id`     | UUIDv7          | 전부. 수행 계정                                                                                  |
 | `occurred_at`          | 타임스탬프(UTC) | 전부. 시각                                                                                       |
 | `graph_id`             | UUIDv7          | `grant`, `ownership_transfer`, `web_delete`, `restore_request`, `operator_restore`               |
-| `subject_type`         | 열거형          | `grant`, `ownership_transfer`                                                                    |
-| `subject_id`           | UUIDv7          | `grant`, `ownership_transfer`                                                                    |
-| `before_grade`         | 열거형          | `grant`, `ownership_transfer`. 이전 등급                                                         |
-| `after_grade`          | 열거형          | `grant`, `ownership_transfer`. 이후 등급                                                         |
-| `team_id`              | UUIDv7          | `team`                                                                                           |
-| `member_account_id`    | UUIDv7          | `team`. 추가하거나 제거한 계정                                                                   |
+| `subject_type`         | 열거형          | `grant`, `ownership_transfer`, `operator_restore`                                                |
+| `subject_id`           | UUIDv7          | `grant`, `ownership_transfer`, `operator_restore`                                                |
+| `before_grade`         | 열거형          | 등급 변경·운영자 복구의 이전 등급. 이전 부여가 없으면 생략                                                         |
+| `after_grade`          | 열거형          | 등급 변경·상속 근거·운영자 복구의 이후 등급                                                         |
+| `team_id`              | UUIDv7          | `team`, 팀 상속 소유자 근거의 `grant`                                                           |
+| `member_account_id`    | UUIDv7          | `team`의 추가·제거 계정, 팀 상속 소유자 근거의 계정                                                                   |
 | `target_context_id`    | UUIDv7          | `web_delete`. 대상이 노드일 때                                                                   |
-| `requester_account_id` | UUIDv7          | `operator_restore`. 복구를 요청한 소유자였던 계정                                                |
+| `requester_account_id` | UUIDv7          | `restore_request`, `operator_restore`. 복구를 요청한 소유자였던 계정                                                |
 
 대상마다 채우는 열이 다르므로 공통 다섯 열을 빼고는 값이 없을 수 있다. 대상별로 테이블을 나누지 않는 이유는 [SRS 감사 기록](../SRS.md#감사-기록)이 두 기록을 화면에서 함께 시각 내림차순으로 보여주라고 확정했기 때문이다. 여섯 테이블로 나누면 화면이 매번 여섯을 합쳐 정렬해야 하고 보존 기간 정리도 여섯 번 돈다.
 
-`restore_request`를 별도 대상으로 두는 이유는 요청과 처리가 다른 시점의 다른 행위이기 때문이다. 요청은 소유자였던 계정이, 처리는 운영자 자격을 가진 계정이 하며 사이에 시간이 있다. 한 행으로 합치면 요청만 있고 처리는 없는 상태를 표현할 수 없어 운영자 화면의 목록을 만들 수 없다. 요청 행은 `graph_id`와 `actor_account_id`, `occurred_at`만 채운다.
+`restore_request`를 별도 대상으로 두는 이유는 요청과 처리가 다른 시점의 다른 행위이기 때문이다. 요청은 소유자였던 계정이, 처리는 운영자 자격을 가진 계정이 하며 사이에 시간이 있다. 한 행으로 합치면 요청만 있고 처리는 없는 상태를 표현할 수 없어 운영자 화면의 목록을 만들 수 없다. 요청 행은 공통 열 외에 `graph_id`와 `requester_account_id`를 채운다. 팀 상속의 과거 소유자 근거는 [감사 조회](observability.md#감사-기록의-조회)를 따른다.
 
 `operator_restore`에 요청자와 처리자를 모두 남기는 것은 [SRS 감사 기록](../SRS.md#감사-기록)이 확정한 것이다. 처리한 운영자는 `actor_account_id`에, 요청자는 `requester_account_id`에 들어간다. [복구](operations.md#복구)가 요청 기록 없이는 처리 경로가 열리지 않는다고 정했으므로 이 열이 비어 있으면 안 되는 대상이 하나 생긴다.
 

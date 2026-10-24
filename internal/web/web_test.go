@@ -272,8 +272,8 @@ func (fakeGraphStore) PendingRestoreRequests(context.Context) ([]model.RestoreRe
 func (fake fakeGraphStore) OperatorRestoreGraph(context.Context, model.ID, model.ID) error {
 	return fake.operatorRestoreErr
 }
-func (fakeGraphStore) ListAuditEntries(context.Context, model.ID, int) ([]model.AuditEntry, error) {
-	return nil, nil
+func (fakeGraphStore) ListAuditEntries(context.Context, model.ID, model.ID, model.AuditFilter, string, int) ([]model.AuditEntry, string, error) {
+	return nil, "", nil
 }
 
 // TestAccessScreenHidesGrantsFromNonOwner는 등급 영역이 소유자에게만 보이고 팀 영역은
@@ -351,13 +351,14 @@ func TestDeletionScreenRestoresAndDeletesNodes(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("삭제 화면 응답 = %d, want %d", response.Code, http.StatusOK)
 	}
-	body := response.Body.String()
-	// 삭제된 컨텍스트가 보이는 자리는 이 복구 화면뿐이다.
-	if !strings.Contains(body, removed.ID.String()) || !strings.Contains(body, "restore_context") {
-		t.Fatal("삭제된 컨텍스트의 복구 수단이 없다")
-	}
-	if !strings.Contains(body, active.ID.String()) {
+	if !strings.Contains(response.Body.String(), active.ID.String()) {
 		t.Fatal("삭제 대상을 고를 활성 컨텍스트 목록이 없다")
+	}
+	// 삭제된 컨텍스트가 보이는 자리는 이 화면의 복구 대상 보기뿐이다.
+	restore := httptest.NewRecorder()
+	server.ServeHTTP(restore, sessionRequest(http.MethodGet, "/graphs/"+graphID.String()+"/deletion?tab=restore", nil))
+	if body := restore.Body.String(); !strings.Contains(body, removed.ID.String()) || !strings.Contains(body, "restore_context") {
+		t.Fatal("삭제된 컨텍스트의 복구 수단이 없다")
 	}
 
 	// 삭제 전 안내는 고른 노드의 연쇄 영향을 보여준다.

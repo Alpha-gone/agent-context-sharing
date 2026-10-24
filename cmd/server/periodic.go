@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/plan"
 	"agent_context_sharing/internal/store"
@@ -20,6 +22,7 @@ const (
 	rateCleanupLockKey        int64 = 4182026106
 	embeddingTierLockKey      int64 = 4182026107
 	idempotencyCleanupLockKey int64 = 4182026108
+	oauthCleanupLockKey       int64 = 4182026109
 )
 
 type periodicStore interface {
@@ -31,6 +34,7 @@ type periodicStore interface {
 	CleanupRequestRateWindows(context.Context, time.Time) (int, error)
 	CleanupExpiredIdempotencyRecords(context.Context, time.Time) (int, error)
 	MoveColdEmbeddings(context.Context, time.Time, store.RetentionDays) (int, error)
+	CleanupOAuthState(context.Context, time.Time) (int, error)
 }
 
 type periodicTask struct {
@@ -40,12 +44,13 @@ type periodicTask struct {
 	run      func(context.Context) (int, error)
 }
 
-// periodicWorker는 모든 애플리케이션 인스턴스에 내장되는 일곱 주기 작업의 시작과 종료를 관리한다.
+// periodicWorker는 여덟 DB 주기 작업을 관리한다. 아홉 번째 파일 정리는 Recorder가 소유한다.
 type periodicWorker struct {
-	store  periodicStore
-	logger *slog.Logger
-	now    func() time.Time
-	tasks  []periodicTask
+	diagnostics diagnostic.Observer
+	store       periodicStore
+	logger      *slog.Logger
+	now         func() time.Time
+	tasks       []periodicTask
 
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -84,6 +89,9 @@ func newPeriodicWorker(database *store.Store, plans plan.AccountPlans, logger *s
 		}},
 		{name: "idempotency_cleanup", interval: time.Hour, lockKey: idempotencyCleanupLockKey, run: func(ctx context.Context) (int, error) {
 			return database.CleanupExpiredIdempotencyRecords(ctx, worker.now().UTC())
+		}},
+		{name: "oauth_cleanup", interval: time.Hour, lockKey: oauthCleanupLockKey, run: func(ctx context.Context) (int, error) {
+			return database.CleanupOAuthState(ctx, worker.now().UTC())
 		}},
 	}
 	return worker, nil
@@ -138,14 +146,43 @@ func (worker *periodicWorker) runPeriodically(ctx context.Context, task periodic
 }
 
 func (worker *periodicWorker) runTask(ctx context.Context, task periodicTask) {
+	if ctx.Err() != nil {
+		return
+	}
+	ctx = diagnostic.ResumeJob(ctx, "")
 	count, acquired, err := worker.store.WithTryAdvisoryLock(ctx, task.lockKey, task.run)
+	worker.reportTask(ctx, task.name, count, acquired, err)
+}
+
+func (worker *periodicWorker) reportTask(ctx context.Context, name string, count int, acquired bool, err error) {
+	job := map[string]string{"proposal_cleanup": "relation_cleanup", "request_rate_cleanup": "rate_window_cleanup", "embedding_tier_move": "embedding_tier"}[name]
+	if job == "" {
+		job = name
+	}
+	result, reason, level := "completed", "completed", "INFO"
+	if !acquired {
+		result, reason = "skipped", "lock_unavailable"
+	}
 	if err != nil {
-		worker.logger.ErrorContext(ctx, "주기 작업 실패", "task", task.name, "processed", count, "status", "failed", "error", err)
+		result, reason, level = "failed", "store_unavailable", "ERROR"
+		if _, fileFailure := errors.AsType[*diagnostic.FileError](err); fileFailure {
+			reason = "file_unavailable"
+		}
+		if errors.Is(err, context.Canceled) {
+			reason = "canceled"
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "deadline_exceeded"
+		}
+	}
+	diagnostic.Observe(worker.diagnostics, ctx, level, "worker", result, reason, false, diagnostic.Fields{System: diagnostic.SystemFields{Job: job, Processed: uint64(max(count, 0))}})
+	if err != nil {
+		worker.logger.ErrorContext(ctx, "주기 작업 실패", "task", name, "processed", count, "status", "failed", "reason_code", reason)
 		return
 	}
 	if !acquired {
-		worker.logger.InfoContext(ctx, "주기 작업 건너뜀", "task", task.name, "processed", 0, "status", "skipped")
+		worker.logger.InfoContext(ctx, "주기 작업 건너뜀", "task", name, "processed", 0, "status", "skipped")
 		return
 	}
-	worker.logger.InfoContext(ctx, "주기 작업 완료", "task", task.name, "processed", count, "status", "completed")
+	worker.logger.InfoContext(ctx, "주기 작업 완료", "task", name, "processed", count, "status", "completed")
 }

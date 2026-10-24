@@ -13,7 +13,10 @@ import (
 )
 
 // GrantGraph은 그래프 잠금 뒤 행위자의 소유자 등급을 확인하고 계정·팀 등급과 감사를 기록한다.
-func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID model.ID, subjectType GrantSubjectType, grade model.GraphGrade) error {
+func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID model.ID, subjectType GrantSubjectType, grade model.GraphGrade) (resultErr error) {
+	ctx, observation := beginManagement(ctx, "grade_grant")
+	defer func() { s.finishManagement(ctx, observation, resultErr) }()
+
 	if !graphID.IsV7() || !actorID.IsV7() || !subjectID.IsV7() || !subjectType.valid() || !grade.Valid() {
 		return fmt.Errorf("그래프 등급 부여 인자가 올바르지 않다")
 	}
@@ -21,6 +24,7 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 	if err != nil {
 		return fmt.Errorf("그래프 등급 부여 트랜잭션 시작: %w", err)
 	}
+	tx = observeWriteTx(ctx, tx, false)
 	defer tx.Rollback(ctx)
 	if subjectType == GrantSubjectTeam {
 		deletedAt, err := lockTeam(ctx, tx, subjectID)
@@ -34,6 +38,7 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
+	observation.stage = "permission"
 	if err := requireGraphOwner(ctx, tx, graphID, actorID); err != nil {
 		return err
 	}
@@ -66,6 +71,11 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 	if err := cancelGraceForConnectedGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
+	if subjectType == GrantSubjectTeam && grade == model.GraphGradeOwner {
+		if err := s.recordInheritedOwners(ctx, tx, []model.ID{graphID}, subjectID, actorID, model.ID{}); err != nil {
+			return err
+		}
+	}
 	// 「권한과 팀 관리 절차」는 다른 계정에 소유자 등급을 주는 것을 소유권 이전으로 본다.
 	// 소유자에서 내리는 것은 그 계정의 등급을 바꾸는 부여일 뿐이다.
 	action, targetKind := "grant", "grant"
@@ -77,7 +87,10 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 
 // RevokeGraphGrantWithAudit은 잠금 뒤 행위자를 인가하고 마지막 소유자를 보호하며 등급을 회수한다.
 // 회수와 웹 감사 기록은 같은 트랜잭션으로 저장한다.
-func (s *Store) RevokeGraphGrantWithAudit(ctx context.Context, graphID, actorID, subjectID model.ID, subjectType GrantSubjectType) error {
+func (s *Store) RevokeGraphGrantWithAudit(ctx context.Context, graphID, actorID, subjectID model.ID, subjectType GrantSubjectType) (resultErr error) {
+	ctx, observation := beginManagement(ctx, "grade_revoke")
+	defer func() { s.finishManagement(ctx, observation, resultErr) }()
+
 	if !graphID.IsV7() || !actorID.IsV7() || !subjectID.IsV7() || !subjectType.valid() {
 		return fmt.Errorf("그래프 등급 회수 인자가 올바르지 않다")
 	}
@@ -85,11 +98,13 @@ func (s *Store) RevokeGraphGrantWithAudit(ctx context.Context, graphID, actorID,
 	if err != nil {
 		return fmt.Errorf("그래프 등급 회수 트랜잭션 시작: %w", err)
 	}
+	tx = observeWriteTx(ctx, tx, false)
 	defer tx.Rollback(ctx)
 	graphIDs, err := lockGraphs(ctx, tx, []model.ID{graphID})
 	if err != nil {
 		return err
 	}
+	observation.stage = "permission"
 	if err := requireGraphOwner(ctx, tx, graphID, actorID); err != nil {
 		return err
 	}
@@ -169,7 +184,10 @@ func (s *Store) ListGraphGrants(ctx context.Context, graphID model.ID) ([]model.
 }
 
 // CreateTeam은 인증된 계정을 팀 관리자로 하여 팀을 만들고 감사 기록을 남긴다.
-func (s *Store) CreateTeam(ctx context.Context, actorID model.ID, name string) (model.Team, error) {
+func (s *Store) CreateTeam(ctx context.Context, actorID model.ID, name string) (teamResult model.Team, resultErr error) {
+	ctx, observation := beginManagement(ctx, "team_create")
+	defer func() { s.finishManagement(ctx, observation, resultErr) }()
+
 	if !actorID.IsV7() {
 		return model.Team{}, fmt.Errorf("팀 생성 인자가 올바르지 않다")
 	}
@@ -185,6 +203,7 @@ func (s *Store) CreateTeam(ctx context.Context, actorID model.ID, name string) (
 	if err != nil {
 		return model.Team{}, fmt.Errorf("팀 생성 트랜잭션 시작: %w", err)
 	}
+	tx = observeWriteTx(ctx, tx, false)
 	defer tx.Rollback(ctx)
 	if err := requireAccount(ctx, tx, actorID); err != nil {
 		return model.Team{}, err
@@ -227,11 +246,13 @@ func (s *Store) ListManagedTeams(ctx context.Context, managerID model.ID) ([]mod
 	if !managerID.IsV7() {
 		return nil, fmt.Errorf("팀 관리자 식별자가 UUIDv7이 아니다")
 	}
-	rows, err := s.pool.Query(ctx, `SELECT team_id, name, manager_account_id, created_at, deleted_at,
+	rows, err := s.pool.Query(ctx, `SELECT team.team_id, team.name, team.manager_account_id, team.created_at, team.deleted_at,
 		ARRAY(SELECT account.login_id FROM public.team_member AS member
 			JOIN public.account AS account ON account.account_id = member.account_id
-			WHERE member.team_id = team.team_id ORDER BY account.login_id)
-		FROM public.team AS team WHERE manager_account_id = $1 ORDER BY name, team_id`, managerID.String())
+			WHERE member.team_id = team.team_id ORDER BY account.login_id), permission.graph_id, permission.grade
+		FROM public.team AS team
+		LEFT JOIN public.graph_grant AS permission ON permission.subject_type = 'team' AND permission.subject_id = team.team_id
+		WHERE team.manager_account_id = $1 ORDER BY team.name, team.team_id, permission.graph_id`, managerID.String())
 	if err != nil {
 		return nil, fmt.Errorf("관리 팀 목록 조회: %w", err)
 	}
@@ -239,12 +260,27 @@ func (s *Store) ListManagedTeams(ctx context.Context, managerID model.ID) ([]mod
 	teams := make([]model.Team, 0)
 	for rows.Next() {
 		var members []string
-		team, err := scanTeam(rows, &members)
+		var rawGraphID, rawGrade *string
+		team, err := scanTeam(rows, &members, &rawGraphID, &rawGrade)
 		if err != nil {
 			return nil, err
 		}
-		team.MemberLoginIDs = members
-		teams = append(teams, team)
+		if len(teams) == 0 || teams[len(teams)-1].ID != team.ID {
+			team.MemberLoginIDs = members
+			teams = append(teams, team)
+		}
+		if rawGraphID != nil {
+			graphID, err := model.ParseID(*rawGraphID)
+			if err != nil {
+				return nil, fmt.Errorf("관리 팀의 그래프 식별자: %w", err)
+			}
+			grade := nullableGrade(rawGrade)
+			if !grade.Valid() {
+				return nil, fmt.Errorf("관리 팀의 그래프 등급이 올바르지 않다")
+			}
+			current := &teams[len(teams)-1]
+			current.GraphGrants = append(current.GraphGrants, model.TeamGraphGrant{GraphID: graphID, Grade: grade})
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("관리 팀 목록 행 읽기: %w", err)
@@ -253,7 +289,10 @@ func (s *Store) ListManagedTeams(ctx context.Context, managerID model.ID) ([]mod
 }
 
 // AddTeamMember는 저장 트랜잭션에서 관리자와 대상 계정을 확인하고 구성원을 추가한다.
-func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID model.ID) error {
+func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID model.ID) (resultErr error) {
+	ctx, observation := beginManagement(ctx, "team_update")
+	defer func() { s.finishManagement(ctx, observation, resultErr) }()
+
 	if !teamID.IsV7() || !actorID.IsV7() || !accountID.IsV7() {
 		return fmt.Errorf("팀 구성원 추가 인자가 올바르지 않다")
 	}
@@ -261,6 +300,7 @@ func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID mo
 	if err != nil {
 		return fmt.Errorf("팀 구성원 추가 트랜잭션 시작: %w", err)
 	}
+	tx = observeWriteTx(ctx, tx, false)
 	defer tx.Rollback(ctx)
 	if err := requireTeamManager(ctx, tx, teamID, actorID); err != nil {
 		return err
@@ -278,11 +318,17 @@ func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID mo
 	if err := cancelGraceForConnectedGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
+	if err := s.recordInheritedOwners(ctx, tx, graphIDs, teamID, actorID, accountID); err != nil {
+		return err
+	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: "team", Action: "add", ActorID: actorID, TeamID: teamID, MemberAccountID: accountID})
 }
 
 // RemoveTeamMemberWithAudit은 팀 관리자 확인 뒤 구성원을 빼고 감사 기록을 남긴다.
-func (s *Store) RemoveTeamMemberWithAudit(ctx context.Context, teamID, actorID, accountID model.ID) error {
+func (s *Store) RemoveTeamMemberWithAudit(ctx context.Context, teamID, actorID, accountID model.ID) (resultErr error) {
+	ctx, observation := beginManagement(ctx, "team_update")
+	defer func() { s.finishManagement(ctx, observation, resultErr) }()
+
 	if !teamID.IsV7() || !actorID.IsV7() || !accountID.IsV7() {
 		return fmt.Errorf("팀 구성원 제거 인자가 올바르지 않다")
 	}
@@ -290,6 +336,7 @@ func (s *Store) RemoveTeamMemberWithAudit(ctx context.Context, teamID, actorID, 
 	if err != nil {
 		return fmt.Errorf("팀 구성원 제거 트랜잭션 시작: %w", err)
 	}
+	tx = observeWriteTx(ctx, tx, false)
 	defer tx.Rollback(ctx)
 	if err := requireTeamManager(ctx, tx, teamID, actorID); err != nil {
 		return err
@@ -312,7 +359,10 @@ func (s *Store) RemoveTeamMemberWithAudit(ctx context.Context, teamID, actorID, 
 }
 
 // SetTeamDeleted는 팀 관리자가 팀을 소프트 삭제하거나 복구하고 감사 기록을 남긴다.
-func (s *Store) SetTeamDeleted(ctx context.Context, teamID, actorID model.ID, deleted bool) error {
+func (s *Store) SetTeamDeleted(ctx context.Context, teamID, actorID model.ID, deleted bool) (resultErr error) {
+	ctx, observation := beginManagement(ctx, "team_delete")
+	defer func() { s.finishManagement(ctx, observation, resultErr) }()
+
 	if !teamID.IsV7() || !actorID.IsV7() {
 		return fmt.Errorf("팀 상태 변경 인자가 올바르지 않다")
 	}
@@ -320,6 +370,7 @@ func (s *Store) SetTeamDeleted(ctx context.Context, teamID, actorID model.ID, de
 	if err != nil {
 		return fmt.Errorf("팀 상태 변경 트랜잭션 시작: %w", err)
 	}
+	tx = observeWriteTx(ctx, tx, false)
 	defer tx.Rollback(ctx)
 	if err := requireTeamManager(ctx, tx, teamID, actorID); err != nil {
 		return err
@@ -347,6 +398,11 @@ func (s *Store) SetTeamDeleted(ctx context.Context, teamID, actorID model.ID, de
 	} else if err := cancelGraceForConnectedGraphs(ctx, tx, graphIDs); err != nil {
 		return err
 	}
+	if !deleted {
+		if err := s.recordInheritedOwners(ctx, tx, graphIDs, teamID, actorID, model.ID{}); err != nil {
+			return err
+		}
+	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: "team", Action: action, ActorID: actorID, TeamID: teamID})
 }
 
@@ -358,6 +414,16 @@ type webAuditRecord struct {
 }
 
 func (s *Store) commitWebAudit(ctx context.Context, tx pgx.Tx, record webAuditRecord) error {
+	if observation, ok := ctx.Value(managementObservationKey{}).(*managementObservation); ok {
+		observation.stage = "audit"
+		if record.ActorID.IsV7() {
+			observation.fields.Identity.AccountID = record.ActorID.String()
+		}
+		if record.GraphID.IsV7() {
+			observation.fields.Identity.GraphID = record.GraphID.String()
+		}
+	}
+
 	if err := s.insertWebAudit(ctx, tx, record); err != nil {
 		return err
 	}
@@ -557,7 +623,10 @@ func (s *Store) agtypeCount(ctx context.Context, query string) (int, error) {
 }
 
 // SetGraphDeleted는 소유자가 웹에서 요청한 그래프 소프트 삭제 또는 복구를 적용한다.
-func (s *Store) SetGraphDeleted(ctx context.Context, graphID, actorID model.ID, deleted bool) error {
+func (s *Store) SetGraphDeleted(ctx context.Context, graphID, actorID model.ID, deleted bool) (resultErr error) {
+	ctx, observation := beginManagement(ctx, "graph_update")
+	defer func() { s.finishManagement(ctx, observation, resultErr) }()
+
 	if !graphID.IsV7() || !actorID.IsV7() {
 		return fmt.Errorf("그래프 상태 변경 인자가 올바르지 않다")
 	}
@@ -565,10 +634,12 @@ func (s *Store) SetGraphDeleted(ctx context.Context, graphID, actorID model.ID, 
 	if err != nil {
 		return fmt.Errorf("그래프 상태 변경 트랜잭션 시작: %w", err)
 	}
+	tx = observeWriteTx(ctx, tx, false)
 	defer tx.Rollback(ctx)
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
+	observation.stage = "permission"
 	if err := requireGraphOwner(ctx, tx, graphID, actorID); err != nil {
 		return err
 	}
@@ -613,9 +684,7 @@ func (s *Store) ListRestoreEligibleGraphs(ctx context.Context, accountID model.I
 		SELECT graph_id, name, description, created_by, created_at, last_activity_at, grace_started_at, stored_chars, version, deleted_at
 		FROM public.context_graph AS graph
 		WHERE graph.deleted_at IS NOT NULL AND graph.grace_started_at IS NOT NULL
-		  AND (graph.created_by = $1 OR EXISTS (
-			SELECT 1 FROM public.web_audit_log WHERE graph_id = graph.graph_id AND subject_id = $1 AND after_grade = 'owner'
-		  ))
+		  AND `+formerOwnerSQL+`
 		ORDER BY graph.deleted_at DESC, graph.graph_id DESC`, accountID.String())
 	if err != nil {
 		return nil, fmt.Errorf("복구 요청 가능 그래프 목록 조회: %w", err)
@@ -678,22 +747,33 @@ func (s *Store) ListOwnedDeletedGraphs(ctx context.Context, accountID model.ID) 
 }
 
 // RequestGraphRestore는 소유자였던 계정의 자동 삭제 그래프 복구 요청을 기록한다.
-func (s *Store) RequestGraphRestore(ctx context.Context, graphID, actorID model.ID) error {
+func (s *Store) RequestGraphRestore(ctx context.Context, graphID, actorID model.ID) (resultErr error) {
+	ctx, observation := beginManagement(ctx, "restore_request")
+	defer func() { s.finishManagement(ctx, observation, resultErr) }()
+
 	if !graphID.IsV7() || !actorID.IsV7() {
 		return fmt.Errorf("그래프 복구 요청 인자가 올바르지 않다")
 	}
-	eligible, err := s.ListRestoreEligibleGraphs(ctx, actorID)
-	if err != nil {
-		return err
-	}
-	if !containsGraph(eligible, graphID) {
-		return ErrNotFound
-	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return fmt.Errorf("그래프 복구 요청 트랜잭션 시작: %w", err)
+		return connectionError(ctx, "그래프 복구 요청 트랜잭션 시작", err)
 	}
-	defer tx.Rollback(ctx)
+	tx = observeWriteTx(ctx, tx, false)
+	defer func() {
+		resultErr = errors.Join(connectionError(ctx, "그래프 복구 요청", resultErr), rollbackTransaction(ctx, tx))
+	}()
+	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return err
+	}
+	var eligible bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.context_graph AS graph
+		WHERE graph.graph_id=$2 AND graph.deleted_at IS NOT NULL AND graph.grace_started_at IS NOT NULL
+		AND `+formerOwnerSQL+`)`, actorID.String(), graphID.String()).Scan(&eligible); err != nil {
+		return fmt.Errorf("복구 요청 자격 재확인: %w", err)
+	}
+	if !eligible {
+		return ErrNotFound
+	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: "restore_request", Action: "request", ActorID: actorID, GraphID: graphID, RequesterAccountID: actorID})
 }
 
@@ -704,12 +784,9 @@ func (s *Store) PendingRestoreRequests(ctx context.Context) ([]model.RestoreRequ
 		FROM public.web_audit_log AS request
 		JOIN public.context_graph AS graph ON graph.graph_id = request.graph_id
 		WHERE request.target_kind = 'restore_request' AND request.action = 'request'
-		  AND NOT EXISTS (
-			SELECT 1 FROM public.web_audit_log AS restored
-			WHERE restored.target_kind = 'operator_restore' AND restored.graph_id = request.graph_id AND restored.occurred_at > request.occurred_at
-		  )
+		  AND NOT EXISTS (`+laterOperatorRestoreSQL+`)
 		  AND graph.deleted_at IS NOT NULL AND graph.grace_started_at IS NOT NULL
-		ORDER BY request.occurred_at ASC, request.graph_id ASC`)
+		ORDER BY request.occurred_at ASC, request.audit_id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("대기 복구 요청 목록 조회: %w", err)
 	}
@@ -740,7 +817,10 @@ func (s *Store) PendingRestoreRequests(ctx context.Context) ([]model.RestoreRequ
 }
 
 // OperatorRestoreGraph은 자동 삭제 그래프를 복구하고 요청자의 직접 소유자 등급을 복원한다.
-func (s *Store) OperatorRestoreGraph(ctx context.Context, graphID, operatorID model.ID) error {
+func (s *Store) OperatorRestoreGraph(ctx context.Context, graphID, operatorID model.ID) (resultErr error) {
+	ctx, observation := beginManagement(ctx, "operator_restore")
+	defer func() { s.finishManagement(ctx, observation, resultErr) }()
+
 	if !graphID.IsV7() || !operatorID.IsV7() {
 		return fmt.Errorf("운영자 그래프 복구 인자가 올바르지 않다")
 	}
@@ -748,7 +828,10 @@ func (s *Store) OperatorRestoreGraph(ctx context.Context, graphID, operatorID mo
 	if err != nil {
 		return fmt.Errorf("운영자 그래프 복구 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	tx = observeWriteTx(ctx, tx, false)
+	defer func() {
+		resultErr = errors.Join(connectionError(ctx, "운영자 그래프 복구", resultErr), rollbackTransaction(ctx, tx))
+	}()
 	// 등급 변경과 같은 그래프 잠금을 쥔 뒤 요청을 읽어야 동시 복구와 회수가
 	// 서로의 미커밋 상태를 기준으로 처리되거나 이미 처리한 요청이 재사용되지 않는다.
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
@@ -761,11 +844,7 @@ func (s *Store) OperatorRestoreGraph(ctx context.Context, graphID, operatorID mo
 		JOIN public.context_graph AS graph ON graph.graph_id = request.graph_id
 		WHERE request.graph_id = $1 AND request.target_kind = 'restore_request' AND request.action = 'request'
 		  AND graph.deleted_at IS NOT NULL AND graph.grace_started_at IS NOT NULL
-		  AND NOT EXISTS (
-			SELECT 1 FROM public.web_audit_log AS restored
-			WHERE restored.target_kind = 'operator_restore' AND restored.graph_id = request.graph_id
-			  AND restored.occurred_at > request.occurred_at
-		  )
+		  AND NOT EXISTS (`+laterOperatorRestoreSQL+`)
 		ORDER BY request.occurred_at ASC, request.audit_id ASC
 		LIMIT 1`, graphID.String()).Scan(&rawRequesterID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -927,48 +1006,4 @@ func (s *Store) graphContextsOrdered(ctx context.Context, graphID model.ID, pred
 		ids[i] = value.ID
 	}
 	return s.contextsByIDs(ctx, s.reader(ctx), graphID, ids)
-}
-
-// ListAuditEntries는 컨텍스트 관리 기록과 웹 관리 기록을 최신순으로 합쳐 읽는다.
-func (s *Store) ListAuditEntries(ctx context.Context, graphID model.ID, limit int) ([]model.AuditEntry, error) {
-	if !graphID.IsV7() || limit <= 0 {
-		return nil, fmt.Errorf("감사 기록 조회 인자가 올바르지 않다")
-	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT kind, action, actor_id, occurred_at, target, detail
-		FROM (
-			SELECT 'operation' AS kind, operation_kind AS action, actor_account_id::text AS actor_id, applied_at AS occurred_at,
-			       COALESCE(context_id::text, relation_id::text, '') AS target, result || COALESCE(': ' || reject_reason, '') AS detail
-			FROM public.operation_log WHERE graph_id = $1
-			UNION ALL
-			SELECT target_kind, action, actor_account_id::text, occurred_at,
-			       COALESCE(target_context_id::text, subject_id::text, team_id::text, graph_id::text, '') AS target,
-			       COALESCE(before_grade || ' → ' || after_grade, '') AS detail
-			FROM public.web_audit_log WHERE graph_id = $1
-		) AS entries
-		ORDER BY occurred_at DESC, actor_id DESC
-		LIMIT $2`, graphID.String(), limit)
-	if err != nil {
-		return nil, fmt.Errorf("감사 기록 목록 조회: %w", err)
-	}
-	defer rows.Close()
-	entries := make([]model.AuditEntry, 0, limit)
-	for rows.Next() {
-		var rawActor string
-		var entry model.AuditEntry
-		if err := rows.Scan(&entry.Kind, &entry.Action, &rawActor, &entry.OccurredAt, &entry.Target, &entry.Detail); err != nil {
-			return nil, fmt.Errorf("감사 기록 행 해석: %w", err)
-		}
-		var err error
-		entry.ActorID, err = model.ParseID(rawActor)
-		if err != nil {
-			return nil, fmt.Errorf("감사 기록 수행 계정 식별자: %w", err)
-		}
-		entry.OccurredAt = entry.OccurredAt.UTC()
-		entries = append(entries, entry)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("감사 기록 행 읽기: %w", err)
-	}
-	return entries, nil
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"agent_context_sharing/internal/config"
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/index"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
@@ -41,12 +42,31 @@ func configureAndRun(ctx context.Context, env config.Environment, start func(con
 }
 
 func runConfigured(ctx context.Context, cfg config.Config) (resultErr error) {
+	source, err := diagnostic.NewSource(cfg.Diagnostic.InstanceID)
+	if err != nil {
+		return err
+	}
+	recorder, err := diagnostic.NewRecorder(ctx, cfg.Diagnostic.Directory, source)
+	if err != nil {
+		return fmt.Errorf("진단 파일 준비: %w", err)
+	}
+	sink, _ := diagnostic.LevelSink(recorder, cfg.Diagnostic.Level)
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, recorder.Close(cleanup))
+	}()
+	indexReporter, _ := diagnostic.NewReporter(diagnostic.Index, sink, source)
+	systemReporter, _ := diagnostic.NewReporter(diagnostic.System, sink, source)
+
 	database, err := store.New(ctx, cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
 		AdjacencyWindow: cfg.RelationAdjacencyWindow, SimilarityThreshold: cfg.RelationSimilarityThreshold, Limit: cfg.RelationProposalLimit,
 	}, func(account model.ID) int { return cfg.AccountPlans.For(account).GraceDays }, store.IndexTargets(cfg.IndexTargetLayers))
 	if err != nil {
 		return fmt.Errorf("색인 DB 준비: %w", err)
 	}
+	database.SetDiagnostics(systemReporter)
+	database.SetOperationDiagnostics(nil, indexReporter)
 	var worker *index.Worker
 	defer func() {
 		if worker != nil {
@@ -70,6 +90,7 @@ func runConfigured(ctx context.Context, cfg config.Config) (resultErr error) {
 	if err := database.CheckEmbeddingSchema(ctx, cfg.EmbeddingVectorType, cfg.EmbeddingDimension); err != nil {
 		return fmt.Errorf("임베딩 DB 구성 확인: %w", err)
 	}
+	worker.SetDiagnostics(indexReporter)
 	worker.Start(ctx)
 	<-ctx.Done()
 	return nil

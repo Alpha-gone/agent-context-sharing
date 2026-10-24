@@ -48,7 +48,7 @@ func TestOPS03WireTransportBoundary(t *testing.T) {
 				{"health", "GET", "/healthz", nil, 200, 200},
 				{"ready", "GET", "/readyz", nil, 200, 200},
 				{"head probe", "HEAD", "/healthz", nil, 200, 200},
-				{"post probe", "POST", "/healthz", nil, 400, 404},
+				{"post probe", "POST", "/healthz", nil, 400, 405},
 				{"public login", "GET", "/login", nil, 400, 200},
 				{"plain login", "POST", "/login", nil, 400, 303},
 				{"trusted login", "POST", "/login", []string{"hTtPs"}, 303, 303},

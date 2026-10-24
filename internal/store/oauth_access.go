@@ -20,16 +20,37 @@ func (s *Store) OAuthAccessAllowed(ctx context.Context, input OAuthAccessBinding
 	if !input.AccountID.IsV7() || !input.GrantID.IsV7() || input.ClientID == "" || input.Resource == "" || input.Scope == "" || input.TokenID == "" || input.IssuedAt.IsZero() || now.IsZero() {
 		return false, ErrInvalidOAuthGrant
 	}
-	var allowed bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS (
-		SELECT 1 FROM public.oauth_grant
-		WHERE grant_id=$1 AND account_id=$2 AND client_id=$3 AND resource=$4 AND scope=$5
-		AND authorized_at <= $6 AND revoked_at IS NULL
-	) AND NOT EXISTS (
-		SELECT 1 FROM public.revoked_token WHERE token_id=$7 AND expires_at > $8
-	)`, input.GrantID.String(), input.AccountID.String(), input.ClientID, input.Resource, input.Scope, input.IssuedAt, input.TokenID, now).Scan(&allowed)
-	if err != nil {
-		return false, storageError("oauth_access_lookup", err)
-	}
-	return allowed, nil
+	reason, err := s.OAuthAccessStatus(ctx, input, now)
+	return reason == "completed", err
 }
+
+// OAuthAccessStatus는 인증 경계에서만 쓰는 안전한 거부 분류다. 원문 자격은 받지 않는다.
+func (s *Store) OAuthAccessStatus(ctx context.Context, input OAuthAccessBinding, now time.Time) (string, error) {
+	var bound, active, individual bool
+	err := s.pool.QueryRow(ctx, `SELECT
+ EXISTS (SELECT 1 FROM public.oauth_grant WHERE grant_id=$1 AND account_id=$2 AND client_id=$3 AND resource=$4 AND scope=$5 AND authorized_at <= $6),
+ EXISTS (SELECT 1 FROM public.oauth_grant WHERE grant_id=$1 AND revoked_at IS NULL),
+ EXISTS (SELECT 1 FROM public.revoked_token WHERE token_id=$7 AND expires_at > $8)`, input.GrantID.String(), input.AccountID.String(), input.ClientID, input.Resource, input.Scope, input.IssuedAt, input.TokenID, now).Scan(&bound, &active, &individual)
+	if err != nil {
+		return "store_unavailable", storageError("oauth_access_lookup", err)
+	}
+	switch {
+	case !bound:
+		return "binding_violation", nil
+	case !active:
+		return "family_revoked", nil
+	case individual:
+		return "individually_revoked", nil
+	default:
+		return "completed", nil
+	}
+}
+
+// OAuthRejection은 외부에는 기존 invalid_grant를 유지하고 내부에 고정 원인만 보존한다.
+type OAuthRejection struct {
+	Reason  string
+	Binding OAuthGrantBinding
+}
+
+func (e *OAuthRejection) Error() string { return ErrInvalidOAuthGrant.Error() }
+func (e *OAuthRejection) Unwrap() error { return ErrInvalidOAuthGrant }

@@ -52,6 +52,7 @@ func TestPeriodicWorkerTasksMatchDesign(t *testing.T) {
 		"request_rate_cleanup": time.Hour,
 		"embedding_tier_move":  24 * time.Hour,
 		"idempotency_cleanup":  time.Hour,
+		"oauth_cleanup":        time.Hour,
 	}
 	if len(worker.tasks) != len(want) {
 		t.Fatalf("주기 작업 수 = %d, want %d", len(worker.tasks), len(want))
@@ -154,3 +155,5 @@ func (*fakePeriodicStore) CleanupExpiredIdempotencyRecords(context.Context, time
 func (*fakePeriodicStore) MoveColdEmbeddings(context.Context, time.Time, store.RetentionDays) (int, error) {
 	return 0, nil
 }
+
+func (*fakePeriodicStore) CleanupOAuthState(context.Context, time.Time) (int, error) { return 0, nil }

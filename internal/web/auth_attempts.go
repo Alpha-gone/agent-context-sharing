@@ -169,5 +169,12 @@ func (server *Server) authenticationFormError(writer http.ResponseWriter, templa
 	if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
 		status, message = http.StatusRequestEntityTooLarge, "입력 크기가 허용 범위를 초과했습니다."
 	}
-	server.render(writer, status, template, pageData{Error: message})
+	title := "입력 오류"
+	switch template {
+	case "login":
+		title = "로그인"
+	case "register":
+		title = "계정 등록"
+	}
+	server.render(writer, status, template, pageData{Title: title, Error: message})
 }

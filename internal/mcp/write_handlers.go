@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/perm"
 	"agent_context_sharing/internal/plan"
@@ -35,6 +36,7 @@ func NewWriteHandlers(d Dependencies) (map[string]ToolHandler, error) {
 	if err != nil {
 		return nil, err
 	}
+	runner.diagnostics = d.Diagnostics
 	handlers := map[string]ToolHandler{}
 	for _, tool := range []string{"graph_create", "graph_update", "node_create", "node_update", "node_discard", "node_restore", "relation_confirm", "relation_discard"} {
 		handlers[tool] = func(ctx context.Context, principal Principal, request *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
@@ -48,6 +50,7 @@ func NewWriteHandlers(d Dependencies) (map[string]ToolHandler, error) {
 				return writeErrorResult(inputFieldError("name"))
 			}
 			args, err := runner.catalog.validate(tool, request.Params.Arguments)
+			observeTool(d.Diagnostics, ctx, "argument_validation", tool, err)
 			if err != nil {
 				return writeErrorResult(err)
 			}
@@ -57,6 +60,7 @@ func NewWriteHandlers(d Dependencies) (map[string]ToolHandler, error) {
 			check := func(ctx context.Context) error {
 				if tool != "graph_create" {
 					if err := perm.Require(ctx, d.Grades, graphID, principal.AccountID, model.GraphGradeEditor); err != nil {
+						observeTool(d.Diagnostics, ctx, "permission", tool, err)
 						return err
 					}
 					graph, err := d.Graphs.Graph(ctx, graphID)
@@ -70,6 +74,7 @@ func NewWriteHandlers(d Dependencies) (map[string]ToolHandler, error) {
 						return model.ErrNotFound
 					}
 				}
+				observeTool(d.Diagnostics, ctx, "permission", tool, nil)
 				limits = d.Plans.For(principal.AccountID)
 				return ctx.Err()
 			}
@@ -312,4 +317,34 @@ func writeResult(data []byte) (*sdk.CallToolResult, error) {
 		return writeErrorResult(&DependencyFailure{Cause: err})
 	}
 	return &sdk.CallToolResult{IsError: value["code"] != nil, StructuredContent: jsontext.Value(data), Content: []sdk.Content{&sdk.TextContent{Text: string(data)}}}, nil
+}
+
+func observeTool(observer Diagnostics, ctx context.Context, stage, tool string, err error) {
+	level, result, reason := "INFO", "completed", "completed"
+	if err != nil {
+		level, result, reason = "WARN", "rejected", "invalid_argument"
+		if stage == "permission" {
+			reason = "permission_denied"
+		}
+		if stage == "actor_binding" {
+			reason = "binding_violation"
+		}
+		_, dependencyFailure := errors.AsType[*DependencyFailure](err)
+		_, actorFailure := errors.AsType[*agentFailure](err)
+		if dependencyFailure || actorFailure {
+			level, result, reason = "ERROR", "failed", "store_unavailable"
+		}
+	}
+	if typed, ok := observer.(diagnostic.Observer); ok {
+		diagnostic.Observe(typed, ctx, level, stage, result, reason, false, diagnostic.Fields{Management: diagnostic.ManagementFields{Operation: tool, ValidationField: diagnosticField(err)}})
+	} else if observer != nil {
+		observer.RecordDiagnostic(ctx, level, stage, result, reason)
+	}
+}
+
+func diagnosticField(err error) string {
+	if e, ok := errors.AsType[model.FieldError](err); ok {
+		return diagnostic.ValidationField(e.Field)
+	}
+	return ""
 }

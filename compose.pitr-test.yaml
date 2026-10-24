@@ -1,0 +1,60 @@
+# test-pitr.sh 전용. 개발 .env·기존 볼륨·공개 포트·외부 제공자를 사용하지 않는다.
+x-db: &db
+  build: .
+  image: ${PITR_TEST_IMAGE:?시험 전용 이미지가 필요하다}
+  environment:
+    POSTGRES_USER: pitr_test
+    POSTGRES_PASSWORD: pitr_test
+    POSTGRES_DB: pitr_test
+  healthcheck:
+    test: [CMD-SHELL, pg_isready -U pitr_test -d pitr_test]
+    interval: 1s
+    timeout: 3s
+    retries: 90
+
+services:
+  source:
+    <<: *db
+    volumes:
+      - source_data:/var/lib/postgresql
+      - source_cold:/var/lib/postgresql/cold
+      - archive:/var/lib/postgresql/wal_archive
+      - backup:/backup
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=age
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f
+
+  recovered:
+    <<: *db
+    volumes:
+      - recovered_data:/var/lib/postgresql
+      - recovered_cold:/var/lib/postgresql/cold
+      - archive:/archive:ro
+      - backup:/backup:ro
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=age
+      - -c
+      - archive_mode=off
+      - -c
+      - restore_command=cp /archive/%f %p
+      - -c
+      - recovery_target_name=ops07_target
+      - -c
+      - recovery_target_action=pause
+      - -c
+      - recovery_target_timeline=current
+
+volumes:
+  source_data:
+  source_cold:
+  recovered_data:
+  recovered_cold:
+  archive:
+  backup:

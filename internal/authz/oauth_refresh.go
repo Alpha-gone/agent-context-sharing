@@ -17,7 +17,11 @@ type RefreshTokenStore interface {
 }
 
 // Refresh는 현재 등록과 인가 결합을 유지하며 이전 갱신 자격을 한 번만 소비한다.
-func (s *Service) Refresh(ctx context.Context, raw, clientID, resource, scope string) (OAuthTokens, error) {
+func (s *Service) Refresh(ctx context.Context, raw, clientID, resource, scope string) (tokens OAuthTokens, resultErr error) {
+	var verified store.OAuthGrantBinding
+	defer func() {
+		s.authObservation(ctx, "refresh", verified.AccountID, verified.ClientID, verified.ID, resultErr)
+	}()
 	if err := ctx.Err(); err != nil {
 		return OAuthTokens{}, err
 	}
@@ -42,6 +46,7 @@ func (s *Service) Refresh(ctx context.Context, raw, clientID, resource, scope st
 	var result OAuthTokens
 	err = s.config.RefreshTokens.RotateOAuthRefreshToken(ctx, store.OAuthRefreshExchange{Hash: sha256.Sum256([]byte(raw)), ClientID: clientID, Resource: resource, Scope: scope}, s.now,
 		func(grant store.OAuthGrantBinding, now time.Time) ([32]byte, error) {
+			verified = grant
 			var hash [32]byte
 			var err error
 			result, hash, err = s.issueOAuthTokens(signer, grant, now)
@@ -51,7 +56,7 @@ func (s *Service) Refresh(ctx context.Context, raw, clientID, resource, scope st
 		return OAuthTokens{}, err
 	}
 	if errors.Is(err, store.ErrInvalidOAuthGrant) {
-		return OAuthTokens{}, &OAuthError{Code: "invalid_grant"}
+		return OAuthTokens{}, &credentialFailure{&OAuthError{Code: "invalid_grant"}, err}
 	}
 	if err != nil {
 		return OAuthTokens{}, &credentialFailure{ErrUnavailable, err}

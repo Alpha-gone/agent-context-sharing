@@ -12,12 +12,16 @@ import (
 
 type mcpReadStorage struct{ mcpWriteStorage }
 
-func newMCPReadHandlers(database *store.Store, plans mcp.Plans, flow mcp.FlowSearch) (map[string]mcp.ToolHandler, error) {
+func newMCPReadHandlers(database *store.Store, plans mcp.Plans, flow mcp.FlowSearch, observers ...mcp.Diagnostics) (map[string]mcp.ToolHandler, error) {
 	if database == nil || flow == nil {
 		return nil, &mcp.DependencyFailure{}
 	}
+	var observer mcp.Diagnostics
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
 	adapter := mcpReadStorage{mcpWriteStorage{database}}
-	return mcp.NewReadHandlers(mcp.Dependencies{Grades: adapter, Plans: plans, Graphs: adapter, Nodes: adapter, Hops: adapter, Relations: adapter, Flow: mcpReadFlow{flow}})
+	return mcp.NewReadHandlers(mcp.Dependencies{Diagnostics: observer, Grades: adapter, Plans: plans, Graphs: adapter, Nodes: adapter, Hops: adapter, Relations: adapter, Flow: mcpReadFlow{flow}})
 }
 
 func mcpReadError(err error) error {

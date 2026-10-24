@@ -58,12 +58,20 @@ func permissionDatabaseWithGrace(t *testing.T, graceDays store.RetentionDays) *s
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed.Path = "/" + name
+	parsed.Path, parsed.RawPath = "/"+name, ""
+	queryOptions := parsed.Query()
+	queryOptions.Del("dbname")
+	queryOptions.Del("database")
+	parsed.RawQuery = queryOptions.Encode()
 	pool, err := migrate.NewPool(t.Context(), parsed.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	var actual string
+	if err := pool.QueryRow(t.Context(), "SELECT current_database()").Scan(&actual); err != nil || actual != name {
+		t.Fatal("실제 연결이 시험 전용 DB가 아니므로 마이그레이션을 중단한다")
+	}
 	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context, conn *pgxpool.Conn) error {
 		loaded, applied, err := migrate.Prepare(ctx, conn, migrations.FS, ".", migrate.Config{
 			GraphName: "agent_context", VectorType: "vector", VectorDim: 128, IndexTargetLayers: "all_layers",

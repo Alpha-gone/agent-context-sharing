@@ -61,6 +61,9 @@ func TestWEB09BrowserAcceptance(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	detail := web03Graph(t, database, owner, "브라우저 상세", now).ID
+	empty := web03Graph(t, database, owner, "브라우저 빈 그래프", now).ID
+	single := web03Graph(t, database, owner, "브라우저 단일 그래프", now).ID
+	singleContext := web05Context(t, database, single, owner, model.LayerSource, "단일 원천", nil)
 	var listed []string
 	var deleteGraph model.Graph
 	for index := range 3 {
@@ -110,8 +113,9 @@ func TestWEB09BrowserAcceptance(t *testing.T) {
 		"chrome": chrome, "spki": base64.StdEncoding.EncodeToString(spki[:]), "profile": t.TempDir(), "evidence": evidence, "base": server.URL, "attacker": attacker.URL,
 		"login": "web09_owner", "password": password, "memberLogin": "web09_member", "teamName": "브라우저 팀",
 		"detailGraph": detail.String(), "listGraphs": listed, "viewerGraph": viewed.Name,
+		"emptyGraph": empty.String(), "singleGraph": single.String(), "singleContext": singleContext.ID.String(),
 		"deleteGraph": map[string]string{"id": deleteGraph.ID.String(), "name": deleteGraph.Name}, "agent": agent.String(),
-		"contexts": map[string]string{"isolated": isolated.ID.String(), "derived": derived.ID.String(), "descendant": descendant.ID.String(), "event": event.ID.String()},
+		"contexts": map[string]string{"isolated": isolated.ID.String(), "source": source.ID.String(), "derived": derived.ID.String(), "descendant": descendant.ID.String(), "event": event.ID.String()},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -126,6 +130,9 @@ func TestWEB09BrowserAcceptance(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "WEB09 {") {
 		t.Fatal("브라우저 인수 결과 요약이 없다")
+	}
+	if !strings.Contains(string(output), "TEST06 {") {
+		t.Fatal("키보드·접근성 트리 인수 결과 요약이 없다")
 	}
 
 	// 브라우저 조작의 결과를 저장소 상태로 대조한다.

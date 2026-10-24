@@ -48,12 +48,21 @@ func newIndexContractDatabase(t *testing.T) (*store.Store, *pgxpool.Pool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u.Path = "/" + name
+	u.Path, u.RawPath = "/"+name, ""
+	// dbname·database 옵션이 새 경로를 덮어쓰지 않도록 제거한다.
+	queryOptions := u.Query()
+	queryOptions.Del("dbname")
+	queryOptions.Del("database")
+	u.RawQuery = queryOptions.Encode()
 	pool, err := migrate.NewPool(t.Context(), u.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	var actual string
+	if err := pool.QueryRow(t.Context(), "SELECT current_database()").Scan(&actual); err != nil || actual != name {
+		t.Fatal("실제 연결이 시험 전용 DB가 아니므로 마이그레이션을 중단한다")
+	}
 	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context, conn *pgxpool.Conn) error {
 		loaded, applied, err := migrate.Prepare(ctx, conn, migrations.FS, ".", migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: 128, IndexTargetLayers: "all_layers"})
 		if err != nil {

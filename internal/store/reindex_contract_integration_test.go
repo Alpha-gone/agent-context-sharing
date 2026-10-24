@@ -280,7 +280,7 @@ func TestReindexShapeTransitionIntegration(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				files := fstest.MapFS{"013_data09_transition.sql": {Data: data}}
+				files := fstest.MapFS{"014_data09_transition.sql": {Data: data}}
 				target := migrate.Config{GraphName: "agent_context", VectorType: cfg.to, VectorDim: cfg.dimension, IndexTargetLayers: string(targets)}
 				loaded, err := migrate.Load(files, ".", target)
 				if err != nil {

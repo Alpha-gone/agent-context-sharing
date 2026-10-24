@@ -1,19 +1,13 @@
 package store
 
 import (
-	"context"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"agent_context_sharing/internal/migrate"
 	"agent_context_sharing/internal/model"
-	"agent_context_sharing/migrations"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestUpdatePasswordHashIfMatchesIntegration은 재해시가 읽은 기존 값과 같을 때만
@@ -202,48 +196,6 @@ func TestRotateSigningKeyIntegration(t *testing.T) {
 	}
 }
 
-// newSigningKeyIntegrationStore는 공유 DB의 활성 키를 건드리지 않고 정식 마이그레이션을
-// 적용한 시험별 DB를 사용한다. 실패한 시험도 자신이 만든 DB만 정리한다.
-func newSigningKeyIntegrationStore(t *testing.T) *Store {
-	t.Helper()
-	admin := newIntegrationStore(t)
-	name := "signing_key_test_" + strings.ReplaceAll(newTestID(t).String(), "-", "")
-	identifier := pgx.Identifier{name}.Sanitize()
-	if _, err := admin.pool.Exec(t.Context(), "CREATE DATABASE "+identifier); err != nil {
-		t.Fatalf("서명 키 시험 DB 생성(DB 생성 권한 필요): %v", err)
-	}
-	// 연결 설정이나 마이그레이션 준비가 실패해도 DB를 정리하도록 생성 직후 등록한다.
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if _, err := admin.pool.Exec(ctx, "DROP DATABASE "+identifier); err != nil {
-			t.Errorf("서명 키 시험 DB 정리: %v", err)
-		}
-	})
-	config := admin.pool.Config().Copy()
-	config.ConnConfig.Database = name
-	pool, err := pgxpool.NewWithConfig(t.Context(), config)
-	if err != nil {
-		t.Fatalf("서명 키 시험 연결 풀 준비: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	loaded, err := migrate.Load(migrations.FS, ".", migrate.Config{
-		GraphName: admin.graphName, VectorType: "vector", VectorDim: 768,
-	})
-	if err != nil {
-		t.Fatalf("서명 키 시험 마이그레이션 읽기: %v", err)
-	}
-	if err := migrate.EnsureHistory(t.Context(), pool); err != nil {
-		t.Fatalf("서명 키 시험 마이그레이션 이력 준비: %v", err)
-	}
-	for _, migration := range loaded {
-		if err := migrate.Apply(t.Context(), pool, migration); err != nil {
-			t.Fatalf("서명 키 시험 마이그레이션 적용: %v", err)
-		}
-	}
-	return &Store{pool: pool, graphName: admin.graphName}
-}
-
 // TestPermissionIntegration은 유효 등급과 소유 그래프 수 질의를 실제 데이터베이스에서
 // 확인한다. 두 질의는 메모리 대역으로 대체할 수 없어 여기에서만 검증된다.
 func TestPermissionIntegration(t *testing.T) {
@@ -315,17 +267,8 @@ func TestPermissionIntegration(t *testing.T) {
 // TestStoreIntegration과 같다.
 func newIntegrationStore(t testing.TB) *Store {
 	t.Helper()
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
-			t.Fatal("TEST_DATABASE_REQUIRED가 설정됐지만 TEST_DATABASE_URL이 비어 있다")
-		}
-		t.Skip("TEST_DATABASE_URL이 없어 통합 테스트를 건너뛴다")
-	}
-	graphName := os.Getenv("AGE_GRAPH_NAME")
-	if graphName == "" {
-		graphName = "agent_context"
-	}
+	databaseURL := integrationDatabaseURL(t)
+	graphName := integrationGraphName()
 	store, err := New(t.Context(), databaseURL, graphName, nil, nil, "")
 	if err != nil {
 		t.Fatalf("저장소 준비: %v", err)

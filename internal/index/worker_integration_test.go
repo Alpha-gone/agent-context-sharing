@@ -97,9 +97,16 @@ func focusIndexQueue(t *testing.T, databaseURL string, graphID model.ID) {
 		t.Fatalf("색인 큐 정리 연결: %v", err)
 	}
 	// 연결 닫기를 먼저 등록해 마지막에 돌게 한다. Cleanup은 나중에 등록한 것부터 돈다.
-	t.Cleanup(func() { connection.Close(context.WithoutCancel(t.Context())) })
 	t.Cleanup(func() {
-		ctx := context.WithoutCancel(t.Context())
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
+		defer cancel()
+		if err := connection.Close(ctx); err != nil {
+			t.Errorf("색인 큐 정리 연결 종료: %v", err)
+		}
+	})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
+		defer cancel()
 		if _, err := connection.Exec(ctx, `DELETE FROM public.index_task WHERE graph_id = $1`, graphID.String()); err != nil {
 			t.Errorf("색인 작업 정리: %v", err)
 		}

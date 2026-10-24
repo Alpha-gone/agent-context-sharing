@@ -190,6 +190,10 @@ func newServerContractDatabase(t *testing.T) (*store.Store, *pgxpool.Pool, strin
 		}
 	})
 	isolated.Path, isolated.RawPath = "/"+name, ""
+	queryOptions := isolated.Query()
+	queryOptions.Del("dbname")
+	queryOptions.Del("database")
+	isolated.RawQuery = queryOptions.Encode()
 	pool, err := migrate.NewPool(t.Context(), isolated.String())
 	if err != nil {
 		t.Fatal("시험 전용 마이그레이션 연결을 준비하지 못했습니다")

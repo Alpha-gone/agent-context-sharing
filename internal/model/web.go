@@ -21,6 +21,14 @@ type Team struct {
 	DeletedAt        *time.Time
 	// MemberLoginIDs는 관리 팀 조회에서만 채우는 현재 구성원의 로그인 아이디다.
 	MemberLoginIDs []string
+	// GraphGrants는 관리 팀 조회에서만 채우며 그래프 내용·접근 권한을 포함하지 않는다.
+	GraphGrants []TeamGraphGrant
+}
+
+// TeamGraphGrant는 팀에 보존된 그래프별 부여 등급이다. 삭제된 팀의 상속은 무효다.
+type TeamGraphGrant struct {
+	GraphID ID
+	Grade   GraphGrade
 }
 
 // DeletionImpact는 삭제 전에 안내할 연결된 대상의 수를 담는다.

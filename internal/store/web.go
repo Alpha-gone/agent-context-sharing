@@ -246,11 +246,13 @@ func (s *Store) ListManagedTeams(ctx context.Context, managerID model.ID) ([]mod
 	if !managerID.IsV7() {
 		return nil, fmt.Errorf("팀 관리자 식별자가 UUIDv7이 아니다")
 	}
-	rows, err := s.pool.Query(ctx, `SELECT team_id, name, manager_account_id, created_at, deleted_at,
+	rows, err := s.pool.Query(ctx, `SELECT team.team_id, team.name, team.manager_account_id, team.created_at, team.deleted_at,
 		ARRAY(SELECT account.login_id FROM public.team_member AS member
 			JOIN public.account AS account ON account.account_id = member.account_id
-			WHERE member.team_id = team.team_id ORDER BY account.login_id)
-		FROM public.team AS team WHERE manager_account_id = $1 ORDER BY name, team_id`, managerID.String())
+			WHERE member.team_id = team.team_id ORDER BY account.login_id), permission.graph_id, permission.grade
+		FROM public.team AS team
+		LEFT JOIN public.graph_grant AS permission ON permission.subject_type = 'team' AND permission.subject_id = team.team_id
+		WHERE team.manager_account_id = $1 ORDER BY team.name, team.team_id, permission.graph_id`, managerID.String())
 	if err != nil {
 		return nil, fmt.Errorf("관리 팀 목록 조회: %w", err)
 	}
@@ -258,12 +260,27 @@ func (s *Store) ListManagedTeams(ctx context.Context, managerID model.ID) ([]mod
 	teams := make([]model.Team, 0)
 	for rows.Next() {
 		var members []string
-		team, err := scanTeam(rows, &members)
+		var rawGraphID, rawGrade *string
+		team, err := scanTeam(rows, &members, &rawGraphID, &rawGrade)
 		if err != nil {
 			return nil, err
 		}
-		team.MemberLoginIDs = members
-		teams = append(teams, team)
+		if len(teams) == 0 || teams[len(teams)-1].ID != team.ID {
+			team.MemberLoginIDs = members
+			teams = append(teams, team)
+		}
+		if rawGraphID != nil {
+			graphID, err := model.ParseID(*rawGraphID)
+			if err != nil {
+				return nil, fmt.Errorf("관리 팀의 그래프 식별자: %w", err)
+			}
+			grade := nullableGrade(rawGrade)
+			if !grade.Valid() {
+				return nil, fmt.Errorf("관리 팀의 그래프 등급이 올바르지 않다")
+			}
+			current := &teams[len(teams)-1]
+			current.GraphGrants = append(current.GraphGrants, model.TeamGraphGrant{GraphID: graphID, Grade: grade})
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("관리 팀 목록 행 읽기: %w", err)

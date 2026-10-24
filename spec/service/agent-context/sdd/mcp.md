@@ -1,6 +1,6 @@
 # MCP 전송과 도구 계약
 
-목표 Streamable HTTP 전송, 도구 14종, 행위자 결합, 멱등성 외피, 입력·응답·오류의 정본이다. 보호 HTTP 전송과 기동 경로의 업무 연결·공통 HTTP 경계는 구현·모듈 인수했으며 전체 도구 계약·호스트 인수는 대기다.
+목표 Streamable HTTP 전송, 도구 14종, 행위자 결합, 멱등성 외피, 입력·응답·오류의 정본이다. 보호 HTTP 전송과 기동 경로의 업무 연결·공통 HTTP 경계 및 [전체 서버 도구 계약](../reviews/2026-10-24-mcp-09.md)을 인수했다. 실제 호스트 인수는 대기다.
 
 [설계 전체](../SDD.md) · [요구사항과 설계 대응](traceability.md)
 
@@ -28,7 +28,7 @@
 
 발견·목록의 ttlMs=0·private와 별도로 모든 HTTP 응답에 no-store를 유지한다. 공개 Host를 loopback 프록시로 전달하는 보호 생성자는 SDK의 자동 localhost Host 거부를 해제하고 정확한 Origin·Bearer와 바깥 TLS 판정을 적용한다. 인증 없는 SDK 관찰 경계는 이 옵션을 사용하지 않는다. SDK의 PropagateRequestCancellation을 명시해 원래 요청의 context를 유지한다. 업무 시간 예산·커밋/재생·실제 단절의 모듈 경계는 [MCP-08 검토](../reviews/2026-10-20-mcp-08.md)에서 인수했다. 전체 기동의 의존 조립·공통 HTTP 경계는 아래 ARCH-06·07 근거를 따르며 운영 실패·호스트 인수는 후속이다.
 
-[MCP-02 인수](../reviews/2026-10-20-mcp-02.md)는 실제 OAuth/TLS와 서버 라우터 주입까지 검증했다. MCP-06·07에서 여덟 쓰기·다섯 읽기 처리기 모듈을 인수했다. [ARCH-06](../reviews/2026-10-23-arch-06.md)의 기동 조립은 실제 등록과 읽기/쓰기 14종을 연결하고 [ARCH-07](../reviews/2026-10-23-arch-07.md)에서 공통 HTTP 경계를 인수했다. 전체 서버 도구 계약은 MCP-09, 실제 호스트는 TEST-08에서 인수한다.
+[MCP-02 인수](../reviews/2026-10-20-mcp-02.md)는 실제 OAuth/TLS와 서버 라우터 주입까지 검증했다. MCP-06·07에서 여덟 쓰기·다섯 읽기 처리기 모듈을 인수했다. [ARCH-06](../reviews/2026-10-23-arch-06.md)의 기동 조립은 실제 등록과 읽기/쓰기 14종을 연결하고 [ARCH-07](../reviews/2026-10-23-arch-07.md)에서 공통 HTTP 경계를 인수했다. 전체 서버 도구 계약은 [MCP-09](../reviews/2026-10-24-mcp-09.md)에서 인수했으며 실제 호스트는 TEST-08에서 별도로 인수한다.
 
 ## 공통 행위자·도구·쓰기 안전성
 
@@ -67,7 +67,7 @@ UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용
 
 ## 요청 처리 순서
 
-보호 HTTP·인증 주체 전달 모듈은 구현했으며 실제 업무 도구의 조립은 후속 대상이다. 표준 SDK 메시지·입력 검증, Bearer 검증·현재 권한 검사·행위자 결합, 도메인 연산·멱등성 트랜잭션, 출력 격리 확인과 표준 결과 매핑 순으로 수행한다. HTTP 오류와 도메인 오류를 구분하고 내부 장애를 재인증 신호로 바꾸지 않는다. 세부 정본은 [표준 MCP 경계](mcp.md#표준-mcp-경계)·[공통 행위자·도구·쓰기 안전성](mcp.md#공통-행위자도구쓰기-안전성)이다.
+보호 HTTP·인증 주체 전달과 실제 업무 도구의 조립은 구현·인수했다. 표준 SDK 메시지·입력 검증, Bearer 검증·현재 권한 검사·행위자 결합, 도메인 연산·멱등성 트랜잭션, 출력 격리 확인과 표준 결과 매핑 순으로 수행한다. HTTP 오류와 도메인 오류를 구분하고 내부 장애를 재인증 신호로 바꾸지 않는다. 세부 정본은 [표준 MCP 경계](mcp.md#표준-mcp-경계)·[공통 행위자·도구·쓰기 안전성](mcp.md#공통-행위자도구쓰기-안전성)이다.
 
 저장 계층의 멱등성·관리 기록·권한 재검사·원천 불변 규칙은 유지하며 전송 어댑터 부재를 도메인 계약의 제거로 해석하지 않는다.
 
@@ -161,7 +161,7 @@ UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용
 
 ## MCP 표면
 
-직접 연결의 표면은 [표준 MCP 경계](mcp.md#표준-mcp-경계)를 따른다. 현재 `internal/mcp`에는 최소 SDK 진입 경계와 [14종 도구 정의·검증](../reviews/2026-10-18-mcp-03.md)이 있다. 공통 instructions와 도구의 description·annotations·스키마를 실제 SDK 목록·호출로 인수했다. 실제 서버 연결·업무 도구의 전체 결과 스냅샷·취소·호스트 인수는 대기 상태다. 실제 호스트 검증 전에는 지원을 주장하지 않는다.
+직접 연결의 표면은 [표준 MCP 경계](mcp.md#표준-mcp-경계)를 따른다. 현재 `internal/mcp`에는 최소 SDK 진입 경계와 [14종 도구 정의·검증](../reviews/2026-10-18-mcp-03.md)이 있다. 공통 instructions와 도구의 description·annotations·스키마를 실제 SDK 목록·호출로 인수했다. [MCP-09](../reviews/2026-10-24-mcp-09.md)에서 두 실제 조립 서버의 14종 성공·도메인 오류·정상 부분 결과와 발견/목록/전송 오류를 응답 스냅샷으로 인수했다. 취소·시간 예산은 MCP-08·ARCH-07·TEST-07의 새 실행으로 대조했으며 실제 호스트 인수는 대기 상태다. 실제 호스트 검증 전에는 지원을 주장하지 않는다.
 
 ## 응답 직렬화
 
@@ -183,7 +183,7 @@ MCP 처리기는 `resultType: "complete"`와 표준 `content`, `structuredConten
 
 흐름 항목의 entry_distance·matched_channels·rank·origin_kinds와 선택 folded_count를 보존한다. budget은 used·limit, channels는 채널별 candidates·latency_ms·contribution·failure이며 내부 연결 계측과 후보 차수는 싣지 않는다. truncated.result_truncated는 정상 부분 결과의 표시다. 홉 절단에는 hop_boundary, 예산 절단에는 reason·excluded를 보존하며 두 절단이 겹치면 둘 다 싣는다. 일부 채널 실패·빈 결과·절단은 isError=false다. DB 내부 장애와 감싸진 부재·커서 오류를 조립 경계에서 구분하며 내부 원문은 응답에 포함하지 않는다.
 
-[MCP-07 모듈 인수](../reviews/2026-10-20-mcp-07.md)는 실제 저장·검색과 고정 SDK 외피를 각각 검증했다. 보호 OAuth/TLS를 포함한 전체 조립·오류 계층/시간 예산·단절·전체 스냅샷과 실제 호스트 인수는 후속 범위다.
+[MCP-07 모듈 인수](../reviews/2026-10-20-mcp-07.md)는 실제 저장·검색과 고정 SDK 외피를 각각 검증했다. 당시 후속이었던 보호 OAuth/TLS의 전체 조립·오류 계층·전체 응답 스냅샷은 [MCP-09](../reviews/2026-10-24-mcp-09.md)에서 인수했다. 시간 예산·단절은 MCP-08·ARCH-07·TEST-07의 증거를 따르며 실제 호스트 인수는 후속 범위다.
 
 ## 오류의 생성과 전달
 
@@ -226,7 +226,7 @@ MCP 처리기는 `resultType: "complete"`와 표준 `content`, `structuredConten
 
 `FR-AGENT_CONTEXT-164`~`172`의 첫 구현은 공식 `github.com/modelcontextprotocol/go-sdk` `v1.8.0`을 사용한다. [공식 릴리스](https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.8.0)가 `2026-07-28` 지원을 명시하며 `ServerOptions.SupportedProtocolVersions`를 해당 revision 하나로 제한한다. SDK의 추가 revision을 자동 노출하지 않고 stateful handler를 사용하지 않는다. 실제 Go 빌드·무상태 transport 동작·호스트 적합성은 인수 시험 대상이다.
 
-SDK의 지원 목록 제한만으로 이전 수명주기와 외피 없는 호출의 거부가 보장되지는 않는다. 서비스의 MCP 진입 경계는 SDK에 위임하기 전에 필수 외피·허용 revision과 메서드를 확인하고, SDK가 직접 처리하지 않는 표준 Base64 Mcp-Name의 해독·본문 대조를 보완한다. 오류는 위 표준 MCP 경계의 JSON-RPC 계약을 유지한다. SDK를 교체하거나 이전 revision을 허용하는 방식으로 우회하지 않는다. [MCP-01 검토](../reviews/2026-10-18-mcp-01.md#서비스-진입-경계-보완과-최종-인수)에서 최소 진입 경계와 SDK의 교환을 인수했다. 인증·Origin·서버 라우터 결합 모듈은 [MCP-02 검토](../reviews/2026-10-20-mcp-02.md)에서 인수했다. 기동 경로의 업무 13종과 등록의 연결은 ARCH-06, 공통 HTTP 경계는 ARCH-07에서 인수했다. 전체 서버 도구 계약은 MCP-09의 후속 인수 대상이다.
+SDK의 지원 목록 제한만으로 이전 수명주기와 외피 없는 호출의 거부가 보장되지는 않는다. 서비스의 MCP 진입 경계는 SDK에 위임하기 전에 필수 외피·허용 revision과 메서드를 확인하고, SDK가 직접 처리하지 않는 표준 Base64 Mcp-Name의 해독·본문 대조를 보완한다. 오류는 위 표준 MCP 경계의 JSON-RPC 계약을 유지한다. SDK를 교체하거나 이전 revision을 허용하는 방식으로 우회하지 않는다. [MCP-01 검토](../reviews/2026-10-18-mcp-01.md#서비스-진입-경계-보완과-최종-인수)에서 최소 진입 경계와 SDK의 교환을 인수했다. 인증·Origin·서버 라우터 결합 모듈은 [MCP-02 검토](../reviews/2026-10-20-mcp-02.md)에서 인수했다. 기동 경로의 업무 13종과 등록의 연결은 ARCH-06, 공통 HTTP 경계는 ARCH-07에서 인수했다. 전체 서버 도구 계약은 [MCP-09](../reviews/2026-10-24-mcp-09.md)에서 인수했다.
 
 서버 정보·도구 설명은 고정 구성에서 만들며 사용자의 입력이나 자격 증명을 instructions에 넣지 않는다. 서버는 이전 요청·발견 결과·접속 인스턴스로 revision·기능을 추론하지 않는다. 표준 메타데이터·헤더·Origin·메시지 검증은 SDK 경계에 두고 인수 시험에서 발견을 생략한 호출과 다른 인스턴스로 이어지는 호출도 대조한다.
 

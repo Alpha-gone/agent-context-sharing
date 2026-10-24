@@ -60,6 +60,8 @@ function click(button) {
 function changeHops(value) {
   range.value = String(value);
   range.dispatchEvent(new Event('input'));
+  assert.equal(range.getAttribute('aria-valuetext'), value + '홉', '슬라이더 값은 홉 단위로 읽힌다');
+  if (status.textContent !== '전체 보기') assert.match(status.textContent, new RegExp(' · ' + value + '홉 · '), '상태 안내는 현재 홉을 알린다');
 }
 function escape() {
   const event = new Event('keydown');
@@ -151,11 +153,21 @@ try {
     assert.match(details.textContent, /^derived · [^\n]+ · 상충\n파생 후손$/, '선택 상세에 상태 표식을 텍스트로 붙인다');
     assert.equal(cy.edges('.evidence').length, 2, '반복 선택에서도 원천까지의 근거 경로를 강조한다');
     assert.equal(evidence.textContent.split('\n').length, 2, '텍스트 근거와 강조 간선이 같아야 한다');
+    const textEvidence = evidence.textContent;
+    changeHops(0);
+    assert.deepEqual(visibleNodes(), ['파생 후손']);
+    assert.equal(evidence.textContent, textEvidence, '국소 범위로 숨겨진 근거도 텍스트에 남는다');
+    assert.equal(cy.edges('.evidence').length, 2, '국소 범위로 숨겨진 근거도 강조 상태에 남는다');
+    escape();
+    expectFullView();
+    assert.equal(range.value, '0', 'Esc 해제는 홉 값을 유지한다');
+    changeHops(maximum);
+    choose('파생 후손');
     choose('파생 후손');
     expectFullView();
     click(fullView);
     expectFullView();
-    console.log('고립 노드 해제 3종·포인터/목록 토글과 pressed 동기화·0/1/최대 홉·텍스트 근거 방향·변경 안내: 통과');
+    console.log('고립 노드 해제 3종·포인터/목록 토글과 pressed 동기화·0/1/최대 홉·홉 값 안내·숨겨진 근거 유지·텍스트 근거 방향·변경 안내: 통과');
   }
 } finally {
   cy.destroy();

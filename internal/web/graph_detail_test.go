@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -173,5 +174,39 @@ func TestWEB06VisualizationReadBoundary(t *testing.T) {
 				t.Fatalf("시각화 조회 경계 = %d", response.Code)
 			}
 		})
+	}
+}
+
+// TestWEB07SelectionAccessibilityMarkup은 키보드 선택 수단이 기본 버튼이고, 선택이 포커스를
+// 강제로 옮기거나 양의 tabindex·캔버스용 위젯 역할을 추가하지 않는지 확인한다.
+func TestWEB07SelectionAccessibilityMarkup(t *testing.T) {
+	account, graph := testID(t), testID(t)
+	nodes := []model.Context{
+		{ID: testID(t), GraphID: graph, Layer: model.LayerSource, Body: "원천"},
+		{ID: testID(t), GraphID: graph, Layer: model.LayerDerived, Body: "파생"},
+	}
+	backend := &web06Store{fakeGraphStore: &fakeGraphStore{accountID: account, graphID: graph}, graph: model.Graph{Name: "접근성"}, result: store.HopResult{Contexts: nodes, Edges: []store.HopEdge{{FromID: nodes[1].ID, ToID: nodes[0].ID, Kind: "derived_from"}}}}
+	html := web06Detail(t, backend)
+	script := html[strings.Index(html, "const elements="):]
+	if regexp.MustCompile(`tabindex="[1-9]`).MatchString(html) || regexp.MustCompile(`role="(application|grid|tab|tablist|listbox|option|button)"`).MatchString(html) {
+		t.Fatal("양의 tabindex 또는 불필요한 위젯 역할이 있다")
+	}
+	if strings.Contains(script, ".focus(") || strings.Count(html, `role="status"`) != 1 {
+		t.Fatal("선택이 포커스를 옮기거나 상태 안내 영역이 하나가 아니다")
+	}
+	for _, node := range nodes {
+		button := `<button type="button" data-context-id="` + node.ID.String() + `" aria-label="` + node.ID.String() + ` 노드 선택" aria-pressed="false" aria-controls="node-details node-evidence"`
+		if !strings.Contains(html, button) {
+			t.Fatalf("노드 %s의 기본 선택 버튼이 없다", node.ID)
+		}
+	}
+	// 버튼 이름은 선택 전후에 바꾸지 않고 상태는 aria-pressed만 바꾼다.
+	if strings.Contains(script, "setAttribute('aria-label'") || strings.Contains(script, ".textContent='노드") || !strings.Contains(script, "setAttribute('aria-pressed'") {
+		t.Fatal("선택 버튼의 이름 또는 상태 갱신 방식이 다르다")
+	}
+	for _, want := range []string{`<a id="details-link" href="#node-details-heading">`, `<h2 id="node-details-heading" tabindex="-1">`, "event.key==='Escape'"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("키보드 경로 %q가 없다", want)
+		}
 	}
 }

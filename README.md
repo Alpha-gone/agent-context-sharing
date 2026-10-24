@@ -243,4 +243,6 @@ sh ./test-wal-archive.sh
 
 [WEB-05 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-05.md)에서 삭제/복구 대상 보기·계층별 영향·운영자 처리 확인과 실제 DB/TLS의 저장량 한도·등급 상실 재판정·요청자 직접 소유자 복원을 확인했습니다. 웹 743건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **89/124개 완료**이며 다음 권장은 [WEB-06](spec/service/agent-context/development-plan/web.md#web-06)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.
 
-[WEB-06 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-06.md)에서 그래프 속성·전역 요약 영역·연결 종류 구분과 실제 DB/TLS의 시작점·슬라이더·절단·삭제 노드 제외를 확인했습니다. 웹 751건·race·Node.js 상태 전이·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 현재 전체 **90/124개 완료**이며 다음 권장은 [WEB-07](spec/service/agent-context/development-plan/web.md#web-07)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.
+[WEB-06 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-06.md)에서 그래프 속성·전역 요약 영역·연결 종류 구분과 실제 DB/TLS의 시작점·슬라이더·절단·삭제 노드 제외를 확인했습니다. 웹 751건·race·Node.js 상태 전이·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **90/124개 완료**이며 다음 권장은 [WEB-07](spec/service/agent-context/development-plan/web.md#web-07)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.
+
+[WEB-07 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-07.md)에서 키보드 선택 수단·홉 값 안내·숨겨진 근거 유지·시각화 영역 역할을 확인했습니다. 웹 752건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 현재 전체 **91/124개 완료**이며 다음 권장은 [WEB-08](spec/service/agent-context/development-plan/web.md#web-08)입니다. 실제 브라우저 키보드·포커스와 음성은 후속 범위입니다.

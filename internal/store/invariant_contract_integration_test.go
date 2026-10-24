@@ -92,30 +92,44 @@ func TestInvariantDuplicateEmbeddingIntegration(t *testing.T) {
 }
 
 func TestInvariantDanglingEdgeIntegration(t *testing.T) {
-	database := newIntegrationStore(t)
-	graph := createInvariantGraph(t, database)
-	orphan, err := database.CreateContext(t.Context(), graph.graphID, testSourceContext(t, graph.graphID, graph.source.CreatedBy, "api://data06/orphan/"+graph.graphID.String()), nil)
-	if err != nil {
-		t.Fatal(err)
+	for _, direction := range []string{"outgoing", "incoming"} {
+		t.Run(direction, func(t *testing.T) {
+			database := newIntegrationStore(t)
+			graph := createInvariantGraph(t, database)
+			orphan, err := database.CreateContext(t.Context(), graph.graphID, testSourceContext(t, graph.graphID, graph.source.CreatedBy, "api://data06/orphan/"+graph.graphID.String()), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			from, to := graph.derived.ID, orphan.ID
+			if direction == "incoming" {
+				from, to = to, from
+			}
+			corruptEdge(t, database, graph.graphID, "DERIVED_FROM", from, to, "")
+			// 간선을 보존한 우회 SQL 삭제를 재현한다. Cypher MATCH만으로는 이 간선을 읽지 못한다.
+			table := pgx.Identifier{database.graphName, "Context"}.Sanitize()
+			if _, err := database.pool.Exec(t.Context(), "DELETE FROM "+table+" WHERE properties ->> 'context_id'::text=$1", orphan.ID.String()); err != nil {
+				t.Fatal(err)
+			}
+			// 삭제된 정점은 제외하고, 정상 간선의 양 끝을 함께 범위에 넣어도 고아 간선만 한 번 보충한다.
+			snapshot := auditSnapshot{graphID: graph.graphID.String(), scope: map[string]struct{}{
+				graph.derived.ID.String(): {}, graph.source.ID.String(): {},
+			}}
+			if err := database.loadDanglingAuditEdges(t.Context(), database.pool, &snapshot); err != nil || len(snapshot.edges) != 1 {
+				t.Fatalf("고아 간선 보충=%+v: %v", snapshot.edges, err)
+			}
+			got := compareInvariantScopes(t, database, graph, []model.ID{graph.derived.ID, graph.source.ID})
+			if len(got) == 0 || !slices.ContainsFunc(got, func(value InvariantViolation) bool {
+				return value.Rule == RuleEndpointLayer && slices.Contains(value.IDs, graph.derived.ID.String())
+			}) {
+				t.Fatalf("고아 간선을 놓쳤다: %+v", got)
+			}
+			line, err := json.Marshal(got)
+			if err != nil || strings.Contains(string(line), graph.source.Body) || strings.Contains(string(line), "embedding\":") {
+				t.Fatalf("감사 출력에 본문/벡터 노출: %v", err)
+			}
+			assertConnectionRecovery(t, database, nil, 0)
+		})
 	}
-	corruptEdge(t, database, graph.graphID, "DERIVED_FROM", graph.derived.ID, orphan.ID, "")
-	// 간선을 보존한 우회 SQL 삭제를 재현한다. Cypher MATCH만으로는 이 간선을 읽지 못한다.
-	table := pgx.Identifier{database.graphName, "Context"}.Sanitize()
-	if _, err := database.pool.Exec(t.Context(), "DELETE FROM "+table+" WHERE properties ->> 'context_id'::text=$1", orphan.ID.String()); err != nil {
-		t.Fatal(err)
-	}
-	// 삭제된 정점 자체는 쓰기 범위로 넘기지 않는다. 살아 있는 끝점을 수정하는 쓰기를 검사한다.
-	got := compareInvariantScopes(t, database, graph, []model.ID{graph.derived.ID})
-	if len(got) == 0 || !slices.ContainsFunc(got, func(value InvariantViolation) bool {
-		return value.Rule == RuleEndpointLayer && slices.Contains(value.IDs, graph.derived.ID.String())
-	}) {
-		t.Fatalf("고아 간선을 놓쳤다: %+v", got)
-	}
-	line, err := json.Marshal(got)
-	if err != nil || strings.Contains(string(line), graph.source.Body) || strings.Contains(string(line), "embedding\":") {
-		t.Fatalf("감사 출력에 본문/벡터 노출: %v", err)
-	}
-	assertConnectionRecovery(t, database, nil, 0)
 }
 
 func TestInvariantCycleOutsideWriteScopeIntegration(t *testing.T) {

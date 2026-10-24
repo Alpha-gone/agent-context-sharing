@@ -465,12 +465,14 @@ func (s *Store) loadDanglingAuditEdges(ctx context.Context, queryer cypherQuerye
 	contexts := pgx.Identifier{s.graphName, "Context"}.Sanitize()
 	var queries []string
 	var arguments []any
-	filter := `(e.properties ->> 'graph_id'::text = $1 OR a.properties ->> 'graph_id'::text = $1 OR b.properties ->> 'graph_id'::text = $1)`
+	var scopeQuery string
+	filters := []string{`(e.properties ->> 'graph_id'::text = $1 OR a.properties ->> 'graph_id'::text = $1 OR b.properties ->> 'graph_id'::text = $1)`}
 	arguments = []any{snapshot.graphID}
 	if snapshot.scope != nil {
-		// 실제 끝점 id를 먼저 구해 start_id/end_id 인덱스로 좁힌다.
-		anchor := `SELECT id FROM ` + contexts + ` WHERE ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"context_id"'::ag_catalog.agtype]) IN (SELECT value::ag_catalog.agtype FROM unnest($1::text[]) value)`
-		filter = `(e.start_id = ANY(ARRAY(` + anchor + `)) OR e.end_id = ANY(ARRAY(` + anchor + `)))`
+		// 방향별로 나눠야 OR의 사후 필터 대신 start_id/end_id 인덱스로 좁힌다.
+		// 고아 간선은 살아 있는 끝점만 범위에 포함되므로 두 방향에서 중복되지 않는다.
+		scopeQuery = `WITH scope_ids AS MATERIALIZED (SELECT id FROM ` + contexts + ` WHERE ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"context_id"'::ag_catalog.agtype]) IN (SELECT value::ag_catalog.agtype FROM unnest($1::text[]) value)) `
+		filters = []string{`e.start_id = ANY(ARRAY(SELECT id FROM scope_ids))`, `e.end_id = ANY(ARRAY(SELECT id FROM scope_ids))`}
 		ids := make([]string, 0, len(snapshot.scope))
 		for id := range snapshot.scope {
 			encoded, err := json.Marshal(id)
@@ -482,15 +484,17 @@ func (s *Store) loadDanglingAuditEdges(ctx context.Context, queryer cypherQuerye
 		arguments = []any{ids}
 	}
 	for _, label := range []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"} {
-		queries = append(queries, `SELECT '`+label+`', coalesce(e.properties ->> 'graph_id'::text, ''),
+		for _, filter := range filters {
+			queries = append(queries, `SELECT '`+label+`', coalesce(e.properties ->> 'graph_id'::text, ''),
 			coalesce(e.properties ->> 'relation_id'::text, ''), coalesce(e.properties ->> 'state'::text, ''),
 			coalesce(a.properties ->> 'context_id'::text, 'age:' || e.start_id::text),
 			coalesce(b.properties ->> 'context_id'::text, 'age:' || e.end_id::text)
 			FROM `+pgx.Identifier{s.graphName, label}.Sanitize()+` e
 			LEFT JOIN `+contexts+` a ON a.id=e.start_id LEFT JOIN `+contexts+` b ON b.id=e.end_id
 			WHERE (a.id IS NULL OR b.id IS NULL) AND `+filter)
+		}
 	}
-	rows, err := queryer.Query(ctx, strings.Join(queries, " UNION ALL "), arguments...)
+	rows, err := queryer.Query(ctx, scopeQuery+strings.Join(queries, " UNION ALL "), arguments...)
 	if err != nil {
 		return fmt.Errorf("불변식 고아 간선 조회: %w", err)
 	}

@@ -207,33 +207,41 @@ func TestRestoreChannelRechecksAfterWebTransitionIntegration(t *testing.T) {
 }
 
 func TestCleanupRetainsDiscardDuringUncommittedRestoreIntegration(t *testing.T) {
-	database := newSmallPoolStore(t)
-	target := restoreChannelTarget(t, database, model.LayerSource)
-	operation := testMCPDiscardOperation(target)
-	if _, err := database.DiscardContext(t.Context(), target.GraphID, target.ID, operation, WriteLimits{}); err != nil {
-		t.Fatal(err)
-	}
-	tx, err := database.pool.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(context.WithoutCancel(t.Context()))
-	if _, err := database.SetContextDeleted(context.WithValue(t.Context(), writeTransactionContextKey{}, tx), target.GraphID, target.ID, target.CreatedBy, false, 0); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.CleanupAuditRecords(t.Context(), time.Now().UTC().AddDate(1, 0, 0), func(owner model.ID) int {
-		if owner == target.CreatedBy {
-			return 1
-		}
-		return 0
-	}, func(model.ID) int { return 0 }); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Rollback(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	operation.Kind = OperationUpdate
-	if _, err := database.RestoreContext(t.Context(), target.GraphID, target.ID, operation, WriteLimits{}); err != nil {
-		t.Fatalf("복구 롤백 뒤 현재 폐기 근거가 사라졌다: %v", err)
+	for _, layer := range []model.Layer{model.LayerSource, model.LayerDerived, model.LayerEvent} {
+		t.Run(string(layer), func(t *testing.T) {
+			database := newSmallPoolStore(t)
+			target := restoreChannelTarget(t, database, layer)
+			operation := testMCPDiscardOperation(target)
+			if _, err := database.DiscardContext(t.Context(), target.GraphID, target.ID, operation, WriteLimits{}); err != nil {
+				t.Fatal(err)
+			}
+			tx, err := database.pool.Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := rollbackTransaction(t.Context(), tx); err != nil {
+					t.Error(err)
+				}
+			}()
+			if _, err := database.SetContextDeleted(context.WithValue(t.Context(), writeTransactionContextKey{}, tx), target.GraphID, target.ID, target.CreatedBy, false, 0); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.CleanupAuditRecords(t.Context(), time.Now().UTC().AddDate(1, 0, 0), func(owner model.ID) int {
+				if owner == target.CreatedBy {
+					return 1
+				}
+				return 0
+			}, func(model.ID) int { return 0 }); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Rollback(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			operation.Kind = OperationUpdate
+			if _, err := database.RestoreContext(t.Context(), target.GraphID, target.ID, operation, WriteLimits{}); err != nil {
+				t.Fatalf("복구 롤백 뒤 현재 폐기 근거가 사라졌다: %v", err)
+			}
+		})
 	}
 }

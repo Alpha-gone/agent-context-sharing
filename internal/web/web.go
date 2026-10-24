@@ -870,6 +870,7 @@ func (server *Server) renderDeletion(writer http.ResponseWriter, request *http.R
 	server.render(writer, http.StatusOK, "deletion", value)
 }
 
+// graphAudit은 두 감사 기록을 기간·대상으로 거른 한 페이지와 다음 페이지 주소를 그린다.
 func (server *Server) graphAudit(writer http.ResponseWriter, request *http.Request, graphID model.ID) {
 	if request.Method != http.MethodGet {
 		methodNotAllowed(writer, http.MethodGet)
@@ -879,12 +880,103 @@ func (server *Server) graphAudit(writer http.ResponseWriter, request *http.Reque
 	if !ok {
 		return
 	}
-	entries, _, err := server.graphs.ListAuditEntries(request.Context(), graphID, accountID, model.AuditFilter{}, "", server.config.Plans.For(accountID).GraphPage.Default)
+	value := pageData{Title: "감사 기록", GraphID: graphID}
+	filter, cursor, err := auditQuery(request.URL.Query(), &value.AuditFilter)
 	if err != nil {
-		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "감사 기록", Error: "감사 기록을 읽을 수 없습니다."})
+		value.Error = err.Error()
+		server.render(writer, http.StatusBadRequest, "audit", value)
 		return
 	}
-	server.render(writer, http.StatusOK, "audit", pageData{Title: "감사 기록", GraphID: graphID, AuditEntries: entries})
+	pageSize, err := server.config.Plans.For(accountID).GraphPage.Resolve("graph_page", nil)
+	if err != nil {
+		value.Error = "목록 한도를 적용할 수 없습니다."
+		server.render(writer, http.StatusInternalServerError, "audit", value)
+		return
+	}
+	entries, next, err := server.graphs.ListAuditEntries(request.Context(), graphID, accountID, filter, cursor, pageSize)
+	if request.Context().Err() != nil {
+		return
+	}
+	if err != nil {
+		status, message := http.StatusInternalServerError, "감사 기록을 읽을 수 없습니다."
+		switch {
+		case errors.Is(err, store.ErrInvalidCursor):
+			status, message = http.StatusBadRequest, "목록 커서가 올바르지 않습니다. 필터를 다시 적용해 주십시오."
+		case errors.Is(err, store.ErrNotFound):
+			status, message = http.StatusNotFound, "그래프를 찾을 수 없습니다."
+		}
+		if _, field := errors.AsType[model.FieldError](err); field {
+			status, message = http.StatusBadRequest, "감사 기록 필터가 올바르지 않습니다."
+		}
+		value.Error = message
+		server.render(writer, status, "audit", value)
+		return
+	}
+	value.AuditEntries = entries
+	if next != "" {
+		value.NextPage = auditPage(graphID, value.AuditFilter, next)
+	}
+	server.render(writer, http.StatusOK, "audit", value)
+}
+
+// auditForm은 감사 필터 양식에 다시 표시할 검증된 입력이다.
+type auditForm struct{ From, Until, Target string }
+
+// auditQuery는 UTC 날짜 두 개와 대상 식별자를 감사 범위로 바꾼다. 종료일은 그날을
+// 포함하도록 다음 날 0시를 제외 경계로 쓴다. 검증된 값만 form에 남겨 다시 표시한다.
+func auditQuery(query url.Values, form *auditForm) (model.AuditFilter, string, error) {
+	var filter model.AuditFilter
+	for key, values := range query {
+		if (key != "from" && key != "until" && key != "target" && key != "cursor") || len(values) != 1 {
+			return filter, "", errors.New("지원하지 않거나 중복된 감사 필터입니다.")
+		}
+	}
+	day := func(name, raw string) (*time.Time, error) {
+		if raw == "" {
+			return nil, nil
+		}
+		value, err := time.Parse(time.DateOnly, raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s은 YYYY-MM-DD 형식의 날짜여야 합니다.", name)
+		}
+		return &value, nil
+	}
+	from, err := day("시작일", query.Get("from"))
+	if err != nil {
+		return filter, "", err
+	}
+	until, err := day("종료일", query.Get("until"))
+	if err != nil {
+		return filter, "", err
+	}
+	if from != nil && until != nil && from.After(*until) {
+		return filter, "", errors.New("시작일은 종료일보다 늦을 수 없습니다.")
+	}
+	if raw := query.Get("target"); raw != "" {
+		target, err := model.ParseID(raw)
+		if err != nil || !target.IsV7() {
+			return filter, "", errors.New("대상 식별자가 올바르지 않습니다.")
+		}
+		filter.Target = target
+	}
+	filter.From = from
+	if until != nil {
+		filter.Until = new(until.AddDate(0, 0, 1))
+	}
+	*form = auditForm{From: query.Get("from"), Until: query.Get("until"), Target: query.Get("target")}
+	return filter, query.Get("cursor"), nil
+}
+
+// auditPage는 현재 필터에 다음 커서를 더한 감사 기록 주소를 만든다.
+func auditPage(graphID model.ID, form auditForm, cursor string) string {
+	values := url.Values{}
+	for key, value := range map[string]string{"from": form.From, "until": form.Until, "target": form.Target} {
+		if value != "" {
+			values.Set(key, value)
+		}
+	}
+	values.Set("cursor", cursor)
+	return "/graphs/" + graphID.String() + "/audit?" + values.Encode()
 }
 
 // operatorRestores는 대기 요청 목록, 선택한 요청의 처리 확인과 처리를 맡는다. 화면은
@@ -1173,6 +1265,8 @@ type pageData struct {
 	RestoreTab bool
 	// GlobalSummaries에는 그래프 상세의 시작점이 된 전역 요약 파생을 둔다.
 	GlobalSummaries []model.Context
+	// AuditFilter에는 감사 기록 양식에 다시 표시할 검증된 필터를 둔다.
+	AuditFilter auditForm
 }
 
 // HasGrade는 현재 등급 필터의 선택 상태를 양식에 반영한다.
@@ -1371,7 +1465,10 @@ range.addEventListener('input',applyScope);
 {{else}}<section class="panel"><h2>그래프 삭제: {{.Graph.Name}}</h2><p>영향: 활성 컨텍스트 {{.Impact.Contexts}}개, 확정 관계 {{.Impact.Relations}}개, 접근이 차단될 계정 {{.Impact.Accounts}}개</p><form method="post"><input type="hidden" name="action" value="delete"><label for="graph-name-confirm">그래프 이름 확인 (필수)</label><p class="hint" id="graph-name-help">삭제하려면 그래프 이름 「{{.Graph.Name}}」을 그대로 입력합니다.</p><input id="graph-name-confirm" name="graph_name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="graph-name-help" required><button type="submit">그래프 소프트 삭제</button></form></section>
 <section class="panel"><h2>노드 삭제</h2>{{if .ContextsTruncated}}<p class="notice">컨텍스트가 많아 최근 것만 표시했습니다. 목록에 없는 컨텍스트는 <code>?context_id=</code>로 직접 열 수 있습니다.</p>{{end}}{{if .Selected}}<article><strong>{{.Selected.Layer}}</strong> <code>{{.Selected.ID}}</code><p>{{.Selected.Body}}</p>{{if eq .Selected.Layer "source"}}<p>영향: 이 원천을 근거로 하는 활성 파생 {{.SelectedImpact.Derived}}개, 구성원으로 갖는 활성 사건 {{.SelectedImpact.Events}}개</p><p>파생에는 근거 무효 표시가 붙고 사건은 삭제하지 않습니다.</p>{{else if eq .Selected.Layer "derived"}}<p>영향: 이 파생을 근거로 하는 활성 파생 {{.SelectedImpact.Derived}}개</p><p>파생에는 근거 무효 표시가 붙습니다.</p>{{else}}<p>영향: 이 사건에 붙은 확정 관계 {{.SelectedImpact.Relations}}개</p><p>사건에 붙은 확정 관계는 함께 폐기됩니다.</p>{{end}}<form method="post"><input type="hidden" name="action" value="delete_context"><input type="hidden" name="context_id" value="{{.Selected.ID}}"><button type="submit">이 노드 소프트 삭제</button></form></article>{{end}}{{range .ActiveContexts}}<p><a href="/graphs/{{$.GraphID}}/deletion?context_id={{.ID}}">{{.Layer}} · {{.ID}}</a></p>{{else}}<p>삭제할 활성 컨텍스트가 없습니다.</p>{{end}}</section>
 {{end}}{{template "foot" .}}{{end}}
-{{define "audit"}}{{template "head" .}}<nav><h1>감사 기록</h1><a href="/graphs/{{.GraphID}}">그래프 상세</a></nav><table><thead><tr><th>시각</th><th>종류</th><th>동작</th><th>대상</th><th>상세</th></tr></thead><tbody>{{range .AuditEntries}}<tr><td>{{formatTime .OccurredAt}}</td><td>{{.Kind}}</td><td>{{.Action}}</td><td>{{.Target}}</td><td>{{.Detail}}</td></tr>{{end}}</tbody></table>{{template "foot" .}}{{end}}
+{{define "audit"}}{{template "head" .}}<nav><h1>감사 기록</h1><a href="/graphs/{{.GraphID}}">그래프 상세</a><a href="/graphs">그래프 목록</a></nav>
+<p class="hint" id="audit-filter-help">날짜는 UTC 기준이며 시작일과 종료일을 모두 포함합니다. 대상 식별자는 컨텍스트·관계·계정·팀 식별자로 좁히며, 비워 두면 모든 대상을 표시합니다.</p>
+<form class="panel actions" method="get" action="/graphs/{{.GraphID}}/audit" aria-describedby="audit-filter-help"><label for="audit-from">시작일<input id="audit-from" type="date" name="from" value="{{.AuditFilter.From}}"></label><label for="audit-until">종료일<input id="audit-until" type="date" name="until" value="{{.AuditFilter.Until}}"></label><label for="audit-target">대상 식별자<input id="audit-target" name="target" value="{{.AuditFilter.Target}}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></label><button type="submit">필터 적용</button></form>
+<table><caption>웹 관리 기록과 관리 연산 기록 (최근 순)</caption><thead><tr><th scope="col">시각</th><th scope="col">기록</th><th scope="col">종류</th><th scope="col">동작</th><th scope="col">행위 계정</th><th scope="col">대상</th><th scope="col">상세</th></tr></thead><tbody>{{range .AuditEntries}}<tr><td>{{formatTime .OccurredAt}}</td><td>{{if eq .Source "web"}}웹 관리{{else}}관리 연산{{end}}</td><td>{{.Kind}}</td><td>{{.Action}}</td><td><code>{{.ActorID}}</code></td><td><code>{{.Target}}</code></td><td>{{.Detail}}</td></tr>{{else}}<tr><td colspan="7">조건에 맞는 감사 기록이 없습니다.</td></tr>{{end}}</tbody></table>{{if .NextPage}}<p><a href="{{.NextPage}}">더 보기</a></p>{{end}}{{template "foot" .}}{{end}}
 {{define "operator_restores"}}{{template "head" .}}<nav><h1>운영자 복구</h1><a href="/graphs">그래프 목록</a></nav><p>처리되지 않은 복구 요청만 표시하며 컨텍스트 본문은 조회하지 않습니다.</p>
 {{with .RestoreRequest}}<section class="panel"><h2>복구 처리 확인</h2><dl class="connection-list"><dt>그래프</dt><dd>{{.GraphName}} <code>{{.GraphID}}</code></dd><dt>요청 계정</dt><dd><code>{{.RequestedBy}}</code></dd><dt>요청 시각</dt><dd>{{formatTime .RequestedAt}}</dd></dl><p>그래프의 삭제·유예 상태를 해제하고 요청 계정에 직접 소유자 등급을 복원합니다. 처리하는 운영자에게는 등급을 부여하지 않습니다. 같은 그래프에 요청이 여럿이면 가장 먼저 등록된 요청을 처리합니다.</p><form method="post" action="/operator/restores"><input type="hidden" name="graph_id" value="{{.GraphID}}"><button type="submit">복구 처리</button></form><p><a href="/operator/restores">처리하지 않고 목록으로 돌아가기</a></p></section>{{end}}
 <table><caption>대기 중인 복구 요청</caption><thead><tr><th scope="col">그래프</th><th scope="col">요청 계정</th><th scope="col">요청 시각</th><th scope="col">처리</th></tr></thead><tbody>{{range .RestoreRequests}}<tr><td>{{.GraphName}} <code>{{.GraphID}}</code></td><td><code>{{.RequestedBy}}</code></td><td>{{formatTime .RequestedAt}}</td><td><a href="/operator/restores?graph_id={{.GraphID}}">처리 확인</a></td></tr>{{else}}<tr><td colspan="4">대기 중인 요청이 없습니다.</td></tr>{{end}}</tbody></table>{{template "foot" .}}{{end}}`

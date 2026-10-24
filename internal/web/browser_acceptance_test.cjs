@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 
 const config = JSON.parse(process.env.WEB09_CONFIG);
 const passed = [];
@@ -180,6 +181,174 @@ async function nodePoint(body) {
     const position = node.renderedPosition();
     return { x: rect.left + position.x, y: rect.top + position.y };
   })()`);
+}
+
+// 접근성 트리는 브라우저가 노출한 의미를 검사한다. 실제 스크린리더 음성과 구분한다.
+async function accessibility(name) {
+  const { nodes } = await cdp.send('Accessibility.getFullAXTree');
+  fs.writeFileSync(path.join(config.evidence, 'ax-' + name + '.json'), JSON.stringify(nodes, null, 2));
+  return nodes.filter((node) => !node.ignored);
+}
+async function axElement(selector, nodes) {
+  const { root } = await cdp.send('DOM.getDocument');
+  const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector });
+  assert.ok(nodeId, '접근성 검사 대상: ' + selector);
+  const { node } = await cdp.send('DOM.describeNode', { nodeId });
+  const result = nodes.find((candidate) => candidate.backendDOMNodeId === node.backendNodeId);
+  assert.ok(result, '접근성 트리에서 노출된 대상: ' + selector);
+  return result;
+}
+function axProperty(node, name) {
+  return node.properties?.find((property) => property.name === name)?.value.value;
+}
+async function axText(selector, nodes) {
+  const root = await axElement(selector, nodes);
+  function text(node) {
+    if (node.role.value === 'StaticText') return node.name.value;
+    return (node.childIds || []).map((id) => nodes.find((child) => child.nodeId === id)).filter(Boolean).map(text).join('\n');
+  }
+  return text(root);
+}
+
+async function keyboardOrder() {
+  const controls = await evaluate(`(() => {
+    return [...document.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')]
+      .filter((element) => !element.disabled && element.tabIndex >= 0 && element.getClientRects().length)
+      .map((element, index) => { element.dataset.test06Focus = String(index); return { index, label: element.getAttribute('aria-label') || element.textContent.trim() || element.id }; });
+  })()`);
+  assert.ok(controls.length >= 10, '상세 화면의 모든 조작 수단');
+  await evaluate(`document.querySelector('[data-test06-focus="0"]').focus()`);
+  for (let index = 1; index < controls.length; index++) {
+    await press('Tab');
+    assert.equal(await evaluate('document.activeElement.dataset.test06Focus'), String(index), 'Tab: ' + controls[index].label);
+    assert.ok(await evaluate(`document.activeElement.matches(':focus-visible')`), 'Tab 포커스 표시');
+  }
+  for (let index = controls.length - 2; index >= 0; index--) {
+    await press('Tab', false, 8); // CDP modifiers의 Shift 비트.
+    assert.equal(await evaluate('document.activeElement.dataset.test06Focus'), String(index), 'Shift+Tab: ' + controls[index].label);
+    assert.ok(await evaluate(`document.activeElement.matches(':focus-visible')`), 'Shift+Tab 포커스 표시');
+  }
+  fs.writeFileSync(path.join(config.evidence, 'keyboard-order.json'), JSON.stringify(controls, null, 2));
+  pass('TEST-06 상세 전체 Tab·Shift+Tab 순서', controls.length + '개 조작 수단, 양방향 포커스 유지');
+}
+
+async function keyboardAccessibility() {
+  await keyboardOrder();
+  const isolated = '[data-context-id="' + config.contexts.isolated + '"]';
+  await evaluate(`document.querySelector(${JSON.stringify(isolated)}).focus()`);
+  await press('Enter');
+  assert.deepEqual((await scope()).visible, ['고립 원천']);
+  await press('Escape');
+  assert.equal((await scope()).active, config.contexts.isolated);
+
+  const descendant = '[data-context-id="' + config.contexts.descendant + '"]';
+  await evaluate(`document.querySelector(${JSON.stringify(descendant)}).focus()`);
+  const initial = await accessibility('unselected');
+  const initialButton = await axElement(descendant, initial);
+  assert.equal(initialButton.role.value, 'button');
+  assert.equal(axProperty(initialButton, 'pressed'), 'false');
+  await press('Enter');
+  const selected = await accessibility('selected');
+  const button = await axElement(descendant, selected);
+  assert.equal(button.name.value, initialButton.name.value, '선택 뒤에도 버튼 이름 유지');
+  assert.equal(axProperty(button, 'pressed'), 'true');
+  assert.equal(axProperty(button, 'focused'), true);
+  const status = await axElement('#scope-status', selected);
+  assert.equal(status.role.value, 'status');
+  assert.equal(axProperty(status, 'live'), 'polite');
+  assert.equal(axProperty(status, 'atomic'), true);
+  const state = await scope();
+  assert.match(state.status, /^국소 보기/);
+  assert.ok(!state.status.includes('파생 후손') && !state.status.includes('derived_from'), '짧은 상태 안내에 본문·근거를 넣지 않는다');
+  assert.ok(selected.some((node) => node.role.value === 'StaticText' && node.name?.value === state.status), '변경 상태가 접근성 트리에 노출된다');
+
+  await evaluate(`document.getElementById('hop-range').focus()`);
+  const maximum = await evaluate(`Number(document.getElementById('hop-range').max)`);
+  assert.equal(maximum, 4, '다중 시작점 5개의 슬라이더 상한은 n-1');
+  for (let index = 0; index < maximum; index++) await press('ArrowLeft');
+  const zero = await accessibility('zero-hop');
+  const slider = await axElement('#hop-range', zero);
+  assert.equal(slider.role.value, 'slider');
+  assert.equal(slider.value.value, 0);
+  assert.equal(axProperty(slider, 'valuemin'), 0);
+  assert.equal(axProperty(slider, 'valuemax'), maximum);
+  const domValueText = (await scope()).valuetext;
+  assert.equal(domValueText, '0홉');
+  // Chromium의 CDP 직렬화는 valuetext에 native kValue(숫자 문자열)를 넣기도 한다.
+  // DOM의 단위 안내와 AX의 수치를 각각 검증하고 실제 음성 안내로 간주하지 않는다.
+  const axValueText = axProperty(slider, 'valuetext');
+  assert.ok([domValueText, String(slider.value.value)].includes(axValueText), 'DOM/AX 슬라이더 값');
+  fs.writeFileSync(path.join(config.evidence, 'range-value-text.json'), JSON.stringify({ dom: domValueText, ax: axValueText }));
+  assert.deepEqual((await scope()).visible, ['파생 후손']);
+  const evidence = (await scope()).evidence;
+  const accessibleEvidence = await axText('#node-evidence', zero);
+  for (const [from, to] of [['descendant', 'derived'], ['derived', 'source']]) {
+    const connection = '파생 ' + config.contexts[from] + ' → 근거 ' + config.contexts[to] + ' (derived_from)';
+    assert.ok(evidence.includes(connection), 'DOM 근거 방향: ' + connection);
+    assert.ok(accessibleEvidence.includes(connection), '숨긴 근거의 텍스트가 접근성 트리에 남는다: ' + connection);
+  }
+  for (let index = 0; index < maximum; index++) await press('ArrowRight');
+  assert.equal((await scope()).range, String(maximum));
+  assert.equal((await scope()).visible.length, 4, '최대 홉도 고립 노드는 포함하지 않는다');
+
+  await evaluate(`document.getElementById('details-link').focus()`);
+  await press('Enter');
+  const details = await accessibility('details');
+  const heading = await axElement('#node-details-heading', details);
+  assert.equal(heading.role.value, 'heading');
+  assert.equal(axProperty(heading, 'level'), 2);
+  assert.equal(axProperty(heading, 'focused'), true);
+  assert.match(await axText('#node-details', details), /파생 후손/, '선택 상세 본문 읽기 대상 노출');
+  assert.equal((await axElement('#context-graph', details)).role.value, 'image');
+  await evaluate(`document.querySelector(${JSON.stringify(descendant)}).focus()`);
+  await press('Space');
+  const cleared = await accessibility('cleared');
+  assert.equal(axProperty(await axElement(descendant, cleared), 'pressed'), 'false');
+  assert.equal((await scope()).status, '전체 보기');
+  assert.ok(!(await scope()).evidence.includes('derived_from'), '선택 해제 뒤 근거 초기화');
+  pass('TEST-06 접근성 트리·키보드', 'pressed·polite/atomic·슬라이더 0/최대·제목 포커스·본문/근거·해제');
+}
+
+async function graphVariants() {
+  for (const [name, graph, expected] of [
+    ['empty', config.emptyGraph, []], ['single', config.singleGraph, ['단일 원천']],
+  ]) {
+    await go(config.base + '/graphs/' + graph);
+    await pageChecks(name);
+    let state = await scope();
+    assert.deepEqual(state.nodes, expected);
+    assert.equal(state.range, '0');
+    assert.equal(await evaluate(`document.getElementById('hop-range').max`), '0');
+    if (expected.length) {
+      await evaluate(`document.querySelector('[data-context-id]').focus()`);
+      await press('Enter');
+      state = await scope();
+      assert.deepEqual(state.visible, expected);
+      assert.deepEqual(state.pressed, [config.singleContext]);
+      await press('Escape');
+      assert.equal((await scope()).active, config.singleContext);
+    } else {
+      assert.match(await evaluate('document.body.textContent'), /표시할 활성 컨텍스트가 없습니다/);
+    }
+    await click('#full-view');
+    await press('Escape');
+    state = await scope();
+    assert.equal(state.status, '전체 보기');
+    assert.deepEqual(state.pressed, []);
+    assert.deepEqual(state.visible, expected);
+    await accessibility(name);
+    pass('TEST-06 ' + name + ' 실제 그래프', '0홉·선택/복귀·빈 상태');
+  }
+}
+
+async function invalidCursor() {
+  const response = cdp.waitFor('Network.responseReceived', (params) => params.type === 'Document' && params.response.url.includes('cursor=broken'));
+  await go(config.base + '/graphs?name=' + encodeURIComponent('목록') + '&cursor=broken');
+  assert.equal((await response).response.status, 400);
+  await pageChecks('잘못된 커서');
+  assert.equal(await evaluate(`document.getElementById('graph-name').value`), '목록');
+  assert.match(await evaluate('document.body.textContent'), /목록 커서가 올바르지 않습니다/);
+  pass('TEST-06 잘못된 커서의 실제 오류 화면', 'HTTP 400·이름 필터 유지');
 }
 
 async function login() {
@@ -477,10 +646,14 @@ async function main() {
     await cdp.send('Page.enable');
     await cdp.send('Network.enable');
     await cdp.send('Runtime.enable');
+    await cdp.send('Accessibility.enable');
     console.log('BROWSER ' + version.Browser + ' · ' + version['User-Agent']);
     await login();
     await graphList();
     await detail();
+    await keyboardAccessibility();
+    await graphVariants();
+    await invalidCursor();
     await teams();
     await deletion();
     await audit();
@@ -489,6 +662,9 @@ async function main() {
     await smallScreens();
     await logout();
     console.log('WEB09 ' + JSON.stringify({ browser: version.Browser, passed }));
+    const result = { browser: version.Browser, node: process.version, os: os.platform() + ' ' + os.release(), passed: passed.filter((name) => name.startsWith('TEST-06')), screenReader: '미실행', safari: '미실행' };
+    fs.writeFileSync(path.join(config.evidence, 'test06.json'), JSON.stringify(result, null, 2));
+    console.log('TEST06 ' + JSON.stringify(result));
   } finally {
     chrome.kill('SIGTERM');
     await new Promise((resolve) => chrome.once('exit', resolve));

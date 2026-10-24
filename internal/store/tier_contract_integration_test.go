@@ -387,7 +387,7 @@ func TestTierConcurrentMovementSmallPoolIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	var group sync.WaitGroup
-	var moveConflicts atomic.Int64
+	var moveConflicts, accessConflicts atomic.Int64
 	errs := make(chan error, 8)
 	for worker := range 8 {
 		group.Go(func() {
@@ -403,6 +403,11 @@ func TestTierConcurrentMovementSmallPoolIntegration(t *testing.T) {
 					}
 				} else {
 					err = database.touchEmbeddings(ctx, graph, ids, old)
+					// 한 번 재시도한 뒤에도 이동이 경합하면 정본대로 40001을 반환한다.
+					if failure, ok := errors.AsType[*pgconn.PgError](err); ok && failure.Code == "40001" {
+						accessConflicts.Add(1)
+						continue
+					}
 				}
 				if err != nil {
 					errs <- err
@@ -416,13 +421,19 @@ func TestTierConcurrentMovementSmallPoolIntegration(t *testing.T) {
 	for err := range errs {
 		t.Errorf("온라인 이동·접근 기록 경합: %v", err)
 	}
-	t.Logf("주기 이동 40001 반환=%d, 접근 기록 오류는 허용하지 않음", moveConflicts.Load())
+	t.Logf("40001 반환: 주기 이동=%d, 접근 기록의 한 번 재시도 소진=%d", moveConflicts.Load(), accessConflicts.Load())
 	var count, unique int
 	if err := database.pool.QueryRow(t.Context(), `SELECT count(*), count(DISTINCT context_id) FROM public.context_embedding WHERE graph_id=$1`, graph.String()).Scan(&count, &unique); err != nil || count != len(nodes) || unique != len(nodes) {
 		t.Fatalf("경합 뒤 유실·중복=%d/%d: %v", count, unique, err)
 	}
 	if database.pool.Stat().MaxConns() != 4 || database.pool.Stat().TotalConns() > 4 {
 		t.Fatal("최소 풀의 실제 연결 상한을 넘었다")
+	}
+	if err := database.touchEmbeddings(t.Context(), graph, ids, now); err != nil {
+		t.Fatalf("경합 종료 뒤 접근 기록 회복: %v", err)
+	}
+	if err := database.pool.QueryRow(t.Context(), `SELECT count(*) FROM public.context_embedding WHERE graph_id=$1 AND storage_tier='hot' AND last_accessed_at=$2`, graph.String(), now).Scan(&count); err != nil || count != len(nodes) {
+		t.Fatalf("경합 종료 뒤 전체 승격·접근 시각=%d: %v", count, err)
 	}
 	assertConnectionRecovery(t, database, nil, 0)
 }

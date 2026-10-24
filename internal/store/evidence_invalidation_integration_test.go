@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// TestEvidenceInvalidationConflictRollsBackIntegration은 전파 대상을 읽은 뒤 다른
-// 트랜잭션의 파생 갱신을 커밋해, 0행 전파가 폐기·대체와 함께 롤백되는지 확인한다.
+// TestEvidenceInvalidationConflictRollsBackIntegration은 그래프 잠금을 우회하는 시험용
+// AGE 갱신을 주입해, 방어적 0행 검사가 폐기·대체 전체를 롤백하는지 확인한다.
 func TestEvidenceInvalidationConflictRollsBackIntegration(t *testing.T) {
 	for _, action := range []string{"discard_source", "discard_derived", "supersede"} {
 		t.Run(action, func(t *testing.T) {
@@ -54,7 +54,9 @@ func TestEvidenceInvalidationConflictRollsBackIntegration(t *testing.T) {
 				_, err := database.DiscardContext(ctx, graphID, evidence.ID, &operation, WriteLimits{})
 				return err
 			}
-			tx, err := database.pool.Begin(t.Context())
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			tx, err := database.pool.Begin(ctx)
 			if err != nil {
 				t.Fatalf("경합 트랜잭션 준비: %v", err)
 			}
@@ -65,12 +67,19 @@ func TestEvidenceInvalidationConflictRollsBackIntegration(t *testing.T) {
 				interleaved = true
 				next := derived
 				next.Body, next.Version = "동시에 커밋한 파생 본문", derived.Version+1
-				updated, err = database.UpdateContext(t.Context(), graphID, derived.Version, next)
+				properties, encodeErr := encodeProperties(contextProperties(next))
+				if encodeErr != nil {
+					t.Fatal(encodeErr)
+				}
+				// 공개 갱신은 그래프 잠금에서 대기하므로 직접 AGE 쓰기로만 손상을 주입한다.
+				query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) +
+					" AND node.context_id = " + cypherString(derived.ID.String()) + " SET node = " + properties + " RETURN node"
+				updated, err = database.contextFromCypher(ctx, database.pool, graphID, query)
 				if err != nil {
 					t.Fatalf("전파 대상 조회 뒤 동시 갱신 커밋: %v", err)
 				}
 			}}
-			err = apply(context.WithValue(t.Context(), writeTransactionContextKey{}, pgx.Tx(wrapped)))
+			err = apply(context.WithValue(ctx, writeTransactionContextKey{}, pgx.Tx(wrapped)))
 			conflict, ok := errors.AsType[VersionConflictError](err)
 			if !interleaved || !ok || conflict.Current != updated.Version {
 				t.Fatalf("근거 무효 전파 결과 = %v, 겹침 %t; want 현재 판 %d의 충돌", err, interleaved, updated.Version)
@@ -114,9 +123,9 @@ func TestEvidenceInvalidationConflictRollsBackIntegration(t *testing.T) {
 	}
 }
 
-// TestEvidenceInvalidationAGEConflictIntegration은 파생 갱신이 아직 미커밋일 때
-// 시작한 전파가 AGE 동시 갱신 오류를 internal이 아닌 판 충돌로 반환하는지 확인한다.
-func TestEvidenceInvalidationAGEConflictIntegration(t *testing.T) {
+// TestEvidenceInvalidationWriteSerializationIntegration은 미커밋 파생 갱신 뒤 시작한
+// 전파가 그래프 잠금에서 기다린 뒤 새 본문·판을 읽어 한 단계만 표시하는지 확인한다.
+func TestEvidenceInvalidationWriteSerializationIntegration(t *testing.T) {
 	database := newIntegrationStore(t)
 	actorID := newTestID(t)
 	createTestAccount(t, database, actorID)
@@ -163,32 +172,31 @@ func TestEvidenceInvalidationAGEConflictIntegration(t *testing.T) {
 		case err := <-result:
 			t.Fatalf("파생 갱신 커밋 전에 전파가 끝났다: %v", err)
 		case <-ctx.Done():
-			t.Fatalf("전파의 AGE 잠금 대기를 확인하지 못했다: %v", ctx.Err())
+			t.Fatalf("전파의 그래프 잠금 대기를 확인하지 못했다: %v", ctx.Err())
 		case <-ticker.C:
 			if err := database.pool.QueryRow(ctx, `SELECT $1::integer = ANY(pg_blocking_pids($2::integer))`, firstPID, secondPID).Scan(&blocked); err != nil {
-				t.Fatalf("전파의 AGE 잠금 대기 조회: %v", err)
+				t.Fatalf("전파의 그래프 잠금 대기 조회: %v", err)
 			}
 		}
 	}
 	if err := first.Commit(ctx); err != nil {
 		t.Fatalf("파생 갱신 커밋: %v", err)
 	}
-	if err := <-result; err == nil {
-		t.Fatal("동시 파생 갱신과 겹친 전파가 성공했다")
-	} else if conflict, ok := errors.AsType[VersionConflictError](err); !ok || conflict.Current != updated.Version {
-		t.Fatalf("AGE 전파 충돌 = %v; want 현재 판 %d의 충돌", err, updated.Version)
+	if err := <-result; err != nil {
+		t.Fatalf("갱신 커밋 뒤 근거 폐기: %v", err)
+	}
+	if err := second.Commit(ctx); err != nil {
+		t.Fatal(err)
 	}
 	current, err := database.Context(t.Context(), graphID, source.ID)
-	if err != nil || current.DeletedAt != nil {
-		t.Fatalf("실패한 근거 폐기가 남았다: %#v, 오류 %v", current, err)
-	}
-	if _, err := database.DiscardContext(t.Context(), graphID, source.ID, nil, WriteLimits{}); err != nil {
-		t.Fatalf("AGE 충돌 뒤 폐기 재시도: %v", err)
+	if err != nil || current.DeletedAt == nil {
+		t.Fatalf("직렬화한 근거 폐기: %#v, 오류 %v", current, err)
 	}
 	invalidated, err := database.Context(t.Context(), graphID, derived.ID)
 	if err != nil || invalidated.Derived == nil || !invalidated.Derived.EvidenceInvalidated || invalidated.Body != updated.Body || invalidated.Version != updated.Version+1 {
-		t.Fatalf("AGE 충돌 재시도 뒤 파생 = %#v, 오류 %v", invalidated, err)
+		t.Fatalf("직렬화한 전파 뒤 파생 = %#v, 오류 %v", invalidated, err)
 	}
+	assertConnectionRecovery(t, database, nil, 0)
 }
 
 // afterEvidenceReadTx는 실제 AGE 결과를 끝까지 읽은 직후 다른 트랜잭션을 실행한다.

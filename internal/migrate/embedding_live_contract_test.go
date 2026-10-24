@@ -193,6 +193,9 @@ func exerciseLiveIndexSearch(t *testing.T, key string, address *url.URL, next ht
 	}
 	actor, graphID, otherGraphID := newID(), newID(), newID()
 	now := time.Now().UTC()
+	if err := database.CreateAccount(ctx, store.Account{ID: actor, LoginID: "synthetic_live", PasswordHash: "synthetic-live-hash", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range []model.ID{graphID, otherGraphID} {
 		if _, err := database.CreateGraph(ctx, model.Graph{ID: id, Name: "합성 실연결 시험", CreatedBy: actor, CreatedAt: now, LastActivityAt: now, Version: 1}); err != nil {
 			t.Fatal(err)

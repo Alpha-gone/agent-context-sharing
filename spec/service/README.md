@@ -126,4 +126,6 @@ Air Context와 관련 연구에서 채택한 검색 단위·외부 원본 재현
 
 [WEB-07 모듈 인수](agent-context/reviews/2026-10-24-web-07.md)에서 키보드 선택 수단·홉 값 안내·숨겨진 근거 유지·시각화 영역 역할을 확인했다. 웹 752건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했다. 당시 전체 **91/124개 완료**이며 다음 권장은 [WEB-08](agent-context/development-plan/web.md#web-08)이다. 실제 브라우저 키보드·포커스와 음성은 후속 범위다.
 
-[WEB-08 모듈 인수](agent-context/reviews/2026-10-24-web-08.md)에서 감사 필터·커서 페이지와 연결 화면의 본인 범위·폐기 효과 구분·웹 세션 유지를 확인했다. 웹 770건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했다. 현재 전체 **92/124개 완료**이며 다음 권장은 [WEB-09](agent-context/development-plan/web.md#web-09)다. 실제 브라우저 인수는 WEB-09 범위다.
+[WEB-08 모듈 인수](agent-context/reviews/2026-10-24-web-08.md)에서 감사 필터·커서 페이지와 연결 화면의 본인 범위·폐기 효과 구분·웹 세션 유지를 확인했다. 웹 770건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했다. 당시 전체 **92/124개 완료**이며 다음 권장은 [WEB-09](agent-context/development-plan/web.md#web-09)다. 실제 브라우저 인수는 WEB-09 범위다.
+
+[WEB-09 분야 인수](agent-context/reviews/2026-10-24-web-09.md)에서 39개 화면 상태 표본과 CDP로 조작한 Chrome 155의 15개 실제 브라우저 시나리오를 저장소 상태와 대조해 웹 분야를 완료했다. 현재 전체 **93/124개 완료**이며 Safari와 실제 스크린리더 음성은 [TEST-06](agent-context/development-plan/testing.md#test-06) 범위다.

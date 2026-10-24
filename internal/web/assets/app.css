@@ -54,6 +54,9 @@ button:disabled { cursor: not-allowed; color: #475569; }
 .hint { margin-block: var(--space-1) var(--space-3); color: #475569; font-size: .875rem; }
 table { width: 100%; border-collapse: collapse; background: #fff; }
 th, td { padding: var(--space-2); text-align: start; vertical-align: top; border: 1px solid #d9dee5; }
+.table-scroll { overflow-x: auto; max-inline-size: 100%; }
+.table-scroll table { min-inline-size: 720px; }
+.table-scroll td { overflow-wrap: break-word; }
 nav, .site-footer { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; }
 nav a, .site-footer a { display: inline-flex; align-items: center; min-block-size: 48px; }
 nav a[aria-current="page"] { font-weight: bold; text-decoration-thickness: var(--space-1); }

@@ -78,7 +78,7 @@ func TestWEB08AuditFilterAndPage(t *testing.T) {
 		t.Fatalf("기간 = %v ~ %v, 종료일을 포함하는 UTC 제외 경계여야 한다", backend.filter.From, backend.filter.Until)
 	}
 	for _, want := range []string{
-		`value="2026-10-01"`, `value="2026-10-02"`, `value="` + target.String() + `"`, "<caption>웹 관리 기록과 관리 연산 기록 (최근 순)</caption>",
+		`value="2026-10-01"`, `value="2026-10-02"`, `value="` + target.String() + `"`, `<div class="table-scroll" role="region" aria-labelledby="audit-caption" tabindex="0"><table><caption id="audit-caption">웹 관리 기록과 관리 연산 기록 (최근 순)</caption>`,
 		`<th scope="col">행위 계정</th>`, "<td>웹 관리</td>", "<td>관리 연산</td>", actor.String(), "&lt;owner&gt; → viewer", "2026-10-02T03:04:05Z",
 	} {
 		if !strings.Contains(body, want) {

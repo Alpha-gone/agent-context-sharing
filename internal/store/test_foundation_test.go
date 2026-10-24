@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"os/exec"
+
+	"github.com/jackc/pgx/v5"
 	"strings"
 	"testing"
 	"time"
@@ -147,4 +150,64 @@ func foundationSubprocess(t *testing.T, test string, environment ...string) (str
 	command.Env = append(os.Environ(), environment...)
 	output, err := command.CombinedOutput()
 	return string(output), err
+}
+
+// 준비가 중간에 실패하거나 생성 권한이 없을 때도 실제 시험은 실패로 끝나야 한다.
+func TestFoundationDatabaseSetupFailuresIntegration(t *testing.T) {
+	mode := os.Getenv("ACS_TEST_FOUNDATION_CHILD")
+	if mode == "preparation" || mode == "permission" {
+		newIsolatedIntegrationStore(t)
+		t.Fatal("fixture unexpectedly succeeded")
+	}
+	admin := foundationAdmin(t)
+	countDatabases := func() int {
+		var count int
+		if err := admin.QueryRow(t.Context(), "SELECT count(*) FROM pg_database WHERE datname LIKE 'store_test_%'").Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	t.Run("migration preparation failure cleans database", func(t *testing.T) {
+		before := countDatabases()
+		output, err := foundationSubprocess(t, "TestFoundationDatabaseSetupFailuresIntegration",
+			"ACS_TEST_FOUNDATION_CHILD=preparation", "AGE_GRAPH_NAME=invalid-name")
+		if err == nil || !strings.Contains(output, "시험 전용 마이그레이션을 읽지 못했다") || strings.Contains(output, "--- SKIP:") {
+			t.Fatalf("준비 실패 판정: %v\n%s", err, output)
+		}
+		if countDatabases() != before {
+			t.Fatal("준비 실패 뒤 시험 DB가 남았다")
+		}
+	})
+	t.Run("missing creation privilege fails", func(t *testing.T) {
+		role := "foundation_" + strings.ReplaceAll(newTestID(t).String(), "-", "")
+		identifier := pgx.Identifier{role}.Sanitize()
+		if _, err := admin.Exec(t.Context(), "CREATE ROLE "+identifier+" LOGIN NOCREATEDB PASSWORD 'synthetic-foundation'"); err != nil {
+			t.Fatal("합성 제한 역할을 준비하지 못했다")
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
+			defer cancel()
+			if _, err := admin.Exec(ctx, "DROP ROLE "+identifier); err != nil {
+				t.Error("합성 제한 역할을 정리하지 못했다")
+			}
+		})
+		address, err := url.Parse(integrationDatabaseURL(t))
+		if err != nil || (address.Scheme != "postgres" && address.Scheme != "postgresql") {
+			t.Fatal("제한 역할 표본에는 PostgreSQL URL이 필요하다")
+		}
+		address.User = url.UserPassword(role, "synthetic-foundation")
+		options := address.Query()
+		options.Del("user")
+		options.Del("password")
+		address.RawQuery = options.Encode()
+		before := countDatabases()
+		output, err := foundationSubprocess(t, "TestFoundationDatabaseSetupFailuresIntegration",
+			"ACS_TEST_FOUNDATION_CHILD=permission", "TEST_DATABASE_URL="+address.String())
+		if err == nil || !strings.Contains(output, "시험 전용 DB를 만들지 못했다(DB 생성 권한 필요)") || strings.Contains(output, "--- SKIP:") {
+			t.Fatalf("권한 부족 판정: %v\n%s", err, output)
+		}
+		if countDatabases() != before {
+			t.Fatal("권한 부족 표본이 DB를 남겼다")
+		}
+	})
 }

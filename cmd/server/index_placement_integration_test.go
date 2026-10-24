@@ -106,7 +106,11 @@ func indexPlacementDatabase(t *testing.T, count int) (*pgx.Conn, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u.Path = "/postgres"
+	u.Path, u.RawPath = "/postgres", ""
+	queryOptions := u.Query()
+	queryOptions.Del("dbname")
+	queryOptions.Del("database")
+	u.RawQuery = queryOptions.Encode()
 	admin, err := pgx.Connect(t.Context(), u.String())
 	if err != nil {
 		t.Fatal(err)
@@ -125,13 +129,17 @@ func indexPlacementDatabase(t *testing.T, count int) (*pgx.Conn, string) {
 		}
 		admin.Close(ctx)
 	})
-	u.Path = "/" + name
+	u.Path, u.RawPath = "/"+name, ""
 	address = u.String()
 	pool, err := migrate.NewPool(t.Context(), address)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	var actual string
+	if err := pool.QueryRow(t.Context(), "SELECT current_database()").Scan(&actual); err != nil || actual != name {
+		t.Fatal("실제 연결이 시험 전용 DB가 아니므로 마이그레이션을 중단한다")
+	}
 	cfg := migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: 128, IndexTargetLayers: "all_layers"}
 	for pass := range 2 {
 		want := 0

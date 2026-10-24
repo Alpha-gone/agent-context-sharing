@@ -234,6 +234,11 @@ func newAuthenticationContractDatabase(t *testing.T) (*store.Store, *store.Store
 		t.Fatal("TEST_DATABASE_URL은 PostgreSQL 연결 URL이어야 합니다")
 	}
 	isolated.Path, isolated.RawPath = "/"+name, ""
+	// dbname·database 옵션이 새 경로를 덮어쓰지 않도록 제거한다.
+	queryOptions := isolated.Query()
+	queryOptions.Del("dbname")
+	queryOptions.Del("database")
+	isolated.RawQuery = queryOptions.Encode()
 	isolatedAddress := isolated.String()
 	pool, err := migrate.NewPool(t.Context(), isolatedAddress)
 	if err != nil {

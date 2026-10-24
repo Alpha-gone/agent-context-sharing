@@ -92,12 +92,20 @@ func isolatedMigrationDatabase(t *testing.T) (*pgxpool.Pool, string) {
 	if err != nil {
 		t.Fatal("시험 DB 주소 해석 실패")
 	}
-	address.Path = "/" + name
+	address.Path, address.RawPath = "/"+name, ""
+	queryOptions := address.Query()
+	queryOptions.Del("dbname")
+	queryOptions.Del("database")
+	address.RawQuery = queryOptions.Encode()
 	pool, err := migrate.NewPool(t.Context(), address.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	var actual string
+	if err := pool.QueryRow(t.Context(), "SELECT current_database()").Scan(&actual); err != nil || actual != name {
+		t.Fatal("실제 연결이 시험 전용 DB가 아니므로 마이그레이션을 중단한다")
+	}
 	return pool, address.String()
 }
 
@@ -151,6 +159,12 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	actor, graphID := newID(), newID()
+	if err := database.CreateAccount(t.Context(), store.Account{
+		ID: actor, LoginID: "migration_" + strings.ReplaceAll(actor.String(), "-", "")[10:],
+		PasswordHash: "synthetic-migration-hash", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.CreateGraph(t.Context(), model.Graph{ID: graphID, Name: "합성 시험 그래프", CreatedBy: actor, CreatedAt: now, LastActivityAt: now, Version: 1}); err != nil {
 		t.Fatal(err)
 	}

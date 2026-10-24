@@ -55,6 +55,11 @@ func newAgentContractDatabase(t *testing.T) (*Store, *Store, *pgxpool.Pool) {
 		}
 	})
 	isolated.Path, isolated.RawPath = "/"+name, ""
+	// dbname·database 옵션이 새 경로를 덮어쓰지 않도록 제거한다.
+	queryOptions := isolated.Query()
+	queryOptions.Del("dbname")
+	queryOptions.Del("database")
+	isolated.RawQuery = queryOptions.Encode()
 	pool, err := migrate.NewPool(t.Context(), isolated.String())
 	if err != nil {
 		t.Fatal(err)

@@ -52,12 +52,21 @@ func newEmbeddingContractStore(t *testing.T, vectorType string, dimension int) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	u.Path = "/" + name
+	u.Path, u.RawPath = "/"+name, ""
+	// dbname·database 옵션이 새 경로를 덮어쓰지 않도록 제거한다.
+	queryOptions := u.Query()
+	queryOptions.Del("dbname")
+	queryOptions.Del("database")
+	u.RawQuery = queryOptions.Encode()
 	pool, err := migrate.NewPool(t.Context(), u.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	var actual string
+	if err := pool.QueryRow(t.Context(), "SELECT current_database()").Scan(&actual); err != nil || actual != name {
+		t.Fatal("실제 연결이 시험 전용 DB가 아니므로 마이그레이션을 중단한다")
+	}
 	cfg := migrate.Config{GraphName: "agent_context", VectorType: vectorType, VectorDim: dimension, IndexTargetLayers: "all_layers"}
 	for _, want := range []int{6, 0} {
 		count := 0

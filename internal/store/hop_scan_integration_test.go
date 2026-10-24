@@ -383,7 +383,7 @@ FROM pg_indexes WHERE schemaname = $1 AND (indexname = 'context_active_graph_con
 	}
 }
 
-func encodedHopRelation(t *testing.T, graph model.ID, kind model.RelationType, from, to model.ID, state model.RelationState) string {
+func encodedHopRelation(t testing.TB, graph model.ID, kind model.RelationType, from, to model.ID, state model.RelationState) string {
 	t.Helper()
 	relation := confirmable(t, graph, kind, from, to)
 	if state == model.RelationStateProposed {

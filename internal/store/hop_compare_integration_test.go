@@ -24,7 +24,7 @@ type hopSample struct {
 //	s1 <- d1 -> s2      d2 -> d1      dx -> s3, d4 -> dx(삭제)
 //	e1{s1} -precedes(확정)-> e2{s2} -causes(확정)-> e3{s3} -relates_to(확정)-> e1 (순환)
 //	e3 -precedes(제안)-> e4{s4}
-func createHopSample(t *testing.T, database *Store, label string) hopSample {
+func createHopSample(t testing.TB, database *Store, label string) hopSample {
 	t.Helper()
 	actorID := newTestID(t)
 	createTestAccount(t, database, actorID)
@@ -144,7 +144,7 @@ func TestHopImplementationsReturnSameResultIntegration(t *testing.T) {
 	}
 }
 
-func compareHopResults(t *testing.T, name string, baseline, candidate HopResult) {
+func compareHopResults(t testing.TB, name string, baseline, candidate HopResult) {
 	t.Helper()
 	ids := func(result HopResult) []model.ID {
 		values := make([]model.ID, 0, len(result.Contexts))

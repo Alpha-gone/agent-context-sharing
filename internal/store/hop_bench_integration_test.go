@@ -12,7 +12,7 @@ import (
 // 둘, 둘을 근거로 한 파생 하나와 둘을 구성원으로 한 사건 하나다. 사건은 다음 묶음과
 // precedes로, 세 묶음 뒤와 relates_to로 확정 연결되어 홉이 늘수록 이웃이 넓어진다. 시작점은
 // 가운데 묶음의 파생과 사건이다.
-func createHopChain(b *testing.B, database *Store, groups int) (model.ID, []model.Context) {
+func createHopChain(b testing.TB, database *Store, groups int) (model.ID, []model.Context) {
 	b.Helper()
 	actorID := newTestID(b)
 	createTestAccount(b, database, actorID)

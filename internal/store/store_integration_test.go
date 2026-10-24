@@ -423,7 +423,7 @@ func createTestAccount(t testing.TB, store *Store, accountID model.ID) {
 }
 
 // grantAccount는 계정 직접 부여를 만든다.
-func grantAccount(t *testing.T, store *Store, graphID, accountID model.ID, grade model.GraphGrade) {
+func grantAccount(t testing.TB, store *Store, graphID, accountID model.ID, grade model.GraphGrade) {
 	t.Helper()
 	_, err := store.pool.Exec(t.Context(), `
 		INSERT INTO public.graph_grant (graph_id, subject_type, subject_id, grade)

@@ -239,4 +239,6 @@ sh ./test-wal-archive.sh
 
 [WEB-03 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-03.md)에서 그래프 목록의 등급 정규화·커서 입력 오류·취소와 실제 DB/TLS의 정렬·페이지·현재 권한 및 본인 복구 요청 진입을 확인했습니다. 웹 642건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **87/124개 완료**이며 다음 권장은 [WEB-04](spec/service/agent-context/development-plan/web.md#web-04)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.
 
-[WEB-04 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-04.md)에서 권한 회수의 본문 설명·팀별 그래프 등급·관리자 범위와 실제 DB/TLS의 회수/부여·현재 권한 재검사를 확인했습니다. 웹 662건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 현재 전체 **88/124개 완료**이며 다음 권장은 [WEB-05](spec/service/agent-context/development-plan/web.md#web-05)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.
+[WEB-04 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-04.md)에서 권한 회수의 본문 설명·팀별 그래프 등급·관리자 범위와 실제 DB/TLS의 회수/부여·현재 권한 재검사를 확인했습니다. 웹 662건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **88/124개 완료**이며 다음 권장은 [WEB-05](spec/service/agent-context/development-plan/web.md#web-05)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.
+
+[WEB-05 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-05.md)에서 삭제/복구 대상 보기·계층별 영향·운영자 처리 확인과 실제 DB/TLS의 저장량 한도·등급 상실 재판정·요청자 직접 소유자 복원을 확인했습니다. 웹 743건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 현재 전체 **89/124개 완료**이며 다음 권장은 [WEB-06](spec/service/agent-context/development-plan/web.md#web-06)입니다. 실제 브라우저·보조 기술·전체 웹 인수는 후속 범위입니다.

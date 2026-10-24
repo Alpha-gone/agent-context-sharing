@@ -202,8 +202,13 @@ func TestWEB02DeletionReadBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			target := "/graphs/" + graph.String() + "/deletion?context_id=" + node.String()
+			if mode == "deleted cross graph" {
+				// 삭제된 목록은 복구 대상 보기만 읽는다.
+				target = "/graphs/" + graph.String() + "/deletion?tab=restore"
+			}
 			response := httptest.NewRecorder()
-			server.ServeHTTP(response, sessionRequest(http.MethodGet, "/graphs/"+graph.String()+"/deletion?context_id="+node.String(), nil))
+			server.ServeHTTP(response, sessionRequest(http.MethodGet, target, nil))
 			body := response.Body.String()
 			if response.Code != want || strings.Contains(body, "internal-web02-marker") || strings.Contains(body, "foreign-web02-marker") {
 				t.Fatalf("조회 경계 = %d, want %d", response.Code, want)

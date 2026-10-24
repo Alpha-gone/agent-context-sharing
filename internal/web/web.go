@@ -722,7 +722,12 @@ func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Re
 				server.render(writer, status, "message", pageData{Title: "삭제와 복구", Error: message})
 				return
 			}
-			http.Redirect(writer, request, "/graphs/"+graphID.String()+"/deletion", http.StatusSeeOther)
+			// 조작한 보기로 돌아가야 이어서 다른 노드를 삭제하거나 복구할 수 있다.
+			target := "/graphs/" + graphID.String() + "/deletion"
+			if action == "restore_context" {
+				target += "?tab=restore"
+			}
+			http.Redirect(writer, request, target, http.StatusSeeOther)
 		default:
 			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "삭제와 복구", Error: "지원하지 않는 삭제 동작입니다."})
 		}
@@ -734,6 +739,9 @@ func (server *Server) graphDeletion(writer http.ResponseWriter, request *http.Re
 func deletionError(err error) (int, string) {
 	if errors.Is(err, store.ErrNotFound) {
 		return http.StatusNotFound, "대상을 찾을 수 없거나 접근 권한이 변경되었습니다."
+	}
+	if errors.Is(err, store.ErrLastOwner) {
+		return http.StatusConflict, "마지막 소유자 등급이 사라지는 처리는 할 수 없습니다."
 	}
 	if errors.Is(err, store.ErrInvalidState) {
 		return http.StatusConflict, "현재 상태에서는 처리할 수 없습니다."
@@ -747,36 +755,70 @@ func deletionError(err error) (int, string) {
 	return http.StatusInternalServerError, "삭제·복구 처리 중 오류가 발생했습니다."
 }
 
-// renderDeletion은 그래프 영향과 노드 목록을 모아 복구 화면을 그린다. context_id를 받은
-// 요청은 그 노드의 연쇄 영향을 함께 보여 삭제 전 안내를 노드에도 적용한다.
+// renderDeletion은 삭제 보기와 복구 대상 보기를 나눠 그린다. 「화면 배치」가 복구 대상
+// 목록을 별도 탭에 두었으므로 각 보기는 자기 목록만 읽는다. context_id를 받은 삭제 보기는
+// 그 노드의 연쇄 영향을 함께 보여 삭제 전 안내를 노드에도 적용한다.
 func (server *Server) renderDeletion(writer http.ResponseWriter, request *http.Request, graphID, accountID model.ID, graph model.Graph) {
 	ctx := request.Context()
-	impact, err := server.graphs.DeletionImpact(ctx, graphID, model.ID{})
-	if err != nil {
-		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "삭제 영향을 읽을 수 없습니다."})
+	query := request.URL.Query()
+	value := pageData{Title: "삭제와 복구", GraphID: graphID, Graph: graph}
+	switch query.Get("tab") {
+	case "":
+	case "restore":
+		value.RestoreTab = true
+	default:
+		server.render(writer, http.StatusBadRequest, "message", pageData{Title: "삭제와 복구", Error: "지원하지 않는 보기입니다."})
 		return
 	}
 	pageSize := server.config.Plans.For(accountID).GraphPage.Default
-	active, activeTruncated, err := server.graphs.ListActiveContexts(ctx, graphID, pageSize)
-	if err != nil {
-		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "컨텍스트 목록을 읽을 수 없습니다."})
-		return
+	switch {
+	case value.RestoreTab:
+		deleted, truncated, err := server.graphs.ListDeletedContexts(ctx, graphID, pageSize)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "삭제된 컨텍스트 목록을 읽을 수 없습니다."})
+			return
+		}
+		if !contextsInGraph(graphID, deleted) {
+			server.responseScopeError(writer)
+			return
+		}
+		value.DeletedContexts, value.ContextsTruncated = deleted, truncated
+	case graph.DeletedAt == nil:
+		// 삭제된 그래프의 노드는 저장소가 바꾸지 않으므로 삭제 보기에 대상을 싣지 않는다.
+		impact, err := server.graphs.DeletionImpact(ctx, graphID, model.ID{})
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "삭제 영향을 읽을 수 없습니다."})
+			return
+		}
+		active, truncated, err := server.graphs.ListActiveContexts(ctx, graphID, pageSize)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "컨텍스트 목록을 읽을 수 없습니다."})
+			return
+		}
+		if !contextsInGraph(graphID, active) {
+			server.responseScopeError(writer)
+			return
+		}
+		value.Impact, value.ActiveContexts, value.ContextsTruncated = impact, active, truncated
 	}
-	deleted, deletedTruncated, err := server.graphs.ListDeletedContexts(ctx, graphID, pageSize)
-	if err != nil {
-		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "삭제된 컨텍스트 목록을 읽을 수 없습니다."})
-		return
-	}
-	if !contextsInGraph(graphID, active) || !contextsInGraph(graphID, deleted) {
-		server.responseScopeError(writer)
-		return
-	}
-	value := pageData{Title: "삭제와 복구", GraphID: graphID, Graph: graph, Impact: impact, ActiveContexts: active, DeletedContexts: deleted, ContextsTruncated: activeTruncated || deletedTruncated}
-	if raw := request.URL.Query().Get("context_id"); raw != "" {
+	if raw := query.Get("context_id"); raw != "" && (value.RestoreTab || graph.DeletedAt == nil) {
 		contextID, err := model.ParseID(raw)
 		if err != nil {
 			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "삭제와 복구", Error: "컨텍스트 식별자가 올바르지 않습니다."})
 			return
+		}
+		missing := "활성 컨텍스트를 찾을 수 없습니다."
+		if value.RestoreTab {
+			missing = "삭제된 컨텍스트를 찾을 수 없습니다."
 		}
 		// 목록에 없어도 직접 읽는다. 목록은 상한으로 잘리므로 목록 안에서만 찾으면
 		// 그래프에 컨텍스트가 많을 때 화면에서 삭제도 복구도 할 수 없다.
@@ -787,7 +829,7 @@ func (server *Server) renderDeletion(writer http.ResponseWriter, request *http.R
 		if err != nil {
 			status, message := http.StatusInternalServerError, "컨텍스트를 읽을 수 없습니다."
 			if errors.Is(err, store.ErrNotFound) {
-				status, message = http.StatusNotFound, "활성 컨텍스트를 찾을 수 없습니다."
+				status, message = http.StatusNotFound, missing
 			}
 			server.render(writer, status, "message", pageData{Title: "삭제와 복구", Error: message})
 			return
@@ -796,16 +838,22 @@ func (server *Server) renderDeletion(writer http.ResponseWriter, request *http.R
 			server.responseScopeError(writer)
 			return
 		}
-		if selected.DeletedAt != nil {
-			server.render(writer, http.StatusNotFound, "message", pageData{Title: "삭제와 복구", Error: "활성 컨텍스트를 찾을 수 없습니다."})
+		if (selected.DeletedAt != nil) != value.RestoreTab {
+			server.render(writer, http.StatusNotFound, "message", pageData{Title: "삭제와 복구", Error: missing})
 			return
 		}
-		selectedImpact, err := server.graphs.DeletionImpact(ctx, graphID, contextID)
-		if err != nil {
-			server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "삭제 영향을 읽을 수 없습니다."})
-			return
+		value.Selected = &selected
+		if !value.RestoreTab {
+			selectedImpact, err := server.graphs.DeletionImpact(ctx, graphID, contextID)
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "삭제와 복구", Error: "삭제 영향을 읽을 수 없습니다."})
+				return
+			}
+			value.SelectedImpact = selectedImpact
 		}
-		value.Selected, value.SelectedImpact = &selected, selectedImpact
 	}
 	server.render(writer, http.StatusOK, "deletion", value)
 }
@@ -827,6 +875,8 @@ func (server *Server) graphAudit(writer http.ResponseWriter, request *http.Reque
 	server.render(writer, http.StatusOK, "audit", pageData{Title: "감사 기록", GraphID: graphID, AuditEntries: entries})
 }
 
+// operatorRestores는 대기 요청 목록, 선택한 요청의 처리 확인과 처리를 맡는다. 화면은
+// 요청과 그래프 메타데이터만 읽고 컨텍스트 본문을 조회하지 않는다.
 func (server *Server) operatorRestores(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodPost {
 		methodNotAllowed(writer, "GET, POST")
@@ -839,11 +889,31 @@ func (server *Server) operatorRestores(writer http.ResponseWriter, request *http
 	switch request.Method {
 	case http.MethodGet:
 		requests, err := server.graphs.PendingRestoreRequests(request.Context())
+		if request.Context().Err() != nil {
+			return
+		}
 		if err != nil {
 			server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "운영자 복구", Error: "대기 요청을 읽을 수 없습니다."})
 			return
 		}
-		server.render(writer, http.StatusOK, "operator_restores", pageData{Title: "운영자 복구", RestoreRequests: requests})
+		value := pageData{Title: "운영자 복구", RestoreRequests: requests}
+		if raw := request.URL.Query().Get("graph_id"); raw != "" {
+			graphID, err := model.ParseID(raw)
+			if err != nil {
+				value.Error = "그래프 식별자가 올바르지 않습니다."
+				server.render(writer, http.StatusBadRequest, "operator_restores", value)
+				return
+			}
+			// 목록이 요청 시각·감사 식별자 순이므로 첫 일치가 저장소가 처리할 가장 오래된 요청이다.
+			index := slices.IndexFunc(requests, func(pending model.RestoreRequest) bool { return pending.GraphID == graphID })
+			if index < 0 {
+				value.Error = "처리할 복구 요청을 찾을 수 없습니다."
+				server.render(writer, http.StatusNotFound, "operator_restores", value)
+				return
+			}
+			value.RestoreRequest = &requests[index]
+		}
+		server.render(writer, http.StatusOK, "operator_restores", value)
 	case http.MethodPost:
 		if err := request.ParseForm(); err != nil {
 			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "운영자 복구", Error: "입력을 처리할 수 없습니다."})
@@ -859,7 +929,7 @@ func (server *Server) operatorRestores(writer http.ResponseWriter, request *http
 			switch {
 			case errors.Is(err, store.ErrNotFound):
 				status, message = http.StatusNotFound, "처리할 복구 요청을 찾을 수 없습니다."
-			case errors.Is(err, store.ErrInvalidState):
+			case errors.Is(err, store.ErrInvalidState), errors.Is(err, store.ErrLastOwner):
 				status, message = http.StatusConflict, "현재 상태에서는 그래프를 복구할 수 없습니다."
 			}
 			server.render(writer, status, "message", pageData{Title: "운영자 복구", Error: message})
@@ -1085,6 +1155,10 @@ type pageData struct {
 	// NextPage에는 현재 필터를 유지한 다음 쪽 주소를 둔다. 커서만 실으면 2쪽부터
 	// 필터가 풀린 전체 목록이 나온다.
 	NextPage string
+	// RestoreRequest에는 운영자가 처리 확인을 위해 고른 대기 요청을 둔다.
+	RestoreRequest *model.RestoreRequest
+	// RestoreTab에는 삭제와 복구 화면이 복구 대상 보기인지를 둔다.
+	RestoreTab bool
 }
 
 // HasGrade는 현재 등급 필터의 선택 상태를 양식에 반영한다.
@@ -1263,6 +1337,16 @@ range.addEventListener('input',applyScope);
 <form method="post" action="{{accessPath $.GraphID}}" class="actions"><input type="hidden" name="team_id" value="{{.ID}}"><input type="hidden" name="action" value="remove_member"><label for="remove-member-{{.ID}}">{{.Name}} 제거할 구성원 로그인 아이디 (필수)<input id="remove-member-{{.ID}}" name="login_id" autocorrect="off" autocapitalize="off" spellcheck="false" required></label><button type="submit">{{.Name}} 구성원 제거</button></form>
 </article>{{else}}<p>관리하는 팀이 없습니다.</p>{{end}}</section>{{template "foot" .}}{{end}}
 
-{{define "deletion"}}{{template "head" .}}<nav><h1>삭제와 복구</h1><a href="/graphs/{{.GraphID}}">그래프 상세</a><a href="/graphs">그래프 목록</a></nav><section class="panel"><h2>{{.Graph.Name}}</h2><p>영향: 활성 컨텍스트 {{.Impact.Contexts}}개, 확정 관계 {{.Impact.Relations}}개, 접근이 차단될 계정 {{.Impact.Accounts}}개</p>{{if .Graph.DeletedAt}}<form method="post"><input type="hidden" name="action" value="restore"><button type="submit">그래프 복구</button></form>{{else}}<form method="post"><input type="hidden" name="action" value="delete"><label>그래프 이름 확인<input name="graph_name" required></label><button type="submit">소프트 삭제</button></form>{{end}}</section><section class="panel"><h2>노드 삭제</h2>{{if .ContextsTruncated}}<p class="notice">컨텍스트가 많아 최근 것만 표시했습니다. 목록에 없는 컨텍스트는 <code>?context_id=</code>로 직접 열 수 있습니다.</p>{{end}}{{if .Selected}}<article><strong>{{.Selected.Layer}}</strong> <code>{{.Selected.ID}}</code><p>{{.Selected.Body}}</p><p>영향: 이 컨텍스트를 근거로 둔 파생 {{.SelectedImpact.Derived}}개, 확정 관계 {{.SelectedImpact.Relations}}개</p><p>연쇄 삭제는 하지 않습니다. 파생에는 근거 무효 표시만 남습니다.</p><form method="post"><input type="hidden" name="action" value="delete_context"><input type="hidden" name="context_id" value="{{.Selected.ID}}"><button type="submit">이 노드 소프트 삭제</button></form></article>{{end}}{{range .ActiveContexts}}<p><a href="/graphs/{{$.GraphID}}/deletion?context_id={{.ID}}">{{.Layer}} · {{.ID}}</a></p>{{else}}<p>삭제할 활성 컨텍스트가 없습니다.</p>{{end}}</section><section class="panel"><h2>삭제된 노드</h2>{{range .DeletedContexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code><p>{{.Body}}</p><form class="inline" method="post"><input type="hidden" name="action" value="restore_context"><input type="hidden" name="context_id" value="{{.ID}}"><button type="submit">복구</button></form></article>{{else}}<p>삭제된 컨텍스트가 없습니다.</p>{{end}}</section>{{template "foot" .}}{{end}}
+{{define "deletion"}}{{template "head" .}}<nav><h1>삭제와 복구</h1><a href="/graphs/{{.GraphID}}">그래프 상세</a><a href="/graphs">그래프 목록</a></nav>
+<nav aria-label="삭제와 복구 보기"><a href="/graphs/{{.GraphID}}/deletion"{{if not .RestoreTab}} aria-current="page"{{end}}>삭제</a><a href="/graphs/{{.GraphID}}/deletion?tab=restore"{{if .RestoreTab}} aria-current="page"{{end}}>복구 대상</a></nav>
+<p>모든 삭제는 소프트 삭제이며 연결된 컨텍스트를 함께 삭제하지 않습니다. 삭제한 대상은 복구 대상 보기에서 되돌릴 수 있습니다.</p>
+{{if .RestoreTab}}<section class="panel"><h2>그래프 복구</h2>{{if not .Graph.DeletedAt}}<p>{{.Graph.Name}} 그래프는 활성 상태입니다.</p>{{else if .Graph.GraceStartedAt}}<p>유예 기간 만료로 자동 삭제된 그래프입니다. 소유자였던 계정이 그래프 목록에서 복구를 요청하면 운영자가 처리합니다.</p>{{else}}<p>{{.Graph.Name}} 그래프는 삭제되어 있습니다. 복구하면 보존된 노드·권한·관계에 다시 접근할 수 있습니다.</p><form method="post"><input type="hidden" name="action" value="restore"><button type="submit">그래프 복구</button></form>{{end}}</section>
+<section class="panel"><h2>삭제된 노드</h2><p>웹에서 삭제한 노드와 에이전트가 폐기한 노드를 함께 표시합니다.</p>{{if .Graph.DeletedAt}}<p class="notice">그래프를 먼저 복구해야 노드를 복구할 수 있습니다.</p>{{end}}{{if .ContextsTruncated}}<p class="notice">삭제된 컨텍스트가 많아 최근 것만 표시했습니다. 목록에 없는 컨텍스트는 <code>?tab=restore&amp;context_id=</code>로 직접 열 수 있습니다.</p>{{end}}{{if .Selected}}<article><strong>{{.Selected.Layer}}</strong> <code>{{.Selected.ID}}</code><p>{{.Selected.Body}}</p>{{if not $.Graph.DeletedAt}}<form method="post"><input type="hidden" name="action" value="restore_context"><input type="hidden" name="context_id" value="{{.Selected.ID}}"><button type="submit">이 노드 복구</button></form>{{end}}</article>{{end}}{{range .DeletedContexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code><p>{{.Body}}</p>{{if not $.Graph.DeletedAt}}<form class="inline" method="post"><input type="hidden" name="action" value="restore_context"><input type="hidden" name="context_id" value="{{.ID}}"><button type="submit">복구</button></form>{{end}}</article>{{else}}<p>삭제된 컨텍스트가 없습니다.</p>{{end}}</section>
+{{else if .Graph.DeletedAt}}<p class="notice">삭제된 그래프입니다. <a href="/graphs/{{.GraphID}}/deletion?tab=restore">복구 대상</a> 보기에서 복구할 수 있습니다.</p>
+{{else}}<section class="panel"><h2>그래프 삭제: {{.Graph.Name}}</h2><p>영향: 활성 컨텍스트 {{.Impact.Contexts}}개, 확정 관계 {{.Impact.Relations}}개, 접근이 차단될 계정 {{.Impact.Accounts}}개</p><form method="post"><input type="hidden" name="action" value="delete"><label for="graph-name-confirm">그래프 이름 확인 (필수)</label><p class="hint" id="graph-name-help">삭제하려면 그래프 이름 「{{.Graph.Name}}」을 그대로 입력합니다.</p><input id="graph-name-confirm" name="graph_name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="graph-name-help" required><button type="submit">그래프 소프트 삭제</button></form></section>
+<section class="panel"><h2>노드 삭제</h2>{{if .ContextsTruncated}}<p class="notice">컨텍스트가 많아 최근 것만 표시했습니다. 목록에 없는 컨텍스트는 <code>?context_id=</code>로 직접 열 수 있습니다.</p>{{end}}{{if .Selected}}<article><strong>{{.Selected.Layer}}</strong> <code>{{.Selected.ID}}</code><p>{{.Selected.Body}}</p>{{if eq .Selected.Layer "source"}}<p>영향: 이 원천을 근거로 하는 활성 파생 {{.SelectedImpact.Derived}}개, 구성원으로 갖는 활성 사건 {{.SelectedImpact.Events}}개</p><p>파생에는 근거 무효 표시가 붙고 사건은 삭제하지 않습니다.</p>{{else if eq .Selected.Layer "derived"}}<p>영향: 이 파생을 근거로 하는 활성 파생 {{.SelectedImpact.Derived}}개</p><p>파생에는 근거 무효 표시가 붙습니다.</p>{{else}}<p>영향: 이 사건에 붙은 확정 관계 {{.SelectedImpact.Relations}}개</p><p>사건에 붙은 확정 관계는 함께 폐기됩니다.</p>{{end}}<form method="post"><input type="hidden" name="action" value="delete_context"><input type="hidden" name="context_id" value="{{.Selected.ID}}"><button type="submit">이 노드 소프트 삭제</button></form></article>{{end}}{{range .ActiveContexts}}<p><a href="/graphs/{{$.GraphID}}/deletion?context_id={{.ID}}">{{.Layer}} · {{.ID}}</a></p>{{else}}<p>삭제할 활성 컨텍스트가 없습니다.</p>{{end}}</section>
+{{end}}{{template "foot" .}}{{end}}
 {{define "audit"}}{{template "head" .}}<nav><h1>감사 기록</h1><a href="/graphs/{{.GraphID}}">그래프 상세</a></nav><table><thead><tr><th>시각</th><th>종류</th><th>동작</th><th>대상</th><th>상세</th></tr></thead><tbody>{{range .AuditEntries}}<tr><td>{{formatTime .OccurredAt}}</td><td>{{.Kind}}</td><td>{{.Action}}</td><td>{{.Target}}</td><td>{{.Detail}}</td></tr>{{end}}</tbody></table>{{template "foot" .}}{{end}}
-{{define "operator_restores"}}{{template "head" .}}<nav><h1>운영자 복구</h1><a href="/graphs">그래프 목록</a></nav><p>대기 중인 요청만 표시하며 컨텍스트 본문은 조회하지 않습니다.</p><table><thead><tr><th>그래프</th><th>요청 계정</th><th>요청 시각</th><th>처리</th></tr></thead><tbody>{{range .RestoreRequests}}<tr><td>{{.GraphName}}</td><td>{{.RequestedBy}}</td><td>{{formatTime .RequestedAt}}</td><td><form class="inline" method="post"><input type="hidden" name="graph_id" value="{{.GraphID}}"><button type="submit">복구</button></form></td></tr>{{else}}<tr><td colspan="4">대기 중인 요청이 없습니다.</td></tr>{{end}}</tbody></table>{{template "foot" .}}{{end}}`
+{{define "operator_restores"}}{{template "head" .}}<nav><h1>운영자 복구</h1><a href="/graphs">그래프 목록</a></nav><p>처리되지 않은 복구 요청만 표시하며 컨텍스트 본문은 조회하지 않습니다.</p>
+{{with .RestoreRequest}}<section class="panel"><h2>복구 처리 확인</h2><dl class="connection-list"><dt>그래프</dt><dd>{{.GraphName}} <code>{{.GraphID}}</code></dd><dt>요청 계정</dt><dd><code>{{.RequestedBy}}</code></dd><dt>요청 시각</dt><dd>{{formatTime .RequestedAt}}</dd></dl><p>그래프의 삭제·유예 상태를 해제하고 요청 계정에 직접 소유자 등급을 복원합니다. 처리하는 운영자에게는 등급을 부여하지 않습니다. 같은 그래프에 요청이 여럿이면 가장 먼저 등록된 요청을 처리합니다.</p><form method="post" action="/operator/restores"><input type="hidden" name="graph_id" value="{{.GraphID}}"><button type="submit">복구 처리</button></form><p><a href="/operator/restores">처리하지 않고 목록으로 돌아가기</a></p></section>{{end}}
+<table><caption>대기 중인 복구 요청</caption><thead><tr><th scope="col">그래프</th><th scope="col">요청 계정</th><th scope="col">요청 시각</th><th scope="col">처리</th></tr></thead><tbody>{{range .RestoreRequests}}<tr><td>{{.GraphName}} <code>{{.GraphID}}</code></td><td><code>{{.RequestedBy}}</code></td><td>{{formatTime .RequestedAt}}</td><td><a href="/operator/restores?graph_id={{.GraphID}}">처리 확인</a></td></tr>{{else}}<tr><td colspan="4">대기 중인 요청이 없습니다.</td></tr>{{end}}</tbody></table>{{template "foot" .}}{{end}}`

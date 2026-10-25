@@ -64,6 +64,9 @@ func main() {
 func run() (err error) {
 	defaultLimits := plan.Default()
 	manifestPath := flag.String("check-manifest", "", "실행 manifest만 검증한다. 데이터 읽기·DB 접속·평가는 실행하지 않는다")
+	prepareFormat := flag.String("prepare-data", "", "고정 공개 데이터 또는 자체 보완 세트를 준비한다. longmemeval, locomo, own-supplement")
+	prepareSource := flag.String("prepare-source", "", "고정 checksum을 확인할 로컬 원본 파일")
+	prepareOutput := flag.String("prepare-out", "", "준비 파일을 생성할 새 디렉터리")
 	contextsPath := flag.String("contexts", "", "컨텍스트 집합 파일 경로")
 	queriesPath := flag.String("queries", "", "질의 집합 파일 경로")
 	stageList := flag.String("stages", "baseline,references,relations,global,evidence", "누적 비교 단계를 순서대로 지정한다")
@@ -113,6 +116,21 @@ func run() (err error) {
 		}
 		slog.Info("manifest 검증 완료", "trial_id", manifest.TrialID, "mode", manifest.Mode)
 		return nil
+	}
+	prepareRequested := false
+	prepareConflict := false
+	flag.Visit(func(f *flag.Flag) {
+		if strings.HasPrefix(f.Name, "prepare-") {
+			prepareRequested = true
+		} else {
+			prepareConflict = true
+		}
+	})
+	if prepareRequested {
+		if prepareConflict || *prepareFormat == "" {
+			return fmt.Errorf("데이터 준비 모드는 다른 실행 옵션과 함께 지정할 수 없다")
+		}
+		return runPrepareData(*prepareFormat, *prepareSource, *prepareOutput)
 	}
 	var modes []string
 	for _, mode := range []struct {

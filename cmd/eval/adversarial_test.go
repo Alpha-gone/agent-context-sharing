@@ -213,7 +213,8 @@ func TestSummarizeMetrics(t *testing.T) {
 			"q1": {{Success: 1, Traced: 1, Affected: 1, Recovered: 1}, {Success: 1, Traced: 0, Affected: 1, Recovered: 1}, {Success: 0, Traced: undefinedMetric, Affected: 1, Recovered: 1}},
 			"q2": {{Traced: undefinedMetric}, {Traced: undefinedMetric}, {Traced: undefinedMetric}},
 		},
-		controls: 2, controlsPre: []float64{0, 0, 0}, controlsPost: []float64{0.5, 0.5, 0.5},
+		controlRuns: map[string][]controlRun{"control": {{before: 0, after: 0.5}}},
+		controls:    2,
 	}
 	metrics := summarizeMetrics([]sampleRuns{runs})
 	if metrics.TargetQueries != 2 || math.Abs(metrics.AttackSuccess.Value-1.0/3) > 1e-9 {

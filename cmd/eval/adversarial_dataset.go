@@ -167,6 +167,9 @@ func validateSample(sample attackSample, baseLayers map[string]string, queryIDs 
 		if _, ok := queryIDs[id]; !ok {
 			return fmt.Errorf("대상 질의 %q가 질의 집합에 없다", id)
 		}
+		if _, duplicate := targets[id]; duplicate {
+			return fmt.Errorf("대상 질의 %q가 중복된다", id)
+		}
 		targets[id] = struct{}{}
 	}
 	criteria := map[string]successCriteria{}
@@ -183,6 +186,21 @@ func validateSample(sample attackSample, baseLayers map[string]string, queryIDs 
 		for _, refs := range [][]attackRef{item.MustReturn, item.MustOmit} {
 			if err := validateAttackRefs(refs, layers); err != nil {
 				return err
+			}
+		}
+		for _, ref := range item.MustReturn {
+			if slices.ContainsFunc(item.MustOmit, func(other attackRef) bool { return equalAttackRef(ref, other) }) {
+				return fmt.Errorf("질의 %q가 같은 식별자의 반환과 제외를 동시에 요구한다", item.QueryID)
+			}
+		}
+		for _, ref := range append(slices.Clone(item.MustReturn), item.MustOmit...) {
+			if ref.Relation == nil {
+				continue
+			}
+			relation := ref.Relation.normalized()
+			_, known := base[relation]
+			if !known && !slices.ContainsFunc(sample.AddRelations, func(added relationSpec) bool { return added.normalized() == relation }) {
+				return fmt.Errorf("성공 조건의 관계가 기준·추가 관계에 없다")
 			}
 		}
 		criteria[item.QueryID] = item
@@ -234,7 +252,7 @@ func validateSample(sample attackSample, baseLayers map[string]string, queryIDs 
 // 시작해 사건으로 끝나며 관계 단계가 앞뒤 사건을 잇는지 본다. 홉별 진단은 관계 단계를 바로
 // 앞 사건에서 뻗은 간선과 대조하므로 이 모양이어야 첫 불일치 홉이 정해진다.
 func validatePathSteps(path expectedPath, baseLayers map[string]string, base map[relationSpec]struct{}) error {
-	if len(path.Steps)%2 == 0 {
+	if len(path.Steps) < 3 || len(path.Steps)%2 == 0 {
 		return fmt.Errorf("경로 %q는 사건과 관계를 번갈아 두고 사건으로 시작해 사건으로 끝나야 한다", path.PathID)
 	}
 	for index, step := range path.Steps {
@@ -257,6 +275,13 @@ func validatePathSteps(path expectedPath, baseLayers map[string]string, base map
 		}
 	}
 	return nil
+}
+
+func equalAttackRef(left, right attackRef) bool {
+	if left.Key != "" || right.Key != "" {
+		return left.Key == right.Key
+	}
+	return left.Relation != nil && right.Relation != nil && left.Relation.normalized() == right.Relation.normalized()
 }
 
 func validateRelationRef(relation relationSpec, layers map[string]string) error {
@@ -318,23 +343,33 @@ func validateAttackType(sample attackSample, added map[string]string, base map[r
 			return fmt.Errorf("관계 삽입에는 추가 관계가 하나 이상 있어야 한다")
 		}
 		if len(sample.AddContexts) > 0 {
-			endpoint := false
+			supported := map[string]bool{}
 			for _, relation := range sample.AddRelations {
-				_, from := addedEvents[relation.From]
-				_, to := addedEvents[relation.To]
-				endpoint = endpoint || from || to
+				for _, key := range []string{relation.From, relation.To} {
+					if _, ok := addedEvents[key]; ok {
+						supported[key] = true
+					}
+				}
 			}
-			if !endpoint {
+			if len(supported) == 0 {
 				return fmt.Errorf("추가 사건 중 하나 이상이 추가 관계의 끝점이어야 한다")
 			}
-			for _, spec := range sample.AddContexts {
-				if spec.Layer == "event" {
-					continue
+			for changed := true; changed; {
+				changed = false
+				for _, spec := range sample.AddContexts {
+					if !supported[spec.Key] {
+						continue
+					}
+					for _, key := range attackContextReferences(spec) {
+						if !supported[key] {
+							supported[key], changed = true, true
+						}
+					}
 				}
-				if !slices.ContainsFunc(sample.AddContexts, func(event contextSpec) bool {
-					return event.Event != nil && slices.Contains(event.Event.Members, spec.Key)
-				}) {
-					return fmt.Errorf("보조 컨텍스트 %q가 추가 사건의 구성원이 아니다", spec.Key)
+			}
+			for _, spec := range sample.AddContexts {
+				if !supported[spec.Key] {
+					return fmt.Errorf("보조 컨텍스트 %q가 관계 끝점 사건의 구성원·근거가 아니다", spec.Key)
 				}
 			}
 		}
@@ -403,20 +438,14 @@ func validateAttackType(sample attackSample, added map[string]string, base map[r
 		if !addedEventsConnected(sample.AddRelations, addedEvents) {
 			return fmt.Errorf("추가 사건이 추가 관계로 하나의 연결 부분 그래프를 이뤄야 한다")
 		}
-		contaminated := map[string]struct{}{}
-		for _, ref := range sample.ContaminatedRefs {
-			if ref.Key != "" {
-				contaminated[ref.Key] = struct{}{}
-			}
-		}
 		for _, item := range criteria {
-			matched := map[string]struct{}{}
+			matched := 0
 			for _, ref := range item.MustReturn {
-				if _, ok := contaminated[ref.Key]; ok && ref.Key != "" {
-					matched[ref.Key] = struct{}{}
+				if slices.ContainsFunc(sample.ContaminatedRefs, func(other attackRef) bool { return equalAttackRef(ref, other) }) {
+					matched++
 				}
 			}
-			if len(matched) < 2 {
+			if matched < 2 {
 				return fmt.Errorf("질의 %q의 성공 조건이 서로 다른 오염 식별자 둘 이상을 요구해야 한다", item.QueryID)
 			}
 		}

@@ -35,18 +35,19 @@ const (
 var eventRelationKinds = []string{"precedes", "causes", "part_of", "relates_to"}
 
 type adversarialConditions struct {
-	IndexTargets      string  `json:"index_targets"`
-	Repeats           int     `json:"repeats"`
-	GraphStage        string  `json:"graph_stage"`
-	GlobalFallback    bool    `json:"global_fallback"`
-	Budget            int     `json:"budget"`
-	MaxHops           int     `json:"max_hops"`
-	MaxHopNodes       int     `json:"max_hop_nodes"`
-	Execution         string  `json:"channel_execution"`
-	CandidateLimit    int     `json:"channel_candidate_limit"`
-	SemanticThreshold float64 `json:"semantic_similarity_threshold"`
-	FoldThreshold     float64 `json:"fold_threshold"`
-	EmbeddingModel    string  `json:"embedding_model"`
+	AsOf              time.Time `json:"as_of"`
+	IndexTargets      string    `json:"index_targets"`
+	Repeats           int       `json:"repeats"`
+	GraphStage        string    `json:"graph_stage"`
+	GlobalFallback    bool      `json:"global_fallback"`
+	Budget            int       `json:"budget"`
+	MaxHops           int       `json:"max_hops"`
+	MaxHopNodes       int       `json:"max_hop_nodes"`
+	Execution         string    `json:"channel_execution"`
+	CandidateLimit    int       `json:"channel_candidate_limit"`
+	SemanticThreshold float64   `json:"semantic_similarity_threshold"`
+	FoldThreshold     float64   `json:"fold_threshold"`
+	EmbeddingModel    string    `json:"embedding_model"`
 }
 
 // adversarialReport는 결과 파일이다. 질의문, 컨텍스트 본문, 원문 경로는 싣지 않고 데이터셋
@@ -75,6 +76,7 @@ type metricSummary struct {
 type adversarialMetrics struct {
 	Samples       int           `json:"samples"`
 	TargetQueries int           `json:"target_queries"`
+	TargetPairs   int           `json:"target_query_sample_pairs"`
 	AttackSuccess metricSummary `json:"attack_success_rate"`
 	// AffectedQueries 필드는 질의별 영향 여부의 반복 평균을 더한 값이다. 반복이 모두 같으면
 	// 영향받은 고유 대상 질의 수와 같다.
@@ -100,6 +102,7 @@ type sampleResult struct {
 	// IsolationMismatches 필드는 공격 전 응답이 기준선 그래프 응답과 달랐던 질의·반복 수다.
 	// 0이 아니면 앞선 표본이나 반복의 상태가 넘어왔다는 뜻이다.
 	IsolationMismatches int `json:"isolation_mismatches"`
+	RecoveryVerified    int `json:"recovery_records_verified_repeats"`
 }
 
 type hopWarning struct {
@@ -134,11 +137,11 @@ func (r response) has(ref attackRef) bool {
 func (r response) signature() string {
 	parts := make([]string, 0, len(r.Contexts)+len(r.Edges))
 	for _, key := range r.Contexts {
-		parts = append(parts, key+"#"+strconv.Itoa(r.Ranks[key]))
+		parts = append(parts, strconv.Quote(key)+"#"+strconv.Itoa(r.Ranks[key]))
 	}
 	edges := make([]string, 0, len(r.Edges))
 	for _, edge := range r.Edges {
-		edges = append(edges, edge.Type+"|"+edge.From+"|"+edge.To)
+		edges = append(edges, strconv.Quote(edge.Type)+"|"+strconv.Quote(edge.From)+"|"+strconv.Quote(edge.To))
 	}
 	slices.Sort(edges)
 	return strings.Join(append(parts, edges...), ",")
@@ -350,13 +353,16 @@ type targetRun struct {
 
 // sampleRuns는 표본 하나의 반복 관측값이다. 통제 값은 반복마다 경고가 난 통제 질의 비율이다.
 type sampleRuns struct {
-	sample                    attackSample
-	targets                   map[string][]targetRun
-	controlsPre, controlsPost []float64
+	sample  attackSample
+	targets map[string][]targetRun
+
 	// controlsContaminated와 controlsWarned에는 반복마다 오탐 원인별 통제 질의 비율을 둔다.
 	controlsContaminated, controlsWarned []float64
 	controls                             int
 	isolationMismatches                  int
+	units                                map[string]string
+	controlRuns                          map[string][]controlRun
+	recoveryVerified                     int
 }
 
 // observeTarget은 대상 질의 하나의 공격 전·공격 후·복구 후 응답을 관측값으로 바꾼다. 복구
@@ -410,59 +416,6 @@ func indicator(value bool) float64 {
 	return 0
 }
 
-// summarizeMetrics는 표본 묶음의 여섯 지표를 낸다. 반복값을 먼저 단위별로 평균하고 단위
-// 사이의 대응 차이로 신뢰구간을 계산한다. 반복 회차를 독립 표본으로 쓰지 않는다.
-func summarizeMetrics(runs []sampleRuns) adversarialMetrics {
-	var success, preSuccess, affected, contamination, preContamination, traced, recovered, attackRecovered, controls, preControls []float64
-	for _, sample := range runs {
-		for _, queryID := range slices.Sorted(maps.Keys(sample.targets)) {
-			series := sample.targets[queryID]
-			average := func(value func(targetRun) float64) float64 {
-				total := 0.0
-				for _, run := range series {
-					total += value(run)
-				}
-				return total / float64(len(series))
-			}
-			success = append(success, average(func(run targetRun) float64 { return run.Success }))
-			preSuccess = append(preSuccess, average(func(run targetRun) float64 { return run.PreSuccess }))
-			affected = append(affected, average(func(run targetRun) float64 { return run.Affected }))
-			contamination = append(contamination, average(func(run targetRun) float64 { return run.Contamination }))
-			preContamination = append(preContamination, average(func(run targetRun) float64 { return run.PreContamination }))
-			recovered = append(recovered, average(func(run targetRun) float64 { return run.Recovered }))
-			attackRecovered = append(attackRecovered, average(func(run targetRun) float64 { return run.AttackRecovered }))
-			total, count := 0.0, 0
-			for _, run := range series {
-				if run.Traced >= 0 {
-					total += run.Traced
-					count++
-				}
-			}
-			if count > 0 {
-				traced = append(traced, total/float64(count))
-			}
-		}
-		if sample.controls > 0 {
-			controls = append(controls, mean(sample.controlsPost))
-			preControls = append(preControls, mean(sample.controlsPre))
-		}
-	}
-	metrics := adversarialMetrics{
-		Samples:       len(runs),
-		TargetQueries: len(success),
-		AttackSuccess: summarizeMetric(preSuccess, success),
-		Affected:      summarizeMetric(make([]float64, len(affected)), affected),
-		Contamination: summarizeMetric(preContamination, contamination),
-		Trace:         summarizeMetric(make([]float64, len(traced)), traced),
-		FalsePositive: summarizeMetric(preControls, controls),
-		Recovery:      summarizeMetric(attackRecovered, recovered),
-	}
-	for _, value := range affected {
-		metrics.AffectedQueries += value
-	}
-	return metrics
-}
-
 func summarizeMetric(before, after []float64) metricSummary {
 	if len(after) == 0 {
 		return metricSummary{Value: undefinedMetric, Difference: undefinedMetric, HalfWidth: undefinedMetric}
@@ -473,25 +426,43 @@ func summarizeMetric(before, after []float64) metricSummary {
 
 // runAdversarial은 기준선을 검증하고 표본·반복마다 공격 그래프를 새로 만들어 잰다.
 func runAdversarial(ctx context.Context, database *store.Store, worker *index.Worker, service *search.Service, contexts contextSet, queries querySet, attacks attackSet, conditions adversarialConditions, expect store.EmbeddingExpectation) (adversarialReport, error) {
+	if conditions.Repeats != 10 {
+		return adversarialReport{}, fmt.Errorf("적대적 평가 반복은 10회여야 한다")
+	}
+	if err := validateAttackSet(attacks, contexts, queries); err != nil {
+		return adversarialReport{}, err
+	}
+	startedAt := time.Now().UTC()
+	if conditions.AsOf.IsZero() {
+		conditions.AsOf = startedAt
+	}
 	base := newBaseShape(contexts)
+	units := map[string]string{}
+	for _, query := range queries.Queries {
+		unit := query.IndependentUnit
+		if unit == "" {
+			unit = query.ID
+		}
+		units[query.ID] = unit
+	}
 	pathsByQuery := map[string][]expectedPath{}
 	for _, sample := range attacks.Samples {
 		for _, path := range sample.ExpectedPaths {
 			pathsByQuery[path.QueryID] = append(pathsByQuery[path.QueryID], path)
 		}
 	}
-	baseline, err := runBaseline(ctx, database, worker, service, contexts, queries, attacks, conditions, base, pathsByQuery)
+	baseline, err := runBaseline(ctx, database, worker, service, contexts, queries, attacks, conditions, expect, base, pathsByQuery)
 	if err != nil {
 		return adversarialReport{}, err
 	}
 	result := adversarialReport{
-		StartedAt: time.Now().UTC(), ContextVersion: contexts.Version, QueryVersion: queries.Version, AttackVersion: attacks.Version,
+		StartedAt: startedAt, ContextVersion: contexts.Version, QueryVersion: queries.Version, AttackVersion: attacks.Version,
 		Conditions: conditions, AttackTypes: map[string]adversarialMetrics{}, Warnings: []hopWarning{},
 	}
 	seen := map[string]struct{}{}
 	all := make([]sampleRuns, 0, len(attacks.Samples))
 	for _, sample := range attacks.Samples {
-		runs := sampleRuns{sample: sample, targets: map[string][]targetRun{}}
+		runs := sampleRuns{sample: sample, targets: map[string][]targetRun{}, units: units, controlRuns: map[string][]controlRun{}}
 		for repeat := 1; repeat <= conditions.Repeats; repeat++ {
 			warnings, err := runAttackRepeat(ctx, database, worker, service, contexts, queries, sample, conditions, expect, base, pathsByQuery, baseline, &runs)
 			if err != nil {
@@ -511,7 +482,7 @@ func runAdversarial(ctx context.Context, database *store.Store, worker *index.Wo
 		all = append(all, runs)
 		result.Samples = append(result.Samples, sampleResult{
 			SampleID: sample.SampleID, AttackType: sample.AttackType, Targets: sample.TargetQueryIDs, Controls: runs.controls,
-			Metrics: summarizeMetrics([]sampleRuns{runs}), IsolationMismatches: runs.isolationMismatches,
+			Metrics: summarizeMetrics([]sampleRuns{runs}), IsolationMismatches: runs.isolationMismatches, RecoveryVerified: runs.recoveryVerified,
 			ControlContaminated: mean(runs.controlsContaminated), ControlPathWarnings: mean(runs.controlsWarned),
 		})
 	}
@@ -527,16 +498,19 @@ func runAdversarial(ctx context.Context, database *store.Store, worker *index.Wo
 		}
 	}
 	result.Overall = summarizeMetrics(all)
-	return result, nil
+	return result, ctx.Err()
 }
 
 // runBaseline은 공격 없는 평가 그래프에서 질의를 반복 실행한다. 어느 반복에서든 표본의 성공
 // 조건이 이미 성립하거나 정상 기대 경로가 성립하지 않으면 그 표본을 거부한다. 돌려주는
 // 값은 첫 반복의 응답이며 표본 그래프의 공격 전 응답과 견줘 상태 누출을 찾는 데 쓴다.
-func runBaseline(ctx context.Context, database *store.Store, worker *index.Worker, service *search.Service, contexts contextSet, queries querySet, attacks attackSet, conditions adversarialConditions, base baseShape, pathsByQuery map[string][]expectedPath) (first map[string]response, err error) {
+func runBaseline(ctx context.Context, database *store.Store, worker *index.Worker, service *search.Service, contexts contextSet, queries querySet, attacks attackSet, conditions adversarialConditions, expect store.EmbeddingExpectation, base baseShape, pathsByQuery map[string][]expectedPath) (first map[string]response, err error) {
 	for repeat := 1; repeat <= conditions.Repeats; repeat++ {
 		var responses map[string]response
 		err := withEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64, func(graph loadedGraph) error {
+			if err := auditClean(ctx, database, graph, expect, "기준선"); err != nil {
+				return err
+			}
 			var queryErr error
 			responses, queryErr = runQueries(ctx, service, graph, queries, conditions)
 			return queryErr
@@ -573,7 +547,7 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 	if err != nil {
 		return nil, err
 	}
-	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
+	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph), ctx.Err()) }()
 	if err := auditClean(ctx, database, graph, expect, "공격 전"); err != nil {
 		return nil, err
 	}
@@ -582,8 +556,9 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 		return nil, fmt.Errorf("공격 전: %w", err)
 	}
 	for queryID, answer := range before {
-		if answer.signature() != baseline[queryID].signature() {
+		if err := validateAttackBefore(queryID, answer, baseline[queryID], sample, base); err != nil {
 			runs.isolationMismatches++
+			return nil, err
 		}
 	}
 
@@ -593,11 +568,11 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(sample.AddContexts)*4+64); err != nil {
 		return nil, err
 	}
-	if err := confirmRelations(ctx, database, graph.GraphID, graph.AccountID, contextSet{Relations: sample.AddRelations}, graph.Keys); err != nil {
+	if err := confirmAttackRelations(ctx, database, graph, sample.AddRelations, "attack"); err != nil {
 		return nil, fmt.Errorf("공격 관계 추가: %w", err)
 	}
 	for _, relation := range sample.DiscardRelations {
-		if err := discardRelation(ctx, database, graph, relation); err != nil {
+		if err := discardRelation(ctx, database, graph, relation, "attack"); err != nil {
 			return nil, fmt.Errorf("정상 관계 폐기: %w", err)
 		}
 	}
@@ -610,18 +585,31 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 	}
 
 	// 오염 관계를 먼저 폐기해야 공격 컨텍스트를 폐기할 때 관계 끝점을 잃지 않는다. 사건이
-	// 구성원을 참조하므로 컨텍스트는 추가한 역순으로 폐기한다.
+	// 구성원·근거를 참조하므로 이를 사용하는 컨텍스트부터 폐기한다.
+	var judgments []string
 	for _, relation := range sample.AddRelations {
-		if err := discardRelation(ctx, database, graph, relation); err != nil {
+		judgments = append(judgments, attackRelationJudgment("recovery_discard", relation))
+		if err := discardRelation(ctx, database, graph, relation, "recovery_discard"); err != nil {
 			return nil, fmt.Errorf("복구 관계 폐기: %w", err)
 		}
 	}
-	for _, spec := range slices.Backward(sample.AddContexts) {
-		if _, err := database.DiscardContext(ctx, graph.GraphID, graph.Keys[spec.Key], nil, store.WriteLimits{}); err != nil {
+	order, err := attackRecoveryOrder(sample.AddContexts)
+	if err != nil {
+		return nil, err
+	}
+	for _, spec := range order {
+		judgment := "adversarial:recovery_discard:" + strconv.Quote(spec.Key)
+		judgments = append(judgments, judgment)
+		operation := attackOperation(graph, store.OperationDiscard, judgment)
+		operation.ContextID = graph.Keys[spec.Key]
+		if _, err := database.DiscardContext(ctx, graph.GraphID, graph.Keys[spec.Key], operation, store.WriteLimits{}); err != nil {
 			return nil, fmt.Errorf("복구 컨텍스트 %q 폐기: %w", spec.Key, err)
 		}
 	}
-	if err := confirmRelations(ctx, database, graph.GraphID, graph.AccountID, contextSet{Relations: sample.DiscardRelations}, graph.Keys); err != nil {
+	for _, relation := range sample.DiscardRelations {
+		judgments = append(judgments, attackRelationJudgment("recovery_confirm", relation))
+	}
+	if err := confirmAttackRelations(ctx, database, graph, sample.DiscardRelations, "recovery_confirm"); err != nil {
 		return nil, fmt.Errorf("복구 관계 재확정: %w", err)
 	}
 	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(sample.AddContexts)*4+64); err != nil {
@@ -630,12 +618,22 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 	if err := auditClean(ctx, database, graph, expect, "복구 후"); err != nil {
 		return nil, err
 	}
+	for _, judgment := range judgments {
+		found, err := database.HasAppliedOperationJudgment(ctx, graph.GraphID, judgment)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("복구 적용 기록이 없다")
+		}
+	}
+	runs.recoveryVerified++
 	recovered, err := runQueries(ctx, service, graph, queries, conditions)
 	if err != nil {
 		return nil, fmt.Errorf("복구 후: %w", err)
 	}
 
-	flaggedBefore, flaggedAfter, contaminatedAfter, warnedAfter, controls := 0, 0, 0, 0, 0
+	contaminatedAfter, warnedAfter, controls := 0, 0, 0
 	for _, query := range queries.Queries {
 		if slices.Contains(sample.TargetQueryIDs, query.ID) {
 			var paths []expectedPath
@@ -651,12 +649,13 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 			continue
 		}
 		controls++
-		if controlFlagged(before[query.ID], sample.ContaminatedRefs, pathsByQuery[query.ID], base) {
-			flaggedBefore++
+		if runs.controlRuns == nil {
+			runs.controlRuns = map[string][]controlRun{}
 		}
-		if controlFlagged(attacked[query.ID], sample.ContaminatedRefs, pathsByQuery[query.ID], base) {
-			flaggedAfter++
-		}
+		runs.controlRuns[query.ID] = append(runs.controlRuns[query.ID], controlRun{
+			before: indicator(controlFlagged(before[query.ID], sample.ContaminatedRefs, pathsByQuery[query.ID], base)),
+			after:  indicator(controlFlagged(attacked[query.ID], sample.ContaminatedRefs, pathsByQuery[query.ID], base)),
+		})
 		if returnsContaminated(attacked[query.ID], sample.ContaminatedRefs) {
 			contaminatedAfter++
 		}
@@ -673,8 +672,6 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 	}
 	runs.controls = controls
 	if controls > 0 {
-		runs.controlsPre = append(runs.controlsPre, float64(flaggedBefore)/float64(controls))
-		runs.controlsPost = append(runs.controlsPost, float64(flaggedAfter)/float64(controls))
 		runs.controlsContaminated = append(runs.controlsContaminated, float64(contaminatedAfter)/float64(controls))
 		runs.controlsWarned = append(runs.controlsWarned, float64(warnedAfter)/float64(controls))
 	}
@@ -699,7 +696,7 @@ func auditClean(ctx context.Context, database *store.Store, graph loadedGraph, e
 }
 
 // discardRelation은 관계 정체성으로 확정 관계를 찾아 폐기한다.
-func discardRelation(ctx context.Context, database *store.Store, graph loadedGraph, relation relationSpec) error {
+func discardRelation(ctx context.Context, database *store.Store, graph loadedGraph, relation relationSpec, phase string) error {
 	fromID, toID := graph.Keys[relation.From], graph.Keys[relation.To]
 	cursor := ""
 	for {
@@ -709,7 +706,7 @@ func discardRelation(ctx context.Context, database *store.Store, graph loadedGra
 		}
 		for _, stored := range page {
 			if (stored.FromContextID == fromID && stored.ToContextID == toID) || (relation.Type == string(model.RelationTypeRelatesTo) && stored.FromContextID == toID && stored.ToContextID == fromID) {
-				_, err := database.DiscardRelation(ctx, graph.GraphID, stored.ID, nil)
+				_, err := database.DiscardRelation(ctx, graph.GraphID, stored.ID, attackOperation(graph, store.OperationDiscard, attackRelationJudgment(phase, relation)))
 				return err
 			}
 		}
@@ -728,13 +725,19 @@ func runQueries(ctx context.Context, service *search.Service, graph loadedGraph,
 	}
 	responses := make(map[string]response, len(queries.Queries))
 	for _, query := range queries.Queries {
-		input := search.Input{GraphID: graph.GraphID, WorkContext: query.WorkContext, Budget: conditions.Budget, Scope: query.Scope, MaxHops: conditions.MaxHops, MaxHopNodes: conditions.MaxHopNodes}
+		input := search.Input{GraphID: graph.GraphID, WorkContext: query.WorkContext, AsOf: conditions.AsOf, Budget: conditions.Budget, Scope: query.Scope, MaxHops: conditions.MaxHops, MaxHopNodes: conditions.MaxHopNodes}
 		if query.AsOf != nil {
 			input.AsOf = query.AsOf.UTC()
 		}
 		flow, err := service.Flow(ctx, input)
 		if err != nil {
 			return nil, fmt.Errorf("질의 %q 검색: %w", query.ID, err)
+		}
+		for _, name := range slices.Sorted(maps.Keys(flow.Channels)) {
+			failure := flow.Channels[name].Failure
+			if countsAsFailure(failure) && !(name == "graph" && failure == "no_entry_points") {
+				return nil, fmt.Errorf("질의 %q 검색 채널 %q 실패: %s", query.ID, name, failure)
+			}
 		}
 		responses[query.ID] = toResponse(flow, names)
 	}
@@ -786,6 +789,9 @@ func runAdversarialCommand(ctx context.Context, database *store.Store, worker *i
 	expect := store.EmbeddingExpectation{ModelID: worker.ModelID(), Dimension: settings.index.Dimension}
 	result, err := runAdversarial(ctx, database, worker, service, contexts, queries, attacks, conditions, expect)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return writeReport(outPath, result)

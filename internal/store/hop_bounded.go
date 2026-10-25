@@ -172,8 +172,24 @@ func (s *Store) hopCandidateSQL(graphID model.ID, frontier, visited []model.ID, 
 		return "SELECT neighbor, anchor::text AS first_anchor FROM (" + pairs + ") AS pairs LIMIT 1", nil
 	}
 	anchorQuery := "MATCH (anchor:Context) WHERE anchor.graph_id = " + graph +
-		" AND anchor.context_id IN " + anchors + " RETURN anchor.context_id"
+		" AND anchor.context_id IN " + anchors + " RETURN anchor.context_id, id(anchor)"
 	contextTable := pgx.Identifier{s.graphName, "Context"}.Sanitize()
+	edgeTable := pgx.Identifier{s.graphName, label.label}.Sanitize()
+	edgePredicate := " AND edge.properties ->> 'graph_id'::text = " + sqlString(graphID.String())
+	if label.confirmed {
+		edgePredicate += " AND edge.properties ->> 'state'::text = 'confirmed'"
+	}
+	between := func(incoming bool) string {
+		from, to := "anchors.vertex_id", "node.vertex_id"
+		if incoming {
+			from, to = to, from
+		}
+		return "SELECT 1 FROM " + edgeTable + " AS edge WHERE edge.start_id = " + from + " AND edge.end_id = " + to + edgePredicate
+	}
+	edgeQuery := between(direction == "in")
+	if direction != "in" && direction != "out" {
+		edgeQuery = "(" + between(false) + ") UNION ALL (" + between(true) + ")"
+	}
 	seenText := make([]string, len(visited))
 	for index, id := range visited {
 		seenText[index] = sqlString(id.String())
@@ -189,8 +205,12 @@ func (s *Store) hopCandidateSQL(graphID model.ID, frontier, visited []model.ID, 
 	if len(seenText) > 0 {
 		seenClause = " AND node.properties ->> 'context_id'::text NOT IN (" + strings.Join(seenText, ",") + ")"
 	}
+	// 물리 끝점을 먼저 고정해 후보마다 허브 간선 전체를 다시 읽지 않게 한다.
+	// 정렬된 후보 경계는 EXISTS가 정렬 앞으로 이동하는 것을 막는다.
 	return fmt.Sprintf(`WITH pairs AS NOT MATERIALIZED (%s),
-anchors AS MATERIALIZED (%s),
+anchors AS MATERIALIZED (
+ SELECT anchor, vertex::text::ag_catalog.graphid AS vertex_id FROM (%s) AS vertices
+),
 candidates AS (
  SELECT anchors.anchor, candidate.neighbor
  FROM anchors CROSS JOIN LATERAL (
@@ -200,21 +220,26 @@ candidates AS (
   (SELECT neighbor FROM sample WHERE (SELECT count(*) FROM sample) <= %d
    GROUP BY neighbor ORDER BY neighbor LIMIT %d)
   UNION ALL
-  (SELECT ag_catalog.agtype_access_operator(VARIADIC ARRAY[node.properties, '"context_id"'::agtype]) AS neighbor
-   FROM %s AS node
+  (SELECT node.neighbor
+   FROM (
+    SELECT id AS vertex_id,
+     ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"context_id"'::agtype]) AS neighbor,
+     properties ->> 'context_id'::text AS neighbor_order
+    FROM %s AS node
+    WHERE node.properties ->> 'graph_id'::text = %s
+     AND node.properties ->> 'deleted_at'::text IS NULL
+     %s
+    ORDER BY (node.properties ->> 'context_id'::text) COLLATE "C" OFFSET 0
+   ) AS node
    WHERE (SELECT count(*) FROM sample) > %d
-    AND node.properties ->> 'graph_id'::text = %s
-    AND node.properties ->> 'deleted_at'::text IS NULL
-    %s
-    AND EXISTS (SELECT 1 FROM pairs WHERE pairs.anchor = anchors.anchor
-      AND pairs.neighbor = ag_catalog.agtype_access_operator(VARIADIC ARRAY[node.properties, '"context_id"'::agtype]) OFFSET 0)
-   ORDER BY (node.properties ->> 'context_id'::text) COLLATE "C" LIMIT %d)
+    AND EXISTS (%s OFFSET 0)
+   ORDER BY node.neighbor_order COLLATE "C" LIMIT %d)
  ) AS candidate
 )
 SELECT neighbor, min(anchor::text COLLATE "C") AS first_anchor
 FROM candidates GROUP BY neighbor ORDER BY first_anchor, neighbor LIMIT %d`,
-		pairs, s.cypherSQL(anchorQuery, "anchor agtype"), sampleLimit, probe, probeLimit,
-		contextTable, probe, sqlString(graphID.String()), seenClause, probeLimit, probeLimit), nil
+		pairs, s.cypherSQL(anchorQuery, "anchor agtype, vertex agtype"), sampleLimit, probe, probeLimit,
+		contextTable, sqlString(graphID.String()), seenClause, probe, edgeQuery, probeLimit, probeLimit), nil
 }
 
 func (s *Store) hopIncludedEdges(ctx context.Context, graphID model.ID, ids []model.ID, label traversalLabel) ([]HopEdge, error) {

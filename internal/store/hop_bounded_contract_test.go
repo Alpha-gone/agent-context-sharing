@@ -84,6 +84,8 @@ func TestHopBoundedSelectionContractIntegration(t *testing.T) {
 					add(nodes[3+i].ID, nodes[3+j].ID, model.RelationTypeRelatesTo, model.RelationStateConfirmed)
 				}
 			}
+			// 실제 끝점이 같아도 다른 graph_id의 간선은 제안 후보를 확정 이웃으로 만들지 않는다.
+			relations = append(relations, encodedHopRelation(t, newTestID(t), model.RelationTypePrecedes, early.ID, nodes[1].ID, model.RelationStateConfirmed))
 			for _, kind := range []struct{ label, name string }{{"PRECEDES", "precedes"}, {"RELATES_TO", "relates_to"}} {
 				query = "UNWIND [" + strings.Join(relations, ",") + "] AS props MATCH (a:Context), (b:Context)" +
 					" WHERE props.relation_type = " + cypherString(kind.name) + " AND a.graph_id = " + cypherString(graph.String()) +

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,7 +101,9 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var embeddingCalls atomic.Int64
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		embeddingCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(raw)
 	}))
@@ -116,12 +119,21 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 	}
 	dir := t.TempDir()
 	contexts, queries := filepath.Join(dir, "contexts.json"), filepath.Join(dir, "queries.json")
-	if err := runConvert(convertOwn, "", "cleanup", 4, "", contexts, queries, ""); err != nil {
-		t.Fatal(err)
-	}
-	set, err := loadContextSet(contexts)
-	if err != nil {
-		t.Fatal(err)
+	// 종료·정리 계약에는 원천과 파생 하나면 충분하다. 품질 비교용 변환기의 큰 세트는
+	// 60개 독립 그래프의 적재·색인을 반복해 패키지 전체 시험 예산을 소진시킨다.
+	set := lifecycleInput(t)
+	queryInput := querySet{Version: set.Version, Queries: []querySpec{
+		{ID: "source", IndependentUnit: "source", UseCase: useCaseFact, WorkContext: "독립 원천", Answers: []string{"source"}},
+		{ID: "derived", IndependentUnit: "derived", UseCase: useCaseAssociative, WorkContext: "원천 근거 파생", Answers: []string{"derived"}},
+	}}
+	for path, value := range map[string]any{contexts: set, queries: queryInput} {
+		body, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, body, 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	binary, err := os.Executable()
 	if err != nil {
@@ -136,6 +148,7 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 		outPath := filepath.Join(t.TempDir(), "report.json")
 		args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-repeat=10", "-budget=20000", "-stages=baseline", "-out=" + outPath}
 		command := exec.CommandContext(t.Context(), binary, append(args, mode...)...)
+		beforeCalls := embeddingCalls.Load()
 		out, err := command.CombinedOutput()
 		if !wantFailure {
 			if err != nil {
@@ -152,6 +165,10 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 				}
 				if after-before != want || active != 0 {
 					t.Fatalf("조건·회차별 그래프 격리: created=%d active=%d want=%d", after-before, active, want)
+				}
+				wantCalls := int64(want * (len(set.Contexts) + len(queryInput.Queries)))
+				if calls := embeddingCalls.Load() - beforeCalls; calls != wantCalls {
+					t.Fatalf("독립 그래프 색인·질의 실행: calls=%d want=%d", calls, wantCalls)
 				}
 			}
 			return

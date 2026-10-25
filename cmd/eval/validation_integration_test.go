@@ -76,14 +76,14 @@ func TestAdversarialCleanupFailuresPropagateIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runBaseline(t.Context(), database, worker, service, contexts, querySet{}, attackSet{}, adversarialConditions{Repeats: 1}, newBaseShape(contexts), nil); err == nil || !strings.Contains(err.Error(), "issue85 cleanup rejected") {
+	if _, err := runBaseline(t.Context(), database, worker, service.service, contexts, querySet{}, attackSet{}, adversarialConditions{Repeats: 1}, newBaseShape(contexts), nil); err == nil || !strings.Contains(err.Error(), "issue85 cleanup rejected") {
 		t.Fatalf("기준선 정리 실패 = %v", err)
 	}
 	var dimension int
 	if err := connection.QueryRow(t.Context(), `SELECT substring(format_type(atttypid,atttypmod) FROM '[0-9]+')::int FROM pg_attribute WHERE attrelid='public.context_embedding'::regclass AND attname='embedding'`).Scan(&dimension); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runAttackRepeat(t.Context(), database, worker, service, contexts, querySet{}, attackSample{}, adversarialConditions{}, store.EmbeddingExpectation{ModelID: worker.ModelID(), Dimension: dimension}, newBaseShape(contexts), nil, nil, &sampleRuns{}); err == nil || !strings.Contains(err.Error(), "issue85 cleanup rejected") {
+	if _, err := runAttackRepeat(t.Context(), database, worker, service.service, contexts, querySet{}, attackSample{}, adversarialConditions{}, store.EmbeddingExpectation{ModelID: worker.ModelID(), Dimension: dimension}, newBaseShape(contexts), nil, nil, &sampleRuns{}); err == nil || !strings.Contains(err.Error(), "issue85 cleanup rejected") {
 		t.Fatalf("공격 회차 정리 실패 = %v", err)
 	}
 }
@@ -200,15 +200,18 @@ func TestConsistencyUnmeasuredResourcesIntegration(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		failed, err := scenario.measure(ctx, service, variant, conditions, time.Millisecond)
-		if err != nil || failed.Errors != conditions.Requests || failed.Connections != undefinedMetric || failed.PeakConnections != -1 || failed.HoldMS.Mean != undefinedMetric {
+		if !errors.Is(err, context.Canceled) || failed.Errors != conditions.Requests || failed.Connections != undefinedMetric || failed.PeakConnections != -1 || failed.HoldMS.Mean != undefinedMetric {
 			t.Fatalf("전 요청 실패의 미측정 자원 = %+v, %v", failed, err)
 		}
 		measured, err := scenario.measure(t.Context(), service, variant, conditions, time.Millisecond)
-		if err != nil || measured.Errors != 0 || measured.Connections < 0 || measured.PeakConnections < 0 {
+		if err != nil || measured.Errors != measured.RetryExhausted {
 			t.Fatalf("측정 자원 = %+v, %v", measured, err)
 		}
 		if variant.Consistency != search.ConsistencySnapshot && measured.HoldMS.Mean != undefinedMetric {
 			t.Fatalf("Read Committed의 스냅숏 시간 = %+v", measured.HoldMS)
+		}
+		if variant.Consistency != search.ConsistencySnapshot && (measured.Connections != -1 || measured.PeakConnections != -1) {
+			t.Fatalf("미측정 연결 수가 실제 0과 구분되지 않는다: %+v", measured)
 		}
 		if variant.Consistency == search.ConsistencySnapshot && measured.HoldMS.Mean < 0 {
 			t.Fatalf("스냅숏 시간이 미측정이다: %+v", measured.HoldMS)

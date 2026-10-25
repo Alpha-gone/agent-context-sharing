@@ -97,7 +97,7 @@ func run() (err error) {
 	adaptiveEvidence := flag.Bool("adaptive-evidence", false, "적응형 비교의 두 구성에 근거 경로 보존 선택을 켠다")
 	directThresholds := flag.String("direct-thresholds", "0.5,0.6,0.7,0.8", "직접 충분성 하한 후보. 쉼표로 나눈다")
 	directMargins := flag.String("direct-margins", "0,0.02,0.05,0.1", "직접 후보 분리 폭 후보. 쉼표로 나눈다")
-	consistency := flag.Bool("consistency", false, "Read Committed 검색과 동기화 스냅숏의 결과 동등성과 동시 쓰기 일관성을 견준다")
+	consistency := flag.Bool("consistency", false, "Read Committed·동기화 스냅숏·평가 전용 내용 판 재시도의 동등성과 동시 쓰기를 견준다")
 	consistencyRequests := flag.Int("consistency-requests", 100, "동시 쓰기 비교에서 구성마다 보낼 요청 수")
 	consistencyLoad := flag.String("consistency-load", "1,8,16,32", "동시 요청 부하 비교의 동시 요청자 수 후보. 쉼표로 나눈다")
 	consistencyLoadRequests := flag.Int("consistency-load-requests", 200, "동시 요청 부하 비교에서 조건마다 보낼 요청 수")

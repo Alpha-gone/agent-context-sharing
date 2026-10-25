@@ -39,7 +39,7 @@ func validManifest() executionManifest {
 }
 
 func TestManifestModesAndMeasuredZero(t *testing.T) {
-	for _, mode := range []string{"basic", "convert", "business", "continual", "adaptive", "consistency", "adversarial", "units"} {
+	for _, mode := range []string{"basic", "convert", "business", "continual", "adaptive", "consistency", "adversarial", "units", "originals"} {
 		t.Run(mode, func(t *testing.T) {
 			m := validManifest()
 			m.Mode = mode
@@ -53,6 +53,8 @@ func TestManifestModesAndMeasuredZero(t *testing.T) {
 				m.Inputs[0].Role = "business"
 			case "units":
 				m.Inputs[0].Role = "unit_comparison"
+			case "originals":
+				m.Inputs[0].Role = "original_reproduction"
 			case "adversarial":
 				input := m.Inputs[0]
 				input.Code, input.Role = "attacks-01", "attacks"

@@ -21,6 +21,33 @@ type loadedGraph struct {
 	Keys      map[string]model.ID
 }
 
+// prepareEvaluationGraph는 준비 실패 시에도 자신이 만든 그래프를 정리한다.
+// 성공한 호출자는 그래프 정리를 소유한다. 상한 오류는 적재 전에 거부한다.
+func prepareEvaluationGraph(ctx context.Context, database *store.Store, worker *index.Worker, set contextSet, limit int) (loadedGraph, error) {
+	if limit < 1 {
+		return loadedGraph{}, fmt.Errorf("색인 처리 상한은 양수여야 한다")
+	}
+	graph, err := loadGraph(ctx, database, set)
+	if err != nil {
+		return loadedGraph{}, err
+	}
+	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, limit); err != nil {
+		return loadedGraph{}, errors.Join(err, dropGraph(ctx, database, graph))
+	}
+	return graph, nil
+}
+
+// withEvaluationGraph는 정리까지 성공해야 호출자에게 측정 성공을 반환한다.
+// run은 보고서를 기록하지 않으며 반환 뒤에만 결과를 공개할 수 있다.
+func withEvaluationGraph(ctx context.Context, database *store.Store, worker *index.Worker, set contextSet, limit int, run func(loadedGraph) error) (err error) {
+	graph, err := prepareEvaluationGraph(ctx, database, worker, set, limit)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph), ctx.Err()) }()
+	return run(graph)
+}
+
 // dropGraph는 취소와 독립된 제한 시간에 평가 그래프를 소프트 삭제하고 실패를 반환한다.
 func dropGraph(ctx context.Context, database *store.Store, graph loadedGraph) error {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -236,6 +263,10 @@ func utcOrNil(value *time.Time) *time.Time {
 func drainIndexQueue(ctx context.Context, database *store.Store, worker *index.Worker, graphID model.ID, limit int) error {
 	if limit < 1 {
 		return fmt.Errorf("색인 처리 상한은 양수여야 한다")
+	}
+	// RunOnceInGraph의 영 식별자는 전체 큐 경로로 이어지므로 실행 전에 차단한다.
+	if !graphID.IsV7() {
+		return fmt.Errorf("평가 색인 처리에 UUIDv7 그래프 식별자가 필요하다")
 	}
 	for range limit {
 		found, err := worker.RunOnceInGraph(ctx, graphID)

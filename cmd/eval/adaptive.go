@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"agent_context_sharing/internal/index"
 	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
 )
@@ -131,9 +132,9 @@ func parseFloats(raw, name string) ([]float64, error) {
 	return values, nil
 }
 
-// runAdaptive는 기존 auto, 강제 경로 셋, 적응형 구성을 같은 그래프에서 반복 측정한다.
+// runAdaptive는 기존 auto, 강제 경로 셋, 적응형 구성을 조건·회차별 새 그래프에서 반복 측정한다.
 // 적응형 구성의 임계값은 강제 경로 결과로 격자를 먼저 견준 뒤 고른 값이다.
-func runAdaptive(ctx context.Context, database *store.Store, worker search.Embedder, graph loadedGraph, contexts contextSet, queries querySet, loaded settings, conditions adaptiveConditions, directs, margins []float64) (adaptiveReport, error) {
+func runAdaptive(ctx context.Context, database *store.Store, worker *index.Worker, contexts contextSet, queries querySet, loaded settings, conditions adaptiveConditions, directs, margins []float64) (adaptiveReport, error) {
 	base := search.Config{
 		Execution:             loaded.execution,
 		CandidateLimit:        loaded.candidateLimit,
@@ -160,8 +161,15 @@ func runAdaptive(ctx context.Context, database *store.Store, worker search.Embed
 		for repeat := 1; repeat <= conditions.Repeats; repeat++ {
 			for offset := range names {
 				name := names[(offset+repeat-1)%len(names)]
-				started := time.Now()
-				measured, err := measure(ctx, services[name], graph, queries, conditions.Budget, conditions.MaxHops, conditions.MaxHopNodes)
+				var measured measurement
+				var elapsed time.Duration
+				err := withEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64, func(graph loadedGraph) error {
+					started := time.Now()
+					var measureErr error
+					measured, measureErr = measure(ctx, services[name], graph, queries, conditions.Budget, conditions.MaxHops, conditions.MaxHopNodes)
+					elapsed = time.Since(started)
+					return measureErr
+				})
 				if err != nil {
 					return fmt.Errorf("구성 %q 회차 %d: %w", name, repeat, err)
 				}
@@ -170,8 +178,8 @@ func runAdaptive(ctx context.Context, database *store.Store, worker search.Embed
 						signals[id] = value
 					}
 				}
-				runs[key(name)] = append(runs[key(name)], runMetrics{Stage: key(name), Repeat: repeat, DurationMS: time.Since(started).Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered})
-				slog.Info("회차 완료", "variant", key(name), "repeat", repeat, "duration", time.Since(started).String())
+				runs[key(name)] = append(runs[key(name)], runMetrics{Stage: key(name), Repeat: repeat, DurationMS: elapsed.Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered})
+				slog.Info("회차 완료", "variant", key(name), "repeat", repeat, "duration", elapsed.String())
 			}
 		}
 		return nil

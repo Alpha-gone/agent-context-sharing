@@ -534,13 +534,13 @@ func runAdversarial(ctx context.Context, database *store.Store, worker *index.Wo
 // 조건이 이미 성립하거나 정상 기대 경로가 성립하지 않으면 그 표본을 거부한다. 돌려주는
 // 값은 첫 반복의 응답이며 표본 그래프의 공격 전 응답과 견줘 상태 누출을 찾는 데 쓴다.
 func runBaseline(ctx context.Context, database *store.Store, worker *index.Worker, service *search.Service, contexts contextSet, queries querySet, attacks attackSet, conditions adversarialConditions, base baseShape, pathsByQuery map[string][]expectedPath) (first map[string]response, err error) {
-	graph, err := loadAdversarialGraph(ctx, database, worker, contexts)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
 	for repeat := 1; repeat <= conditions.Repeats; repeat++ {
-		responses, err := runQueries(ctx, service, graph, queries, conditions)
+		var responses map[string]response
+		err := withEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64, func(graph loadedGraph) error {
+			var queryErr error
+			responses, queryErr = runQueries(ctx, service, graph, queries, conditions)
+			return queryErr
+		})
 		if err != nil {
 			return nil, fmt.Errorf("기준선 회차 %d: %w", repeat, err)
 		}
@@ -682,14 +682,7 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 }
 
 func loadAdversarialGraph(ctx context.Context, database *store.Store, worker *index.Worker, contexts contextSet) (loadedGraph, error) {
-	graph, err := loadGraph(ctx, database, contexts)
-	if err != nil {
-		return loadedGraph{}, err
-	}
-	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(contexts.Contexts)*4+64); err != nil {
-		return loadedGraph{}, errors.Join(err, dropGraph(ctx, database, graph))
-	}
-	return graph, nil
+	return prepareEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64)
 }
 
 // auditClean은 그래프 불변식 전체 감사가 위반 없이 끝나는지 본다. 공격은 구조적으로 유효한

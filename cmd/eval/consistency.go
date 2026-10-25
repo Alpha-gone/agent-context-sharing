@@ -199,26 +199,31 @@ func runConsistency(ctx context.Context, database *store.Store, worker *index.Wo
 			if err != nil {
 				return consistencyReport{}, err
 			}
-			measured := measureLoad(ctx, database, service, graph.GraphID, queries, variant.Name, concurrency, conditions)
+			var measured loadResult
+			err = withEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64, func(loadGraph loadedGraph) error {
+				measured = measureLoad(ctx, database, service, loadGraph.GraphID, queries, variant.Name, concurrency, conditions)
+				return ctx.Err()
+			})
+			if err != nil {
+				return consistencyReport{}, err
+			}
 			result.Load = append(result.Load, measured)
 			slog.Info("동시 요청 비교 완료", "variant", variant.Name, "concurrency", concurrency, "errors", measured.Errors, "empty_acquires", measured.EmptyAcquires)
 		}
 	}
 
-	scenario, err := createConsistencyScenario(ctx, database, worker)
-	if err != nil {
-		return consistencyReport{}, err
-	}
-	defer func() {
-		err = errors.Join(err, deleteConsistencyGraph(ctx, database, scenario.graph))
-	}()
 	for _, pause := range conditions.WritePausesMS {
 		for _, variant := range variants {
 			service, err := consistencyService(database, worker, loaded, stage, variant)
 			if err != nil {
 				return consistencyReport{}, err
 			}
-			measured, err := scenario.measure(ctx, service, variant, conditions, time.Duration(pause)*time.Millisecond)
+			scenario, err := createConsistencyScenario(ctx, database, worker)
+			if err != nil {
+				return consistencyReport{}, err
+			}
+			measured, measureErr := scenario.measure(ctx, service, variant, conditions, time.Duration(pause)*time.Millisecond)
+			err = errors.Join(measureErr, deleteConsistencyGraph(ctx, database, scenario.graph))
 			if err != nil {
 				return consistencyReport{}, err
 			}
@@ -335,17 +340,9 @@ func createConsistencyScenario(ctx context.Context, database *store.Store, worke
 		set.Contexts = append(set.Contexts, contextSpec{Key: fmt.Sprintf("e%d", index), Layer: "event", Body: fmt.Sprintf("동시 쓰기 검증 사건 %d이다.", index),
 			Event: &eventSpec{Members: []string{"hub"}, Start: start, End: &end}})
 	}
-	graph, err := loadGraph(ctx, database, set)
+	graph, err := prepareEvaluationGraph(ctx, database, worker, set, len(set.Contexts)*4)
 	if err != nil {
 		return nil, fmt.Errorf("동시 쓰기 표본 적재: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, deleteConsistencyGraph(ctx, database, graph))
-		}
-	}()
-	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(set.Contexts)*4); err != nil {
-		return nil, err
 	}
 	scenario = &consistencyScenario{database: database, worker: worker, graph: graph, hub: graph.Keys["hub"], events: [2]model.ID{graph.Keys["e0"], graph.Keys["e1"]}}
 	for index := range consistencyToggled {

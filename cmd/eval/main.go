@@ -10,15 +10,16 @@ package main
 import (
 	"context"
 	json "encoding/json/v2"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
+	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"agent_context_sharing/internal/index"
@@ -188,7 +189,9 @@ func run() (err error) {
 		return fmt.Errorf("초기 평가의 조건별 반복 회차는 %d여야 한다", initialEvaluationRepeats)
 	}
 	if *continual {
-		return runContinual(*outPath, *repeats, *maxHops, *maxHopNodes)
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runContinual(ctx, *outPath, *repeats, *maxHops, *maxHopNodes)
 	}
 	if *contextsPath == "" || *queriesPath == "" {
 		return fmt.Errorf("-contexts와 -queries가 필요하다")
@@ -241,7 +244,8 @@ func run() (err error) {
 			return err
 		}
 	}
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	// 관계 후보 제안과 유예 기간을 주지 않는다. 제안은 확정되기 전까지 그래프 경로
 	// 채널에 쓰이지 않으므로 측정에 들어가지 않고, 끄면 회차마다 같은 그래프 상태에서
 	// 재는 것이 보장된다. 유예 판정은 주기 작업의 몫이며 평가는 그 경로를 타지 않는다.
@@ -270,23 +274,17 @@ func run() (err error) {
 			SemanticThreshold: settings.semanticThreshold, FoldThreshold: settings.foldThreshold, EmbeddingModel: worker.ModelID(),
 		}, *outPath)
 	}
-	graph, err := loadGraph(ctx, database, contexts)
-	if err != nil {
-		return err
-	}
-	// 평가 그래프는 측정이 끝나면 소프트 삭제해 다음 회차의 검색 대상에서 뺀다.
-	// 「소프트 삭제 수명주기」가 영구 삭제를 하지 않으므로 기록은 남는다.
-	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
-	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(contexts.Contexts)*4+64); err != nil {
-		return err
-	}
-
 	if *consistency {
-		result, err := runConsistency(ctx, database, worker, graph, contexts, queries, settings, consistencyConditions{
-			IndexTargets: *indexTargets, FoldThreshold: settings.foldThreshold,
-			Requests: consistencyOptions.Requests, WritePausesMS: consistencyOptions.WritePauses, LoadConcurrency: consistencyOptions.Concurrency, LoadRequests: consistencyOptions.LoadRequests, ToggledContexts: consistencyToggled, GraphStage: consistencyOptions.Stage,
-			Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
-			CandidateLimit: settings.candidateLimit, SemanticThreshold: settings.semanticThreshold, EmbeddingModel: worker.ModelID(),
+		var result consistencyReport
+		err := withEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64, func(graph loadedGraph) error {
+			var measureErr error
+			result, measureErr = runConsistency(ctx, database, worker, graph, contexts, queries, settings, consistencyConditions{
+				IndexTargets: *indexTargets, FoldThreshold: settings.foldThreshold,
+				Requests: consistencyOptions.Requests, WritePausesMS: consistencyOptions.WritePauses, LoadConcurrency: consistencyOptions.Concurrency, LoadRequests: consistencyOptions.LoadRequests, ToggledContexts: consistencyToggled, GraphStage: consistencyOptions.Stage,
+				Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
+				CandidateLimit: settings.candidateLimit, SemanticThreshold: settings.semanticThreshold, EmbeddingModel: worker.ModelID(),
+			})
+			return measureErr
 		})
 		if err != nil {
 			return err
@@ -294,7 +292,7 @@ func run() (err error) {
 		return writeReport(*outPath, result)
 	}
 	if *adaptive {
-		result, err := runAdaptive(ctx, database, worker, graph, contexts, queries, settings, adaptiveConditions{
+		result, err := runAdaptive(ctx, database, worker, contexts, queries, settings, adaptiveConditions{
 			Repeats: *repeats, Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
 			GraphStage: *adaptiveStage, EvidencePathSelection: *adaptiveEvidence,
 			Execution: string(settings.execution), CandidateLimit: settings.candidateLimit,
@@ -348,12 +346,18 @@ func run() (err error) {
 		for offset := range stages {
 			stage := stages[(offset+repeat-1)%len(stages)]
 			service := services[stage]
-			started := time.Now()
-			measured, err := measure(ctx, service, graph, queries, *budget, *maxHops, *maxHopNodes)
+			var measured measurement
+			var elapsed time.Duration
+			err := withEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64, func(graph loadedGraph) error {
+				started := time.Now()
+				var measureErr error
+				measured, measureErr = measure(ctx, service, graph, queries, *budget, *maxHops, *maxHopNodes)
+				elapsed = time.Since(started)
+				return measureErr
+			})
 			if err != nil {
 				return fmt.Errorf("단계 %q 회차 %d: %w", stage, repeat, err)
 			}
-			elapsed := time.Since(started)
 			run := runMetrics{Stage: stage, Repeat: repeat, DurationMS: elapsed.Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered}
 			runs[stage] = append(runs[stage], run)
 			result.Runs = append(result.Runs, run)

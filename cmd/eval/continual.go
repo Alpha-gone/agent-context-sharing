@@ -64,12 +64,11 @@ type continualScenario struct {
 	judgments  []string
 }
 
-func runContinual(outPath string, repeats, maxHops, maxHopNodes int) error {
+func runContinual(ctx context.Context, outPath string, repeats, maxHops, maxHopNodes int) error {
 	settings, err := loadSettings()
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
 	database, err := store.New(ctx, settings.databaseURL, settings.graphName, nil, nil, store.IndexTargetsAllLayers)
 	if err != nil {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
@@ -108,14 +107,11 @@ func runContinual(outPath string, repeats, maxHops, maxHopNodes int) error {
 }
 
 func runContinualScenario(ctx context.Context, database *store.Store, worker *index.Worker, settings settings, scenario continualScenario, repeat, maxHops, maxHopNodes int) (result continualRun, err error) {
-	graph, err := loadGraph(ctx, database, scenario.contexts)
+	graph, err := prepareEvaluationGraph(ctx, database, worker, scenario.contexts, len(scenario.contexts.Contexts)*4+64)
 	if err != nil {
 		return continualRun{}, err
 	}
 	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
-	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(scenario.contexts.Contexts)*4+64); err != nil {
-		return continualRun{}, err
-	}
 	service, err := search.New(database, worker, search.Config{
 		Execution: settings.execution, CandidateLimit: settings.candidateLimit,
 		SemanticThreshold: settings.semanticThreshold, FoldThreshold: settings.foldThreshold,

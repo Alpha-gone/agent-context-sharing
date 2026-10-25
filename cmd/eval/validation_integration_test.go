@@ -76,7 +76,7 @@ func TestAdversarialCleanupFailuresPropagateIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runBaseline(t.Context(), database, worker, service, contexts, querySet{}, attackSet{}, adversarialConditions{}, newBaseShape(contexts), nil); err == nil || !strings.Contains(err.Error(), "issue85 cleanup rejected") {
+	if _, err := runBaseline(t.Context(), database, worker, service, contexts, querySet{}, attackSet{}, adversarialConditions{Repeats: 1}, newBaseShape(contexts), nil); err == nil || !strings.Contains(err.Error(), "issue85 cleanup rejected") {
 		t.Fatalf("기준선 정리 실패 = %v", err)
 	}
 	var dimension int
@@ -119,24 +119,49 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 	if err := runConvert(convertOwn, "", "cleanup", 4, "", contexts, queries, ""); err != nil {
 		t.Fatal(err)
 	}
+	set, err := loadContextSet(contexts)
+	if err != nil {
+		t.Fatal(err)
+	}
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	invoke := func(t *testing.T, mode []string, wantFailure bool) {
 		t.Helper()
-		args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-repeat=10", "-budget=20000", "-stages=baseline", "-out=" + filepath.Join(t.TempDir(), "report.json")}
+		var before int
+		if err := connection.QueryRow(t.Context(), `SELECT count(*) FROM public.context_graph WHERE name = $1`, "eval "+set.Version).Scan(&before); err != nil {
+			t.Fatal(err)
+		}
+		outPath := filepath.Join(t.TempDir(), "report.json")
+		args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-repeat=10", "-budget=20000", "-stages=baseline", "-out=" + outPath}
 		command := exec.CommandContext(t.Context(), binary, append(args, mode...)...)
 		out, err := command.CombinedOutput()
 		if !wantFailure {
 			if err != nil {
 				t.Fatalf("평가 정상 실행 실패: %v\n%s", err, out)
 			}
+			if len(mode) == 0 || mode[0] == "-adaptive" {
+				var after, active int
+				if err := connection.QueryRow(t.Context(), `SELECT count(*), count(*) FILTER (WHERE deleted_at IS NULL) FROM public.context_graph WHERE name = $1`, "eval "+set.Version).Scan(&after, &active); err != nil {
+					t.Fatal(err)
+				}
+				want := 10
+				if len(mode) > 0 {
+					want = 60 // 네 경로의 격자 40회 + auto/적응형 비교 20회.
+				}
+				if after-before != want || active != 0 {
+					t.Fatalf("조건·회차별 그래프 격리: created=%d active=%d want=%d", after-before, active, want)
+				}
+			}
 			return
 		}
 		status, ok := errors.AsType[*exec.ExitError](err)
 		if !ok || status.ExitCode() != 1 || !strings.Contains(string(out), "issue85 cleanup rejected") {
 			t.Fatalf("정리 실패 종료 = %v\n%s", err, out)
+		}
+		if _, err := os.Stat(outPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("정리 실패에서 정상 보고서가 기록됐다: %v", err)
 		}
 	}
 	modes := [][]string{nil, {"-adaptive", "-direct-thresholds=0.5", "-direct-margins=0"}, {"-continual"}, {"-consistency", "-consistency-requests=1", "-consistency-load=1", "-consistency-load-requests=1", "-consistency-write-pauses=1"}}

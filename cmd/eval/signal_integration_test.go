@@ -22,7 +22,7 @@ func TestEvaluationCommandSignalCleansGraphIntegration(t *testing.T) {
 	if err := connection.QueryRow(t.Context(), `SELECT substring(format_type(atttypid,atttypmod) FROM '[0-9]+')::int FROM pg_attribute WHERE attrelid='public.context_embedding'::regclass AND attname='embedding'`).Scan(&dimension); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"basic", "index", "adaptive", "continual", "consistency", "adversarial"} {
+	for _, mode := range []string{"basic", "index", "adaptive", "continual", "consistency", "adversarial", "units"} {
 		t.Run(mode, func(t *testing.T) {
 			started, release := make(chan struct{}, 1), make(chan struct{})
 			unblock := sync.OnceFunc(func() { close(release) })
@@ -69,6 +69,13 @@ func TestEvaluationCommandSignalCleansGraphIntegration(t *testing.T) {
 			}
 			if mode == "adversarial" {
 				args = append(args, "-attacks="+attacks)
+			}
+			if mode == "units" {
+				input := unitFixture(t, 1)
+				input.Search.EmbeddingModel = "gemini:gemini-embedding-2:retrieval-v1:vector:" + strconv.Itoa(dimension)
+				input.Search.CandidateLimit = 500
+				refreshUnitHashes(&input)
+				args = []string{"-test.run=^TestEvalCommandProcess$", "--", "-unit-comparison=" + writeManifestFixture(t, input), "-out=" + outPath}
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 			defer cancel()

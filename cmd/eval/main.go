@@ -92,6 +92,7 @@ func run() (err error) {
 	convertUseCase := flag.String("convert-use-case", "", "변환 결과의 질의를 fact, associative 또는 global 사용 사례로 제한한다")
 	continual := flag.Bool("continual", false, "온라인 갱신부터 상충 해소까지 여섯 지속 평가 시나리오를 실행한다")
 	businessPath := flag.String("business", "", "업무 효과 통제 과업의 집계 지표 파일 경로")
+	unitPath := flag.String("unit-comparison", "", "원천을 공유하는 두 파생 경계 정책의 완전성·검색·과업 비교 입력")
 	adaptive := flag.Bool("adaptive", false, "기존 auto와 질의 적응형 라우팅을 세 검색 경로의 오프라인 최적 경로로 견준다")
 	adaptiveStage := flag.String("adaptive-stage", string(search.GraphStageRelations), "적응형 비교의 그래프 관계 범위. baseline은 쓸 수 없다")
 	adaptiveEvidence := flag.Bool("adaptive-evidence", false, "적응형 비교의 두 구성에 근거 경로 보존 선택을 켠다")
@@ -149,6 +150,7 @@ func run() (err error) {
 	}{
 		{"compare-index-targets", *compareIndex}, {"convert", *convert != ""}, {"business", *businessPath != ""}, {"continual", *continual},
 		{"adaptive", *adaptive}, {"consistency", *consistency}, {"adversarial", *adversarial},
+		{"unit-comparison", *unitPath != ""},
 	} {
 		if mode.enabled {
 			modes = append(modes, mode.name)
@@ -199,6 +201,26 @@ func run() (err error) {
 	}
 	if *repeats != initialEvaluationRepeats {
 		return fmt.Errorf("초기 평가의 조건별 반복 회차는 %d여야 한다", initialEvaluationRepeats)
+	}
+	if *unitPath != "" {
+		conflict := false
+		flag.Visit(func(f *flag.Flag) {
+			conflict = conflict || !slices.Contains([]string{"unit-comparison", "out", "repeats"}, f.Name)
+		})
+		if conflict {
+			return fmt.Errorf("검색 단위 비교는 입력에 고정한 통제 조건만 사용한다")
+		}
+		input, err := loadUnitInput(*unitPath)
+		if err != nil {
+			return err
+		}
+		settings, err := loadSettings()
+		if err != nil {
+			return err
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runUnitCommand(ctx, settings, input, *outPath)
 	}
 	if *continual {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

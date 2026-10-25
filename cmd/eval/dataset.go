@@ -113,6 +113,10 @@ func loadContextSet(path string) (contextSet, error) {
 	if err := readJSON(path, &set); err != nil {
 		return contextSet{}, err
 	}
+	return validateContextSet(set, path)
+}
+
+func validateContextSet(set contextSet, path string) (contextSet, error) {
 	if set.Version == "" {
 		return contextSet{}, fmt.Errorf("%s: 데이터셋 판을 비울 수 없다", path)
 	}
@@ -214,6 +218,10 @@ func loadQuerySet(path string, contexts contextSet) (querySet, error) {
 	if err := readJSON(path, &set); err != nil {
 		return querySet{}, err
 	}
+	return validateQuerySet(set, contexts, path)
+}
+
+func validateQuerySet(set querySet, contexts contextSet, path string) (querySet, error) {
 	if set.Version == "" {
 		return querySet{}, fmt.Errorf("%s: 데이터셋 판을 비울 수 없다", path)
 	}

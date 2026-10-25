@@ -1,12 +1,14 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -30,27 +32,34 @@ type continualReport struct {
 }
 
 type continualConditions struct {
-	Budget            int     `json:"budget"`
-	MaxHops           int     `json:"max_hops"`
-	MaxHopNodes       int     `json:"max_hop_nodes"`
-	Execution         string  `json:"channel_execution"`
-	CandidateLimit    int     `json:"channel_candidate_limit"`
-	SemanticThreshold float64 `json:"semantic_similarity_threshold"`
-	FoldThreshold     float64 `json:"fold_threshold"`
-	EmbeddingModel    string  `json:"embedding_model"`
+	AsOf              time.Time `json:"as_of"`
+	IndexTargets      string    `json:"index_targets"`
+	Budget            int       `json:"budget"`
+	MaxHops           int       `json:"max_hops"`
+	MaxHopNodes       int       `json:"max_hop_nodes"`
+	Execution         string    `json:"channel_execution"`
+	CandidateLimit    int       `json:"channel_candidate_limit"`
+	SemanticThreshold float64   `json:"semantic_similarity_threshold"`
+	FoldThreshold     float64   `json:"fold_threshold"`
+	EmbeddingModel    string    `json:"embedding_model"`
 }
 
 type continualRun struct {
-	IndependentUnit  string       `json:"independent_unit,omitempty"`
-	Scenario         string       `json:"scenario"`
-	Repeat           int          `json:"repeat"`
-	Baseline         queryMetrics `json:"baseline"`
-	Current          queryMetrics `json:"current"`
-	StateVerified    bool         `json:"state_verified"`
-	JudgmentVerified bool         `json:"judgment_verified"`
+	GraphStage       string          `json:"graph_stage"`
+	StateChecks      map[string]bool `json:"state_checks"`
+	JudgmentChecks   map[string]bool `json:"judgment_checks"`
+	IndependentUnit  string          `json:"independent_unit,omitempty"`
+	Scenario         string          `json:"scenario"`
+	Repeat           int             `json:"repeat"`
+	Baseline         queryMetrics    `json:"baseline"`
+	Current          queryMetrics    `json:"current"`
+	StateVerified    bool            `json:"state_verified"`
+	JudgmentVerified bool            `json:"judgment_verified"`
 }
 
 type continualJudgement struct {
+	Status        string       `json:"status"`
+	Reason        string       `json:"reason,omitempty"`
 	Scenario      string       `json:"scenario"`
 	Comparisons   []comparison `json:"comparisons"`
 	StatePassed   bool         `json:"state_passed"`
@@ -67,6 +76,9 @@ type continualScenario struct {
 }
 
 func runContinual(ctx context.Context, outPath string, repeats, maxHops, maxHopNodes int) error {
+	if repeats != initialEvaluationRepeats {
+		return fmt.Errorf("지속 평가에는 10회 반복이 필요하다")
+	}
 	settings, err := loadSettings()
 	if err != nil {
 		return err
@@ -88,6 +100,7 @@ func runContinual(ctx context.Context, outPath string, repeats, maxHops, maxHopN
 		StartedAt: time.Now().UTC(),
 		Repeats:   repeats,
 		Conditions: continualConditions{
+			AsOf: continualAsOf, IndexTargets: string(store.IndexTargetsAllLayers),
 			Budget: continualBudget, MaxHops: maxHops, MaxHopNodes: maxHopNodes,
 			Execution: string(settings.execution), CandidateLimit: settings.candidateLimit,
 			SemanticThreshold: settings.semanticThreshold, FoldThreshold: settings.foldThreshold,
@@ -105,6 +118,9 @@ func runContinual(ctx context.Context, outPath string, repeats, maxHops, maxHopN
 		}
 	}
 	result.Judgements = judgeContinual(result.Runs)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return writeReport(outPath, result)
 }
 
@@ -113,7 +129,7 @@ func runContinualScenario(ctx context.Context, database *store.Store, worker *in
 	if err != nil {
 		return continualRun{}, err
 	}
-	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
+	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph), ctx.Err()) }()
 	service, err := search.New(database, worker, search.Config{
 		Execution: settings.execution, CandidateLimit: settings.candidateLimit,
 		SemanticThreshold: settings.semanticThreshold, FoldThreshold: settings.foldThreshold,
@@ -126,7 +142,7 @@ func runContinualScenario(ctx context.Context, database *store.Store, worker *in
 	if err != nil {
 		return continualRun{}, err
 	}
-	if err := applyContinualMutation(ctx, database, graph, scenario); err != nil {
+	if err := applyContinualMutation(ctx, database, graph, scenario, service, maxHops, maxHopNodes); err != nil {
 		return continualRun{}, err
 	}
 	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, 64); err != nil {
@@ -136,19 +152,16 @@ func runContinualScenario(ctx context.Context, database *store.Store, worker *in
 	if err != nil {
 		return continualRun{}, err
 	}
-	stateVerified, err := verifyContinualState(ctx, database, graph, scenario, baselineFlow, currentFlow)
+	stateChecks, err := verifyContinualState(ctx, database, graph, scenario, baselineFlow, currentFlow)
 	if err != nil {
 		return continualRun{}, err
 	}
-	judgmentVerified := true
-	for _, judgment := range scenario.judgments {
-		found, err := database.HasOperationJudgment(ctx, graph.GraphID, judgment)
-		if err != nil {
-			return continualRun{}, err
-		}
-		judgmentVerified = judgmentVerified && found
+	judgmentChecks, err := verifyContinualJudgments(ctx, database, graph, scenario)
+	if err != nil {
+		return continualRun{}, err
 	}
-	return continualRun{Scenario: scenario.name, Repeat: repeat, Baseline: baseline, Current: current, StateVerified: stateVerified, JudgmentVerified: judgmentVerified}, nil
+	return continualRun{Scenario: scenario.name, IndependentUnit: scenario.name, GraphStage: string(scenario.graphStage), Repeat: repeat, Baseline: baseline, Current: current,
+		StateChecks: stateChecks, JudgmentChecks: judgmentChecks, StateVerified: allContinualChecks(stateChecks), JudgmentVerified: allContinualChecks(judgmentChecks)}, nil
 }
 
 func measureContinualQuery(ctx context.Context, service *search.Service, graph loadedGraph, query querySpec, maxHops, maxHopNodes int) (queryMetrics, search.Flow, error) {
@@ -156,8 +169,14 @@ func measureContinualQuery(ctx context.Context, service *search.Service, graph l
 	if err != nil {
 		return queryMetrics{}, search.Flow{}, err
 	}
+	for _, name := range slices.Sorted(maps.Keys(flow.Channels)) {
+		failure := flow.Channels[name].Failure
+		if countsAsFailure(failure) && !(name == "graph" && failure == "no_entry_points") {
+			return queryMetrics{}, search.Flow{}, fmt.Errorf("지속 평가 검색 채널 %q 실패: %s", name, failure)
+		}
+	}
 	hits, best := scoreFlow(flow, answerIDs(query, graph.Keys))
-	metrics := queryMetrics{ID: query.ID, UseCase: query.UseCase, Recall: float64(hits) / float64(len(query.Answers)), BudgetPerHit: undefinedMetric,
+	metrics := queryMetrics{ID: query.ID, IndependentUnit: query.IndependentUnit, UseCase: query.UseCase, BudgetUsed: flow.BudgetUsed, Recall: float64(hits) / float64(len(query.Answers)), BudgetPerHit: undefinedMetric,
 		EvidenceCompleteness: undefinedMetric, PathContinuity: undefinedMetric, DisconnectedRatio: undefinedMetric,
 		HubConcentration: undefinedMetric, DuplicateRatio: undefinedMetric, LatencyMS: undefinedMetric, Misrouted: undefinedMetric}
 	if best > 0 {
@@ -177,10 +196,12 @@ func judgeContinual(runs []continualRun) []continualJudgement {
 	judgements := make([]continualJudgement, 0, len(grouped))
 	for _, scenario := range continualScenarios() {
 		values := grouped[scenario.name]
-		if len(values) == 0 {
-			continue
-		}
-		judgement := continualJudgement{Scenario: scenario.name, StatePassed: true, RecordsPassed: true, Passed: true}
+		values = slices.Clone(values)
+		slices.SortFunc(values, func(a, b continualRun) int {
+			return cmp.Or(cmp.Compare(a.IndependentUnit, b.IndependentUnit), cmp.Compare(a.Repeat, b.Repeat))
+		})
+		judgement := continualJudgement{Scenario: scenario.name, StatePassed: len(values) > 0, RecordsPassed: len(values) > 0}
+		ready, unmeasured, regressed := true, false, false
 		for _, run := range values {
 			judgement.StatePassed = judgement.StatePassed && run.StateVerified
 			judgement.RecordsPassed = judgement.RecordsPassed && run.JudgmentVerified
@@ -216,9 +237,11 @@ func judgeContinual(runs []continualRun) []continualJudgement {
 				}
 			}
 			if len(baseline) == 0 {
-				judgement.Passed = false
+				unmeasured = true
+				judgement.Comparisons = append(judgement.Comparisons, comparison{Metric: metric.name, Status: "unmeasured", Baseline: -1, Current: -1, Difference: -1, Interval: -1})
 				continue
 			}
+			unmeasured = unmeasured || len(baseline) != len(units)
 			difference, interval := pairedInterval(baseline, current)
 			improved := difference > 0
 			degraded := difference < -interval
@@ -227,15 +250,67 @@ func judgeContinual(runs []continualRun) []continualJudgement {
 				degraded = difference > interval
 			}
 			judgement.Comparisons = append(judgement.Comparisons, comparison{Metric: metric.name, Status: statisticalStatus(len(baseline)), DegreesFreedom: max(0, len(baseline)-1), Samples: len(baseline), Baseline: mean(baseline), Current: mean(current), Difference: difference, Interval: interval, Improved: improved, Significant: interval >= 0 && math.Abs(difference) > interval})
-			judgement.Passed = judgement.Passed && interval >= 0 && !degraded
+			ready = ready && interval >= 0
+			regressed = regressed || (interval >= 0 && degraded)
 		}
-		judgement.Passed = judgement.Passed && judgement.StatePassed && judgement.RecordsPassed
+		switch {
+		case len(values) == 0:
+			judgement.Status, judgement.Reason = "deferred", "missing_runs"
+		case !judgement.StatePassed || !judgement.RecordsPassed:
+			judgement.Status, judgement.Reason = "failed", "state_or_record_violation"
+		case regressed:
+			judgement.Status, judgement.Reason = "failed", "quality_regression"
+		case !continualRepeatsComplete(values):
+			judgement.Status, judgement.Reason = "deferred", "incomplete_or_duplicate_repeats"
+		case unmeasured:
+			judgement.Status, judgement.Reason = "deferred", "unmeasured_metrics"
+		case !ready:
+			judgement.Status, judgement.Reason = "deferred", "insufficient_independent_units"
+		default:
+			judgement.Status, judgement.Passed = "passed", true
+		}
 		judgements = append(judgements, judgement)
 	}
 	return judgements
 }
 
-func applyContinualMutation(ctx context.Context, database *store.Store, graph loadedGraph, scenario continualScenario) error {
+// 같은 입력의 반복이 완전한지 확인하며 반복을 독립 표본으로 세지 않는다.
+func continualRepeatsComplete(runs []continualRun) bool {
+	units := map[string]map[int]bool{}
+	for _, run := range runs {
+		unit := run.IndependentUnit
+		if unit == "" {
+			unit = run.Scenario
+		}
+		if units[unit] == nil {
+			units[unit] = map[int]bool{}
+		}
+		if run.Repeat < 1 || run.Repeat > initialEvaluationRepeats || units[unit][run.Repeat] {
+			return false
+		}
+		units[unit][run.Repeat] = true
+	}
+	for _, repeats := range units {
+		if len(repeats) != initialEvaluationRepeats {
+			return false
+		}
+	}
+	return len(units) > 0
+}
+
+func allContinualChecks(checks map[string]bool) bool {
+	if len(checks) == 0 {
+		return false
+	}
+	for _, passed := range checks {
+		if !passed {
+			return false
+		}
+	}
+	return true
+}
+
+func applyContinualMutation(ctx context.Context, database *store.Store, graph loadedGraph, scenario continualScenario, service *search.Service, maxHops, maxHopNodes int) error {
 	operation := func(kind store.OperationKind, contextID model.ID, judgment string) *store.OperationRecord {
 		return &store.OperationRecord{Kind: kind, GraphID: graph.GraphID, ContextID: contextID, JudgmentInput: judgment, AccountID: graph.AccountID, AgentID: graph.AccountID}
 	}
@@ -253,11 +328,15 @@ func applyContinualMutation(ctx context.Context, database *store.Store, graph lo
 		if err != nil {
 			return err
 		}
-		if _, err := database.KeepContext(ctx, graph.GraphID, id, value.Version, operation(store.OperationKeep, id, scenario.judgments[0])); err != nil {
+		kept, err := database.KeepContext(ctx, graph.GraphID, id, value.Version, operation(store.OperationKeep, id, scenario.judgments[0]))
+		if err != nil {
 			return err
 		}
+		if !reflect.DeepEqual(value, kept) {
+			return fmt.Errorf("유지 연산이 내용·판·속성을 변경했다")
+		}
 	case "transfer":
-		source, err := createContinualSource(ctx, database, graph, "transfer-target", longBody("새 사건의 별도 배경", 80), operation(store.OperationAdd, model.ID{}, scenario.judgments[0]))
+		source, err := createContinualSource(ctx, database, graph, "transfer-target", shortBody("새 사건의 별도 배경"), operation(store.OperationAdd, model.ID{}, scenario.judgments[0]))
 		if err != nil {
 			return err
 		}
@@ -270,6 +349,13 @@ func applyContinualMutation(ctx context.Context, database *store.Store, graph lo
 		}
 		if discarded.DeletedAt == nil {
 			return fmt.Errorf("폐기 뒤 삭제 표시가 없다")
+		}
+		_, discardedFlow, err := measureContinualQuery(ctx, service, graph, scenario.query, maxHops, maxHopNodes)
+		if err != nil {
+			return err
+		}
+		if flowContains(discardedFlow, id) {
+			return fmt.Errorf("폐기한 컨텍스트가 복구 전에 검색됐다")
 		}
 		if _, err := database.RestoreContext(ctx, graph.GraphID, id, operation(store.OperationUpdate, id, scenario.judgments[1]), store.WriteLimits{}); err != nil {
 			return err
@@ -285,6 +371,9 @@ func applyContinualMutation(ctx context.Context, database *store.Store, graph lo
 		if _, err := database.UpdateContextWithOperation(ctx, graph.GraphID, value.Version-1, value, operation(store.OperationUpdate, id, scenario.judgments[0]), store.WriteLimits{}); err != nil {
 			return err
 		}
+		if _, err := database.DiscardContext(ctx, graph.GraphID, graph.Keys["discarded"], operation(store.OperationDiscard, graph.Keys["discarded"], scenario.judgments[1]), store.WriteLimits{}); err != nil {
+			return err
+		}
 	case "conflict_resolution":
 		id := graph.Keys["disputed"]
 		value, err := database.Context(ctx, graph.GraphID, id)
@@ -292,7 +381,7 @@ func applyContinualMutation(ctx context.Context, database *store.Store, graph lo
 			return err
 		}
 		value.Version++
-		value.Body = "해소된 예전 의견"
+		value.Body += " 후속 판단으로 해소했다"
 		value.Derived.ConfidenceState = model.ConfidenceStateUncertain
 		if _, err := database.UpdateContextWithOperation(ctx, graph.GraphID, value.Version-1, value, operation(store.OperationUpdate, id, scenario.judgments[0]), store.WriteLimits{}); err != nil {
 			return err
@@ -303,48 +392,6 @@ func applyContinualMutation(ctx context.Context, database *store.Store, graph lo
 	return nil
 }
 
-func verifyContinualState(ctx context.Context, database *store.Store, graph loadedGraph, scenario continualScenario, baseline, current search.Flow) (bool, error) {
-	switch scenario.name {
-	case "online_update", "replay":
-		return flowContains(current, graph.Keys["answer"]), nil
-	case "transfer":
-		answer, evidence := graph.Keys["answer"], graph.Keys["evidence"]
-		hops, err := database.HopContexts(ctx, graph.GraphID, answer, 1, "out", []string{"derived_from"}, 10)
-		if err != nil {
-			return false, err
-		}
-		for _, edge := range hops.Edges {
-			if edge.FromID == answer && edge.ToID == evidence && edge.Kind == "derived_from" {
-				return true, nil
-			}
-		}
-		return false, nil
-	case "recovery":
-		value, err := database.Context(ctx, graph.GraphID, graph.Keys["answer"])
-		return err == nil && value.DeletedAt == nil && flowContains(current, value.ID), err
-	case "forgetting":
-		expiring := graph.Keys["expiring"]
-		if flowContains(current, expiring) {
-			return false, nil
-		}
-		hops, err := database.HopContexts(ctx, graph.GraphID, graph.Keys["answer"], 1, "in", []string{"derived_from"}, 10)
-		if err != nil {
-			return false, err
-		}
-		for _, value := range hops.Contexts {
-			if value.ID == expiring {
-				return true, nil
-			}
-		}
-		return false, nil
-	case "conflict_resolution":
-		before, after := confidenceInFlow(baseline, graph.Keys["disputed"]), confidenceInFlow(current, graph.Keys["disputed"])
-		return before == model.ConfidenceStateDisputed && after == model.ConfidenceStateUncertain, nil
-	default:
-		return false, nil
-	}
-}
-
 func createContinualSource(ctx context.Context, database *store.Store, graph loadedGraph, locator, body string, operation *store.OperationRecord) (model.Context, error) {
 	id, err := model.NewID()
 	if err != nil {
@@ -352,7 +399,11 @@ func createContinualSource(ctx context.Context, database *store.Store, graph loa
 	}
 	operation.ContextID = id
 	value := model.Context{ID: id, GraphID: graph.GraphID, Layer: model.LayerSource, Body: body, RecordedAt: time.Now().UTC(), CreatedBy: graph.AccountID, CreatedByAgent: graph.AccountID, Version: 1, Source: &model.SourceAttributes{Reference: model.SourceReference{Channel: model.SourceChannelOther, Locator: "eval://continual/" + locator}, OccurredAt: continualAsOf.Add(-24 * time.Hour), OriginKind: model.OriginKindAgentOutput}}
-	return database.CreateContextWithOperation(ctx, graph.GraphID, value, nil, operation, store.WriteLimits{})
+	created, err := database.CreateContextWithOperation(ctx, graph.GraphID, value, nil, operation, store.WriteLimits{})
+	if err == nil {
+		graph.Keys[locator] = created.ID
+	}
+	return created, err
 }
 
 func createContinualEvent(ctx context.Context, database *store.Store, graph loadedGraph, member model.Context, operation *store.OperationRecord) error {
@@ -362,8 +413,11 @@ func createContinualEvent(ctx context.Context, database *store.Store, graph load
 	}
 	operation.ContextID = id
 	end := member.Source.OccurredAt.Add(time.Minute)
-	value := model.Context{ID: id, GraphID: graph.GraphID, Layer: model.LayerEvent, Body: longBody("전이 대상 새 사건", 80), RecordedAt: time.Now().UTC(), CreatedBy: graph.AccountID, CreatedByAgent: graph.AccountID, Version: 1, Event: &model.EventAttributes{MemberIDs: []model.ID{member.ID}, Start: member.Source.OccurredAt, End: &end}}
+	value := model.Context{ID: id, GraphID: graph.GraphID, Layer: model.LayerEvent, Body: shortBody("전이 대상 새 사건"), RecordedAt: time.Now().UTC(), CreatedBy: graph.AccountID, CreatedByAgent: graph.AccountID, Version: 1, Event: &model.EventAttributes{MemberIDs: []model.ID{member.ID, graph.Keys["answer"]}, Start: member.Source.OccurredAt, End: &end}}
 	_, err = database.CreateContextWithOperation(ctx, graph.GraphID, value, nil, operation, store.WriteLimits{})
+	if err == nil {
+		graph.Keys["transfer-event"] = id
+	}
 	return err
 }
 
@@ -373,7 +427,7 @@ func continualScenarios() []continualScenario {
 		newContinualScenario("replay", search.GraphStageBaseline, []string{"continual:replay:keep"}),
 		newContinualScenario("transfer", search.GraphStageReferences, []string{"continual:transfer:add_source", "continual:transfer:add_event"}),
 		newContinualScenario("recovery", search.GraphStageBaseline, []string{"continual:recovery:discard", "continual:recovery:restore"}),
-		newContinualScenario("forgetting", search.GraphStageBaseline, []string{"continual:forgetting:expire"}),
+		newContinualScenario("forgetting", search.GraphStageBaseline, []string{"continual:forgetting:expire", "continual:forgetting:discard"}),
 		newContinualScenario("conflict_resolution", search.GraphStageBaseline, []string{"continual:conflict_resolution:update"}),
 	}
 }
@@ -383,7 +437,7 @@ func newContinualScenario(name string, stage search.GraphStage, judgments []stri
 	source := func(key, body string, offset int) contextSpec {
 		return contextSpec{Key: key, Layer: "source", Body: body, Source: &sourceSpec{Channel: "other", Locator: "eval://continual/" + name + "/" + key, OccurredAt: base.Add(time.Duration(offset) * time.Minute), OriginKind: "agent_output"}}
 	}
-	query := querySpec{ID: name, UseCase: useCaseFact, Scope: "local", AsOf: new(continualAsOf)}
+	query := querySpec{ID: name, IndependentUnit: name, UseCase: useCaseFact, Scope: "local", AsOf: new(continualAsOf)}
 	var contexts []contextSpec
 	switch name {
 	case "online_update":
@@ -408,6 +462,7 @@ func newContinualScenario(name string, stage search.GraphStage, judgments []stri
 			source("answer", shortBody(query.WorkContext), 1),
 			{Key: "expiring", Layer: "derived", Body: shortBody(query.WorkContext + " 예전 판"), Derived: &derivedSpec{Kind: "proposition", DerivedFrom: []string{"answer"}, EvidenceState: "observation", ValidFrom: new(base)}},
 		}
+		contexts = append(contexts, source("discarded", shortBody("망각 은색표식 폐기 대상"), 2))
 	case "conflict_resolution":
 		query.WorkContext, query.Answers = "상충 금색표식 현재 판단", []string{"answer"}
 		contexts = []contextSpec{

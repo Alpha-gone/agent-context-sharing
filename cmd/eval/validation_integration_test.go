@@ -154,6 +154,9 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 			if err != nil {
 				t.Fatalf("평가 정상 실행 실패: %v\n%s", err, out)
 			}
+			if len(mode) > 0 && mode[0] == "-continual" {
+				requireContinualReport(t, outPath)
+			}
 			if len(mode) == 0 || mode[0] == "-adaptive" {
 				var after, active int
 				if err := connection.QueryRow(t.Context(), `SELECT count(*), count(*) FILTER (WHERE deleted_at IS NULL) FROM public.context_graph WHERE name = $1`, "eval "+set.Version).Scan(&after, &active); err != nil {

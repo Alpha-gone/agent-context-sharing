@@ -91,6 +91,15 @@ func (s *Store) hasAppliedDiscard(ctx context.Context, queryer cypherQueryer, gr
 // 존재하는지 확인한다. 지속 평가는 본문 대신 시나리오 표식을 판단 입력에
 // 남겨 반복 강화 여부를 검증한다.
 func (s *Store) HasOperationJudgment(ctx context.Context, graphID model.ID, judgmentInput string) (bool, error) {
+	return s.hasOperationJudgment(ctx, graphID, judgmentInput, false)
+}
+
+// HasAppliedOperationJudgment는 거부된 판단 기록을 적용 성공의 근거로 사용하지 않는다.
+func (s *Store) HasAppliedOperationJudgment(ctx context.Context, graphID model.ID, judgmentInput string) (bool, error) {
+	return s.hasOperationJudgment(ctx, graphID, judgmentInput, true)
+}
+
+func (s *Store) hasOperationJudgment(ctx context.Context, graphID model.ID, judgmentInput string, appliedOnly bool) (bool, error) {
 	if !graphID.IsV7() || judgmentInput == "" {
 		return false, fmt.Errorf("관리 연산 판단 조회 인자가 올바르지 않다")
 	}
@@ -99,7 +108,8 @@ func (s *Store) HasOperationJudgment(ctx context.Context, graphID model.ID, judg
 		SELECT EXISTS (
 			SELECT 1 FROM public.operation_log
 			WHERE graph_id = $1 AND judgment_input = $2
-		)`, graphID.String(), judgmentInput).Scan(&found); err != nil {
+			  AND (NOT $3::boolean OR result = 'applied')
+		)`, graphID.String(), judgmentInput, appliedOnly).Scan(&found); err != nil {
 		return false, fmt.Errorf("관리 연산 판단 입력 조회: %w", err)
 	}
 	return found, nil

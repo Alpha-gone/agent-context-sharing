@@ -93,6 +93,7 @@ func run() (err error) {
 	continual := flag.Bool("continual", false, "온라인 갱신부터 상충 해소까지 여섯 지속 평가 시나리오를 실행한다")
 	businessPath := flag.String("business", "", "업무 효과 통제 과업의 집계 지표 파일 경로")
 	unitPath := flag.String("unit-comparison", "", "원천을 공유하는 두 파생 경계 정책의 완전성·검색·과업 비교 입력")
+	embeddingPath := flag.String("embedding-comparison", "", "임베딩 한 축의 순위·관계/전역 임계값 통제 비교 입력")
 	originalPath := flag.String("original-reproduction", "", "수집 당시 원본과 승인한 HTTPS 출처의 판·범위·내용을 비교하는 입력")
 	adaptive := flag.Bool("adaptive", false, "기존 auto와 질의 적응형 라우팅을 세 검색 경로의 오프라인 최적 경로로 견준다")
 	adaptiveStage := flag.String("adaptive-stage", string(search.GraphStageRelations), "적응형 비교의 그래프 관계 범위. baseline은 쓸 수 없다")
@@ -153,6 +154,7 @@ func run() (err error) {
 		{"adaptive", *adaptive}, {"consistency", *consistency}, {"adversarial", *adversarial},
 		{"unit-comparison", *unitPath != ""},
 		{"original-reproduction", *originalPath != ""},
+		{"embedding-comparison", *embeddingPath != ""},
 	} {
 		if mode.enabled {
 			modes = append(modes, mode.name)
@@ -203,6 +205,18 @@ func run() (err error) {
 	}
 	if *repeats != initialEvaluationRepeats {
 		return fmt.Errorf("초기 평가의 조건별 반복 회차는 %d여야 한다", initialEvaluationRepeats)
+	}
+	if *embeddingPath != "" {
+		conflict := false
+		flag.Visit(func(f *flag.Flag) {
+			conflict = conflict || !slices.Contains([]string{"embedding-comparison", "out", "repeat"}, f.Name)
+		})
+		if conflict {
+			return fmt.Errorf("임베딩 비교는 입력에 고정한 통제 조건만 사용한다")
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runEmbeddingCommand(ctx, *embeddingPath, *outPath)
 	}
 	if *originalPath != "" {
 		conflict := false

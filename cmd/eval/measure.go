@@ -51,6 +51,7 @@ const channelDisabled = "disabled"
 // runMetrics는 한 회차 전체의 측정값이다. 소요 시간을 밀리초 정수로 두는 이유는
 // time.Duration에 JSON 표현이 정해져 있지 않기 때문이다.
 type runMetrics struct {
+	Preparation  *preparationMetrics       `json:"preparation,omitzero"`
 	Stage        string                    `json:"stage"`
 	Repeat       int                       `json:"repeat"`
 	DurationMS   int64                     `json:"duration_ms"`
@@ -64,6 +65,10 @@ type runMetrics struct {
 // queryMetrics는 반복이 결정적인 실행에서도 질의 사이의 차이로 단계 효과를 판정할 수
 // 있게 하는 표본이다. 본문은 싣지 않고 데이터셋 식별자와 지표만 남긴다.
 type queryMetrics struct {
+	EvidenceStatus       string `json:"evidence_status,omitempty"`
+	DatasetType          string `json:"dataset_type,omitempty"`
+	hits                 int
+	unmeasuredAnswers    bool
 	IndependentUnit      string  `json:"independent_unit,omitempty"`
 	ID                   string  `json:"id"`
 	UseCase              string  `json:"use_case"`
@@ -90,7 +95,8 @@ type measurement struct {
 	QuerySamples []queryMetrics
 	Recovered    map[string]map[string]struct{}
 	// Signals에는 질의별 라우터 신호를 둔다. 적응형 비교가 임계값 후보를 오프라인으로 견줄 때만 쓴다.
-	Signals map[string]search.RouteSignals
+	channelCounts map[string]map[string]int
+	Signals       map[string]search.RouteSignals
 }
 
 // measure는 질의를 하나씩 돌려 사용 사례별로 묶는다. 질의문과 컨텍스트 본문은
@@ -98,15 +104,14 @@ type measurement struct {
 // 했고 「업무 효과 평가」가 같은 제외를 평가에도 요구한다.
 func measure(ctx context.Context, service *search.Service, graph loadedGraph, queries querySet, budget, maxHops, maxHopNodes int) (measurement, error) {
 	type accumulator struct {
-		queries        int
-		recall         float64
-		reciprocalRank float64
-		budgetUsed     int
-		hits           int
-		channels       map[string]int
-		failures       map[string]int
-		samples        []queryMetrics
-		selection      search.Selection
+		queries      int
+		budgetUsed   int
+		hits         int
+		scoredBudget int
+		channels     map[string]int
+		failures     map[string]int
+		samples      []queryMetrics
+		selection    search.Selection
 	}
 	totals := map[string]*accumulator{}
 	for _, useCase := range useCases {
@@ -138,17 +143,23 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		answers := answerIDs(query, graph.Keys)
 		hits, best := scoreFlow(flow, answers)
 		total.hits += hits
-		total.recall += float64(hits) / float64(len(answers))
-		if best > 0 {
-			total.reciprocalRank += 1 / float64(best)
+		if len(answers) > 0 {
+			total.scoredBudget += flow.BudgetUsed
 		}
 		total.budgetUsed += flow.BudgetUsed
 		shape := measureStructure(flow, query, graph.Keys)
-		sample := queryMetrics{ID: query.ID, IndependentUnit: query.IndependentUnit, UseCase: query.UseCase, Recall: float64(hits) / float64(len(answers)), BudgetPerHit: -1,
+		recall := undefinedMetric
+		if len(answers) > 0 {
+			recall = float64(hits) / float64(len(answers))
+		}
+		sample := queryMetrics{EvidenceStatus: query.evidenceStatus, DatasetType: query.DatasetType, hits: hits, unmeasuredAnswers: query.unmeasuredAnswers, ID: query.ID, IndependentUnit: query.IndependentUnit, UseCase: query.UseCase, Recall: recall, BudgetPerHit: -1,
 			BudgetUsed: flow.BudgetUsed, EvidenceCompleteness: shape.completeness, PathContinuity: shape.continuity,
 			DisconnectedRatio: shape.disconnected, HubConcentration: shape.hub, DuplicateRatio: shape.duplicate,
 			LatencyMS: float64(latency.Microseconds()) / 1000,
 			Route:     string(flow.Route), RouteReason: flow.RouteReason, Misrouted: undefinedMetric}
+		if query.unmeasuredAnswers {
+			sample.ReciprocalRank = undefinedMetric
+		}
 		if best > 0 {
 			sample.ReciprocalRank = 1 / float64(best)
 		}
@@ -180,8 +191,8 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		metrics := useCaseMetrics{
 			BudgetUsed:           float64(total.budgetUsed) / count,
 			Queries:              total.queries,
-			Recall:               total.recall / count,
-			ReciprocalRank:       total.reciprocalRank / count,
+			Recall:               definedMean(total.samples, func(sample queryMetrics) float64 { return sample.Recall }),
+			ReciprocalRank:       definedMean(total.samples, func(sample queryMetrics) float64 { return sample.ReciprocalRank }),
 			EvidenceCompleteness: definedMean(total.samples, func(sample queryMetrics) float64 { return sample.EvidenceCompleteness }),
 			PathContinuity:       definedMean(total.samples, func(sample queryMetrics) float64 { return sample.PathContinuity }),
 			DisconnectedRatio:    definedMean(total.samples, func(sample queryMetrics) float64 { return sample.DisconnectedRatio }),
@@ -203,11 +214,15 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		// 0으로 두면 가장 좋은 값과 구분되지 않으므로 음수 표식으로 남긴다.
 		metrics.BudgetPerHit = -1
 		if total.hits > 0 {
-			metrics.BudgetPerHit = float64(total.budgetUsed) / float64(total.hits)
+			metrics.BudgetPerHit = float64(total.scoredBudget) / float64(total.hits)
 		}
 		result[useCase] = metrics
 	}
-	return measurement{UseCases: result, QuerySamples: querySamples, Recovered: recovered, Signals: signals}, nil
+	channelCounts := map[string]map[string]int{}
+	for useCase, total := range totals {
+		channelCounts[useCase] = total.channels
+	}
+	return measurement{channelCounts: channelCounts, UseCases: result, QuerySamples: querySamples, Recovered: recovered, Signals: signals}, nil
 }
 
 // routeRatio는 사용 사례 안에서 경로별 선택 비율을 낸다.

@@ -97,7 +97,7 @@ func TestAdversarialConvertRejectsFilterBeforeWriting(t *testing.T) {
 }
 
 func TestEvaluationModesRejectConflictsBeforeIO(t *testing.T) {
-	modes := []string{"-convert=own", "-business=missing.json", "-continual", "-adaptive", "-consistency", "-adversarial"}
+	modes := []string{"-compare-index-targets", "-convert=own", "-business=missing.json", "-continual", "-adaptive", "-consistency", "-adversarial"}
 	for i, first := range modes {
 		for _, second := range modes[i+1:] {
 			t.Run(first+"/"+second, func(t *testing.T) {

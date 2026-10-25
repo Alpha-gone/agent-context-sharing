@@ -22,7 +22,7 @@ func TestEvaluationCommandSignalCleansGraphIntegration(t *testing.T) {
 	if err := connection.QueryRow(t.Context(), `SELECT substring(format_type(atttypid,atttypmod) FROM '[0-9]+')::int FROM pg_attribute WHERE attrelid='public.context_embedding'::regclass AND attname='embedding'`).Scan(&dimension); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"basic", "adaptive", "continual", "consistency", "adversarial"} {
+	for _, mode := range []string{"basic", "index", "adaptive", "continual", "consistency", "adversarial"} {
 		t.Run(mode, func(t *testing.T) {
 			started, release := make(chan struct{}, 1), make(chan struct{})
 			unblock := sync.OnceFunc(func() { close(release) })
@@ -62,7 +62,9 @@ func TestEvaluationCommandSignalCleansGraphIntegration(t *testing.T) {
 			}
 			outPath := filepath.Join(dir, "report.json")
 			args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-stages=baseline", "-out=" + outPath}
-			if mode != "basic" {
+			if mode == "index" {
+				args = append(args, "-compare-index-targets")
+			} else if mode != "basic" {
 				args = append(args, "-"+mode)
 			}
 			if mode == "adversarial" {

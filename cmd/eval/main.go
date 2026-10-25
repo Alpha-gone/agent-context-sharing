@@ -31,28 +31,35 @@ import (
 // report는 결과 파일 전체다. 「검증」이 조건, 반복 회차, 지표 값과 데이터셋 판을
 // 함께 남기라고 요구한다.
 type report struct {
-	StartedAt      time.Time        `json:"started_at"`
-	ContextVersion string           `json:"context_dataset_version"`
-	QueryVersion   string           `json:"query_dataset_version"`
-	Conditions     conditions       `json:"conditions"`
-	Runs           []runMetrics     `json:"runs"`
-	Judgements     []stageJudgement `json:"judgements"`
-	Marginals      []marginal       `json:"marginal_contributions"`
+	InputPreparation *preparationReport     `json:"input_preparation,omitzero"`
+	StartedAt        time.Time              `json:"started_at"`
+	ContextVersion   string                 `json:"context_dataset_version"`
+	QueryVersion     string                 `json:"query_dataset_version"`
+	Conditions       conditions             `json:"conditions"`
+	Runs             []runMetrics           `json:"runs"`
+	Judgements       []stageJudgement       `json:"judgements"`
+	Marginals        []marginal             `json:"marginal_contributions"`
+	Assessments      []comparisonAssessment `json:"activation_assessments,omitempty"`
 }
 
 // conditions는 단계를 제외하고 회차마다 고정한 통제 조건이다.
 type conditions struct {
-	Stages            []string `json:"stages"`
-	Repeats           int      `json:"repeats"`
-	Budget            int      `json:"budget"`
-	MaxHops           int      `json:"max_hops"`
-	MaxHopNodes       int      `json:"max_hop_nodes"`
-	Execution         string   `json:"channel_execution"`
-	CandidateLimit    int      `json:"channel_candidate_limit"`
-	SemanticThreshold float64  `json:"semantic_similarity_threshold"`
-	FoldThreshold     float64  `json:"fold_threshold"`
-	EmbeddingModel    string   `json:"embedding_model"`
-	IndexTargets      string   `json:"index_targets"`
+	GraphGroups       int                 `json:"measured_graph_groups,omitzero"`
+	ComparisonAxis    string              `json:"comparison_axis,omitempty"`
+	Variants          []comparisonVariant `json:"variants,omitempty"`
+	PreparationPolicy string              `json:"preparation_policy,omitempty"`
+	AsOf              time.Time           `json:"default_as_of,omitzero"`
+	Stages            []string            `json:"stages"`
+	Repeats           int                 `json:"repeats"`
+	Budget            int                 `json:"budget"`
+	MaxHops           int                 `json:"max_hops"`
+	MaxHopNodes       int                 `json:"max_hop_nodes"`
+	Execution         string              `json:"channel_execution"`
+	CandidateLimit    int                 `json:"channel_candidate_limit"`
+	SemanticThreshold float64             `json:"semantic_similarity_threshold"`
+	FoldThreshold     float64             `json:"fold_threshold"`
+	EmbeddingModel    string              `json:"embedding_model"`
+	IndexTargets      string              `json:"index_targets"`
 }
 
 func main() {
@@ -68,6 +75,7 @@ func run() (err error) {
 	prepareFormat := flag.String("prepare-data", "", "고정 공개 데이터 또는 자체 보완 세트를 준비한다. longmemeval, locomo, own-supplement")
 	prepareSource := flag.String("prepare-source", "", "고정 checksum을 확인할 로컬 원본 파일")
 	prepareOutput := flag.String("prepare-out", "", "준비 파일을 생성할 새 디렉터리")
+	preparedInput := flag.String("prepared-input", "", "통제 비교에 사용할 EVAL-02 준비 디렉터리")
 	contextsPath := flag.String("contexts", "", "컨텍스트 집합 파일 경로")
 	queriesPath := flag.String("queries", "", "질의 집합 파일 경로")
 	stageList := flag.String("stages", "baseline,references,relations,global,evidence", "누적 비교 단계를 순서대로 지정한다")
@@ -75,6 +83,7 @@ func run() (err error) {
 	budget := flag.Int("budget", 4000, "검색 예산 문자 수. 0은 한도 없음이다")
 	maxHops := flag.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
 	maxHopNodes := flag.Int("max-hop-nodes", defaultLimits.MaxHopNodes, "그래프 확장 최대 노드 수")
+	compareIndex := flag.Bool("compare-index-targets", false, "고정 그래프 단계에서 all_layers와 without_source를 별도로 비교한다")
 	indexTargets := flag.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
 	convert := flag.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag, own, own-global, own-global-auto 또는 own-adversarial")
 	convertSource := flag.String("convert-source", "", "변환할 벤치마크 파일 경로")
@@ -138,12 +147,15 @@ func run() (err error) {
 		name    string
 		enabled bool
 	}{
-		{"convert", *convert != ""}, {"business", *businessPath != ""}, {"continual", *continual},
+		{"compare-index-targets", *compareIndex}, {"convert", *convert != ""}, {"business", *businessPath != ""}, {"continual", *continual},
 		{"adaptive", *adaptive}, {"consistency", *consistency}, {"adversarial", *adversarial},
 	} {
 		if mode.enabled {
 			modes = append(modes, mode.name)
 		}
+	}
+	if *preparedInput != "" && ((*contextsPath != "" || *queriesPath != "") || (len(modes) > 0 && !*compareIndex)) {
+		return fmt.Errorf("prepared-input은 직접 contexts/queries 없이 통제 비교에만 지정할 수 있다")
 	}
 	if len(modes) > 1 {
 		return fmt.Errorf("평가 모드는 하나만 지정해야 한다: %s", strings.Join(modes, ", "))
@@ -193,7 +205,7 @@ func run() (err error) {
 		defer stop()
 		return runContinual(ctx, *outPath, *repeats, *maxHops, *maxHopNodes)
 	}
-	if *contextsPath == "" || *queriesPath == "" {
+	if *preparedInput == "" && (*contextsPath == "" || *queriesPath == "") {
 		return fmt.Errorf("-contexts와 -queries가 필요하다")
 	}
 	if *adversarial && *attacksPath == "" {
@@ -202,6 +214,21 @@ func run() (err error) {
 	stages, err := parseStages(*stageList)
 	if err != nil {
 		return err
+	}
+	if !*adaptive && !*consistency && !*adversarial {
+		if _, err := comparisonVariants(stages, *indexTargets, *compareIndex); err != nil {
+			return err
+		}
+		if *compareIndex {
+			var explicitStages, explicitTargets bool
+			flag.Visit(func(f *flag.Flag) {
+				explicitStages = explicitStages || f.Name == "stages"
+				explicitTargets = explicitTargets || f.Name == "index-targets"
+			})
+			if !explicitStages || explicitTargets {
+				return fmt.Errorf("색인 대상 비교에는 -stages의 고정 단계 하나가 필요하며 -index-targets를 함께 지정할 수 없다")
+			}
+		}
 	}
 	var directs, margins []float64
 	if *adaptive {
@@ -216,13 +243,23 @@ func run() (err error) {
 			return err
 		}
 	}
-	contexts, err := loadContextSet(*contextsPath)
-	if err != nil {
-		return err
-	}
-	queries, err := loadQuerySet(*queriesPath, contexts)
-	if err != nil {
-		return err
+	var contexts contextSet
+	var queries querySet
+	var prepared comparisonInput
+	if *preparedInput != "" {
+		prepared, err = loadPreparedComparison(*preparedInput)
+		if err != nil {
+			return err
+		}
+	} else {
+		contexts, err = loadContextSet(*contextsPath)
+		if err != nil {
+			return err
+		}
+		queries, err = loadQuerySet(*queriesPath, contexts)
+		if err != nil {
+			return err
+		}
 	}
 
 	var attacks attackSet
@@ -246,12 +283,20 @@ func run() (err error) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if !*adaptive && !*consistency && !*adversarial {
+		if *preparedInput != "" {
+			return runControlledInput(ctx, settings, prepared, controlledOptions{Stages: stages, IndexTargets: *indexTargets, CompareIndex: *compareIndex, Repeats: *repeats, Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes}, *outPath)
+		}
+		return runControlledCommand(ctx, settings, contexts, queries, controlledOptions{
+			Stages: stages, IndexTargets: *indexTargets, CompareIndex: *compareIndex,
+			Repeats: *repeats, Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
+		}, *outPath)
+	}
 	// 관계 후보 제안과 유예 기간을 주지 않는다. 제안은 확정되기 전까지 그래프 경로
 	// 채널에 쓰이지 않으므로 측정에 들어가지 않고, 끄면 회차마다 같은 그래프 상태에서
 	// 재는 것이 보장된다. 유예 판정은 주기 작업의 몫이며 평가는 그 경로를 타지 않는다.
 	// 색인 대상 계층은 적재 시점의 등록 조건이므로 그래프를 만들기 전에 정해야 한다.
-	// 「색인 대상 비교」는 이 값만 바꾼 두 실행의 결과를 견주는 것이며, 단계 비교처럼
-	// 한 실행 안에서 바꿀 수 있는 축이 아니다.
+	// 색인 대상 통제 비교는 위의 별도 실행 경로가 조건별 저장소를 만든다.
 	database, err := store.New(ctx, settings.databaseURL, settings.graphName, nil, nil, store.IndexTargets(*indexTargets))
 	if err != nil {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
@@ -304,72 +349,7 @@ func run() (err error) {
 		}
 		return writeReport(*outPath, result)
 	}
-	result := report{
-		StartedAt:      time.Now().UTC(),
-		ContextVersion: contexts.Version,
-		QueryVersion:   queries.Version,
-		Conditions: conditions{
-			Stages:            stages,
-			Repeats:           *repeats,
-			Budget:            *budget,
-			MaxHops:           *maxHops,
-			MaxHopNodes:       *maxHopNodes,
-			Execution:         string(settings.execution),
-			CandidateLimit:    settings.candidateLimit,
-			SemanticThreshold: settings.semanticThreshold,
-			FoldThreshold:     settings.foldThreshold,
-			EmbeddingModel:    worker.ModelID(),
-			IndexTargets:      *indexTargets,
-		},
-	}
-	runs := map[string][]runMetrics{}
-	services := make(map[string]*search.Service, len(stages))
-	for _, stage := range stages {
-		graphStage, evidence := stageConfig(stage)
-		service, err := search.New(database, worker, search.Config{
-			Execution:             settings.execution,
-			CandidateLimit:        settings.candidateLimit,
-			SemanticThreshold:     settings.semanticThreshold,
-			FoldThreshold:         settings.foldThreshold,
-			GraphStage:            graphStage,
-			GlobalFallback:        graphStage == search.GraphStageGlobal,
-			EvidencePathSelection: evidence,
-		}, slog.Default())
-		if err != nil {
-			return fmt.Errorf("단계 %q 검색 실행기 준비: %w", stage, err)
-		}
-		services[stage] = service
-	}
-	// 단계 순서를 회차마다 돌린다. 한 단계의 반복을 몰아 재면 뒤 단계만 데워진 캐시를 써서
-	// 단계 사이 지연 차이에 실행 순서가 섞인다.
-	for repeat := 1; repeat <= *repeats; repeat++ {
-		for offset := range stages {
-			stage := stages[(offset+repeat-1)%len(stages)]
-			service := services[stage]
-			var measured measurement
-			var elapsed time.Duration
-			err := withEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64, func(graph loadedGraph) error {
-				started := time.Now()
-				var measureErr error
-				measured, measureErr = measure(ctx, service, graph, queries, *budget, *maxHops, *maxHopNodes)
-				elapsed = time.Since(started)
-				return measureErr
-			})
-			if err != nil {
-				return fmt.Errorf("단계 %q 회차 %d: %w", stage, repeat, err)
-			}
-			run := runMetrics{Stage: stage, Repeat: repeat, DurationMS: elapsed.Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered}
-			runs[stage] = append(runs[stage], run)
-			result.Runs = append(result.Runs, run)
-			slog.Info("회차 완료", "stage", stage, "repeat", repeat, "duration", elapsed.String())
-		}
-	}
-	if err := validateMeasuredRuns(stages, runs); err != nil {
-		return err
-	}
-	result.Judgements = judge(stages, runs)
-	result.Marginals = marginals(stages, runs)
-	return writeReport(*outPath, result)
+	return fmt.Errorf("평가 모드 실행 경로가 없다")
 }
 
 // runConvert는 공개 벤치마크를 데이터셋 두 파일로 옮기고 끝낸다.

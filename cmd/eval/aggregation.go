@@ -22,7 +22,7 @@ func unitOf(sample queryMetrics) string {
 
 // validateMeasuredRuns는10회 대응 집계 전에 중복·누락·단위 변경을 거부한다.
 func validateMeasuredRuns(stages []string, runs map[string][]runMetrics) error {
-	type identity struct{ useCase, unit string }
+	type identity struct{ useCase, unit, datasetType, evidenceStatus string }
 	var reference map[string]identity
 	seenStages := map[string]bool{}
 	if len(stages) == 0 {
@@ -51,7 +51,7 @@ func validateMeasuredRuns(stages []string, runs map[string][]runMetrics) error {
 						return fmt.Errorf("집계 지표가 유한 측정값 또는 -1이 아니다")
 					}
 				}
-				identities[q.ID] = identity{q.UseCase, unitOf(q)}
+				identities[q.ID] = identity{q.UseCase, unitOf(q), q.DatasetType, q.EvidenceStatus}
 			}
 			if reference == nil {
 				reference = identities

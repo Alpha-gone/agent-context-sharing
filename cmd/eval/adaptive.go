@@ -182,7 +182,11 @@ func runAdaptive(ctx context.Context, database *store.Store, worker *index.Worke
 				slog.Info("회차 완료", "variant", key(name), "repeat", repeat, "duration", elapsed.String())
 			}
 		}
-		return nil
+		stages := make([]string, 0, len(names))
+		for _, name := range names {
+			stages = append(stages, key(name))
+		}
+		return validateMeasuredRuns(stages, runs)
 	}
 	configs := map[string]search.Config{variantAuto: base}
 	names := []string{variantAuto}
@@ -241,6 +245,9 @@ func runAdaptive(ctx context.Context, database *store.Store, worker *index.Worke
 	for _, name := range append([]string{variantAuto, variantAdaptive, variantAutoGrid}, variantPrefix+"direct", variantPrefix+"local", variantPrefix+"global") {
 		result.Runs = append(result.Runs, runs[name]...)
 	}
+	if err := validateMeasuredRuns([]string{variantAuto, variantAdaptive}, runs); err != nil {
+		return adaptiveReport{}, err
+	}
 	result.Judgements = judge([]string{variantAuto, variantAdaptive}, runs)
 	return result, nil
 }
@@ -258,7 +265,7 @@ func qualityOf(sample queryMetrics) []float64 {
 // outcomes는 반복 회차를 질의별로 평균낸다. 경로는 검색이 결정적이므로 첫 회차 값을 쓴다.
 func outcomes(runs []runMetrics, queries querySet) map[string]queryOutcome {
 	result := make(map[string]queryOutcome, len(queries.Queries))
-	for _, run := range runs {
+	for _, run := range orderedRuns(runs) {
 		for _, sample := range run.QuerySamples {
 			current, present := result[sample.ID]
 			if !present {

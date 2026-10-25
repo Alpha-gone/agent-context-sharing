@@ -193,7 +193,7 @@ func TestStageJudgementAndMarginalsAreDeterministic(t *testing.T) {
 
 // 연분수 구현과 독립적인 t 확률밀도의 Simpson 적분으로 분위수를 대조한다.
 func TestCriticalValueMatchesStudentTDensityIntegral(t *testing.T) {
-	for degrees := 1; degrees <= 120; degrees++ {
+	for degrees := 1; degrees <= 500; degrees++ {
 		nu := float64(degrees)
 		critical := criticalValue(degrees)
 		lg1, _ := math.Lgamma((nu + 1) / 2)

@@ -30,7 +30,7 @@
 
 [OPS-03](agent-context/reviews/2026-10-19-ops-03.md)에서 TLS 판정을 라우팅 앞으로 옮기고 실제 상대와 전달 헤더의 형식을 보완했다. 직접 TLS·신뢰/비신뢰 프록시의 루프백 교환과 Secure 쿠키를 검증했으며 실제 Tunnel·운영 배포·전 구간 TLS 인수는 별도다.
 
-Air Context와 관련 연구에서 채택한 검색 단위·외부 원본 재현성·임베딩 용도별 비교·에이전트 업무 비용 평가(`FR-AGENT_CONTEXT-160`~`163`)는 SRS에 확정하고 [평가 SDD](agent-context/sdd/evaluation.md#초기-공개-평가-실행-설계)에 반영했다. 요구사항 자체의 미정 사항과 구분하며 [SDD 추적표](agent-context/sdd/traceability.md#요구사항-추적표)에서 추적한다. [EVAL-01](agent-context/reviews/2026-10-25-eval-01.md)의 실행 manifest 사전 검증은 완료했다. 이어 [EVAL-02](agent-context/reviews/2026-10-25-eval-02.md)에서 공식 고정 판과 사용 조건을 확인하고 공개/자체 데이터를 준비했다. 이어 [EVAL-03](agent-context/reviews/2026-10-25-eval-03.md)에서 그래프 수명·색인 준비·독립 정리를 실제 DB·대역 제공자로 검증했다. 공개 데이터의 실제 비교 실행·효과 판정은 대기 중이며, 서버 외부 원본 수집·AST 분할·이진 양자화와 관찰 마스킹의 운영 채택을 뜻하지 않는다.
+Air Context와 관련 연구에서 채택한 검색 단위·외부 원본 재현성·임베딩 용도별 비교·에이전트 업무 비용 평가(`FR-AGENT_CONTEXT-160`~`163`)는 SRS에 확정하고 [평가 SDD](agent-context/sdd/evaluation.md#초기-공개-평가-실행-설계)에 반영했다. 요구사항 자체의 미정 사항과 구분하며 [SDD 추적표](agent-context/sdd/traceability.md#요구사항-추적표)에서 추적한다. [EVAL-01](agent-context/reviews/2026-10-25-eval-01.md)의 실행 manifest 사전 검증은 완료했다. 이어 [EVAL-02](agent-context/reviews/2026-10-25-eval-02.md)에서 공식 고정 판과 사용 조건을 확인하고 공개/자체 데이터를 준비했다. 이어 [EVAL-03](agent-context/reviews/2026-10-25-eval-03.md)에서 그래프 수명·색인 준비·독립 정리를 실제 DB·대역 제공자로 검증했다. 이어 [EVAL-04](agent-context/reviews/2026-10-25-eval-04.md)에서 독립 단위 통계·결정적 집계·지표 분모를 검증했다. 공개 데이터의 실제 비교 실행·효과 판정은 대기 중이며, 서버 외부 원본 수집·AST 분할·이진 양자화와 관찰 마스킹의 운영 채택을 뜻하지 않는다.
 
 시험 분석용 종류별 파일 저장·흐름 추적·파일 보호(`FR-AGENT_CONTEXT-173`~`175`)는 [SRS 「종류별 진단 로그」](agent-context/SRS.md#종류별-진단-로그)에서 확정했고 [관측성 SDD](agent-context/sdd/observability.md#종류별-진단-로그)가 파일 분류·상관 ID·회전·보존·상한·실패 처리와 검증 절차를 구체화했다. 실제 파일 저장·재시작·다중 인스턴스 검증과 구현은 대기 중이다.
 

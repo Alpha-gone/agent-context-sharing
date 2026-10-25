@@ -86,15 +86,16 @@ type relationSpec struct {
 // 경로다. 경로의 이웃한 두 key 사이 관계가 필수 관계가 된다. 둘 다 비면 근거 완전성과
 // 경로 연속성을 정의하지 않는다.
 type querySpec struct {
-	ID           string     `json:"id"`
-	UseCase      string     `json:"use_case"`
-	WorkContext  string     `json:"work_context"`
-	Answers      []string   `json:"answers"`
-	Required     []string   `json:"required,omitzero"`
-	Paths        [][]string `json:"paths,omitzero"`
-	Scope        string     `json:"scope,omitzero"`
-	SummaryScope string     `json:"summary_scope,omitzero"`
-	AsOf         *time.Time `json:"as_of,omitzero"`
+	IndependentUnit string     `json:"independent_unit,omitempty"`
+	ID              string     `json:"id"`
+	UseCase         string     `json:"use_case"`
+	WorkContext     string     `json:"work_context"`
+	Answers         []string   `json:"answers"`
+	Required        []string   `json:"required,omitzero"`
+	Paths           [][]string `json:"paths,omitzero"`
+	Scope           string     `json:"scope,omitzero"`
+	SummaryScope    string     `json:"summary_scope,omitzero"`
+	AsOf            *time.Time `json:"as_of,omitzero"`
 }
 
 type querySet struct {
@@ -222,6 +223,9 @@ func loadQuerySet(path string, contexts contextSet) (querySet, error) {
 	}
 	ids := make(map[string]struct{}, len(set.Queries))
 	for _, query := range set.Queries {
+		if query.IndependentUnit != "" && !manifestCode.MatchString(query.IndependentUnit) {
+			return querySet{}, fmt.Errorf("질의 독립 단위는 비식별 코드여야 한다")
+		}
 		if query.ID == "" || query.WorkContext == "" {
 			return querySet{}, fmt.Errorf("%s: id와 work_context를 비울 수 없다", path)
 		}

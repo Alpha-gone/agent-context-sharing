@@ -364,6 +364,9 @@ func run() (err error) {
 			slog.Info("회차 완료", "stage", stage, "repeat", repeat, "duration", elapsed.String())
 		}
 	}
+	if err := validateMeasuredRuns(stages, runs); err != nil {
+		return err
+	}
 	result.Judgements = judge(stages, runs)
 	result.Marginals = marginals(stages, runs)
 	return writeReport(*outPath, result)

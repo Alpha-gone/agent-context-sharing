@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"agent_context_sharing/internal/model"
@@ -20,6 +21,7 @@ import (
 // 구조 지표와 지연은 질의별 값의 평균이며 정의되지 않은 질의는 뺀다. 모든 질의에서
 // 정의되지 않으면 음수 표식이다. 선택 측정값은 질의당 평균이다.
 type useCaseMetrics struct {
+	BudgetUsed           float64            `json:"budget_used_per_query"`
 	Queries              int                `json:"queries"`
 	Recall               float64            `json:"recall"`
 	ReciprocalRank       float64            `json:"reciprocal_rank"`
@@ -62,6 +64,7 @@ type runMetrics struct {
 // queryMetrics는 반복이 결정적인 실행에서도 질의 사이의 차이로 단계 효과를 판정할 수
 // 있게 하는 표본이다. 본문은 싣지 않고 데이터셋 식별자와 지표만 남긴다.
 type queryMetrics struct {
+	IndependentUnit      string  `json:"independent_unit,omitempty"`
 	ID                   string  `json:"id"`
 	UseCase              string  `json:"use_case"`
 	Recall               float64 `json:"recall"`
@@ -112,7 +115,7 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 	querySamples := make([]queryMetrics, 0, len(queries.Queries))
 	recovered := make(map[string]map[string]struct{}, len(queries.Queries))
 	signals := make(map[string]search.RouteSignals, len(queries.Queries))
-	for _, query := range queries.Queries {
+	for _, query := range slices.SortedFunc(slices.Values(queries.Queries), func(a, b querySpec) int { return strings.Compare(a.ID, b.ID) }) {
 		input := search.Input{
 			GraphID:     graph.GraphID,
 			WorkContext: query.WorkContext,
@@ -141,7 +144,7 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		}
 		total.budgetUsed += flow.BudgetUsed
 		shape := measureStructure(flow, query, graph.Keys)
-		sample := queryMetrics{ID: query.ID, UseCase: query.UseCase, Recall: float64(hits) / float64(len(answers)), BudgetPerHit: -1,
+		sample := queryMetrics{ID: query.ID, IndependentUnit: query.IndependentUnit, UseCase: query.UseCase, Recall: float64(hits) / float64(len(answers)), BudgetPerHit: -1,
 			BudgetUsed: flow.BudgetUsed, EvidenceCompleteness: shape.completeness, PathContinuity: shape.continuity,
 			DisconnectedRatio: shape.disconnected, HubConcentration: shape.hub, DuplicateRatio: shape.duplicate,
 			LatencyMS: float64(latency.Microseconds()) / 1000,
@@ -175,6 +178,7 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		}
 		count := float64(total.queries)
 		metrics := useCaseMetrics{
+			BudgetUsed:           float64(total.budgetUsed) / count,
 			Queries:              total.queries,
 			Recall:               total.recall / count,
 			ReciprocalRank:       total.reciprocalRank / count,
@@ -226,17 +230,13 @@ func routeReasons(samples []queryMetrics) map[string]int {
 
 // definedMean은 정의된 질의별 값만 평균낸다. 하나도 없으면 정의되지 않은 값이다.
 func definedMean(samples []queryMetrics, value func(queryMetrics) float64) float64 {
-	total, count := 0.0, 0
+	values := []float64{}
 	for _, sample := range samples {
-		if current := value(sample); current >= 0 {
-			total += current
-			count++
+		if current := value(sample); validMetric(current) {
+			values = append(values, current)
 		}
 	}
-	if count == 0 {
-		return undefinedMetric
-	}
-	return total / float64(count)
+	return mean(values)
 }
 
 // latencyP95는 질의별 지연의 95번째 백분위수를 최근접 순위로 낸다. 「검색 품질 평가」가
@@ -247,7 +247,12 @@ func latencyP95(samples []queryMetrics) float64 {
 	}
 	latencies := make([]float64, 0, len(samples))
 	for _, sample := range samples {
-		latencies = append(latencies, sample.LatencyMS)
+		if validMetric(sample.LatencyMS) {
+			latencies = append(latencies, sample.LatencyMS)
+		}
+	}
+	if len(latencies) == 0 {
+		return undefinedMetric
 	}
 	slices.Sort(latencies)
 	rank := (95*len(latencies) + 99) / 100

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -40,6 +41,7 @@ type continualConditions struct {
 }
 
 type continualRun struct {
+	IndependentUnit  string       `json:"independent_unit,omitempty"`
 	Scenario         string       `json:"scenario"`
 	Repeat           int          `json:"repeat"`
 	Baseline         queryMetrics `json:"baseline"`
@@ -187,18 +189,34 @@ func judgeContinual(runs []continualRun) []continualJudgement {
 			if !slices.Contains([]string{"recall", "reciprocal_rank", "budget_per_hit"}, metric.name) {
 				continue
 			}
-			baseline := make([]float64, 0, len(values))
-			current := make([]float64, 0, len(values))
+			type pair struct {
+				before, after []float64
+				missing       bool
+			}
+			units := map[string]pair{}
 			for _, run := range values {
-				before := metric.sample(run.Baseline)
-				after := metric.sample(run.Current)
-				if before < 0 || after < 0 {
-					continue
+				unit := run.IndependentUnit
+				if unit == "" {
+					unit = scenario.name
 				}
-				baseline = append(baseline, before)
-				current = append(current, after)
+				p := units[unit]
+				before, after := metric.sample(run.Baseline), metric.sample(run.Current)
+				if !validMetric(before) || !validMetric(after) {
+					p.missing = true
+				} else {
+					p.before, p.after = append(p.before, before), append(p.after, after)
+				}
+				units[unit] = p
+			}
+			baseline, current := []float64{}, []float64{}
+			for _, unit := range slices.Sorted(maps.Keys(units)) {
+				p := units[unit]
+				if !p.missing {
+					baseline, current = append(baseline, mean(p.before)), append(current, mean(p.after))
+				}
 			}
 			if len(baseline) == 0 {
+				judgement.Passed = false
 				continue
 			}
 			difference, interval := pairedInterval(baseline, current)
@@ -208,7 +226,7 @@ func judgeContinual(runs []continualRun) []continualJudgement {
 				improved = difference < 0
 				degraded = difference > interval
 			}
-			judgement.Comparisons = append(judgement.Comparisons, comparison{Metric: metric.name, Samples: len(baseline), Baseline: mean(baseline), Current: mean(current), Difference: difference, Interval: interval, Improved: improved, Significant: interval >= 0 && math.Abs(difference) > interval})
+			judgement.Comparisons = append(judgement.Comparisons, comparison{Metric: metric.name, Status: statisticalStatus(len(baseline)), DegreesFreedom: max(0, len(baseline)-1), Samples: len(baseline), Baseline: mean(baseline), Current: mean(current), Difference: difference, Interval: interval, Improved: improved, Significant: interval >= 0 && math.Abs(difference) > interval})
 			judgement.Passed = judgement.Passed && interval >= 0 && !degraded
 		}
 		judgement.Passed = judgement.Passed && judgement.StatePassed && judgement.RecordsPassed

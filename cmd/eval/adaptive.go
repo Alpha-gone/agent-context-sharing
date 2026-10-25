@@ -120,7 +120,7 @@ func parseFloats(raw, name string) ([]float64, error) {
 			continue
 		}
 		value, err := strconv.ParseFloat(part, 64)
-		if err != nil || value < 0 || value > 1 {
+		if err != nil || !manifestRatio(&value) {
 			return nil, fmt.Errorf("%s 후보 %q가 0 이상 1 이하의 수가 아니다", name, part)
 		}
 		values = append(values, value)

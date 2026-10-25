@@ -228,7 +228,7 @@ func TestEvaluationCommandRejectsUnreadyIndexIntegration(t *testing.T) {
 	for i, mode := range [][]string{nil, {"-continual"}, {"-adversarial", "-attacks=" + attacks}, {"-consistency"}, {"-adaptive"}} {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			outPath := filepath.Join(t.TempDir(), "report.json")
-			args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-repeat=3", "-out=" + outPath}
+			args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-repeat=10", "-out=" + outPath}
 			out, err := exec.CommandContext(t.Context(), binary, append(args, mode...)...).CombinedOutput()
 			status, ok := errors.AsType[*exec.ExitError](err)
 			if !ok || status.ExitCode() != 1 || !strings.Contains(string(out), "색인 미완료") {

@@ -125,7 +125,7 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 	}
 	invoke := func(t *testing.T, mode []string, wantFailure bool) {
 		t.Helper()
-		args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-repeat=3", "-budget=20000", "-stages=baseline", "-out=" + filepath.Join(t.TempDir(), "report.json")}
+		args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-repeat=10", "-budget=20000", "-stages=baseline", "-out=" + filepath.Join(t.TempDir(), "report.json")}
 		command := exec.CommandContext(t.Context(), binary, append(args, mode...)...)
 		out, err := command.CombinedOutput()
 		if !wantFailure {

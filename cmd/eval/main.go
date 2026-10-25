@@ -63,10 +63,11 @@ func main() {
 
 func run() (err error) {
 	defaultLimits := plan.Default()
+	manifestPath := flag.String("check-manifest", "", "실행 manifest만 검증한다. 데이터 읽기·DB 접속·평가는 실행하지 않는다")
 	contextsPath := flag.String("contexts", "", "컨텍스트 집합 파일 경로")
 	queriesPath := flag.String("queries", "", "질의 집합 파일 경로")
 	stageList := flag.String("stages", "baseline,references,relations,global,evidence", "누적 비교 단계를 순서대로 지정한다")
-	repeats := flag.Int("repeat", minimumRepeats, "단계마다 반복할 회차 수")
+	repeats := flag.Int("repeat", initialEvaluationRepeats, "조건별 대응 반복 회차 수. 초기 평가는 10회다")
 	budget := flag.Int("budget", 4000, "검색 예산 문자 수. 0은 한도 없음이다")
 	maxHops := flag.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
 	maxHopNodes := flag.Int("max-hop-nodes", defaultLimits.MaxHopNodes, "그래프 확장 최대 노드 수")
@@ -92,7 +93,27 @@ func run() (err error) {
 	adversarial := flag.Bool("adversarial", false, "관계·경로 오염 공격 표본을 공격 전후와 복구 후에 평가하고 홉별 첫 불일치를 진단한다")
 	attacksPath := flag.String("attacks", "", "공격 표본 파일 경로. -adversarial의 입력이자 own-adversarial 생성의 출력이다")
 	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
-	flag.Parse()
+	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
+		return err
+	}
+	if flag.NArg() != 0 {
+		return fmt.Errorf("위치 인자는 허용하지 않는다")
+	}
+	manifestRequested := false
+	flag.Visit(func(f *flag.Flag) { manifestRequested = manifestRequested || f.Name == "check-manifest" })
+	if manifestRequested {
+		conflict := false
+		flag.Visit(func(f *flag.Flag) { conflict = conflict || f.Name != "check-manifest" })
+		if conflict || *manifestPath == "" {
+			return fmt.Errorf("manifest 검사 모드는 다른 실행 옵션과 함께 지정할 수 없다")
+		}
+		manifest, err := loadManifest(*manifestPath)
+		if err != nil {
+			return err
+		}
+		slog.Info("manifest 검증 완료", "trial_id", manifest.TrialID, "mode", manifest.Mode)
+		return nil
+	}
 	var modes []string
 	for _, mode := range []struct {
 		name    string
@@ -108,6 +129,31 @@ func run() (err error) {
 	if len(modes) > 1 {
 		return fmt.Errorf("평가 모드는 하나만 지정해야 한다: %s", strings.Join(modes, ", "))
 	}
+	if err := validateModeFlags(*convert, *adaptive, *consistency, *adversarial); err != nil {
+		return err
+	}
+	if *budget < 0 || *maxHops < 0 || *maxHopNodes < 0 || !slices.Contains([]string{string(store.IndexTargetsAllLayers), string(store.IndexTargetsWithoutSource)}, *indexTargets) {
+		return fmt.Errorf("문자·홉·노드 예산 또는 색인 대상이 올바르지 않다")
+	}
+	var consistencyOptions manifestConsistency
+	if *consistency {
+		candidateLimit, err := strconv.Atoi(strings.TrimSpace(envOr("SEARCH_CHANNEL_CANDIDATE_LIMIT", "50")))
+		if err != nil {
+			return fmt.Errorf("SEARCH_CHANNEL_CANDIDATE_LIMIT 해석: %w", err)
+		}
+		concurrency, err := parseIntegerOptions(*consistencyLoad, 1)
+		if err != nil {
+			return err
+		}
+		pauses, err := parseIntegerOptions(*consistencyPauses, 0)
+		if err != nil {
+			return err
+		}
+		consistencyOptions = manifestConsistency{Stage: *consistencyStage, Requests: *consistencyRequests, LoadRequests: *consistencyLoadRequests, Concurrency: concurrency, WritePauses: pauses}
+		if err := validateConsistencyOptions(consistencyOptions, candidateLimit); err != nil {
+			return err
+		}
+	}
 
 	// 변환은 데이터베이스에 닿지 않는다. 같은 두 경로를 출력 자리로 쓰므로 변환한
 	// 파일을 그대로 측정에 넘길 수 있다.
@@ -120,14 +166,17 @@ func run() (err error) {
 	if *businessPath != "" {
 		return runBusiness(*businessPath, *outPath)
 	}
-	if *repeats < minimumRepeats {
-		return fmt.Errorf("반복 회차는 %d 이상이어야 한다. 「검증」이 최소 세 번으로 정했다", minimumRepeats)
+	if *repeats != initialEvaluationRepeats {
+		return fmt.Errorf("초기 평가의 조건별 반복 회차는 %d여야 한다", initialEvaluationRepeats)
 	}
 	if *continual {
 		return runContinual(*outPath, *repeats, *maxHops, *maxHopNodes)
 	}
 	if *contextsPath == "" || *queriesPath == "" {
 		return fmt.Errorf("-contexts와 -queries가 필요하다")
+	}
+	if *adversarial && *attacksPath == "" {
+		return fmt.Errorf("-adversarial에는 -attacks가 필요하다")
 	}
 	stages, err := parseStages(*stageList)
 	if err != nil {
@@ -215,31 +264,9 @@ func run() (err error) {
 	}
 
 	if *consistency {
-		if !slices.Contains([]string{string(search.GraphStageReferences), string(search.GraphStageRelations), string(search.GraphStageGlobal)}, *consistencyStage) || *consistencyRequests < 1 {
-			return fmt.Errorf("-consistency-stage는 references, relations, global 중 하나이고 -consistency-requests는 양수여야 한다")
-		}
-		var pauses []int
-		for part := range strings.SplitSeq(*consistencyPauses, ",") {
-			pause, err := strconv.Atoi(strings.TrimSpace(part))
-			if err != nil || pause < 0 {
-				return fmt.Errorf("-consistency-write-pauses의 %q가 0 이상의 정수가 아니다", part)
-			}
-			pauses = append(pauses, pause)
-		}
-		var concurrency []int
-		for part := range strings.SplitSeq(*consistencyLoad, ",") {
-			value, err := strconv.Atoi(strings.TrimSpace(part))
-			if err != nil || value < 1 {
-				return fmt.Errorf("-consistency-load의 %q가 양의 정수가 아니다", part)
-			}
-			concurrency = append(concurrency, value)
-		}
-		if *consistencyLoadRequests < 1 {
-			return fmt.Errorf("-consistency-load-requests는 양수여야 한다")
-		}
 		result, err := runConsistency(ctx, database, worker, graph, contexts, queries, settings, consistencyConditions{
 			IndexTargets: *indexTargets, FoldThreshold: settings.foldThreshold,
-			Requests: *consistencyRequests, WritePausesMS: pauses, LoadConcurrency: concurrency, LoadRequests: *consistencyLoadRequests, ToggledContexts: consistencyToggled, GraphStage: *consistencyStage,
+			Requests: consistencyOptions.Requests, WritePausesMS: consistencyOptions.WritePauses, LoadConcurrency: consistencyOptions.Concurrency, LoadRequests: consistencyOptions.LoadRequests, ToggledContexts: consistencyToggled, GraphStage: consistencyOptions.Stage,
 			Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
 			CandidateLimit: settings.candidateLimit, SemanticThreshold: settings.semanticThreshold, EmbeddingModel: worker.ModelID(),
 		})
@@ -322,8 +349,11 @@ func run() (err error) {
 
 // runConvert는 공개 벤치마크를 데이터셋 두 파일로 옮기고 끝낸다.
 func runConvert(format, source, name string, limit int, useCase, contextsPath, queriesPath, attacksPath string) error {
-	if format == convertOwnAdversarial && useCase != "" {
-		return fmt.Errorf("own-adversarial은 모든 공격 표본을 함께 생성하므로 -convert-use-case를 사용할 수 없다")
+	if err := validateConversion(format, useCase); err != nil {
+		return err
+	}
+	if limit < 0 {
+		return fmt.Errorf("변환 질의 수는 0 이상이어야 한다")
 	}
 	var contexts contextSet
 	var queries querySet

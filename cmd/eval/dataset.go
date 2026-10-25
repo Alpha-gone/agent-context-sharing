@@ -265,7 +265,7 @@ func readJSON(path string, out any) error {
 	if err != nil {
 		return fmt.Errorf("데이터셋 읽기: %w", err)
 	}
-	if err := json.Unmarshal(raw, out); err != nil {
+	if err := json.Unmarshal(raw, out, json.RejectUnknownMembers(true)); err != nil {
 		return fmt.Errorf("%s: 데이터셋 해석: %w", path, err)
 	}
 	return nil

@@ -303,3 +303,10 @@
 | 2026-10-25 | 23:57 KST | Go 1.27.1 격리 원본 조회·root 파일·ETag 계약 | https://pkg.go.dev/net/http@go1.27.1#Client.Do · https://pkg.go.dev/net/http@go1.27.1#ErrUseLastResponse · https://pkg.go.dev/os@go1.27.1#OpenRoot · https://go.dev/src/net/http/fs.go | 적용 SDK의 공식 go doc에서 HTTP 상태와 전송 오류·Body 종료·redirect 미추적·root 파일 읽기를 확인하고 공식 SDK 소스의 scanETag/etagStrongMatch에서 유효 문자와 강한 비교 조건을 대조했다. | [EVAL-10 인수](reviews/2026-10-25-eval-10.md)의 승인 origin GET·이동 미추적·snapshot root·ETag 문법 검사와 실제 CLI/취소·미측정 판정에 반영했다. 실제 외부 출처의 불변 보증은 별도 인수 대상이다. |
 
 | 2026-10-26 | 00:26 KST | pgvector 0.8.6 공식 README·설치 확장 SQL, pgx v5.10.0 공식 API | https://github.com/pgvector/pgvector/blob/v0.8.6/README.md · https://pkg.go.dev/github.com/jackc/pgx/v5@v5.10.0#Conn.Query | 코사인 유사도는 1에서 <=> 거리를 뺀 값이며 halfvec의 코사인 연산/인덱스와 타입별 차원 상한을 확인했다. 설치된 vector.control·vector--0.8.6.sql과 로컬 pgx go doc의 Rows.Close/Err·context 전달 계약을 대조했다. | EVAL-11의 저장 벡터 점수·halfvec 비교·행 종료/오류 처리. 명목 바이트 공식 대신 pg_column_size를 실측하며 운영 표현 채택을 변경하지 않는다. |
+
+
+## 2026-10-26 EVAL-12 업무 효과·비용 비교 구현 근거
+
+- 조회일: 2026-10-26 KST. [Go 1.27.1 encoding/json/v2](https://pkg.go.dev/encoding/json/v2@go1.27.1)에서 `RejectUnknownMembers`·기본 중복 이름 거부와 `Deterministic` 옵션을 확인했다. `cmd/eval/business_tasks.go`의 안전한 입력 거부·맵을 포함한 trace 결합 해시에 적용했다. 결정적 직렬화는 입력 결합을 재현하는 데 사용하며 원문이나 개인 정보를 결과에 기록하지 않는다.
+- [Go 1.27.1 io](https://pkg.go.dev/io@go1.27.1)에서 `LimitReader`·`ReadAll`의 한도 읽기 계약을 확인해 32 MiB+1 읽기로 과대 입력을 거부한다.
+- 업무 성공률·반복/독립 단위·과금 범주의 의미와 후보 판정은 기존 SRS·[업무 평가 설계](sdd/evaluation.md#에이전트-업무-비용과-축소-비교)를 따른다. 유료 제공자의 최신 단가를 조회·고정한 작업이 아니며 수입 입력의 단가 판·산정일·통화·단위·배분율로 계산한다. 합성 단가는 실제 서비스 가격 근거로 사용하지 않는다. 검증 결과·제한은 [EVAL-12 검토](reviews/2026-10-26-eval-12.md)에 기록했다.

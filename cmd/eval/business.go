@@ -107,7 +107,7 @@ func loadBusinessSet(path string) (businessSet, error) {
 	// 허용하지 않은 필드를 거부해 본문이나 개인 식별 정보가 실수로 입력 형식에
 	// 추가되어도 조용히 무시한 채 평가 파일에 남는 일을 막는다.
 	if err := json.Unmarshal(raw, &set, json.RejectUnknownMembers(true)); err != nil {
-		return businessSet{}, fmt.Errorf("%s: 업무 효과 집계 해석: %w", path, err)
+		return businessSet{}, fmt.Errorf("업무 효과 JSON 형식 또는 허용 필드가 올바르지 않다")
 	}
 	if err := validateBusinessSet(set); err != nil {
 		return businessSet{}, fmt.Errorf("%s: %w", path, err)

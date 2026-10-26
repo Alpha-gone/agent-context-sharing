@@ -177,7 +177,7 @@ func (m executionManifest) validate() error {
 	if m.SchemaVersion != 1 || !manifestCode.MatchString(m.TrialID) {
 		return invalid("schema_version/trial_id")
 	}
-	if !slices.Contains([]string{"basic", "convert", "business", "continual", "adaptive", "consistency", "adversarial", "units", "originals", "embeddings"}, m.Mode) {
+	if !slices.Contains([]string{"basic", "convert", "business", "business_tasks", "continual", "adaptive", "consistency", "adversarial", "units", "originals", "embeddings"}, m.Mode) {
 		return invalid("mode")
 	}
 	if (m.Mode == "convert") != (m.Conversion != nil) || (m.Mode == "consistency") != (m.Consistency != nil) {
@@ -195,7 +195,7 @@ func (m executionManifest) validate() error {
 	for _, input := range m.Inputs {
 		if !manifestCode.MatchString(input.Code) || !manifestCode.MatchString(input.Dataset) || !manifestCode.MatchString(input.Version) || inputs[input.Code] ||
 			!manifestCommit.MatchString(input.Commit) || !manifestSHA256.MatchString(input.SHA256) ||
-			!slices.Contains([]string{"source", "contexts", "queries", "answers", "evidence", "attacks", "business", "unit_comparison", "original_reproduction", "embedding_comparison"}, input.Role) {
+			!slices.Contains([]string{"source", "contexts", "queries", "answers", "evidence", "attacks", "business", "business_tasks", "unit_comparison", "original_reproduction", "embedding_comparison"}, input.Role) {
 			return invalid("inputs")
 		}
 		inputs[input.Code], datasets[input.Dataset] = true, true
@@ -224,6 +224,10 @@ func (m executionManifest) validate() error {
 		case "business":
 			if !roles[unit.Dataset+"/business"] {
 				return invalid("inputs business checksum")
+			}
+		case "business_tasks":
+			if !roles[unit.Dataset+"/business_tasks"] {
+				return invalid("inputs business tasks checksum")
 			}
 		case "units":
 			if !roles[unit.Dataset+"/unit_comparison"] {

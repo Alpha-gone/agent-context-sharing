@@ -92,6 +92,7 @@ func run() (err error) {
 	convertUseCase := flag.String("convert-use-case", "", "변환 결과의 질의를 fact, associative 또는 global 사용 사례로 제한한다")
 	continual := flag.Bool("continual", false, "온라인 갱신부터 상충 해소까지 여섯 지속 평가 시나리오를 실행한다")
 	businessPath := flag.String("business", "", "업무 효과 통제 과업의 집계 지표 파일 경로")
+	businessTasksPath := flag.String("business-tasks", "", "비식별 과업 trace의 성공률·토큰·총비용·축소 통제 비교 입력")
 	unitPath := flag.String("unit-comparison", "", "원천을 공유하는 두 파생 경계 정책의 완전성·검색·과업 비교 입력")
 	embeddingPath := flag.String("embedding-comparison", "", "임베딩 한 축의 순위·관계/전역 임계값 통제 비교 입력")
 	originalPath := flag.String("original-reproduction", "", "수집 당시 원본과 승인한 HTTPS 출처의 판·범위·내용을 비교하는 입력")
@@ -155,6 +156,7 @@ func run() (err error) {
 		{"unit-comparison", *unitPath != ""},
 		{"original-reproduction", *originalPath != ""},
 		{"embedding-comparison", *embeddingPath != ""},
+		{"business-tasks", *businessTasksPath != ""},
 	} {
 		if mode.enabled {
 			modes = append(modes, mode.name)
@@ -199,6 +201,14 @@ func run() (err error) {
 			return fmt.Errorf("-contexts와 -queries가 필요하다")
 		}
 		return runConvert(*convert, *convertSource, *convertName, *convertLimit, *convertUseCase, *contextsPath, *queriesPath, *attacksPath)
+	}
+	if *businessTasksPath != "" {
+		conflict := false
+		flag.Visit(func(f *flag.Flag) { conflict = conflict || !slices.Contains([]string{"business-tasks", "out"}, f.Name) })
+		if conflict {
+			return fmt.Errorf("업무 과업 비교는 입력에 고정한 통제 조건만 사용한다")
+		}
+		return runBusinessTasks(*businessTasksPath, *outPath)
 	}
 	if *businessPath != "" {
 		return runBusiness(*businessPath, *outPath)

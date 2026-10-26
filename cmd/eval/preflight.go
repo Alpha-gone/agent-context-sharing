@@ -8,8 +8,12 @@ import (
 )
 
 func validateModeFlags(convert string, adaptive, consistency, adversarial bool) error {
+	return validateModeFlagsFor(flag.CommandLine, convert, adaptive, consistency, adversarial)
+}
+
+func validateModeFlagsFor(flags *flag.FlagSet, convert string, adaptive, consistency, adversarial bool) error {
 	var invalid bool
-	flag.Visit(func(f *flag.Flag) {
+	flags.Visit(func(f *flag.Flag) {
 		switch {
 		case strings.HasPrefix(f.Name, "convert-"):
 			invalid = invalid || convert == ""

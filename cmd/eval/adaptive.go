@@ -191,6 +191,7 @@ func runAdaptive(ctx context.Context, database *store.Store, worker *index.Worke
 					}
 				}
 				runs[key(name)] = append(runs[key(name)], runMetrics{Stage: key(name), Repeat: repeat, DurationMS: elapsed.Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered})
+				trialRoundDone(ctx, key(name), "", repeat)
 				slog.Info("회차 완료", "variant", key(name), "repeat", repeat, "duration", elapsed.String())
 			}
 		}

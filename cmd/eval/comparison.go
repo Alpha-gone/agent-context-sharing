@@ -201,6 +201,7 @@ func runControlledInput(ctx context.Context, settings settings, input comparison
 			}
 		}
 		measured := mergeMeasurements(parts)
+		trialRoundDone(ctx, variant.Name, "", repeat)
 		return runMetrics{Stage: variant.Name, Repeat: repeat, DurationMS: duration.Milliseconds(), Preparation: &preparation, UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered}, nil
 	})
 	if err != nil {

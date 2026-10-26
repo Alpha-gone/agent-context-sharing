@@ -114,6 +114,7 @@ func runContinual(ctx context.Context, outPath string, repeats, maxHops, maxHopN
 				return fmt.Errorf("시나리오 %q 회차 %d: %w", scenario.name, repeat, err)
 			}
 			result.Runs = append(result.Runs, run)
+			trialRoundDone(ctx, scenario.name, "", repeat)
 			slog.Info("지속 평가 회차 완료", "scenario", scenario.name, "repeat", repeat)
 		}
 	}
@@ -165,6 +166,9 @@ func runContinualScenario(ctx context.Context, database *store.Store, worker *in
 }
 
 func measureContinualQuery(ctx context.Context, service *search.Service, graph loadedGraph, query querySpec, maxHops, maxHopNodes int) (queryMetrics, search.Flow, error) {
+	if err := trialRequest(ctx); err != nil {
+		return queryMetrics{}, search.Flow{}, err
+	}
 	flow, err := service.Flow(ctx, search.Input{GraphID: graph.GraphID, WorkContext: query.WorkContext, AsOf: query.AsOf.UTC(), Budget: continualBudget, Scope: query.Scope, MaxHops: maxHops, MaxHopNodes: maxHopNodes})
 	if err != nil {
 		return queryMetrics{}, search.Flow{}, err

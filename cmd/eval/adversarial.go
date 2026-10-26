@@ -477,6 +477,7 @@ func runAdversarial(ctx context.Context, database *store.Store, worker *index.Wo
 				warning.SampleID = sample.SampleID
 				result.Warnings = append(result.Warnings, warning)
 			}
+			trialRoundDone(ctx, "adversarial", sample.SampleID, repeat)
 			slog.Info("공격 회차 완료", "sample", sample.SampleID, "repeat", repeat)
 		}
 		all = append(all, runs)
@@ -532,6 +533,7 @@ func runBaseline(ctx context.Context, database *store.Store, worker *index.Worke
 				}
 			}
 		}
+		trialRoundDone(ctx, "baseline", "", repeat)
 		if first == nil {
 			first = responses
 		}
@@ -728,6 +730,9 @@ func runQueries(ctx context.Context, service *search.Service, graph loadedGraph,
 		input := search.Input{GraphID: graph.GraphID, WorkContext: query.WorkContext, AsOf: conditions.AsOf, Budget: conditions.Budget, Scope: query.Scope, MaxHops: conditions.MaxHops, MaxHopNodes: conditions.MaxHopNodes}
 		if query.AsOf != nil {
 			input.AsOf = query.AsOf.UTC()
+		}
+		if err := trialRequest(ctx); err != nil {
+			return nil, err
 		}
 		flow, err := service.Flow(ctx, input)
 		if err != nil {

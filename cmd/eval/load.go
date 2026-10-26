@@ -23,7 +23,11 @@ type loadedGraph struct {
 
 // prepareEvaluationGraph는 준비 실패 시에도 자신이 만든 그래프를 정리한다.
 // 성공한 호출자는 그래프 정리를 소유한다. 상한 오류는 적재 전에 거부한다.
-func prepareEvaluationGraph(ctx context.Context, database *store.Store, worker *index.Worker, set contextSet, limit int) (loadedGraph, error) {
+func prepareEvaluationGraph(ctx context.Context, database *store.Store, worker *index.Worker, set contextSet, limit int) (result loadedGraph, err error) {
+	started := time.Now()
+	trialStage(ctx, "preparation")
+	defer func() { trialPrepared(ctx, started, err == nil) }()
+	limit = trialIndexLimit(ctx, limit)
 	if limit < 1 {
 		return loadedGraph{}, fmt.Errorf("색인 처리 상한은 양수여야 한다")
 	}
@@ -44,12 +48,24 @@ func withEvaluationGraph(ctx context.Context, database *store.Store, worker *ind
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph), ctx.Err()) }()
+	defer func() {
+		if err != nil {
+			trialFailed(ctx, "measurement")
+		}
+		err = errors.Join(err, dropGraph(ctx, database, graph), ctx.Err())
+	}()
 	return run(graph)
 }
 
 // dropGraph는 취소와 독립된 제한 시간에 평가 그래프를 소프트 삭제하고 실패를 반환한다.
-func dropGraph(ctx context.Context, database *store.Store, graph loadedGraph) error {
+func dropGraph(ctx context.Context, database *store.Store, graph loadedGraph) (err error) {
+	trialStage(ctx, "cleanup")
+	defer func() {
+		if err != nil {
+			trialFailed(ctx, "cleanup")
+		}
+		trialGraphCleanup(ctx, graph.GraphID, err)
+	}()
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	if err := database.SetGraphDeleted(cleanupCtx, graph.GraphID, graph.AccountID, true); err != nil {
@@ -97,6 +113,7 @@ func loadGraph(ctx context.Context, database *store.Store, set contextSet) (load
 	if err != nil {
 		return loadedGraph{}, fmt.Errorf("평가 그래프 생성: %w", err)
 	}
+	trialGraphCreated(ctx, graph.ID)
 	keys := make(map[string]model.ID, len(set.Contexts))
 	if err := createContexts(ctx, database, graph.ID, accountID, set.Contexts, keys); err != nil {
 		// 절반만 찬 그래프를 남기지 않는다. 적재가 실패하면 호출자가 그래프 식별자를
@@ -261,6 +278,7 @@ func utcOrNil(value *time.Time) *time.Time {
 // 비우면 다른 그래프가 남긴 대기 작업을 평가가 대신 처리하게 되고, 그만큼 측정 시작
 // 상태가 회차마다 달라진다.
 func drainIndexQueue(ctx context.Context, database *store.Store, worker *index.Worker, graphID model.ID, limit int) error {
+	limit = trialIndexLimit(ctx, limit)
 	if limit < 1 {
 		return fmt.Errorf("색인 처리 상한은 양수여야 한다")
 	}

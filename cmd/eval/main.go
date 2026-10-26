@@ -8,18 +8,15 @@
 package main
 
 import (
-	"context"
 	json "encoding/json/v2"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
-	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"agent_context_sharing/internal/index"
@@ -69,58 +66,80 @@ func main() {
 	}
 }
 
-func run() (err error) {
+func run() error { return runEvaluation(os.Args[1:], nil) }
+
+func runEvaluation(args []string, trial *trialProgress) (err error) {
+	flags := flag.NewFlagSet("eval", flag.ContinueOnError)
+	manifestRun := flags.String("manifest", "", "manifest와 실제 입력을 대조해 결과 묶음을 새 디렉터리에 저장한다")
+	results := flags.String("results", "", "manifest 결과를 저장할 루트 디렉터리")
+	var bindings trialBindings
+	flags.Var(&bindings, "trial-input", "manifest input code=로컬 파일. 여러 번 지정할 수 있다")
+	trialPreparedDirectory := flags.String("trial-prepared", "", "manifest와 대조할 준비 데이터 디렉터리")
 	defaultLimits := plan.Default()
-	manifestPath := flag.String("check-manifest", "", "실행 manifest만 검증한다. 데이터 읽기·DB 접속·평가는 실행하지 않는다")
-	prepareFormat := flag.String("prepare-data", "", "고정 공개 데이터 또는 자체 보완 세트를 준비한다. longmemeval, locomo, own-supplement")
-	prepareSource := flag.String("prepare-source", "", "고정 checksum을 확인할 로컬 원본 파일")
-	prepareOutput := flag.String("prepare-out", "", "준비 파일을 생성할 새 디렉터리")
-	preparedInput := flag.String("prepared-input", "", "통제 비교에 사용할 EVAL-02 준비 디렉터리")
-	contextsPath := flag.String("contexts", "", "컨텍스트 집합 파일 경로")
-	queriesPath := flag.String("queries", "", "질의 집합 파일 경로")
-	stageList := flag.String("stages", "baseline,references,relations,global,evidence", "누적 비교 단계를 순서대로 지정한다")
-	repeats := flag.Int("repeat", initialEvaluationRepeats, "조건별 대응 반복 회차 수. 초기 평가는 10회다")
-	budget := flag.Int("budget", 4000, "검색 예산 문자 수. 0은 한도 없음이다")
-	maxHops := flag.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
-	maxHopNodes := flag.Int("max-hop-nodes", defaultLimits.MaxHopNodes, "그래프 확장 최대 노드 수")
-	compareIndex := flag.Bool("compare-index-targets", false, "고정 그래프 단계에서 all_layers와 without_source를 별도로 비교한다")
-	indexTargets := flag.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
-	convert := flag.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag, own, own-global, own-global-auto 또는 own-adversarial")
-	convertSource := flag.String("convert-source", "", "변환할 벤치마크 파일 경로")
-	convertName := flag.String("convert-name", "", "데이터셋 판에 넣을 세트 이름")
-	convertLimit := flag.Int("convert-questions", 0, "변환에 쓸 질의 수. 0이면 전부 쓴다")
-	convertUseCase := flag.String("convert-use-case", "", "변환 결과의 질의를 fact, associative 또는 global 사용 사례로 제한한다")
-	continual := flag.Bool("continual", false, "온라인 갱신부터 상충 해소까지 여섯 지속 평가 시나리오를 실행한다")
-	businessPath := flag.String("business", "", "업무 효과 통제 과업의 집계 지표 파일 경로")
-	businessTasksPath := flag.String("business-tasks", "", "비식별 과업 trace의 성공률·토큰·총비용·축소 통제 비교 입력")
-	unitPath := flag.String("unit-comparison", "", "원천을 공유하는 두 파생 경계 정책의 완전성·검색·과업 비교 입력")
-	embeddingPath := flag.String("embedding-comparison", "", "임베딩 한 축의 순위·관계/전역 임계값 통제 비교 입력")
-	originalPath := flag.String("original-reproduction", "", "수집 당시 원본과 승인한 HTTPS 출처의 판·범위·내용을 비교하는 입력")
-	adaptive := flag.Bool("adaptive", false, "기존 auto와 질의 적응형 라우팅을 세 검색 경로의 오프라인 최적 경로로 견준다")
-	adaptiveStage := flag.String("adaptive-stage", string(search.GraphStageRelations), "적응형 비교의 그래프 관계 범위. baseline은 쓸 수 없다")
-	adaptiveEvidence := flag.Bool("adaptive-evidence", false, "적응형 비교의 두 구성에 근거 경로 보존 선택을 켠다")
-	directThresholds := flag.String("direct-thresholds", "0.5,0.6,0.7,0.8", "직접 충분성 하한 후보. 쉼표로 나눈다")
-	directMargins := flag.String("direct-margins", "0,0.02,0.05,0.1", "직접 후보 분리 폭 후보. 쉼표로 나눈다")
-	consistency := flag.Bool("consistency", false, "Read Committed·동기화 스냅숏·평가 전용 내용 판 재시도의 동등성과 동시 쓰기를 견준다")
-	consistencyRequests := flag.Int("consistency-requests", 100, "동시 쓰기 비교에서 구성마다 보낼 요청 수")
-	consistencyLoad := flag.String("consistency-load", "1,8,16,32", "동시 요청 부하 비교의 동시 요청자 수 후보. 쉼표로 나눈다")
-	consistencyLoadRequests := flag.Int("consistency-load-requests", 200, "동시 요청 부하 비교에서 조건마다 보낼 요청 수")
-	consistencyPauses := flag.String("consistency-write-pauses", "0,50,250", "동시 쓰기 비교에서 쓰기 사이에 쉬는 밀리초 후보. 쉼표로 나눈다")
-	consistencyStage := flag.String("consistency-stage", string(search.GraphStageReferences), "일관 읽기 비교의 그래프 관계 범위")
-	adversarial := flag.Bool("adversarial", false, "관계·경로 오염 공격 표본을 공격 전후와 복구 후에 평가하고 홉별 첫 불일치를 진단한다")
-	attacksPath := flag.String("attacks", "", "공격 표본 파일 경로. -adversarial의 입력이자 own-adversarial 생성의 출력이다")
-	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
-	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
+	manifestPath := flags.String("check-manifest", "", "실행 manifest만 검증한다. 데이터 읽기·DB 접속·평가는 실행하지 않는다")
+	prepareFormat := flags.String("prepare-data", "", "고정 공개 데이터 또는 자체 보완 세트를 준비한다. longmemeval, locomo, own-supplement")
+	prepareSource := flags.String("prepare-source", "", "고정 checksum을 확인할 로컬 원본 파일")
+	prepareOutput := flags.String("prepare-out", "", "준비 파일을 생성할 새 디렉터리")
+	preparedInput := flags.String("prepared-input", "", "통제 비교에 사용할 EVAL-02 준비 디렉터리")
+	contextsPath := flags.String("contexts", "", "컨텍스트 집합 파일 경로")
+	queriesPath := flags.String("queries", "", "질의 집합 파일 경로")
+	stageList := flags.String("stages", "baseline,references,relations,global,evidence", "누적 비교 단계를 순서대로 지정한다")
+	repeats := flags.Int("repeat", initialEvaluationRepeats, "조건별 대응 반복 회차 수. 초기 평가는 10회다")
+	budget := flags.Int("budget", 4000, "검색 예산 문자 수. 0은 한도 없음이다")
+	maxHops := flags.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
+	maxHopNodes := flags.Int("max-hop-nodes", defaultLimits.MaxHopNodes, "그래프 확장 최대 노드 수")
+	compareIndex := flags.Bool("compare-index-targets", false, "고정 그래프 단계에서 all_layers와 without_source를 별도로 비교한다")
+	indexTargets := flags.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
+	convert := flags.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag, own, own-global, own-global-auto 또는 own-adversarial")
+	convertSource := flags.String("convert-source", "", "변환할 벤치마크 파일 경로")
+	convertName := flags.String("convert-name", "", "데이터셋 판에 넣을 세트 이름")
+	convertLimit := flags.Int("convert-questions", 0, "변환에 쓸 질의 수. 0이면 전부 쓴다")
+	convertUseCase := flags.String("convert-use-case", "", "변환 결과의 질의를 fact, associative 또는 global 사용 사례로 제한한다")
+	continual := flags.Bool("continual", false, "온라인 갱신부터 상충 해소까지 여섯 지속 평가 시나리오를 실행한다")
+	businessPath := flags.String("business", "", "업무 효과 통제 과업의 집계 지표 파일 경로")
+	businessTasksPath := flags.String("business-tasks", "", "비식별 과업 trace의 성공률·토큰·총비용·축소 통제 비교 입력")
+	unitPath := flags.String("unit-comparison", "", "원천을 공유하는 두 파생 경계 정책의 완전성·검색·과업 비교 입력")
+	embeddingPath := flags.String("embedding-comparison", "", "임베딩 한 축의 순위·관계/전역 임계값 통제 비교 입력")
+	originalPath := flags.String("original-reproduction", "", "수집 당시 원본과 승인한 HTTPS 출처의 판·범위·내용을 비교하는 입력")
+	adaptive := flags.Bool("adaptive", false, "기존 auto와 질의 적응형 라우팅을 세 검색 경로의 오프라인 최적 경로로 견준다")
+	adaptiveStage := flags.String("adaptive-stage", string(search.GraphStageRelations), "적응형 비교의 그래프 관계 범위. baseline은 쓸 수 없다")
+	adaptiveEvidence := flags.Bool("adaptive-evidence", false, "적응형 비교의 두 구성에 근거 경로 보존 선택을 켠다")
+	directThresholds := flags.String("direct-thresholds", "0.5,0.6,0.7,0.8", "직접 충분성 하한 후보. 쉼표로 나눈다")
+	directMargins := flags.String("direct-margins", "0,0.02,0.05,0.1", "직접 후보 분리 폭 후보. 쉼표로 나눈다")
+	consistency := flags.Bool("consistency", false, "Read Committed·동기화 스냅숏·평가 전용 내용 판 재시도의 동등성과 동시 쓰기를 견준다")
+	consistencyRequests := flags.Int("consistency-requests", 100, "동시 쓰기 비교에서 구성마다 보낼 요청 수")
+	consistencyLoad := flags.String("consistency-load", "1,8,16,32", "동시 요청 부하 비교의 동시 요청자 수 후보. 쉼표로 나눈다")
+	consistencyLoadRequests := flags.Int("consistency-load-requests", 200, "동시 요청 부하 비교에서 조건마다 보낼 요청 수")
+	consistencyPauses := flags.String("consistency-write-pauses", "0,50,250", "동시 쓰기 비교에서 쓰기 사이에 쉬는 밀리초 후보. 쉼표로 나눈다")
+	consistencyStage := flags.String("consistency-stage", string(search.GraphStageReferences), "일관 읽기 비교의 그래프 관계 범위")
+	adversarial := flags.Bool("adversarial", false, "관계·경로 오염 공격 표본을 공격 전후와 복구 후에 평가하고 홉별 첫 불일치를 진단한다")
+	attacksPath := flags.String("attacks", "", "공격 표본 파일 경로. -adversarial의 입력이자 own-adversarial 생성의 출력이다")
+	outPath := flags.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
+	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flag.NArg() != 0 {
+	if flags.NArg() != 0 {
 		return fmt.Errorf("위치 인자는 허용하지 않는다")
 	}
+	trialRequested := false
+	flags.Visit(func(f *flag.Flag) {
+		trialRequested = trialRequested || slices.Contains([]string{"manifest", "results", "trial-input", "trial-prepared"}, f.Name)
+	})
+	if trialRequested {
+		conflict := false
+		flags.Visit(func(f *flag.Flag) {
+			conflict = conflict || !slices.Contains([]string{"manifest", "results", "trial-input", "trial-prepared"}, f.Name)
+		})
+		if conflict || *manifestRun == "" || *results == "" {
+			return fmt.Errorf("manifest 실행에는 manifest·results·trial-input·trial-prepared만 지정할 수 있다")
+		}
+		return runManifestTrial(*manifestRun, *results, bindings, *trialPreparedDirectory)
+	}
 	manifestRequested := false
-	flag.Visit(func(f *flag.Flag) { manifestRequested = manifestRequested || f.Name == "check-manifest" })
+	flags.Visit(func(f *flag.Flag) { manifestRequested = manifestRequested || f.Name == "check-manifest" })
 	if manifestRequested {
 		conflict := false
-		flag.Visit(func(f *flag.Flag) { conflict = conflict || f.Name != "check-manifest" })
+		flags.Visit(func(f *flag.Flag) { conflict = conflict || f.Name != "check-manifest" })
 		if conflict || *manifestPath == "" {
 			return fmt.Errorf("manifest 검사 모드는 다른 실행 옵션과 함께 지정할 수 없다")
 		}
@@ -133,7 +152,7 @@ func run() (err error) {
 	}
 	prepareRequested := false
 	prepareConflict := false
-	flag.Visit(func(f *flag.Flag) {
+	flags.Visit(func(f *flag.Flag) {
 		if strings.HasPrefix(f.Name, "prepare-") {
 			prepareRequested = true
 		} else {
@@ -168,7 +187,7 @@ func run() (err error) {
 	if len(modes) > 1 {
 		return fmt.Errorf("평가 모드는 하나만 지정해야 한다: %s", strings.Join(modes, ", "))
 	}
-	if err := validateModeFlags(*convert, *adaptive, *consistency, *adversarial); err != nil {
+	if err := validateModeFlagsFor(flags, *convert, *adaptive, *consistency, *adversarial); err != nil {
 		return err
 	}
 	if *budget < 0 || *maxHops < 0 || *maxHopNodes < 0 || !slices.Contains([]string{string(store.IndexTargetsAllLayers), string(store.IndexTargetsWithoutSource)}, *indexTargets) {
@@ -204,7 +223,7 @@ func run() (err error) {
 	}
 	if *businessTasksPath != "" {
 		conflict := false
-		flag.Visit(func(f *flag.Flag) { conflict = conflict || !slices.Contains([]string{"business-tasks", "out"}, f.Name) })
+		flags.Visit(func(f *flag.Flag) { conflict = conflict || !slices.Contains([]string{"business-tasks", "out"}, f.Name) })
 		if conflict {
 			return fmt.Errorf("업무 과업 비교는 입력에 고정한 통제 조건만 사용한다")
 		}
@@ -218,31 +237,31 @@ func run() (err error) {
 	}
 	if *embeddingPath != "" {
 		conflict := false
-		flag.Visit(func(f *flag.Flag) {
+		flags.Visit(func(f *flag.Flag) {
 			conflict = conflict || !slices.Contains([]string{"embedding-comparison", "out", "repeat"}, f.Name)
 		})
 		if conflict {
 			return fmt.Errorf("임베딩 비교는 입력에 고정한 통제 조건만 사용한다")
 		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, stop := trialContext(trial)
 		defer stop()
 		return runEmbeddingCommand(ctx, *embeddingPath, *outPath)
 	}
 	if *originalPath != "" {
 		conflict := false
-		flag.Visit(func(f *flag.Flag) {
+		flags.Visit(func(f *flag.Flag) {
 			conflict = conflict || !slices.Contains([]string{"original-reproduction", "out", "repeats"}, f.Name)
 		})
 		if conflict {
 			return fmt.Errorf("원본 비교는 입력에 고정한 출처·요청 설정만 사용한다")
 		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, stop := trialContext(trial)
 		defer stop()
 		return runOriginalCommand(ctx, *originalPath, *outPath)
 	}
 	if *unitPath != "" {
 		conflict := false
-		flag.Visit(func(f *flag.Flag) {
+		flags.Visit(func(f *flag.Flag) {
 			conflict = conflict || !slices.Contains([]string{"unit-comparison", "out", "repeats"}, f.Name)
 		})
 		if conflict {
@@ -256,12 +275,12 @@ func run() (err error) {
 		if err != nil {
 			return err
 		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, stop := trialContext(trial)
 		defer stop()
 		return runUnitCommand(ctx, settings, input, *outPath)
 	}
 	if *continual {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, stop := trialContext(trial)
 		defer stop()
 		return runContinual(ctx, *outPath, *repeats, *maxHops, *maxHopNodes)
 	}
@@ -281,7 +300,7 @@ func run() (err error) {
 		}
 		if *compareIndex {
 			var explicitStages, explicitTargets bool
-			flag.Visit(func(f *flag.Flag) {
+			flags.Visit(func(f *flag.Flag) {
 				explicitStages = explicitStages || f.Name == "stages"
 				explicitTargets = explicitTargets || f.Name == "index-targets"
 			})
@@ -341,7 +360,7 @@ func run() (err error) {
 			return err
 		}
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := trialContext(trial)
 	defer stop()
 	if !*adaptive && !*consistency && !*adversarial {
 		if *preparedInput != "" {

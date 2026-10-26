@@ -156,6 +156,7 @@ func runEmbeddingInput(ctx context.Context, input embeddingInput, configs []sett
 						return fmt.Errorf("임베딩 비교 %s/%s/%s 회차 %d: %w", split, input.Variants[i].Code, sample.Code, repeat, err)
 					}
 					result.Runs = append(result.Runs, run)
+					trialRoundDone(ctx, input.Variants[i].Code, sample.Code, repeat)
 				}
 			}
 		}

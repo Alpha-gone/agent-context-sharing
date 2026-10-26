@@ -81,6 +81,9 @@ func (reader *consistencyReader) Flow(ctx context.Context, input search.Input) (
 }
 
 func (reader *consistencyReader) measuredFlow(ctx context.Context, input search.Input) (search.Flow, consistencyAttempt, error) {
+	if err := trialRequest(ctx); err != nil {
+		return search.Flow{}, consistencyAttempt{}, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, consistencyRequestTimeout)
 	defer cancel()
 	if input.AsOf.IsZero() {

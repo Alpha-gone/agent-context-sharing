@@ -132,6 +132,9 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		if query.AsOf != nil {
 			input.AsOf = query.AsOf.UTC()
 		}
+		if err := trialRequest(ctx); err != nil {
+			return measurement{}, err
+		}
 		started := time.Now()
 		flow, err := service.Flow(ctx, input)
 		latency := time.Since(started)

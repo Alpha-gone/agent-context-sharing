@@ -148,6 +148,7 @@ func runUnitCommand(ctx context.Context, settings settings, input unitInput, out
 				return runMetrics{}, err
 			}
 			result.Runs = append(result.Runs, run)
+			trialRoundDone(ctx, policy.Name, sample.Code, repeat)
 		}
 		return runMetrics{}, nil
 	})

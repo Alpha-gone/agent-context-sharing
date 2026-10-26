@@ -18,19 +18,29 @@ const maxManifestBytes = 4 << 20
 // executionManifest는 데이터 준비와 비교 실행에 앞서 고정하는 통제 명세다.
 // 검사 성공은 파일 checksum 대조나 실제 측정 완료를 뜻하지 않는다.
 type executionManifest struct {
-	SchemaVersion int                  `json:"schema_version"`
-	TrialID       string               `json:"trial_id"`
-	Mode          string               `json:"mode"`
-	Inputs        []manifestInput      `json:"inputs"`
-	Mapping       manifestMapping      `json:"mapping"`
-	Units         []manifestUnit       `json:"units"`
-	Models        manifestModels       `json:"models"`
-	Search        manifestSearch       `json:"search"`
-	Execution     manifestExecution    `json:"execution"`
-	Exclusions    manifestExclusions   `json:"exclusions"`
-	Cost          manifestCost         `json:"cost"`
-	Conversion    *manifestConversion  `json:"conversion,omitzero"`
-	Consistency   *manifestConsistency `json:"consistency,omitzero"`
+	SchemaVersion  int                  `json:"schema_version"`
+	TrialID        string               `json:"trial_id"`
+	Mode           string               `json:"mode"`
+	Inputs         []manifestInput      `json:"inputs"`
+	Mapping        manifestMapping      `json:"mapping"`
+	Units          []manifestUnit       `json:"units"`
+	Models         manifestModels       `json:"models"`
+	Search         manifestSearch       `json:"search"`
+	Execution      manifestExecution    `json:"execution"`
+	Exclusions     manifestExclusions   `json:"exclusions"`
+	Cost           manifestCost         `json:"cost"`
+	Conversion     *manifestConversion  `json:"conversion,omitzero"`
+	Consistency    *manifestConsistency `json:"consistency,omitzero"`
+	Provenance     string               `json:"provenance,omitempty"`
+	ComparisonAxis string               `json:"comparison_axis,omitempty"`
+	Followup       *manifestFollowup    `json:"followup,omitzero"`
+}
+
+type manifestFollowup struct {
+	Parent  string `json:"parent_trial"`
+	Purpose string `json:"purpose_code"`
+	Samples int    `json:"planned_samples"`
+	Repeats int    `json:"planned_repeats"`
 }
 
 type manifestInput struct {
@@ -177,6 +187,12 @@ func (m executionManifest) validate() error {
 	if m.SchemaVersion != 1 || !manifestCode.MatchString(m.TrialID) {
 		return invalid("schema_version/trial_id")
 	}
+	if !slices.Contains([]string{"", "unverified", "synthetic", "observed", "agent_trace", "authorized_origin"}, m.Provenance) || !slices.Contains([]string{"", "graph_stage", "index_targets"}, m.ComparisonAxis) || (m.ComparisonAxis != "" && m.Mode != "basic") {
+		return invalid("provenance/comparison_axis")
+	}
+	if f := m.Followup; f != nil && (!manifestCode.MatchString(f.Parent) || f.Parent == m.TrialID || !manifestCode.MatchString(f.Purpose) || f.Samples != len(m.Units) || f.Repeats != initialEvaluationRepeats) {
+		return invalid("followup")
+	}
 	if !slices.Contains([]string{"basic", "convert", "business", "business_tasks", "continual", "adaptive", "consistency", "adversarial", "units", "originals", "embeddings"}, m.Mode) {
 		return invalid("mode")
 	}
@@ -195,7 +211,7 @@ func (m executionManifest) validate() error {
 	for _, input := range m.Inputs {
 		if !manifestCode.MatchString(input.Code) || !manifestCode.MatchString(input.Dataset) || !manifestCode.MatchString(input.Version) || inputs[input.Code] ||
 			!manifestCommit.MatchString(input.Commit) || !manifestSHA256.MatchString(input.SHA256) ||
-			!slices.Contains([]string{"source", "contexts", "queries", "answers", "evidence", "attacks", "business", "business_tasks", "unit_comparison", "original_reproduction", "embedding_comparison"}, input.Role) {
+			!slices.Contains([]string{"source", "contexts", "queries", "answers", "evidence", "attacks", "business", "business_tasks", "unit_comparison", "original_reproduction", "embedding_comparison", "preparation", "continual_scenarios"}, input.Role) {
 			return invalid("inputs")
 		}
 		inputs[input.Code], datasets[input.Dataset] = true, true
@@ -217,6 +233,10 @@ func (m executionManifest) validate() error {
 			return invalid("units")
 		}
 		switch m.Mode {
+		case "continual":
+			if !roles[unit.Dataset+"/continual_scenarios"] && (!roles[unit.Dataset+"/contexts"] || !roles[unit.Dataset+"/queries"]) {
+				return invalid("inputs continual scenarios checksum")
+			}
 		case "convert":
 			if !roles[unit.Dataset+"/source"] {
 				return invalid("inputs source checksum")
@@ -278,7 +298,7 @@ func (m executionManifest) validate() error {
 	}
 	if !slices.Contains([]string{"all_layers", "without_source"}, s.IndexTargets) || !slices.Contains([]string{"parallel", "sequential"}, s.ChannelExecution) ||
 		s.EvidenceSelection == nil || s.GlobalFallback == nil || s.Budget == nil || *s.Budget < 0 || s.MaxHops == nil || *s.MaxHops < 0 || s.MaxHopNodes == nil || *s.MaxHopNodes < 0 || s.CandidateLimit < 1 ||
-		!manifestRatio(s.SemanticThreshold) || !manifestRatio(s.FoldThreshold) || *s.FoldThreshold == 0 {
+		(!(m.Mode == "embeddings" && s.SemanticThreshold == nil) && !manifestRatio(s.SemanticThreshold)) || !manifestRatio(s.FoldThreshold) || *s.FoldThreshold == 0 {
 		return invalid("search")
 	}
 	if m.Mode == "adaptive" {

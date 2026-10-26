@@ -310,3 +310,11 @@
 - 조회일: 2026-10-26 KST. [Go 1.27.1 encoding/json/v2](https://pkg.go.dev/encoding/json/v2@go1.27.1)에서 `RejectUnknownMembers`·기본 중복 이름 거부와 `Deterministic` 옵션을 확인했다. `cmd/eval/business_tasks.go`의 안전한 입력 거부·맵을 포함한 trace 결합 해시에 적용했다. 결정적 직렬화는 입력 결합을 재현하는 데 사용하며 원문이나 개인 정보를 결과에 기록하지 않는다.
 - [Go 1.27.1 io](https://pkg.go.dev/io@go1.27.1)에서 `LimitReader`·`ReadAll`의 한도 읽기 계약을 확인해 32 MiB+1 읽기로 과대 입력을 거부한다.
 - 업무 성공률·반복/독립 단위·과금 범주의 의미와 후보 판정은 기존 SRS·[업무 평가 설계](sdd/evaluation.md#에이전트-업무-비용과-축소-비교)를 따른다. 유료 제공자의 최신 단가를 조회·고정한 작업이 아니며 수입 입력의 단가 판·산정일·통화·단위·배분율로 계산한다. 합성 단가는 실제 서비스 가격 근거로 사용하지 않는다. 검증 결과·제한은 [EVAL-12 검토](reviews/2026-10-26-eval-12.md)에 기록했다.
+
+
+## 2026-10-26 EVAL-13 manifest 실행·결과 저장·실패 보고 근거
+
+- 조회일: 2026-10-26 KST. [Go 1.27.1 os](https://pkg.go.dev/os@go1.27.1)에서 임시 파일·Sync·Rename 계약을 확인했다. 기존 결과 디렉터리의 덮어쓰기를 막기 위해 일반 Rename과 별도로 플랫폼의 비덮어쓰기 연산을 사용한다. `cmd/eval/trial.go`는 쓰기·재해석·동기화·비공개 입력 제거·원자적 저장을 소유한다.
+- [golang.org/x/sys v0.41.0 Darwin 구현](https://github.com/golang/sys/blob/v0.41.0/unix/syscall_darwin.go)과 적용 모듈의 API/상수를 확인했다. [Linux rename(2)](https://man7.org/linux/man-pages/man2/rename.2.html)의 RENAME_NOREPLACE 계약과 함께 macOS RenamexNp/RENAME_EXCL, Linux Renameat2/RENAME_NOREPLACE를 사용한다. 두 OS의 실제 기존 파일·빈 디렉터리·심볼릭 링크 보존과 동시 예약을 시험했다. 다른 OS의 실행 인수는 미실행이다.
+- [Go 1.27.1 jsontext](https://pkg.go.dev/encoding/json/jsontext@go1.27.1)·[encoding/json/v2](https://pkg.go.dev/encoding/json/v2@go1.27.1)에서 Canonicalize·Clone·엄격한 해석과 결정적 직렬화를 확인했다. 정규화가 원래 바이트를 변경할 수 있어 복제본을 사용하며, 완전한 결과 필드/회차·수입 과업의 실제 집계와 대조한다.
+- 최종 평가 전체 865건(최상위 195건)·231.717초, Linux 파일 경계 48건(최상위 11건)과 전체 정적 검증의 근거·제한은 [EVAL-13 분야 인수](reviews/2026-10-26-eval-13.md)에 있다. 실제 공개 검색/업무·유료 비용 효과는 구현 완료와 별개로 실증 대기다.

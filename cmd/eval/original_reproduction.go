@@ -56,11 +56,15 @@ func runOriginalCommand(ctx context.Context, path, output string) error {
 				return err
 			}
 			sample := samples[(offset+repeat-1)%len(samples)]
+			if err := trialRequest(ctx); err != nil {
+				return err
+			}
 			attempt := fetchOriginal(ctx, client, input, sample, repeat)
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			result.Attempts = append(result.Attempts, attempt)
+			trialRoundDone(ctx, "originals", sample.spec.Code, repeat)
 		}
 	}
 	result.Overall, result.Scenarios, err = aggregateOriginals(result.Attempts)

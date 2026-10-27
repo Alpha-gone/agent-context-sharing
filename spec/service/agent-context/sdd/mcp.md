@@ -28,7 +28,7 @@
 
 발견·목록의 ttlMs=0·private와 별도로 모든 HTTP 응답에 no-store를 유지한다. 공개 Host를 loopback 프록시로 전달하는 보호 생성자는 SDK의 자동 localhost Host 거부를 해제하고 정확한 Origin·Bearer와 바깥 TLS 판정을 적용한다. 인증 없는 SDK 관찰 경계는 이 옵션을 사용하지 않는다. SDK의 PropagateRequestCancellation을 명시해 원래 요청의 context를 유지한다. 업무 시간 예산·커밋/재생·실제 단절의 모듈 경계는 [MCP-08 검토](../reviews/2026-10-20-mcp-08.md)에서 인수했다. 전체 기동의 의존 조립·공통 HTTP 경계는 아래 ARCH-06·07 근거를 따르며 운영 실패·호스트 인수는 후속이다.
 
-[MCP-02 인수](../reviews/2026-10-20-mcp-02.md)는 실제 OAuth/TLS와 서버 라우터 주입까지 검증했다. MCP-06·07에서 여덟 쓰기·다섯 읽기 처리기 모듈을 인수했다. [ARCH-06](../reviews/2026-10-23-arch-06.md)의 기동 조립은 실제 등록과 읽기/쓰기 14종을 연결하고 [ARCH-07](../reviews/2026-10-23-arch-07.md)에서 공통 HTTP 경계를 인수했다. 전체 서버 도구 계약은 [MCP-09](../reviews/2026-10-24-mcp-09.md)에서 인수했으며 실제 호스트는 TEST-08에서 별도로 인수한다.
+[MCP-02 인수](../reviews/2026-10-20-mcp-02.md)는 실제 OAuth/TLS와 서버 라우터 주입까지 검증했다. MCP-06·07에서 여덟 쓰기·다섯 읽기 처리기 모듈을 인수했다. [ARCH-06](../reviews/2026-10-23-arch-06.md)의 기동 조립은 실제 등록과 읽기/쓰기 14종을 연결하고 [ARCH-07](../reviews/2026-10-23-arch-07.md)에서 공통 HTTP 경계를 인수했다. 전체 서버 도구 계약은 [MCP-09](../reviews/2026-10-24-mcp-09.md)에서 인수했으며 선정 CLI의 실제 호스트 인수는 [TEST-08](../reviews/2026-10-27-test-08-completion.md)에서 완료했다.
 
 ## 공통 행위자·도구·쓰기 안전성
 

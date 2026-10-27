@@ -195,6 +195,8 @@ sh ./test-dev-compose.sh --runtime
 sh ./test-wal-archive.sh
 ```
 
+실제 CLI의 1시간 접근 만료 시험은 `codex_expiry_live` 태그와 `-timeout=75m`으로 별도 실행합니다. `TEST_DATABASE_URL`·`TEST_DATABASE_REQUIRED=1`·정확한 CLI 0.160.1의 `TEST_CODEX_BINARY`·`TEST_CODEX_REQUIRED=1`이 필요합니다. 자격과 시계를 수정하지 않으며 상세 명령은 [TEST-08 인수](spec/service/agent-context/reviews/2026-10-27-test-08-completion.md)를 따릅니다. DB를 실제로 정지하는 `operations_runtime` 시험은 전용 합성 컨테이너의 ID·소유 라벨·고정 loopback 포트를 검증하며 [OPS-09 실행 범위](spec/service/agent-context/reviews/2026-10-27-ops-09.md)를 따릅니다.
+
 기록기 분야 인수는 macOS에서 `go test -race -count=1 -skip '^TestOBS08ContainerPersistence$' ./internal/diagnostic`, Linux 격리 환경에서는 `sh internal/diagnostic/test-linux.sh`로 실행합니다. Linux 스크립트는 기존 로컬 이미지 ID를 고정하며 `ACS_OBS08_IMAGE`로 이미 설치된 Linux arm64/amd64 이미지를 지정할 수 있습니다. Go 1.27.1과 Docker가 필요하고 이미지 다운로드·DB·네트워크는 사용하지 않습니다. 전용 볼륨에서 전체 파일·커널 쓰기 오류·컨테이너 재생성·슬롯 교체를 검증하고 자신이 만든 자원만 정리합니다. 결과 JSON·stderr는 출력한 임시 결과 경로에 남습니다. 상세 범위와 디스크 부족 주입의 제한은 [OBS-08 검토](spec/service/agent-context/reviews/2026-10-23-obs-08.md)를 따릅니다.
 
 그래프 불변식 감사는 `go run ./cmd/audit`, 검색 품질 평가는 `cmd/eval`이 담당합니다. 평가 표본과 실행 방법은 [테스트 설계](spec/service/agent-context/sdd/testing.md)와 [평가 검증 설계](spec/service/agent-context/sdd/evaluation.md#검증을-가능하게-하는-설계)를 확인하십시오.
@@ -252,4 +254,4 @@ sh ./test-wal-archive.sh
 [WEB-09 분야 인수](spec/service/agent-context/reviews/2026-10-24-web-09.md)에서 39개 화면 상태 표본과 CDP로 조작한 Chrome 155의 15개 실제 브라우저 시나리오를 저장소 상태와 대조해 웹 분야를 완료했습니다. 당시 전체 **93/124개 완료**이며 Safari와 실제 스크린리더 음성은 [TEST-06](spec/service/agent-context/development-plan/testing.md#test-06) 범위입니다.
 
 
-[TEST-08 OAuth 후속 검토](spec/service/agent-context/reviews/2026-10-27-test-08-oauth.md)에서 실제 CLI 0.160.1·Chrome 156의 최초 인가·issuer/state·자격 파일 0600·새 프로세스 재사용과 업무 호출, 서버 교체·두 인스턴스·키 전파 후 갱신·저장 장애/복구·폐기·유휴/절대 만료·응답 유실·동시 갱신·쓰기 결과 재생을 확인했다. 갱신은 시험 소유 클라이언트 만료 메타데이터를 앞당긴 조건이며 7/30일은 격리 DB 시각 표본이다. 실제 서버 발급 접근 토큰의 1시간 만료 후 호스트 갱신과 나머지 필수 오류/취소 인수는 남아 있어 TEST-08·TBD-064는 진행·미해소다. 전체 116개 완료·2개 진행·6개 미착수를 유지한다.
+[TEST-08 최종 인수](spec/service/agent-context/reviews/2026-10-27-test-08-completion.md)에서 실제 1시간 접근 만료와 CLI 단일 갱신·새 프로세스 재사용, OAuth 결합 거부·403/500·실제 쓰기 취소·현재 권한/지문/판 재검사·중복 쓰기를 확인했다. 관련 267건과 실제 만료 1건, 총 268건이 필수 DB·race에서 실패·건너뜀 없이 통과했다. 선정한 macOS CLI 0.160.1 exec·features.mcp_2026_07_28=true·파일 자격 저장 구성에서 TEST-08을 완료하고 TBD-064를 해소했다. [OPS-09](spec/service/agent-context/reviews/2026-10-27-ops-09.md)는 DB 중단/복구·계층별 선행 검증을 마쳤으며 배포 전체의 조합 장애·회복 인수는 진행 중이다. 현재 전체 117개 완료·2개 진행·5개 미착수다.

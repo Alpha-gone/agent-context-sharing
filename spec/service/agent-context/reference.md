@@ -330,3 +330,10 @@
 - 조회일: 2026-10-27 KST. [OpenAI Docs 구성 참조](https://learn.chatgpt.com/docs/config-file/config-reference)의 서버별 oauth.client_id·callback_url/port, mcp_oauth_credentials_store=file과 도구 승인 구성을 확인했다. 현재 문서 안내를 설치 판의 실제 동작 증거로 대체하지 않으며 기존 캐시의 CLI 0.160.1에서 브라우저 인가·고정 callback·issuer/state·0600 저장·새 프로세스 재사용을 직접 확인했다.
 - [OpenAI 공식 Function calling 문서](https://developers.openai.com/api/docs/guides/function-calling)의 namespace 도구 형식을 확인하고 실제 CLI가 전송한 도구 목록에서 namespace·함수명을 찾아 로컬 Responses 대역을 구동했다. 고정 응답 대역이며 실제 모델 추론·업무 효과·비용 측정이 아니다.
 - [TEST-08 OAuth 후속 검토](reviews/2026-10-27-test-08-oauth.md)에 252건의 필수 DB·race 결과, 여섯 호스트 표본과 실제 접근 만료 인수의 제한을 기록했다. 키 전파 시간은 기존 [인증 정본](sdd/authentication.md#토큰-검증)의 계약을 따르며 운영 설정·호스트 판·revision을 변경하지 않았다.
+
+
+## 2026-10-27 TEST-08 오류/만료와 OPS-09 DB 복구 근거
+
+- [OpenAI Docs MCP](https://learn.chatgpt.com/docs/extend/mcp)의 사전 등록·issuer 지원과 callback iss 누락/불일치 거부를 확인했다. 현재 안내를 설치 판의 증거로 대체하지 않고 CLI 0.160.1에서 실제 issuer 오류 응답의 코드 미교환·자격 미저장을 대조했다. 새 시험·제한은 [TEST-08 후속 인수](reviews/2026-10-27-test-08-completion.md)에 기록한다.
+- [Docker 공식 포트 공개 문서](https://docs.docker.com/engine/network/port-publishing/)의 host IP/port 지정과 inspect의 HostIp/HostPort 형식을 확인했다. OPS-09 첫 임시 포트 표본은 재시작 후 실제 포트가 바뀌어 실패했고 이후 고정 loopback 포트·HostConfig/실제 포트 일치를 검증했다. Docker 동작의 추측을 제품 장애로 기록하지 않는다.
+- 적용된 pgx v5.10.0의 공급자 소스 pgxpool/pool.go에서 NewWithConfig의 ParseConfig 입력과 별도 풀 구성 계약을 확인했다. DB 복귀 뒤 오래된 관리 TCP 연결을 쓰지 않도록 시험 정리에서 새 관리 풀을 연다. [OPS-09 검토](reviews/2026-10-27-ops-09.md)에 두 예비 실패·최종 성공·Linux DB 범위 건너뜀과 자원 정리를 구분했다.

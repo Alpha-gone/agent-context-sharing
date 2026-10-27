@@ -64,6 +64,11 @@ async function main() {
   await send('Page.enable'); await send('Runtime.enable');
   stage = 'login';
   await send('Page.navigate', { url: config.authorization });
+  if (config.expectedRejection) {
+    await until(() => evaluate('location.pathname === "/authorize" && document.readyState === "complete" && !document.querySelector("input[name=login_id]")'));
+    console.log(JSON.stringify({ browser: version.Browser, authorization_rejected: true }));
+    return;
+  }
   await until(() => evaluate('location.pathname === "/login" && !!document.querySelector("input[name=login_id]")'));
   for (const [selector, text] of [['input[name=login_id]', config.login], ['input[name=password]', config.password]]) {
     await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
@@ -76,10 +81,11 @@ async function main() {
   stage = 'callback';
   await until(() => evaluate('location.origin === "http://127.0.0.1:49152" && location.pathname === "/callback"'));
   const callback = await evaluate('({issuer:new URL(location.href).searchParams.get("iss"),state:new URL(location.href).searchParams.get("state")})');
-  if (callback.issuer !== config.origin || callback.state !== new URL(config.authorization).searchParams.get('state')) {
+  const issuerMatch = callback.issuer === config.origin;
+  if (issuerMatch === Boolean(config.expectedIssuerFailure) || callback.state !== new URL(config.authorization).searchParams.get('state')) {
     throw new Error('callback binding failed');
   }
-  console.log(JSON.stringify({ browser: version.Browser, login: true, consent: true, callback: true, issuer_match: true, state_match: true }));
+  console.log(JSON.stringify({ browser: version.Browser, login: true, consent: true, callback: true, issuer_match: issuerMatch, state_match: true }));
 }
 
 (async () => {

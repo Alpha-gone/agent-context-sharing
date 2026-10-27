@@ -12,19 +12,24 @@ import (
 // 실제 추론 없이 CLI의 네이티브 MCP 도구 실행을 구동하는 Responses 대역이다.
 // 도구 이름은 CLI가 보낸 목록에서 찾고 식별자는 실제 서버 결과에서만 얻는다.
 type test08Model struct {
-	mu            sync.Mutex
-	enabled       bool
-	replay        bool
-	updateVersion float64
-	step          int
-	catalog       int
-	names         []string
-	failure       string
-	agent         string
-	graph         string
-	node          string
-	version       float64
-	observed      []string
+	mu             sync.Mutex
+	enabled        bool
+	replay         bool
+	replayError    string
+	parallelReplay bool
+	replayRejected bool
+	beforeUpdate   func(string) error
+	beforeReplay   func(string) error
+	updateVersion  float64
+	step           int
+	catalog        int
+	names          []string
+	failure        string
+	agent          string
+	graph          string
+	node           string
+	version        float64
+	observed       []string
 }
 
 func (script *test08Model) observe(tool string, data []byte) {
@@ -39,7 +44,20 @@ func (script *test08Model) observe(tool string, data []byte) {
 			Value   map[string]any `json:"structuredContent"`
 		} `json:"result"`
 	}
-	if json.Unmarshal(data, &result) != nil || result.Result.IsError || result.Result.Value == nil {
+	if json.Unmarshal(data, &result) != nil || result.Result.Value == nil {
+		script.failure = "tool_result"
+		return
+	}
+	if result.Result.IsError {
+		if script.replayError != "" && script.step == 8 && tool == "graph_update" && result.Result.Value["code"] == script.replayError {
+			if script.replayError == "version_conflict" && fmt.Sprint(result.Result.Value["current_version"]) != "2" {
+				script.failure = "conflict_version"
+				return
+			}
+			script.replayRejected = true
+			script.observed = append(script.observed, tool)
+			return
+		}
 		script.failure = "tool_result"
 		return
 	}
@@ -91,6 +109,9 @@ func (script *test08Model) serve(w http.ResponseWriter, r *http.Request) {
 	if script.replay {
 		steps = []string{"agent_register", "graph_list", "graph_create", "node_create", "node_get", "graph_get", "graph_update", "graph_update", "graph_get"}
 	}
+	if script.replayError != "" {
+		steps = steps[:8]
+	}
 	if script.step > len(steps) || script.failure != "" {
 		http.Error(w, "fixture stopped", http.StatusBadRequest)
 		return
@@ -141,18 +162,45 @@ func (script *test08Model) serve(w http.ResponseWriter, r *http.Request) {
 		case 5, 8:
 			args["graph_id"] = script.graph
 		case 6:
+			if script.beforeUpdate != nil && script.beforeUpdate(script.graph) != nil {
+				script.failure = "before_update"
+				return
+			}
 			script.updateVersion = script.version
 			args["graph_id"], args["expected_version"], args["name"], args["request_id"] = script.graph, script.version, "TEST08 changed", "test08-graph-update-001"
 		case 7:
 			args["graph_id"] = script.graph
 			if script.replay {
+				if script.beforeReplay != nil && script.beforeReplay(script.graph) != nil {
+					script.failure = "before_replay"
+					return
+				}
 				args["expected_version"], args["name"], args["request_id"] = script.updateVersion, "TEST08 changed", "test08-graph-update-001"
+				if script.replayError == "invalid_argument" {
+					args["name"] = "TEST08 conflicting fingerprint"
+				}
+				if script.replayError == "version_conflict" {
+					args["request_id"] = "test08-graph-update-other"
+				}
 			}
 		}
 		encoded, _ := json.Marshal(args)
 		item = map[string]any{"type": "function_call", "id": fmt.Sprintf("fc_test08_%d", script.step), "call_id": fmt.Sprintf("call_test08_%d", script.step), "name": name, "arguments": string(encoded)}
 		if namespace != "" {
 			item["namespace"] = namespace
+		}
+		if script.parallelReplay && script.step == 6 {
+			second := map[string]any{"type": "function_call", "id": "fc_test08_parallel", "call_id": "call_test08_parallel", "name": name, "arguments": string(encoded)}
+			if namespace != "" {
+				second["namespace"] = namespace
+			}
+			for index, call := range []map[string]any{item, second} {
+				emit("response.output_item.added", map[string]any{"output_index": index, "item": call})
+				emit("response.output_item.done", map[string]any{"output_index": index, "item": call})
+			}
+			emit("response.completed", map[string]any{"response": map[string]any{"id": responseID, "status": "completed", "output": []any{item, second}}})
+			script.step += 2
+			return
 		}
 		emit("response.output_item.added", map[string]any{"output_index": 0, "item": item})
 	} else {

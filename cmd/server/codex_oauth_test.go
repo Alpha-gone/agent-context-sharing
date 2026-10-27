@@ -25,17 +25,41 @@ import (
 
 	"agent_context_sharing/internal/authz"
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/store"
 )
 
 // 첫 인가의 verifier·코드·토큰을 시험이 대신 만들지 않는다. 실제 CLI와
 // 브라우저가 교환하고 저장한 자격을 새 CLI 프로세스가 다시 사용해야 한다.
 func TestTEST08CodexCLIOAuthIntegration(t *testing.T) {
 	for _, scenario := range []string{"restart_and_revoke", "idle_expiry", "absolute_expiry", "refresh_response_loss", "concurrent_process_refresh", "uncertain_write"} {
-		t.Run(scenario, func(t *testing.T) { test08CodexOAuth(t, scenario) })
+		t.Run(scenario, func(t *testing.T) { test08CodexOAuth(t, scenario, nil) })
 	}
 }
 
-func test08CodexOAuth(t *testing.T, scenario string) {
+func TestTEST08CodexCLIWriteSafetyIntegration(t *testing.T) {
+	for _, scenario := range []string{"cancel_write", "permission_replay", "fingerprint_conflict", "version_conflict", "parallel_write"} {
+		t.Run(scenario, func(t *testing.T) { test08CodexOAuth(t, scenario, nil) })
+	}
+}
+
+func TestTEST08CodexCLIOAuthRejectionsIntegration(t *testing.T) {
+	for _, scenario := range []string{"invalid_callback", "invalid_issuer", "missing_issuer", "invalid_verifier", "invalid_resource"} {
+		t.Run(scenario, func(t *testing.T) { test08CodexOAuth(t, scenario, nil) })
+	}
+}
+
+type test08OAuthSession struct {
+	ctx                              context.Context
+	credentials                      string
+	server                           *httptest.Server
+	initialToken                     authz.OAuthTokens
+	command                          func(...string) *exec.Cmd
+	calls, exchanges, tokenSucceeded *atomic.Int64
+	refreshCounts                    func() (int, int)
+	forcedStatus, forcedRequests     *atomic.Int64
+}
+
+func test08CodexOAuth(t *testing.T, scenario string, afterLogin func(*testing.T, test08OAuthSession)) {
 	t.Helper()
 	binary := test08CLI(t)
 	chrome := os.Getenv("WEB_BROWSER_CHROME")
@@ -49,7 +73,13 @@ func test08CodexOAuth(t *testing.T, scenario string) {
 	if err != nil {
 		t.Fatal("TEST-08 OAuth 인수에는 Node.js가 필요합니다")
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	lifetime := 120 * time.Second
+	certificateLifetime := time.Hour
+	if scenario == "natural_expiry" {
+		lifetime = 70 * time.Minute
+		certificateLifetime = 2 * time.Hour
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), lifetime)
 	defer cancel()
 	database, pool, address := newServerContractDatabase(t)
 	provider := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +89,7 @@ func test08CodexOAuth(t *testing.T, scenario string) {
 	server := httptest.NewUnstartedServer(nil)
 	server.Config.ErrorLog = slog.NewLogLogger(slog.NewTextHandler(io.Discard, nil), slog.LevelError)
 	t.Cleanup(server.Close)
-	certificate, rootPEM := test08Certificate(t)
+	certificate, rootPEM := test08CertificateValidFor(t, certificateLifetime)
 	server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}
 	origin := "https://" + server.Listener.Addr().String()
 	cfg := arch06Configuration(t, address, provider.URL)
@@ -91,6 +121,8 @@ func test08CodexOAuth(t *testing.T, scenario string) {
 	var calls atomic.Int64
 	var primaryCalls, secondaryCalls atomic.Int64
 	var exchanges atomic.Int64
+	var authorizationRejected, forcedStatus, forcedRequests atomic.Int64
+	var initialToken atomic.Pointer[authz.OAuthTokens]
 	var unauthorized, unavailable, tokenRejected, tokenSucceeded atomic.Int64
 	var dropTokenResponse atomic.Bool
 	var dropWriteResponse atomic.Bool
@@ -103,6 +135,10 @@ func test08CodexOAuth(t *testing.T, scenario string) {
 	var alternate atomic.Pointer[target]
 	var routed atomic.Uint64
 	var writeRequests atomic.Uint64
+	writeArrived, writeDone := make(chan struct{}), make(chan struct{})
+	arrivedOnce := sync.OnceFunc(func() { close(writeArrived) })
+	doneOnce := sync.OnceFunc(func() { close(writeDone) })
+	var requestCancelled atomic.Bool
 	active.Store(&target{assembly.app.handler()})
 	newReplica := func() *serverAssembly {
 		t.Helper()
@@ -130,7 +166,62 @@ func test08CodexOAuth(t *testing.T, scenario string) {
 				next, secondary = other.handler, true
 			}
 		}
+		if r.URL.Path == "/authorize" && (scenario == "invalid_callback" || scenario == "invalid_issuer" || scenario == "missing_issuer") {
+			if scenario == "invalid_callback" {
+				values := r.URL.Query()
+				values.Set("redirect_uri", "http://127.0.0.1:49152/unregistered")
+				r.URL.RawQuery = values.Encode()
+			}
+			recorder := httptest.NewRecorder()
+			next.ServeHTTP(recorder, r)
+			if recorder.Code == http.StatusBadRequest {
+				authorizationRejected.Add(1)
+			}
+			if location := recorder.Header().Get("Location"); location != "" && scenario != "invalid_callback" {
+				callback, err := url.Parse(location)
+				if err != nil {
+					t.Error("시험 callback 응답 해석 실패")
+					return
+				}
+				if callback.Path == "/callback" {
+					values := callback.Query()
+					if scenario == "invalid_issuer" {
+						values.Set("iss", origin+"/wrong-issuer")
+					} else {
+						values.Del("iss")
+					}
+					callback.RawQuery = values.Encode()
+					recorder.Header().Set("Location", callback.String())
+				}
+			}
+			for key, values := range recorder.Header() {
+				w.Header()[key] = values
+			}
+			w.WriteHeader(recorder.Code)
+			_, _ = w.Write(recorder.Body.Bytes())
+			return
+		}
 		if r.URL.Path == "/mcp" {
+			if scenario == "cancel_write" && r.Header.Get("Mcp-Name") == "graph_update" {
+				arrivedOnce()
+				defer func() {
+					requestCancelled.Store(r.Context().Err() != nil)
+					doneOnce()
+				}()
+			}
+			if status := forcedStatus.Load(); status != 0 {
+				forcedRequests.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Cache-Control", "no-store")
+				failure := "server_error"
+				if status == http.StatusForbidden {
+					failure = "insufficient_scope"
+					w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata=%q, scope="agent-context", error="insufficient_scope"`, origin+"/.well-known/oauth-protected-resource/mcp"))
+				}
+				w.WriteHeader(int(status))
+				_, _ = fmt.Fprintf(w, `{"error":%q}`, failure)
+				return
+			}
 			recorder := httptest.NewRecorder()
 			next.ServeHTTP(recorder, r)
 			if recorder.Code == http.StatusOK && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
@@ -166,6 +257,26 @@ func test08CodexOAuth(t *testing.T, scenario string) {
 		}
 		if r.URL.Path == "/token" {
 			exchanges.Add(1)
+			if scenario == "invalid_verifier" || scenario == "invalid_resource" {
+				body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+				if err != nil {
+					t.Error("시험 코드 교환 요청 읽기 실패")
+					return
+				}
+				values, err := url.ParseQuery(string(body))
+				if err != nil {
+					t.Error("시험 코드 교환 요청 해석 실패")
+					return
+				}
+				if scenario == "invalid_verifier" {
+					values.Set("code_verifier", strings.Repeat("A", 43))
+				} else {
+					values.Set("resource", origin+"/other-resource")
+				}
+				encoded := values.Encode()
+				r.Body = io.NopCloser(strings.NewReader(encoded))
+				r.ContentLength = int64(len(encoded))
+			}
 			if simultaneous.Load() {
 				if refreshWaiters.Add(1) == 2 {
 					close(refreshArrived)
@@ -180,6 +291,12 @@ func test08CodexOAuth(t *testing.T, scenario string) {
 			next.ServeHTTP(recorder, r)
 			if recorder.Code == http.StatusOK {
 				tokenSucceeded.Add(1)
+				var tokens authz.OAuthTokens
+				if json.Unmarshal(recorder.Body.Bytes(), &tokens) != nil || tokens.AccessToken == "" || tokens.RefreshToken == "" {
+					t.Error("실제 CLI 토큰 응답 해석 실패")
+				} else {
+					initialToken.CompareAndSwap(nil, &tokens)
+				}
 			} else {
 				tokenRejected.Add(1)
 			}
@@ -293,7 +410,7 @@ callback_port = 49152
 	}
 	listener.Close()
 	spki := sha256.Sum256(server.Certificate().RawSubjectPublicKeyInfo)
-	browserConfig, err := json.Marshal(map[string]any{"chrome": chrome, "profile": t.TempDir(), "spki": base64.StdEncoding.EncodeToString(spki[:]), "authorization": authorization, "origin": origin, "login": "test08_oauth", "password": "test08-oauth-password"})
+	browserConfig, err := json.Marshal(map[string]any{"chrome": chrome, "profile": t.TempDir(), "spki": base64.StdEncoding.EncodeToString(spki[:]), "authorization": authorization, "origin": origin, "login": "test08_oauth", "password": "test08-oauth-password", "expectedRejection": scenario == "invalid_callback", "expectedIssuerFailure": scenario == "invalid_issuer" || scenario == "missing_issuer"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,11 +423,45 @@ callback_port = 49152
 	if err := browser.Run(); err != nil {
 		t.Fatal("실제 브라우저 OAuth 실패: ", evidence.String())
 	}
+	assertNoGrant := func() {
+		t.Helper()
+		var grants, consumed, refresh int
+		if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM public.oauth_grant),(SELECT count(*) FROM public.oauth_authorization_code WHERE consumed_at IS NOT NULL),(SELECT count(*) FROM public.oauth_refresh_token)`).Scan(&grants, &consumed, &refresh); err != nil || grants != 0 || consumed != 0 || refresh != 0 {
+			t.Fatal("거부한 OAuth 교환이 코드 소비·계열·갱신 자격을 만들었습니다")
+		}
+		if _, err := os.Stat(filepath.Join(root, ".credentials.json")); err == nil {
+			t.Fatal("거부한 OAuth의 자격 파일이 생성되었습니다")
+		}
+	}
+	if scenario == "invalid_callback" {
+		var codes int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM public.oauth_authorization_code").Scan(&codes); err != nil || codes != 0 || authorizationRejected.Load() == 0 || exchanges.Load() != 0 {
+			t.Fatal("미등록 callback이 발급 전에 거부되지 않았습니다")
+		}
+		assertNoGrant()
+		t.Log("TEST-08 stage=authorization_rejected correlation=invalid-callback token_attempts=0 grant_count=0")
+		return
+	}
 	select {
 	case err := <-finished:
 		waited = true
 		if err != nil {
+			if scenario == "invalid_issuer" || scenario == "missing_issuer" || scenario == "invalid_verifier" || scenario == "invalid_resource" {
+				want := int64(1)
+				if scenario == "invalid_issuer" || scenario == "missing_issuer" {
+					want = 0
+				}
+				if exchanges.Load() != want || tokenSucceeded.Load() != 0 {
+					t.Fatal("OAuth 오류 단계의 자격 교환 횟수 불일치")
+				}
+				assertNoGrant()
+				t.Logf("TEST-08 stage=oauth_rejected correlation=%s token_attempts=%d grant_count=0", scenario, exchanges.Load())
+				return
+			}
 			t.Fatal("브라우저 callback 뒤 CLI OAuth 교환·저장 실패")
+		}
+		if scenario == "invalid_issuer" || scenario == "missing_issuer" || scenario == "invalid_verifier" || scenario == "invalid_resource" {
+			t.Fatal("잘못된 OAuth 결합으로 실제 CLI 로그인이 성공했습니다")
 		}
 	case <-ctx.Done():
 		t.Fatal("CLI OAuth callback 완료 대기 시간 초과")
@@ -329,14 +480,159 @@ callback_port = 49152
 	if calls.Load() < before+2 || exchanges.Load() != 1 {
 		t.Fatal("새 CLI 프로세스의 저장 자격 재사용을 확인하지 못했습니다")
 	}
+	if afterLogin != nil {
+		if initialToken.Load() == nil {
+			t.Fatal("최초 실제 발급 자격을 확인하지 못했습니다")
+		}
+		afterLogin(t, test08OAuthSession{
+			ctx: ctx, credentials: credentials, server: server, initialToken: *initialToken.Load(),
+			command: command, calls: &calls, exchanges: &exchanges, tokenSucceeded: &tokenSucceeded,
+			forcedStatus: &forcedStatus, forcedRequests: &forcedRequests,
+			refreshCounts: func() (int, int) {
+				var count, consumed int
+				if err := pool.QueryRow(ctx, "SELECT count(*),count(consumed_at) FROM public.oauth_refresh_token").Scan(&count, &consumed); err != nil {
+					t.Fatal("시험 갱신 상태 조회 실패")
+				}
+				return count, consumed
+			},
+		})
+		return
+	}
 	script.mu.Lock()
 	script.enabled = true
-	script.replay = scenario == "uncertain_write"
+	script.replay = scenario == "uncertain_write" || scenario == "permission_replay" || scenario == "fingerprint_conflict" || scenario == "version_conflict" || scenario == "parallel_write"
+	script.parallelReplay = scenario == "parallel_write"
+	switch scenario {
+	case "permission_replay":
+		script.replayError = "permission_denied"
+	case "fingerprint_conflict":
+		script.replayError = "invalid_argument"
+	case "version_conflict":
+		script.replayError = "version_conflict"
+	}
+	if scenario == "permission_replay" {
+		script.beforeReplay = func(graph string) error {
+			id, err := model.ParseID(graph)
+			if err != nil {
+				return fmt.Errorf("시험 그래프 식별 실패")
+			}
+			var actor string
+			if err := pool.QueryRow(ctx, "SELECT created_by::text FROM public.context_graph WHERE graph_id=$1", graph).Scan(&actor); err != nil {
+				return fmt.Errorf("시험 소유자 조회 실패")
+			}
+			owner, err := model.ParseID(actor)
+			if err != nil {
+				return fmt.Errorf("시험 소유자 식별 실패")
+			}
+			other, err := service.Register(ctx, "test08_other", "test08-other-password")
+			if err != nil {
+				return fmt.Errorf("시험 소유권 인계 계정 준비 실패")
+			}
+			if database.GrantGraph(ctx, id, owner, other, store.GrantSubjectAccount, model.GraphGradeOwner) != nil || database.GrantGraph(ctx, id, other, owner, store.GrantSubjectAccount, model.GraphGradeViewer) != nil {
+				return fmt.Errorf("시험 소유권 인계·쓰기 등급 회수 실패")
+			}
+			return nil
+		}
+	}
+	type guardLease struct {
+		release func()
+		pid     int
+	}
+	guardRelease := make(chan guardLease, 1)
+	if scenario == "cancel_write" {
+		t.Cleanup(func() {
+			select {
+			case lease := <-guardRelease:
+				lease.release()
+			default:
+			}
+		})
+		script.beforeUpdate = func(graph string) error {
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				return fmt.Errorf("시험 행 잠금 준비 실패")
+			}
+			var found string
+			var pid int
+			if err := tx.QueryRow(ctx, "SELECT graph_id::text,pg_backend_pid() FROM public.context_graph WHERE graph_id=$1 FOR UPDATE", graph).Scan(&found, &pid); err != nil || found != graph {
+				_ = tx.Rollback(ctx)
+				return fmt.Errorf("시험 그래프 행 잠금 실패")
+			}
+			guardRelease <- guardLease{pid: pid, release: func() {
+				cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				defer cancel()
+				if err := tx.Rollback(cleanup); err != nil {
+					t.Error("시험 그래프 행 잠금 정리 실패")
+				}
+			}}
+			return nil
+		}
+	}
 	script.mu.Unlock()
 	if scenario == "uncertain_write" {
 		dropWriteResponse.Store(true)
 	}
-	if err := command("exec", "--skip-git-repo-check", "--ephemeral", "--json", "Run the TEST08 fixture tools.").Run(); err != nil {
+	invocation := command("exec", "--skip-git-repo-check", "--ephemeral", "--json", "Run the TEST08 fixture tools.")
+	if scenario == "cancel_write" {
+		if err := invocation.Start(); err != nil {
+			t.Fatal("취소 대상 실제 CLI 시작 실패")
+		}
+		completed := make(chan error, 1)
+		go func() { completed <- invocation.Wait() }()
+		waited := false
+		defer func() {
+			if !waited {
+				_ = invocation.Process.Kill()
+				<-completed
+			}
+		}()
+		select {
+		case <-writeArrived:
+		case <-time.After(10 * time.Second):
+			t.Fatal("취소 대상 실제 쓰기 요청 대기 실패")
+		}
+		lease := <-guardRelease
+		defer lease.release()
+		deadline, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var waiting bool
+			if err := pool.QueryRow(deadline, "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock')").Scan(&waiting); err != nil {
+				t.Fatal("실제 DB 잠금 대기를 확인하지 못했습니다")
+			}
+			if waiting {
+				break
+			}
+			select {
+			case <-ticker.C:
+			case <-deadline.Done():
+				t.Fatal("실제 DB 잠금 대기 시간 초과")
+			}
+		}
+		if err := invocation.Process.Signal(os.Interrupt); err != nil {
+			t.Fatal("실제 CLI 취소 전달 실패")
+		}
+		select {
+		case <-completed:
+			waited = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("취소한 실제 CLI 종료 시간 초과")
+		}
+		select {
+		case <-writeDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("취소한 HTTP 요청의 저장 작업 정리 시간 초과")
+		}
+		var version, records, active int
+		if err := pool.QueryRow(ctx, "SELECT (SELECT version FROM public.context_graph),(SELECT count(*) FROM public.idempotency_record WHERE tool_name='graph_update'),(SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND backend_type='client backend' AND pid<>pg_backend_pid() AND pid<>$1 AND state<>'idle')", lease.pid).Scan(&version, &records, &active); err != nil || version != 1 || records != 0 || !requestCancelled.Load() || active != 0 {
+			t.Fatal("취소한 쓰기의 롤백·HTTP 취소·연결 반환 불일치")
+		}
+		t.Log("TEST-08 stage=cancelled_write correlation=cancel-write database_lock_observed=true http_cancelled=true graph_version=1 replay_count=0 active_or_transactional_connections=0")
+		return
+	}
+	if err := invocation.Run(); err != nil {
 		script.mu.Lock()
 		t.Logf("script step=%d observed_calls=%d failure=%s catalog=%d names=%v", script.step, len(script.observed), script.failure, script.catalog, script.names)
 		script.mu.Unlock()
@@ -346,6 +642,12 @@ callback_port = 49152
 	valid := script.step == 9 && len(script.observed) == 8 && script.version == 2 && script.failure == ""
 	if scenario == "uncertain_write" {
 		valid = script.step == 10 && len(script.observed) >= 9 && script.version == 2 && script.failure == "" && !dropWriteResponse.Load()
+	}
+	if scenario == "permission_replay" || scenario == "fingerprint_conflict" || scenario == "version_conflict" {
+		valid = script.step == 9 && len(script.observed) == 8 && script.version == 2 && script.failure == "" && script.replayRejected
+	}
+	if scenario == "parallel_write" {
+		valid = script.step == 10 && len(script.observed) == 9 && script.version == 2 && script.failure == ""
 	}
 	toolCalls := len(script.observed)
 	script.enabled = false
@@ -371,6 +673,16 @@ callback_port = 49152
 		t.Fatal("시험 소유 자격 스냅숏 실패")
 	}
 	switch scenario {
+	case "permission_replay", "fingerprint_conflict", "version_conflict", "parallel_write":
+		var version, records int
+		wantRecords := 1
+		if scenario == "version_conflict" {
+			wantRecords = 2
+		}
+		if err := pool.QueryRow(ctx, "SELECT (SELECT version FROM public.context_graph),(SELECT count(*) FROM public.idempotency_record WHERE tool_name='graph_update')").Scan(&version, &records); err != nil || version != 2 || records != wantRecords {
+			t.Fatal("권한 회수 뒤 거부된 재생이 최초 결과·판을 변경했습니다")
+		}
+		t.Logf("TEST-08 stage=write_boundary correlation=%s graph_version=2 replay_count=%d", scenario, records)
 	case "restart_and_revoke":
 		address := server.Listener.Addr().String()
 		handler := server.Config.Handler

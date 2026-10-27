@@ -68,6 +68,16 @@ func arch06IndexWorkers() int {
 
 func arch06MCP(t *testing.T, server *httptest.Server, host, token, method, name string, args map[string]any) map[string]any {
 	t.Helper()
+	result := arch06MCPResult(t, server, host, token, method, name, args)
+	if result["isError"] == true {
+		t.Fatal("조립한 업무 처리 실패", result)
+	}
+	return result
+}
+
+// 오류 결과를 인수하는 시험도 동일한 실제 MCP 전송을 사용한다.
+func arch06MCPResult(t *testing.T, server *httptest.Server, host, token, method, name string, args map[string]any) map[string]any {
+	t.Helper()
 	params := map[string]any{"_meta": map[string]any{sdk.MetaKeyProtocolVersion: "2026-07-28", sdk.MetaKeyClientCapabilities: map[string]any{}, sdk.MetaKeyClientInfo: map[string]any{"name": "arch06", "version": "1"}}}
 	if method == "tools/call" {
 		params["name"], params["arguments"] = name, args
@@ -102,11 +112,7 @@ func arch06MCP(t *testing.T, server *httptest.Server, host, token, method, name 
 	if response.StatusCode != 200 || json.Unmarshal(raw, &value) != nil || value["error"] != nil {
 		t.Fatal("조립한 MCP 전송 실패", response.StatusCode, string(raw))
 	}
-	result := value["result"].(map[string]any)
-	if result["isError"] == true {
-		t.Fatal("조립한 업무 처리 실패", string(raw))
-	}
-	return result
+	return value["result"].(map[string]any)
 }
 
 func TestARCH06AssemblyMCPProviderAndPlacementIntegration(t *testing.T) {

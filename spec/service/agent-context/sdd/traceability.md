@@ -199,7 +199,7 @@ FR 171건과 NFR 13건, 총 184건을 각 한 행으로 추적한다. 폐기된 
 
 | ID | 항목 | 상태·남은 내용 | 해소 조건 |
 |---|---|---|---|
-| `TBD-AGENT_CONTEXT-064` | 실제 SDK·호스트 상호운용 | SDK v1.8.0·revision 2026-07-28·macOS Codex CLI 0.160.1 선정은 확정. 최소 SDK 경계와 MCP-09·TEST-07의 서버 계약은 인수했다. [TEST-08 실제 전송](../reviews/2026-10-26-test-08.md)은 features.mcp_2026_07_28=true에서 server/discover·tools/list의 HTTP 200·요청별 메타데이터/헤더를 인수했다. 기본 비활성 시험에서 내린 초기 지원 실패 판정은 정정했다. 호스트 OAuth·저장/회전·재시작·취소·쓰기는 미인수이고 TUI·앱·IDE는 미시험 | 같은 기능 활성 구성에서 [첫 호스트 시험](testing.md#첫-codex-cli-상호운용-시험)의 나머지 필수 흐름을 실제로 인수 |
+| `TBD-AGENT_CONTEXT-064` | 실제 SDK·호스트 상호운용 | SDK v1.8.0·revision 2026-07-28·macOS Codex CLI 0.160.1 선정은 확정. 최소 SDK 경계와 MCP-09·TEST-07의 서버 계약은 인수했다. [TEST-08 실제 전송](../reviews/2026-10-26-test-08.md)은 features.mcp_2026_07_28=true에서 server/discover·tools/list의 HTTP 200·요청별 메타데이터/헤더를 인수했다. 기본 비활성 시험에서 내린 초기 지원 실패 판정은 정정했다. [OAuth 후속](../reviews/2026-10-27-test-08-oauth.md)에서 실제 브라우저 인가·파일 저장/재사용·업무·서버 교체·폐기와 통제한 갱신/장애 경계를 인수했다. 실제 1시간 접근 만료 후 호스트 갱신·나머지 오류/취소 흐름은 대기이고 keyring·TUI·앱·IDE는 미시험 | 같은 기능 활성 구성에서 [첫 호스트 시험](testing.md#첫-codex-cli-상호운용-시험)의 나머지 필수 흐름을 실제로 인수 |
 
 ## 해소한 설계 선택
 

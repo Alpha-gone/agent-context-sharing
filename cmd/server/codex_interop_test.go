@@ -38,22 +38,9 @@ import (
 // 실제 CLI의 첫 전송을 먼저 대조한다. 여기서 발급한 시험 Bearer는 OAuth
 // 호스트 인수를 대신하지 않으며, 전송 실패 뒤 인가·저장 성공을 추정하지 않는다.
 func TestTEST08CodexCLITransportIntegration(t *testing.T) {
-	binary := os.Getenv("TEST_CODEX_BINARY")
-	if binary == "" {
-		if os.Getenv("TEST_CODEX_REQUIRED") != "" {
-			t.Fatal("TEST_CODEX_BINARY가 필요합니다")
-		}
-		t.Skip("TEST_CODEX_BINARY가 없어 실제 Codex CLI 인수를 건너뜁니다")
-	}
-	if runtime.GOOS != "darwin" || runtime.Version() != "go1.27.1" {
-		t.Fatal("TEST-08 대상은 macOS·Go 1.27.1입니다")
-	}
+	binary := test08CLI(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	defer cancel()
-	version, err := exec.CommandContext(ctx, binary, "--version").Output()
-	if err != nil || strings.TrimSpace(string(version)) != "codex-cli 0.160.1" {
-		t.Fatal("TEST-08 대상 Codex CLI 0.160.1을 확인하지 못했습니다")
-	}
 	database, _, address := newServerContractDatabase(t)
 	provider := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "synthetic provider unavailable", http.StatusServiceUnavailable)
@@ -249,6 +236,27 @@ startup_timeout_sec = 10
 	// 로컬 모델의 의도적인 거부로 CLI는 실패할 수 있다. 여기서 인수하는
 	// 것은 실제 도구 목록 전송까지이며 OAuth·과업·전체 지원은 별도다.
 	t.Logf("TEST-08 transport-only accepted; local model guard exit=%t; full host acceptance pending", err != nil)
+}
+
+func test08CLI(t *testing.T) string {
+	t.Helper()
+	binary := os.Getenv("TEST_CODEX_BINARY")
+	if binary == "" {
+		if os.Getenv("TEST_CODEX_REQUIRED") != "" {
+			t.Fatal("TEST_CODEX_BINARY가 필요합니다")
+		}
+		t.Skip("TEST_CODEX_BINARY가 없어 실제 Codex CLI 인수를 건너뜁니다")
+	}
+	if runtime.GOOS != "darwin" || runtime.Version() != "go1.27.1" {
+		t.Fatal("TEST-08 대상은 macOS·Go 1.27.1입니다")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	version, err := exec.CommandContext(ctx, binary, "--version").Output()
+	if err != nil || strings.TrimSpace(string(version)) != "codex-cli 0.160.1" {
+		t.Fatal("TEST-08 대상 Codex CLI 0.160.1을 확인하지 못했습니다")
+	}
+	return binary
 }
 
 // httptest의 기본 인증서는 CA=true인 인증서를 서버 인증서로도 쓴다.

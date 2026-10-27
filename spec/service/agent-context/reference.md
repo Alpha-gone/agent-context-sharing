@@ -323,3 +323,10 @@
 | 2026-10-26 | 23:23 KST | OpenAI Docs: 환경 변수·사용자 인증 | https://learn.chatgpt.com/docs/config-file/environment-variables · https://learn.chatgpt.com/docs/auth | CODEX_HOME의 상태 루트와 CODEX_CA_CERTIFICATE·SSL_CERT_FILE의 PEM CA 구성을 확인했다. | TEST-08 자식 CLI를 임시 상태 루트와 환경 허용 목록으로 격리하고 별도 CA·서버 인증서의 TLS 검증을 유지했다. 일반 HTTPS 대조 1회 도달·TLS 인증서 오류 0회를 실제 관찰한 뒤 MCP 계약 실패를 판정했다. |
 
 | 2026-10-26 | 23:43 KST | OpenAI Docs: Codex CLI 0.147.0 공식 릴리스 | https://learn.chatgpt.com/docs/changelog | 2026-08-07의 0.147.0 항목이 MCP 2026-07-28의 opt-in 지원·페이지 발견·다중 회차·비차단 시작을 명시한다. 큰 페이지를 공식 주소에서 직접 읽어 해당 릴리스 절을 확인했다. | TEST-08의 23:23 지원 실패 판정을 정정했다. 설치된 0.160.1에서 mcp_2026_07_28은 기본 비활성이며 true를 명시하면 server/discover·tools/list가 요청별 2026-07-28 메타데이터/헤더와 HTTP 200으로 통과한다. 최초 OAuth 등 전체 호스트 지원은 미인수다. |
+
+
+## 2026-10-27 TEST-08 OAuth·업무 호출 후속 근거
+
+- 조회일: 2026-10-27 KST. [OpenAI Docs 구성 참조](https://learn.chatgpt.com/docs/config-file/config-reference)의 서버별 oauth.client_id·callback_url/port, mcp_oauth_credentials_store=file과 도구 승인 구성을 확인했다. 현재 문서 안내를 설치 판의 실제 동작 증거로 대체하지 않으며 기존 캐시의 CLI 0.160.1에서 브라우저 인가·고정 callback·issuer/state·0600 저장·새 프로세스 재사용을 직접 확인했다.
+- [OpenAI 공식 Function calling 문서](https://developers.openai.com/api/docs/guides/function-calling)의 namespace 도구 형식을 확인하고 실제 CLI가 전송한 도구 목록에서 namespace·함수명을 찾아 로컬 Responses 대역을 구동했다. 고정 응답 대역이며 실제 모델 추론·업무 효과·비용 측정이 아니다.
+- [TEST-08 OAuth 후속 검토](reviews/2026-10-27-test-08-oauth.md)에 252건의 필수 DB·race 결과, 여섯 호스트 표본과 실제 접근 만료 인수의 제한을 기록했다. 키 전파 시간은 기존 [인증 정본](sdd/authentication.md#토큰-검증)의 계약을 따르며 운영 설정·호스트 판·revision을 변경하지 않았다.

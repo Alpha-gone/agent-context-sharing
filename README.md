@@ -249,4 +249,7 @@ sh ./test-wal-archive.sh
 
 [WEB-08 모듈 인수](spec/service/agent-context/reviews/2026-10-24-web-08.md)에서 감사 필터·커서 페이지와 연결 화면의 본인 범위·폐기 효과 구분·웹 세션 유지를 확인했습니다. 웹 770건·race·전체 Go 정적 검사가 실패·건너뜀 없이 통과했습니다. 당시 전체 **92/124개 완료**이며 다음 권장은 [WEB-09](spec/service/agent-context/development-plan/web.md#web-09)입니다. 실제 브라우저 인수는 WEB-09 범위입니다.
 
-[WEB-09 분야 인수](spec/service/agent-context/reviews/2026-10-24-web-09.md)에서 39개 화면 상태 표본과 CDP로 조작한 Chrome 155의 15개 실제 브라우저 시나리오를 저장소 상태와 대조해 웹 분야를 완료했습니다. 현재 전체 **93/124개 완료**이며 Safari와 실제 스크린리더 음성은 [TEST-06](spec/service/agent-context/development-plan/testing.md#test-06) 범위입니다.
+[WEB-09 분야 인수](spec/service/agent-context/reviews/2026-10-24-web-09.md)에서 39개 화면 상태 표본과 CDP로 조작한 Chrome 155의 15개 실제 브라우저 시나리오를 저장소 상태와 대조해 웹 분야를 완료했습니다. 당시 전체 **93/124개 완료**이며 Safari와 실제 스크린리더 음성은 [TEST-06](spec/service/agent-context/development-plan/testing.md#test-06) 범위입니다.
+
+
+[TEST-08 OAuth 후속 검토](spec/service/agent-context/reviews/2026-10-27-test-08-oauth.md)에서 실제 CLI 0.160.1·Chrome 156의 최초 인가·issuer/state·자격 파일 0600·새 프로세스 재사용과 업무 호출, 서버 교체·두 인스턴스·키 전파 후 갱신·저장 장애/복구·폐기·유휴/절대 만료·응답 유실·동시 갱신·쓰기 결과 재생을 확인했다. 갱신은 시험 소유 클라이언트 만료 메타데이터를 앞당긴 조건이며 7/30일은 격리 DB 시각 표본이다. 실제 서버 발급 접근 토큰의 1시간 만료 후 호스트 갱신과 나머지 필수 오류/취소 인수는 남아 있어 TEST-08·TBD-064는 진행·미해소다. 전체 116개 완료·2개 진행·6개 미착수를 유지한다.

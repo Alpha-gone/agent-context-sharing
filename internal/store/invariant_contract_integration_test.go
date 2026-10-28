@@ -113,7 +113,10 @@ func TestInvariantDanglingEdgeIntegration(t *testing.T) {
 			// 삭제된 정점은 제외하고, 정상 간선의 양 끝을 함께 범위에 넣어도 고아 간선만 한 번 보충한다.
 			snapshot := auditSnapshot{graphID: graph.graphID.String(), scope: map[string]struct{}{
 				graph.derived.ID.String(): {}, graph.source.ID.String(): {},
-			}}
+			}, contexts: map[string]auditContext{}}
+			if err := database.loadAuditContexts(t.Context(), database.pool, "n.context_id IN ["+cypherString(graph.derived.ID.String())+", "+cypherString(graph.source.ID.String())+"]", snapshot.contexts); err != nil {
+				t.Fatal(err)
+			}
 			if err := database.loadDanglingAuditEdges(t.Context(), database.pool, &snapshot); err != nil || len(snapshot.edges) != 1 {
 				t.Fatalf("고아 간선 보충=%+v: %v", snapshot.edges, err)
 			}

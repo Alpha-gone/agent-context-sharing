@@ -11,7 +11,6 @@ import (
 	"agent_context_sharing/internal/index"
 	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
-	"github.com/jackc/pgx/v5"
 )
 
 type unitReport struct {
@@ -77,15 +76,7 @@ func runUnitCommand(ctx context.Context, settings settings, input unitInput, out
 	if err != nil {
 		return err
 	}
-	connection, err := pgx.Connect(ctx, settings.databaseURL)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		_ = connection.Close(closeCtx)
-	}()
+
 	variants, err := comparisonVariants([]string{s.Stage}, s.IndexTargets, false)
 	if err != nil {
 		return err
@@ -126,7 +117,7 @@ func runUnitCommand(ctx context.Context, settings settings, input unitInput, out
 			started, before := time.Now(), counter.calls.Load()
 			err = withEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64, func(graph loadedGraph) error {
 				prep.DurationMS, prep.EmbeddingCalls = float64(time.Since(started).Microseconds())/1000, counter.calls.Load()-before
-				if err := readVectorFootprint(ctx, connection, graph.GraphID, worker.ModelID(), &prep); err != nil {
+				if err := readVectorFootprint(ctx, database, graph.GraphID, worker.ModelID(), &prep); err != nil {
 					return err
 				}
 				measuring := time.Now()

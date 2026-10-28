@@ -50,7 +50,7 @@ func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest
 // error는 미완료 실패이며 바깥 예약·쓰기를 모두 되돌린다.
 func (s *Store) ExecuteWrite(ctx context.Context, account model.ID, key, tool string, normalized []byte, check func(context.Context) error, apply func(context.Context) ([]byte, error)) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, connectionError(ctx, "쓰기 시작", err)
 	}
 	if !account.IsV7() || check == nil || apply == nil {
 		return nil, fmt.Errorf("쓰기 주체와 처리기가 필요하다")
@@ -95,7 +95,7 @@ func (s *Store) ExecuteWrite(ctx context.Context, account model.ID, key, tool st
 
 func (s *Store) replayWrite(ctx context.Context, account model.ID, key, tool string, fingerprint [sha256.Size]byte, check func(context.Context) error, run func(context.Context) ([]byte, error)) (result []byte, err error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, connectionError(ctx, "재생 시작", err)
 	}
 	if _, ok := ctx.Value(writeTransactionContextKey{}).(pgx.Tx); ok {
 		return nil, storageError("nested_idempotency", errors.New("재생 경계는 중첩할 수 없다"))

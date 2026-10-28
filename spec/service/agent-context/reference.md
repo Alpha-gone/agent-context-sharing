@@ -342,3 +342,7 @@
 
 - 조회일 2026-10-28 KST. [Cytoscape.js 공식 스타일 문서](https://js.cytoscape.org/#style)에서 선택 상태 선택자와 노드 뒤 underlay의 색·여백·불투명도 속성을 확인했다. 적용 자산 3.34.3으로 실제 스타일을 계산해 선택 강조와 기존 계층/상태 표현의 보존을 검증했다.
 - 같은 날 [W3C 버튼 패턴](https://www.w3.org/WAI/ARIA/apg/patterns/button/)의 토글 버튼 고정 이름과 aria-pressed를 확인했다. 시각 선택 표식은 aria-hidden으로 분리했다. 반영 위치는 웹 시각 표현 정본과 [TEST-06 선택 강조 검토](reviews/2026-10-28-test-06-selection.md)다.
+
+## 2026-10-28 TEST-09 색인 시계
+
+- 조회일 2026-10-28 KST. [PostgreSQL 18 현재 시각 함수](https://www.postgresql.org/docs/18/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT)에서 statement_timestamp()는 현재 명령의 시작, CURRENT_TIMESTAMP는 트랜잭션 시작, clock_timestamp()는 실제 현재 시각임을 확인했다. 색인 등록·재등록과 확보·리스·재시도·준비 검사를 같은 DB 시계로 맞추는 근거로 반영했다. 호스트 시각을 등록값으로 보내던 경로와 평가 실행기의 직접 DB 접근은 [TEST-09 검토](reviews/2026-10-28-test-09.md)에 수정·회귀 범위를 기록한다.

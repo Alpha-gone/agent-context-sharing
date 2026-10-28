@@ -191,7 +191,7 @@ Safari 앱 접근은 컴퓨터 사용 도구가 “Computer Use was not approved
 
 ### TEST-09
 
-- [ ] **새 구현의 전체 검증·평가·이행 인수를 종합한다.**
+- [x] **새 구현의 전체 검증·평가·이행 인수를 종합한다.**
 - 선행: [TEST-02](#test-02), [TEST-03](#test-03), [TEST-04](#test-04), [TEST-05](#test-05), [TEST-06](#test-06), [TEST-08](#test-08), [DATA-10](data.md#data-10), [OPS-09](operations.md#ops-09), [EVAL-13](evaluation.md#eval-13).
 
 1. Go 1.27.1에서 전체 test·build·vet·gofmt 목록 검사, 필수 DB·관련 race·정적 Compose·격리 WAL/DB 검사를 실행한다.
@@ -201,3 +201,7 @@ Safari 앱 접근은 컴퓨터 사용 도구가 “Computer Use was not approved
 
 - 산출물: 요구사항별 새로운 실행 증거, 지원·효과·운영 준비의 구분된 판정.
 - 완료 기준: 필수 시험을 건너뛴 결과를 통과로 보고하지 않고 184건의 완료 근거를 [TRACE-04](traceability.md#trace-04)와 연결한다. 코드 완성과 실제 외부 공개는 별도 상태다.
+
+#### 최종 종합 인수 완료
+
+2026-10-28 [TEST-09 최종 검토](../reviews/2026-10-28-test-09.md)에서 전용 vector(768)·vector(128)·halfvec(768), 필수 Chrome·선정 CLI 0.160.1과 race 조건의 전체 시험을 같은 접속 정보로 두 번 연속 실행했다. 각 회차 6,422건(최상위 1,146건)이 통과했고 기준 계정·정상 서명 키·마이그레이션 이력은 처음부터 두 회차 종료까지 같았다. 일반 실행의 전용 복구·이행 건너뜀 2건은 소유 스크립트에서 실제 통과했다. Go build·vet·gofmt, 격리 기동·WAL·물리 복구·이행/복귀·Linux 실제 파일·조합 장애 회복도 대조했으며 전용 자원을 정리했다. 실제 Gemini·공개 데이터 전체 효과·외부 과업·운영/호스트 공개와 추가 수동 키보드·실제 VoiceOver의 제외 범위는 검토에 구분했다. 184건별 최종 근거 정리는 TRACE-04로 연결하며 TEST-09를 완료한다.

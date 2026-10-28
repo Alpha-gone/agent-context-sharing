@@ -43,6 +43,50 @@ func registrationTaskFor(t *testing.T, database *Store, id model.ID) registratio
 	return task
 }
 
+func registrationClock(t *testing.T, database *Store) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := database.pool.QueryRow(t.Context(), `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	return now
+}
+
+func TestIndexRegistrationUsesDatabaseClockIntegration(t *testing.T) {
+	database := newEmbeddingContractStore(t, "vector", 8)
+	claimExec(t, database, `CREATE FUNCTION public.check_registration_clock() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+		IF NEW.enqueued_at IS DISTINCT FROM statement_timestamp() OR NEW.next_attempt_at IS DISTINCT FROM statement_timestamp() THEN
+		  RAISE EXCEPTION 'registration must use the database statement clock';
+		END IF;
+		RETURN NEW;
+		END $$;
+		CREATE TRIGGER check_registration_clock BEFORE INSERT ON public.index_task
+		FOR EACH ROW EXECUTE FUNCTION public.check_registration_clock()`)
+	actor := newTestID(t)
+	createTestAccount(t, database, actor)
+	graph := createTestGraph(t, database, actor)
+	node, err := database.CreateContext(t.Context(), graph, testSourceContext(t, graph, actor, "urn:test09:registration-clock"), nil)
+	if err != nil {
+		if cause, ok := errors.AsType[*pgconn.PgError](err); ok {
+			t.Fatalf("등록 DB 거부: %s %s", cause.Code, cause.Message)
+		}
+		t.Fatal(err)
+	}
+	if err := database.ReindexGraph(t.Context(), graph); err != nil {
+		t.Fatal(err)
+	}
+	result, err := database.ProcessNextIndexTaskInGraph(t.Context(), graph, func(_ context.Context, task IndexTask) IndexTaskResult {
+		if task.ContextID != node.ID {
+			t.Fatal("다른 컨텍스트를 확보했다")
+		}
+		return IndexTaskResult{Embedding: []float64{1, 0, 0, 0, 0, 0, 0, 0}, ModelID: "test:clock"}
+	})
+	if err != nil || !result.Found || !result.Succeeded {
+		t.Fatalf("등록·재등록 직후 작업 확보: %+v, %v", result, err)
+	}
+}
+
 func assertRegistration(t *testing.T, database *Store, node model.Context, taskID string, correlation model.ID, since time.Time) {
 	t.Helper()
 	if database.indexTargets == IndexTargetsWithoutSource && node.Layer == model.LayerSource {
@@ -90,7 +134,7 @@ func TestIndexRegistrationLifecycleIntegration(t *testing.T) {
 						value = testEventContext(t, graph, actor, seed.ID)
 					}
 					ctx, correlation := indexRequestContext(t)
-					since := time.Now().UTC()
+					since := registrationClock(t, database)
 					node, err := database.CreateContextWithOperation(ctx, graph, value, refs, registrationOperation(value, OperationAdd), WriteLimits{})
 					if err != nil {
 						t.Fatal(err)
@@ -135,7 +179,7 @@ func TestIndexRegistrationLifecycleIntegration(t *testing.T) {
 							t.Fatalf("본문 불변 재등록=%v", err)
 						}
 						ctx, correlation = indexRequestContext(t)
-						since = time.Now().UTC()
+						since = registrationClock(t, database)
 						next = node
 						next.Body += " 새 본문"
 						next.Version++
@@ -149,14 +193,14 @@ func TestIndexRegistrationLifecycleIntegration(t *testing.T) {
 						t.Fatal(err)
 					}
 					ctx, correlation = indexRequestContext(t)
-					since = time.Now().UTC()
+					since = registrationClock(t, database)
 					node, err = database.RestoreContext(ctx, graph, node.ID, registrationOperation(node, OperationUpdate), WriteLimits{})
 					if err != nil {
 						t.Fatal(err)
 					}
 					assertRegistration(t, database, node, taskID, correlation, since)
 					// 요청 없는 재색인은 옛 요청 상관 ID를 물려받지 않는다.
-					since = time.Now().UTC()
+					since = registrationClock(t, database)
 					if err := database.ReindexGraph(t.Context(), graph); err != nil {
 						t.Fatal(err)
 					}

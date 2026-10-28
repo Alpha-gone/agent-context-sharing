@@ -13,7 +13,6 @@ import (
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
-	"github.com/jackc/pgx/v5"
 )
 
 type comparisonVariant struct {
@@ -146,15 +145,7 @@ func runControlledInput(ctx context.Context, settings settings, input comparison
 		}
 		backends[variant.IndexTargets] = comparisonBackend{database, worker, counter}
 	}
-	connection, err := pgx.Connect(ctx, settings.databaseURL)
-	if err != nil {
-		return fmt.Errorf("비교 저장량 연결: %w", err)
-	}
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		_ = connection.Close(closeCtx)
-	}()
+
 	stages := make([]string, 0, len(variants))
 	for _, variant := range variants {
 		stages = append(stages, variant.Name)
@@ -185,7 +176,7 @@ func runControlledInput(ctx context.Context, settings settings, input comparison
 				preparation.DurationMS += float64(time.Since(started).Microseconds()) / 1000
 				preparation.EmbeddingCalls += backend.counter.calls.Load() - before
 				var footprint preparationMetrics
-				if err := readVectorFootprint(ctx, connection, graph.GraphID, backend.worker.ModelID(), &footprint); err != nil {
+				if err := readVectorFootprint(ctx, backend.database, graph.GraphID, backend.worker.ModelID(), &footprint); err != nil {
 					return err
 				}
 				preparation.VectorRows += footprint.VectorRows
@@ -220,11 +211,12 @@ func runControlledInput(ctx context.Context, settings settings, input comparison
 }
 
 // 소프트 삭제 전에 현재 그래프·모델의 행과 열 저장량만 측정한다.
-func readVectorFootprint(ctx context.Context, connection *pgx.Conn, graphID model.ID, modelID string, preparation *preparationMetrics) error {
-	if err := connection.QueryRow(ctx, `SELECT count(*), coalesce(sum(pg_column_size(embedding)), 0)
-		FROM public.context_embedding WHERE graph_id=$1 AND model_id=$2`, graphID.String(), modelID).Scan(&preparation.VectorRows, &preparation.VectorBytes); err != nil {
+func readVectorFootprint(ctx context.Context, database *store.Store, graphID model.ID, modelID string, preparation *preparationMetrics) error {
+	footprint, err := database.EmbeddingFootprint(ctx, graphID, modelID)
+	if err != nil {
 		return fmt.Errorf("비교 벡터 저장량 측정: %w", err)
 	}
+	preparation.VectorRows, preparation.VectorBytes = footprint.Rows, footprint.Bytes
 	return nil
 }
 

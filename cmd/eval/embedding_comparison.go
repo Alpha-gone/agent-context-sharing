@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"agent_context_sharing/internal/index"
+	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
-	"github.com/jackc/pgx/v5"
 )
 
 type embeddingThresholds struct {
@@ -77,7 +77,6 @@ type embeddingReport struct {
 
 type embeddingBackend struct {
 	comparisonBackend
-	connection *pgx.Conn
 }
 
 func runEmbeddingCommand(ctx context.Context, path, output string) error {
@@ -125,16 +124,8 @@ func runEmbeddingInput(ctx context.Context, input embeddingInput, configs []sett
 		if err != nil {
 			return err
 		}
-		connection, err := pgx.Connect(ctx, cfg.databaseURL)
-		if err != nil {
-			return fmt.Errorf("임베딩 비교 측정 연결 실패")
-		}
-		defer func() {
-			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-			defer cancel()
-			_ = connection.Close(closeCtx)
-		}()
-		backends[i] = embeddingBackend{comparisonBackend{database, worker, counter}, connection}
+
+		backends[i] = embeddingBackend{comparisonBackend{database, worker, counter}}
 	}
 	result := embeddingReport{Version: input.Version, Provenance: input.Provenance, Axis: input.Axis, StartedAt: time.Now().UTC(), AsOf: input.AsOf, Search: input.Search, Policy: "fresh_graph_no_explicit_warmup_shared_cache", Repeats: initialEvaluationRepeats}
 	for i, v := range input.Variants {
@@ -187,7 +178,7 @@ func measureEmbeddingSample(ctx context.Context, input embeddingInput, sample em
 	err := withEvaluationGraph(ctx, backend.database, backend.worker, set, len(set.Contexts)*4+64, func(graph loadedGraph) error {
 		run.Preparation.DurationMS = float64(time.Since(started).Microseconds()) / 1000
 		run.Preparation.EmbeddingCalls = backend.counter.calls.Load() - before
-		if err := readVectorFootprint(ctx, backend.connection, graph.GraphID, backend.worker.ModelID(), &run.Preparation); err != nil {
+		if err := readVectorFootprint(ctx, backend.database, graph.GraphID, backend.worker.ModelID(), &run.Preparation); err != nil {
 			return err
 		}
 		start, calls := time.Now(), backend.counter.calls.Load()
@@ -252,35 +243,23 @@ func measureEmbeddingSample(ctx context.Context, input embeddingInput, sample em
 // 저장된 동일 그래프·모델의 사건 벡터만 읽는다. 전체 주석 후보의 점수 순서는
 // 제안 실행과 같은 거리·UUID 동률 순서이며 관계 상태를 만들지 않는다.
 func embeddingRelationScores(ctx context.Context, b embeddingBackend, g loadedGraph, s embeddingSample) ([]embeddingScore, error) {
-	ids, keys := []string{}, map[string]string{}
+	ids, keys := []model.ID{}, map[model.ID]string{}
 	for key := range s.Related {
-		id := g.Keys[key].String()
+		id := g.Keys[key]
 		ids = append(ids, id)
 		keys[id] = key
 	}
-	rows, err := b.connection.Query(ctx, `SELECT b.context_id::text, 1-(b.embedding <=> a.embedding)
- FROM public.context_embedding a JOIN public.context_embedding b ON b.graph_id=a.graph_id AND b.model_id=a.model_id
- WHERE a.graph_id=$1 AND a.model_id=$2 AND a.context_id=$3 AND b.context_id::text=ANY($4)
- ORDER BY b.embedding <=> a.embedding,b.context_id`, g.GraphID.String(), b.worker.ModelID(), g.Keys[s.Anchor].String(), ids)
+	scores, err := b.database.EmbeddingSimilarities(ctx, g.GraphID, b.worker.ModelID(), g.Keys[s.Anchor], ids)
 	if err != nil {
-		return nil, fmt.Errorf("관계 점수 읽기 실패")
+		return nil, fmt.Errorf("관계 점수 읽기 실패: %w", err)
 	}
-	defer rows.Close()
 	var result []embeddingScore
-	for rows.Next() {
-		var id string
-		var score float64
-		if err := rows.Scan(&id, &score); err != nil {
-			return nil, err
-		}
-		if !validMetric(score+1) || score > 1 {
+	for _, score := range scores {
+		if !validMetric(score.Similarity+1) || score.Similarity > 1 {
 			return nil, fmt.Errorf("관계 점수 범위 오류")
 		}
-		key := keys[id]
-		result = append(result, embeddingScore{key, score, s.Related[key]})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		key := keys[score.ContextID]
+		result = append(result, embeddingScore{key, score.Similarity, s.Related[key]})
 	}
 	if len(result) != len(s.Related) {
 		return nil, fmt.Errorf("관계 점수 벡터 누락")

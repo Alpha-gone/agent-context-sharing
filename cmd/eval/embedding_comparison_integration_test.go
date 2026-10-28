@@ -286,12 +286,12 @@ func TestEmbeddingComparisonCommandIntegration(t *testing.T) {
 }
 
 func TestEmbeddingRelationScreenMatchesProposalIntegration(t *testing.T) {
-	database, worker, connection := evalDatabase(t, nil)
+	database, worker, _ := evalDatabase(t, nil)
 	in := embeddingFixture(t)
 	sample := in.Samples[0]
 	sample.Contexts.Version = lifecycleInput(t).Version
 	err := withEvaluationGraph(t.Context(), database, worker, sample.Contexts, 32, func(graph loadedGraph) error {
-		raw, err := embeddingRelationScores(t.Context(), embeddingBackend{comparisonBackend{database: database, worker: worker}, connection}, graph, sample)
+		raw, err := embeddingRelationScores(t.Context(), embeddingBackend{comparisonBackend{database: database, worker: worker}}, graph, sample)
 		if err != nil {
 			return err
 		}

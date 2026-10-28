@@ -337,3 +337,8 @@
 - [OpenAI Docs MCP](https://learn.chatgpt.com/docs/extend/mcp)의 사전 등록·issuer 지원과 callback iss 누락/불일치 거부를 확인했다. 현재 안내를 설치 판의 증거로 대체하지 않고 CLI 0.160.1에서 실제 issuer 오류 응답의 코드 미교환·자격 미저장을 대조했다. 새 시험·제한은 [TEST-08 후속 인수](reviews/2026-10-27-test-08-completion.md)에 기록한다.
 - [Docker 공식 포트 공개 문서](https://docs.docker.com/engine/network/port-publishing/)의 host IP/port 지정과 inspect의 HostIp/HostPort 형식을 확인했다. OPS-09 첫 임시 포트 표본은 재시작 후 실제 포트가 바뀌어 실패했고 이후 고정 loopback 포트·HostConfig/실제 포트 일치를 검증했다. Docker 동작의 추측을 제품 장애로 기록하지 않는다.
 - 적용된 pgx v5.10.0의 공급자 소스 pgxpool/pool.go에서 NewWithConfig의 ParseConfig 입력과 별도 풀 구성 계약을 확인했다. DB 복귀 뒤 오래된 관리 TCP 연결을 쓰지 않도록 시험 정리에서 새 관리 풀을 연다. [OPS-09 검토](reviews/2026-10-27-ops-09.md)에 두 예비 실패·최종 성공·Linux DB 범위 건너뜀과 자원 정리를 구분했다.
+
+## 2026-10-28 노드 선택 강조
+
+- 조회일 2026-10-28 KST. [Cytoscape.js 공식 스타일 문서](https://js.cytoscape.org/#style)에서 선택 상태 선택자와 노드 뒤 underlay의 색·여백·불투명도 속성을 확인했다. 적용 자산 3.34.3으로 실제 스타일을 계산해 선택 강조와 기존 계층/상태 표현의 보존을 검증했다.
+- 같은 날 [W3C 버튼 패턴](https://www.w3.org/WAI/ARIA/apg/patterns/button/)의 토글 버튼 고정 이름과 aria-pressed를 확인했다. 시각 선택 표식은 aria-hidden으로 분리했다. 반영 위치는 웹 시각 표현 정본과 [TEST-06 선택 강조 검토](reviews/2026-10-28-test-06-selection.md)다.

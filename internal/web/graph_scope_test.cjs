@@ -50,6 +50,9 @@ vm.runInNewContext(scripts[0][1], {
   },
 });
 assert.equal(cy.nodes().length, choices.length, '표시 노드마다 목록 선택 버튼이 있어야 한다');
+const initialNodeStyles = new Map(cy.nodes().map((node) => [node.id(), {
+  background: node.style('background-color'), shape: node.style('shape'), border: node.style('border-style'),
+}]));
 
 function visibleNodes() {
   return cy.nodes().filter((node) => node.visible()).map((node) => node.data('body')).sort();
@@ -79,6 +82,7 @@ function expectFullView() {
   assert.equal(cy.elements().filter((element) => element.visible()).length, cy.elements().length);
   assert.equal(cy.edges('.evidence').length, 0);
   assert.equal(cy.nodes(':selected').length, 0);
+  cy.nodes().forEach((node) => assert.equal(node.numericStyle('underlay-opacity'), 0, '선택 해제 시 바깥 강조도 사라진다'));
   assert.equal(details.textContent, prompt);
   assert.equal(status.textContent, '전체 보기');
   assert.equal(evidence.textContent, evidencePrompt);
@@ -86,6 +90,14 @@ function expectFullView() {
 }
 
 function expectSelection(node) {
+  assert.equal(node.selected(), true);
+  assert.equal(node.numericStyle('border-width'), 5, '선택 노드는 굵은 테두리로 구분한다');
+  assert.equal(node.numericStyle('underlay-opacity'), 0.6, '선택 노드의 바깥 강조가 표시된다');
+  assert.equal(node.numericStyle('underlay-padding'), 8);
+  const initial = initialNodeStyles.get(node.id());
+  assert.equal(node.style('background-color'), initial.background, '계층 색은 선택 뒤에도 유지한다');
+  assert.equal(node.style('shape'), initial.shape, '상태 모양은 선택 뒤에도 유지한다');
+  assert.equal(node.style('border-style'), initial.border, '상충 점선은 선택 뒤에도 유지한다');
   assert.match(status.textContent, new RegExp(node.id()));
   assert.match(status.textContent, /본문과 근거 정보를 갱신했습니다/);
   assert.ok(choices.every((button) => button.getAttribute('aria-pressed') === String(button.dataset.contextId === node.id())));

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -63,7 +64,7 @@ func (catalog *toolCatalog) validate(name string, arguments []byte) (map[string]
 
 // register는 모든 업무 처리기가 준비됐는지 먼저 검사한다. 임시 성공 처리기로
 // 미구현 도구를 노출하지 않으며 인증 경로나 업무 구현을 여기서 만들지 않는다.
-func (catalog *toolCatalog) register(server *sdk.Server, handlers map[string]sdk.ToolHandler) error {
+func (catalog *toolCatalog) register(server *sdk.Server, handlers map[string]sdk.ToolHandler, observer diagnostic.Observer) error {
 	if server == nil || len(handlers) != len(catalog.definitions) {
 		return fmt.Errorf("14종 업무 처리기가 필요하다")
 	}
@@ -76,7 +77,17 @@ func (catalog *toolCatalog) register(server *sdk.Server, handlers map[string]sdk
 		handler := handlers[definition.tool.Name]
 		tool := *definition.tool
 		tool.InputSchema = tool.InputSchema.(*jsonschema.Schema).CloneSchemas()
-		server.AddTool(&tool, func(ctx context.Context, request *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		server.AddTool(&tool, func(ctx context.Context, request *sdk.CallToolRequest) (result *sdk.CallToolResult, err error) {
+			// SDK는 HTTP 복구 경계 밖의 goroutine에서 호출한다. panic 값은 보관하지 않는다.
+			defer func() {
+				if recover() != nil {
+					result, err = writeErrorResult(&DependencyFailure{})
+					// 진단 의존의 추가 panic도 이미 정한 internal 결과를 바꾸지 않는다.
+					defer func() { _ = recover() }()
+					diagnostic.Observe(observer, ctx, "ERROR", "response", "failed", "handler_panic", false,
+						diagnostic.Fields{Request: diagnostic.RequestFields{Route: "mcp", Tool: tool.Name}})
+				}
+			}()
 			if _, err := definition.validate(request.Params.Arguments); err != nil {
 				field := "arguments"
 				if failure, ok := errors.AsType[model.FieldError](err); ok {

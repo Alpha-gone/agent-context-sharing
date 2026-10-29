@@ -351,3 +351,8 @@
 
 - 조회일 2026-10-29 KST. [PostgreSQL 18 교착 방지](https://www.postgresql.org/docs/18/explicit-locking.html#LOCKING-DEADLOCKS)에서 여러 대상을 잠그는 모든 경로가 같은 순서를 사용해야 함을 확인했다. [수명주기 공통 잠금 순서](sdd/context-lifecycle.md#판정의-직렬화)와 [색인 작업 큐](sdd/indexing.md#색인-작업-큐)의 그래프 선행 잠금에 반영했다.
 - [pgx v5.10.0 Tx](https://pkg.go.dev/github.com/jackc/pgx/v5@v5.10.0#Tx)의 중첩 트랜잭션은 저장점이며 중첩 Commit은 저장점을 해제한다. Begin의 컨텍스트 취소는 자동 롤백을 보장하지 않으므로 회귀 시험은 작업자 취소·종료 대기와 바깥 트랜잭션 롤백을 명시한다.
+
+## 2026-10-29 #147 MCP 도구 panic 복구
+
+- 조회일 2026-10-29 KST. [Go 언어 명세의 panic 처리](https://go.dev/ref/spec#Handling_panics)는 같은 goroutine에서 실행되는 deferred 함수가 직접 recover를 호출해야 복구된다고 정한다. [go-sdk v1.8.0 jsonrpc2 실행 경계](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/internal/jsonrpc2/conn.go#L682-L689)와 같은 판의 모듈 캐시에서 비동기 handler 호출을 별도 goroutine으로 실행함을 확인했다.
+- HTTP 바깥의 recover에 의존하지 않고 도구 등록 콜백 안에서 복구하는 근거로 [MCP 오류 계약](sdd/mcp.md#오류의-생성과-전달)에 반영했다. panic 값은 보관·문자열화하지 않으며 고정 결과와 진단 코드만 사용한다.

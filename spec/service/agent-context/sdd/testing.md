@@ -127,6 +127,21 @@ RETURNING key_id, state;
 
 삭제한 가짜 키는 복구할 필요가 없는 시험 자료다. 삭제 후 활성 키가 없으면 다음 토큰·세션 발급 시 정상 키를 생성한다. 이전 회전으로 은퇴한 정상 키는 기존 토큰 검증을 위해 유지한다.
 
+## 필터 없는 패키지 인수
+
+모듈 시험과 분야별 통합 인수를 마칠 때는 대상 패키지를 `-run`·`-skip` 없이 실행한다. 특정 시험의 선별 실행은 진단에 사용할 수 있지만 패키지 인수를 대신하지 않는다. 저장소 시험은 다음 세 조건을 구분한다.
+
+```sh
+# DB 없는 입력 검증과 전체 패키지의 정상 종료, DB 시험의 건너뜀 확인
+env -u TEST_DATABASE_URL -u TEST_DATABASE_REQUIRED go test -race -count=1 ./internal/store
+# 접속 정보 누락을 숨기지 않는지 확인: panic 없이 실패 종료해야 한다.
+env -u TEST_DATABASE_URL TEST_DATABASE_REQUIRED=1 go test -race -count=1 ./internal/store
+# 격리 시험 DB의 접속 정보를 설정한 뒤 DB 연산 전체 인수
+TEST_DATABASE_REQUIRED=1 go test -race -count=1 ./internal/store
+```
+
+DB 연결 전 입력 거부 시험은 DB 풀이 없는 `&Store{}`로 호출하고 `model.FieldError`의 필드를 확인한다. nil `*Store`의 메서드 호출 가능 여부를 전제로 삼지 않으며, 반환 시 실행되는 관리 진단을 포함해 panic 없이 끝나야 한다. DB 미설정 실행의 건너뜀과 필수 설정의 예상 실패는 실제 DB 연산 통과로 집계하지 않는다.
+
 ## 그래프 불변식 감사 테스트
 
 그래프 불변식 테스트는 규칙마다 정상 표본과 한 규칙만 위반한 표본을 둔다. 쓰기 경로는 영향 주변부 검사로 커밋을 막고, `cmd/audit`는 같은 위반을 같은 규칙 식별자와 위치로 보고해야 한다. 전체 감사가 `body`나 임베딩 값을 출력하지 않고 위반을 자동 변경하지 않는지도 확인한다.

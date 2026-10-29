@@ -91,7 +91,7 @@ func NewHandler(config HTTPConfig) (http.Handler, error) {
 			return result, nil
 		}
 	}
-	if err := catalog.register(server, handlers); err != nil {
+	if err := catalog.register(server, handlers, config.Diagnostics); err != nil {
 		return nil, err
 	}
 	next := sdkTransport(server, sdk.DefaultMaxRequestBodyBytes, true)

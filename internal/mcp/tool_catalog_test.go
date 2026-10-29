@@ -409,7 +409,7 @@ func TestCatalogSDKRegistrationAndValidationBeforeHandler(t *testing.T) {
 			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: name}}, StructuredContent: map[string]any{"tool": name}}, nil
 		}
 	}
-	if err := catalog.register(server, handlers); err != nil {
+	if err := catalog.register(server, handlers, nil); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
@@ -475,14 +475,14 @@ func TestCatalogSDKRegistrationAndValidationBeforeHandler(t *testing.T) {
 func TestCatalogRegistrationRequiresEveryHandler(t *testing.T) {
 	catalog := mustCatalog(t)
 	server := sdk.NewServer(&sdk.Implementation{Name: "missing-handlers", Version: "1"}, nil)
-	if err := catalog.register(server, map[string]sdk.ToolHandler{}); err == nil {
+	if err := catalog.register(server, map[string]sdk.ToolHandler{}, nil); err == nil {
 		t.Fatal("미구현 도구를 등록했다")
 	}
 	handlers := map[string]sdk.ToolHandler{}
 	for _, definition := range catalog.definitions {
 		handlers[definition.tool.Name] = nil
 	}
-	if err := catalog.register(server, handlers); err == nil {
+	if err := catalog.register(server, handlers, nil); err == nil {
 		t.Fatal("nil 처리기를 등록했다")
 	}
 }

@@ -9,8 +9,8 @@ import (
 // stageRuns는 질의별 재현율을 세 반복에 같게 둔다. 반복을 표본으로 복제하지 않고
 // 질의별 차이를 판정하는지 확인하기 위한 입력이다.
 func stageRuns(stage string, recalls ...float64) []runMetrics {
-	runs := make([]runMetrics, 0, minimumRepeats)
-	for repeat := range minimumRepeats {
+	runs := make([]runMetrics, 0, initialEvaluationRepeats)
+	for repeat := range initialEvaluationRepeats {
 		samples := make([]queryMetrics, 0, len(recalls))
 		for index, recall := range recalls {
 			samples = append(samples, queryMetrics{ID: fmt.Sprintf("q%d", index), UseCase: useCaseFact, Recall: recall, ReciprocalRank: recall, BudgetPerHit: 100})
@@ -84,13 +84,11 @@ func TestJudgeTreatsBudgetLowerAsBetter(t *testing.T) {
 // 정답을 못 찾은 회차의 예산 효율은 정의되지 않으므로 표본에서 빠져야 한다.
 func TestJudgeDropsUndefinedBudget(t *testing.T) {
 	runs := stageRuns("baseline", 0.5, 0.5, 0.5)
-	metrics := runs[0].UseCases[useCaseFact]
-	metrics.BudgetPerHit = -1
-	runs[0].UseCases[useCaseFact] = metrics
+	runs[0].QuerySamples[0].BudgetPerHit = -1
 	judgements := judge([]string{"baseline"}, map[string][]runMetrics{"baseline": runs})
 	budget := judgements[0].Estimates[useCaseFact]["budget_per_hit"]
-	if budget.Repeats != 2 {
-		t.Fatalf("정의되지 않은 회차가 표본에 남았다: %+v", budget)
+	if budget.Samples != 2 {
+		t.Fatalf("불완전한 질의가 독립 표본에 남았다: %+v", budget)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"agent_context_sharing/internal/index"
 	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
 )
@@ -46,18 +47,20 @@ type adaptiveReport struct {
 
 // adaptiveConditions는 두 구성이 공유하는 통제 조건이다.
 type adaptiveConditions struct {
-	Repeats               int     `json:"repeats"`
-	Budget                int     `json:"budget"`
-	MaxHops               int     `json:"max_hops"`
-	MaxHopNodes           int     `json:"max_hop_nodes"`
-	GraphStage            string  `json:"graph_stage"`
-	EvidencePathSelection bool    `json:"evidence_path_selection"`
-	Execution             string  `json:"channel_execution"`
-	CandidateLimit        int     `json:"channel_candidate_limit"`
-	SemanticThreshold     float64 `json:"semantic_similarity_threshold"`
-	FoldThreshold         float64 `json:"fold_threshold"`
-	EmbeddingModel        string  `json:"embedding_model"`
-	IndexTargets          string  `json:"index_targets"`
+	AsOf                  time.Time `json:"default_as_of"`
+	SignalPolicy          string    `json:"initial_signal_policy"`
+	Repeats               int       `json:"repeats"`
+	Budget                int       `json:"budget"`
+	MaxHops               int       `json:"max_hops"`
+	MaxHopNodes           int       `json:"max_hop_nodes"`
+	GraphStage            string    `json:"graph_stage"`
+	EvidencePathSelection bool      `json:"evidence_path_selection"`
+	Execution             string    `json:"channel_execution"`
+	CandidateLimit        int       `json:"channel_candidate_limit"`
+	SemanticThreshold     float64   `json:"semantic_similarity_threshold"`
+	FoldThreshold         float64   `json:"fold_threshold"`
+	EmbeddingModel        string    `json:"embedding_model"`
+	IndexTargets          string    `json:"index_targets"`
 }
 
 type thresholdPair struct {
@@ -120,7 +123,7 @@ func parseFloats(raw, name string) ([]float64, error) {
 			continue
 		}
 		value, err := strconv.ParseFloat(part, 64)
-		if err != nil || value < 0 || value > 1 {
+		if err != nil || !manifestRatio(&value) {
 			return nil, fmt.Errorf("%s 후보 %q가 0 이상 1 이하의 수가 아니다", name, part)
 		}
 		values = append(values, value)
@@ -131,9 +134,19 @@ func parseFloats(raw, name string) ([]float64, error) {
 	return values, nil
 }
 
-// runAdaptive는 기존 auto, 강제 경로 셋, 적응형 구성을 같은 그래프에서 반복 측정한다.
+// runAdaptive는 기존 auto, 강제 경로 셋, 적응형 구성을 조건·회차별 새 그래프에서 반복 측정한다.
 // 적응형 구성의 임계값은 강제 경로 결과로 격자를 먼저 견준 뒤 고른 값이다.
-func runAdaptive(ctx context.Context, database *store.Store, worker search.Embedder, graph loadedGraph, contexts contextSet, queries querySet, loaded settings, conditions adaptiveConditions, directs, margins []float64) (adaptiveReport, error) {
+func runAdaptive(ctx context.Context, database *store.Store, worker *index.Worker, contexts contextSet, queries querySet, loaded settings, conditions adaptiveConditions, directs, margins []float64) (adaptiveReport, error) {
+	if conditions.Repeats != initialEvaluationRepeats || len(directs) == 0 || len(margins) == 0 {
+		return adaptiveReport{}, fmt.Errorf("라우팅 비교에는 10회 반복과 임계값 후보가 필요하다")
+	}
+	conditions.AsOf = time.Now().UTC()
+	conditions.SignalPolicy = "identical_across_forced_routes_and_repeats"
+	var err error
+	queries, err = controlledQueries(queries, conditions.AsOf)
+	if err != nil {
+		return adaptiveReport{}, err
+	}
 	base := search.Config{
 		Execution:             loaded.execution,
 		CandidateLimit:        loaded.candidateLimit,
@@ -160,21 +173,33 @@ func runAdaptive(ctx context.Context, database *store.Store, worker search.Embed
 		for repeat := 1; repeat <= conditions.Repeats; repeat++ {
 			for offset := range names {
 				name := names[(offset+repeat-1)%len(names)]
-				started := time.Now()
-				measured, err := measure(ctx, services[name], graph, queries, conditions.Budget, conditions.MaxHops, conditions.MaxHopNodes)
+				var measured measurement
+				var elapsed time.Duration
+				err := withEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64, func(graph loadedGraph) error {
+					started := time.Now()
+					var measureErr error
+					measured, measureErr = measure(ctx, services[name], graph, queries, conditions.Budget, conditions.MaxHops, conditions.MaxHopNodes)
+					elapsed = time.Since(started)
+					return measureErr
+				})
 				if err != nil {
 					return fmt.Errorf("구성 %q 회차 %d: %w", name, repeat, err)
 				}
 				if strings.HasPrefix(name, variantPrefix) {
-					for id, value := range measured.Signals {
-						signals[id] = value
+					if err := retainRouteSignals(signals, measured); err != nil {
+						return err
 					}
 				}
-				runs[key(name)] = append(runs[key(name)], runMetrics{Stage: key(name), Repeat: repeat, DurationMS: time.Since(started).Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered})
-				slog.Info("회차 완료", "variant", key(name), "repeat", repeat, "duration", time.Since(started).String())
+				runs[key(name)] = append(runs[key(name)], runMetrics{Stage: key(name), Repeat: repeat, DurationMS: elapsed.Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered})
+				trialRoundDone(ctx, key(name), "", repeat)
+				slog.Info("회차 완료", "variant", key(name), "repeat", repeat, "duration", elapsed.String())
 			}
 		}
-		return nil
+		stages := make([]string, 0, len(names))
+		for _, name := range names {
+			stages = append(stages, key(name))
+		}
+		return validateMeasuredRuns(stages, runs)
 	}
 	configs := map[string]search.Config{variantAuto: base}
 	names := []string{variantAuto}
@@ -233,8 +258,32 @@ func runAdaptive(ctx context.Context, database *store.Store, worker search.Embed
 	for _, name := range append([]string{variantAuto, variantAdaptive, variantAutoGrid}, variantPrefix+"direct", variantPrefix+"local", variantPrefix+"global") {
 		result.Runs = append(result.Runs, runs[name]...)
 	}
+	if err := validateMeasuredRuns([]string{variantAuto, variantAdaptive}, runs); err != nil {
+		return adaptiveReport{}, err
+	}
 	result.Judgements = judge([]string{variantAuto, variantAdaptive}, runs)
 	return result, nil
+}
+
+// 임계값 격자는 동일한 초기 후보를 전제로 한다. 마지막 신호로 앞선 회차를 덮어쓰지 않는다.
+func retainRouteSignals(signals map[string]search.RouteSignals, measured measurement) error {
+	for _, metrics := range measured.UseCases {
+		for _, failures := range metrics.Failures {
+			if failures > 0 {
+				return fmt.Errorf("라우팅 신호 측정 중 채널 실패")
+			}
+		}
+	}
+	if len(measured.Signals) == 0 || (len(signals) != 0 && len(signals) != len(measured.Signals)) {
+		return fmt.Errorf("라우팅 신호의 질의 집합이 다르다")
+	}
+	for id, value := range measured.Signals {
+		if previous, present := signals[id]; len(signals) != 0 && (!present || previous != value) {
+			return fmt.Errorf("질의 %s의 초기 라우팅 신호가 조건·회차 사이에 다르다", id)
+		}
+	}
+	maps.Copy(signals, measured.Signals)
+	return nil
 }
 
 // qualityOf는 오프라인 최적 경로를 정하는 품질 지표를 우선순위대로 낸다. 사실 검색은
@@ -250,7 +299,7 @@ func qualityOf(sample queryMetrics) []float64 {
 // outcomes는 반복 회차를 질의별로 평균낸다. 경로는 검색이 결정적이므로 첫 회차 값을 쓴다.
 func outcomes(runs []runMetrics, queries querySet) map[string]queryOutcome {
 	result := make(map[string]queryOutcome, len(queries.Queries))
-	for _, run := range runs {
+	for _, run := range orderedRuns(runs) {
 		for _, sample := range run.QuerySamples {
 			current, present := result[sample.ID]
 			if !present {
@@ -373,15 +422,17 @@ func thresholdGrid(directs, margins []float64, signals map[string]search.RouteSi
 // qualityNotWorse는 모든 품질 지표가 기준 이상인지 본다. 반복 평균의 부동소수 오차는
 // 같은 값으로 본다. 기준에서 정의된 지표가 후보에서 정의되지 않으면 악화로 본다.
 func qualityNotWorse(values, baseline []float64) bool {
+	defined := false
 	for index, value := range values {
 		if baseline[index] < 0 {
 			continue
 		}
+		defined = true
 		if value < baseline[index]-1e-9 {
 			return false
 		}
 	}
-	return true
+	return defined
 }
 
 // useCaseQuality는 사용 사례별 품질 지표 평균이다. 품질이 비악화인지 견주는 기준이다.
@@ -426,7 +477,7 @@ func chooseThresholds(grid []thresholdResult) (thresholdPair, error) {
 	}
 	scores := []score{}
 	for _, entry := range grid {
-		if !entry.Feasible {
+		if !entry.Feasible || len(entry.UseCases) == 0 {
 			continue
 		}
 		current := score{pair: entry.thresholdPair}

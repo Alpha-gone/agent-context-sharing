@@ -185,7 +185,14 @@ func newServerContractDatabase(t *testing.T) (*store.Store, *pgxpool.Pool, strin
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
-		if _, err := admin.Exec(ctx, "DROP DATABASE "+identifier); err != nil {
+		// 장애 시험에서 DB 프로세스가 교체되어도 정지 전 TCP 연결을 재사용하지 않는다.
+		cleanupAdmin, err := pgxpool.NewWithConfig(ctx, config)
+		if err != nil {
+			t.Error("시험 DB 정리용 새 관리 연결 준비 실패")
+			return
+		}
+		defer cleanupAdmin.Close()
+		if _, err := cleanupAdmin.Exec(ctx, "DROP DATABASE "+identifier); err != nil {
 			t.Error("시험 전용 DB를 정리하지 못했습니다")
 		}
 	})

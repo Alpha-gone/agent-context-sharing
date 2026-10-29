@@ -113,7 +113,8 @@ func planUsesIndex(plan hopPlanNode, name string) bool {
 func TestQueryIndexPlansIntegration(t *testing.T) {
 	for _, size := range []int{1000, 10000} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
-			database := newIntegrationStore(t)
+			// 실행 계획이 다른 시험의 누적 데이터·통계에 좌우되지 않게 시험 DB를 격리한다.
+			database := newIsolatedIntegrationStore(t)
 			graph, hub := createHopHub(t, database, size)
 			createHopHub(t, database, size) // 다른 그래프도 같은 label 테이블을 공유한다.
 			for _, label := range []string{"Context", "DERIVED_FROM"} {
@@ -248,7 +249,7 @@ func TestQueryRelationalIndexPlansIntegration(t *testing.T) {
 }
 
 func TestQueryUniqueIndexRacesIntegration(t *testing.T) {
-	database := newIntegrationStore(t)
+	database := newIsolatedIntegrationStore(t)
 	for _, name := range []string{"login", "source", "active_key", "index_task"} {
 		t.Run(name, func(t *testing.T) {
 			id, other, graph := newTestID(t), newTestID(t), newTestID(t)

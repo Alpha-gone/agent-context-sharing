@@ -188,6 +188,9 @@ func TestWEB07SelectionAccessibilityMarkup(t *testing.T) {
 	backend := &web06Store{fakeGraphStore: &fakeGraphStore{accountID: account, graphID: graph}, graph: model.Graph{Name: "접근성"}, result: store.HopResult{Contexts: nodes, Edges: []store.HopEdge{{FromID: nodes[1].ID, ToID: nodes[0].ID, Kind: "derived_from"}}}}
 	html := web06Detail(t, backend)
 	script := html[strings.Index(html, "const elements="):]
+	if strings.Count(html, `<span class="node-selection-mark" aria-hidden="true">✓ 선택됨</span>`) != len(nodes) {
+		t.Fatal("선택 표식은 노드별로 제공하고 접근성 이름과 분리해야 한다")
+	}
 	if regexp.MustCompile(`tabindex="[1-9]`).MatchString(html) || regexp.MustCompile(`role="(application|grid|tab|tablist|listbox|option|button)"`).MatchString(html) {
 		t.Fatal("양의 tabindex 또는 불필요한 위젯 역할이 있다")
 	}

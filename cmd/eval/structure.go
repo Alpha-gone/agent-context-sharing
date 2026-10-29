@@ -61,7 +61,13 @@ func pairOf(left, right model.ID) [2]model.ID {
 // 경로 가운데 모든 노드와 관계가 반환된 비율이다.
 func evidenceScore(query querySpec, keys map[string]model.ID, returned map[model.ID]struct{}, edges map[[2]model.ID]struct{}) (float64, float64) {
 	required, found := 0, 0
+	contextSeen := map[string]bool{}
+	edgeSeen := map[[2]model.ID]bool{}
 	for _, key := range query.Required {
+		if contextSeen[key] {
+			continue
+		}
+		contextSeen[key] = true
 		required++
 		if _, ok := returned[keys[key]]; ok {
 			found++
@@ -71,12 +77,19 @@ func evidenceScore(query querySpec, keys map[string]model.ID, returned map[model
 	for _, path := range query.Paths {
 		whole := true
 		for index := range len(path) - 1 {
-			required++
+			pair := pairOf(keys[path[index]], keys[path[index+1]])
+			fresh := !edgeSeen[pair]
+			if fresh {
+				required++
+				edgeSeen[pair] = true
+			}
 			_, fromReturned := returned[keys[path[index]]]
 			_, toReturned := returned[keys[path[index+1]]]
 			_, linked := edges[pairOf(keys[path[index]], keys[path[index+1]])]
 			if fromReturned && toReturned && linked {
-				found++
+				if fresh {
+					found++
+				}
 				continue
 			}
 			whole = false
@@ -112,7 +125,14 @@ func isEntry(item search.Context) bool {
 // 원천에 닿지 못하는 비율이다. 비진입 컨텍스트가 없으면 0이다.
 func disconnectedRatio(flow search.Flow) float64 {
 	adjacency := map[model.ID][]model.ID{}
+	returned := map[model.ID]bool{}
+	for _, item := range flow.Contexts {
+		returned[item.Value.ID] = true
+	}
 	for _, edge := range flow.Edges {
+		if !returned[edge.FromID] || !returned[edge.ToID] {
+			continue
+		}
 		adjacency[edge.FromID] = append(adjacency[edge.FromID], edge.ToID)
 		adjacency[edge.ToID] = append(adjacency[edge.ToID], edge.FromID)
 	}
@@ -155,17 +175,20 @@ func hubConcentration(flow search.Flow) float64 {
 	if len(flow.Contexts) <= 1 {
 		return 0
 	}
-	total, spread := 0, 0
-	for _, left := range flow.Contexts {
-		total += left.CandidateDegree
-		for _, right := range flow.Contexts {
-			spread += max(left.CandidateDegree-right.CandidateDegree, right.CandidateDegree-left.CandidateDegree)
-		}
+	degrees := make([]int, 0, len(flow.Contexts))
+	for _, item := range flow.Contexts {
+		degrees = append(degrees, item.CandidateDegree)
+	}
+	slices.Sort(degrees)
+	total, spread := 0.0, 0.0
+	for i, degree := range degrees {
+		total += float64(degree)
+		spread += float64(2*i-len(degrees)+1) * float64(degree)
 	}
 	if total == 0 {
 		return 0
 	}
-	return float64(spread) / float64(2*len(flow.Contexts)*total)
+	return spread / (float64(len(degrees)) * total)
 }
 
 // duplicateRatio는 context_id 통합과 중복 파생 접기 전 후보 중 두 처리로 제거된 비율이다.

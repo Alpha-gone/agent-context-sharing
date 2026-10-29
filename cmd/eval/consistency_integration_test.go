@@ -212,7 +212,7 @@ func TestConsistencyMeasureResetsVariantsIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		result, err := scenario.measure(t.Context(), service, variant, conditions, time.Millisecond)
-		if err != nil || result.Errors != 0 || result.WriteErrors != 0 {
+		if err != nil || result.Errors != result.RetryExhausted || result.WriteErrors != 0 {
 			t.Fatalf("구성 %s 측정 = %+v, %v", variant.Name, result, err)
 		}
 		assertNoConfirmedRelations(t, scenario)
@@ -268,11 +268,11 @@ func TestContinualRecordsUnmeasuredMetricsAsUndefinedIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sample, _, err := measureContinualQuery(t.Context(), service, graph, scenario.query, 2, 100)
+	sample, _, err := measureContinualQuery(t.Context(), service.service, graph, scenario.query, 2, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, metric := range metricNames[3:] {
+	for _, metric := range metricNames[4:] {
 		if got := metric.sample(sample); got != undefinedMetric {
 			t.Errorf("측정하지 않은 %s = %v", metric.name, got)
 		}

@@ -272,16 +272,16 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 
 ## 목표 추가 구성
 
-이 표는 직접 연결과 진단의 구성 계약이다. 구성 검증과 두 환경 예시·운영 안내를 함께 유지한다. MCP·OAuth 조립과 진단 볼륨·파일 준비는 구현되어 있으며 실제 호스트·운영 배포 인수는 후속 개발 작업의 책임이다.
+이 표는 직접 연결과 진단의 구성 계약이다. 구성 검증과 두 환경 예시·운영 안내를 함께 유지한다. MCP·OAuth 조립과 진단 볼륨·파일 준비는 구현되어 있으며 선정 CLI의 [직접 연결 인수](../reviews/2026-10-27-test-08-completion.md)와 운영 예시의 [격리 인수](../reviews/2026-10-28-test-09.md)는 완료했다. 다른 호스트/판·실제 운영 배포와 공개 TLS/Tunnel은 별도 인수다.
 
 | 키 | 값·검증 | 상태 |
 |---|---|---|
-| `MCP_RESOURCE_URL` | 절대 HTTPS `/mcp` URI. issuer와 독립된 고정 리소스 식별자이며 토큰 aud·OAuth resource·보호 메타데이터에 동일 적용 | 목표 추가 |
-| `MCP_ALLOWED_ORIGINS` | 쉼표 구분 HTTPS origin 목록. path·query·fragment·userinfo와 와일드카드를 허용하지 않으며 요청 Origin은 완전 일치 | 목표 추가 |
-| `OAUTH_CLIENT_REGISTRATIONS` | 공개 `client_id`를 키로 하는 등록 JSON. callback URI와 허용 resource 목록을 검증하고 중복 client·빈 목록·비루프백 HTTP를 거부 | 목표 추가 |
-| `DIAGNOSTIC_LOG_DIR` | 영속 로그 루트. 기본 `/var/log/agent-context`, 공개 자산 경로·임시 디렉터리를 쓰지 않는다 | 목표 추가 |
-| `DIAGNOSTIC_INSTANCE_ID` | 영속 배포 슬롯별 1~64자 ASCII 식별자. 경로 구분자·점 경로 금지, 동시 인스턴스 간 중복은 기동 거부 | 목표 추가 |
-| `DIAGNOSTIC_LOG_LEVEL` | `INFO` 기본. `WARN`, `ERROR`, 시험용 `DEBUG`만 허용하고 허용 필드·용량 제한을 완화하지 않는다 | 목표 추가 |
+| `MCP_RESOURCE_URL` | 절대 HTTPS `/mcp` URI. issuer와 독립된 고정 리소스 식별자이며 토큰 aud·OAuth resource·보호 메타데이터에 동일 적용 | 구현·구성 인수 |
+| `MCP_ALLOWED_ORIGINS` | 쉼표 구분 HTTPS origin 목록. path·query·fragment·userinfo와 와일드카드를 허용하지 않으며 요청 Origin은 완전 일치 | 구현·구성 인수 |
+| `OAUTH_CLIENT_REGISTRATIONS` | 공개 `client_id`를 키로 하는 등록 JSON. callback URI와 허용 resource 목록을 검증하고 중복 client·빈 목록·비루프백 HTTP를 거부 | 구현·구성 인수 |
+| `DIAGNOSTIC_LOG_DIR` | 영속 로그 루트. 기본 `/var/log/agent-context`, 공개 자산 경로·임시 디렉터리를 쓰지 않는다 | 구현·구성 인수 |
+| `DIAGNOSTIC_INSTANCE_ID` | 영속 배포 슬롯별 1~64자 ASCII 식별자. 경로 구분자·점 경로 금지, 동시 인스턴스 간 중복은 기동 거부 | 구현·구성 인수 |
+| `DIAGNOSTIC_LOG_LEVEL` | `INFO` 기본. `WARN`, `ERROR`, 시험용 `DEBUG`만 허용하고 허용 필드·용량 제한을 완화하지 않는다 | 구현·구성 인수 |
 
 토큰 수명·소비 상태 보존·로그 회전 크기·기간·저장량·대기 상한은 SRS의 확정값이며 배포 선택으로 열지 않는다. 첫 Codex 시험 등록은 `http://127.0.0.1:49152/callback`을 정확히 일치시키고 다른 loopback 포트 예외를 그 등록에 적용하지 않는다. 기존 일반 loopback 등록에만 같은 IP의 가변 포트 정책을 사용할 수 있다.
 

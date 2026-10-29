@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,14 +77,14 @@ func TestAdversarialCleanupFailuresPropagateIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runBaseline(t.Context(), database, worker, service, contexts, querySet{}, attackSet{}, adversarialConditions{}, newBaseShape(contexts), nil); err == nil || !strings.Contains(err.Error(), "issue85 cleanup rejected") {
-		t.Fatalf("기준선 정리 실패 = %v", err)
-	}
 	var dimension int
 	if err := connection.QueryRow(t.Context(), `SELECT substring(format_type(atttypid,atttypmod) FROM '[0-9]+')::int FROM pg_attribute WHERE attrelid='public.context_embedding'::regclass AND attname='embedding'`).Scan(&dimension); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runAttackRepeat(t.Context(), database, worker, service, contexts, querySet{}, attackSample{}, adversarialConditions{}, store.EmbeddingExpectation{ModelID: worker.ModelID(), Dimension: dimension}, newBaseShape(contexts), nil, nil, &sampleRuns{}); err == nil || !strings.Contains(err.Error(), "issue85 cleanup rejected") {
+	if _, err := runBaseline(t.Context(), database, worker, service.service, contexts, querySet{}, attackSet{}, adversarialConditions{Repeats: 1}, store.EmbeddingExpectation{ModelID: worker.ModelID(), Dimension: dimension}, newBaseShape(contexts), nil); err == nil || !strings.Contains(err.Error(), "issue85 cleanup rejected") {
+		t.Fatalf("기준선 정리 실패 = %v", err)
+	}
+	if _, err := runAttackRepeat(t.Context(), database, worker, service.service, contexts, querySet{}, attackSample{}, adversarialConditions{}, store.EmbeddingExpectation{ModelID: worker.ModelID(), Dimension: dimension}, newBaseShape(contexts), nil, nil, &sampleRuns{}); err == nil || !strings.Contains(err.Error(), "issue85 cleanup rejected") {
 		t.Fatalf("공격 회차 정리 실패 = %v", err)
 	}
 }
@@ -100,7 +101,9 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var embeddingCalls atomic.Int64
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		embeddingCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(raw)
 	}))
@@ -116,8 +119,21 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 	}
 	dir := t.TempDir()
 	contexts, queries := filepath.Join(dir, "contexts.json"), filepath.Join(dir, "queries.json")
-	if err := runConvert(convertOwn, "", "cleanup", 4, "", contexts, queries, ""); err != nil {
-		t.Fatal(err)
+	// 종료·정리 계약에는 원천과 파생 하나면 충분하다. 품질 비교용 변환기의 큰 세트는
+	// 60개 독립 그래프의 적재·색인을 반복해 패키지 전체 시험 예산을 소진시킨다.
+	set := lifecycleInput(t)
+	queryInput := querySet{Version: set.Version, Queries: []querySpec{
+		{ID: "source", IndependentUnit: "source", UseCase: useCaseFact, WorkContext: "독립 원천", Answers: []string{"source"}},
+		{ID: "derived", IndependentUnit: "derived", UseCase: useCaseAssociative, WorkContext: "원천 근거 파생", Answers: []string{"derived"}},
+	}}
+	for path, value := range map[string]any{contexts: set, queries: queryInput} {
+		body, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, body, 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	binary, err := os.Executable()
 	if err != nil {
@@ -125,18 +141,47 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 	}
 	invoke := func(t *testing.T, mode []string, wantFailure bool) {
 		t.Helper()
-		args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-repeat=3", "-budget=20000", "-stages=baseline", "-out=" + filepath.Join(t.TempDir(), "report.json")}
+		var before int
+		if err := connection.QueryRow(t.Context(), `SELECT count(*) FROM public.context_graph WHERE name = $1`, "eval "+set.Version).Scan(&before); err != nil {
+			t.Fatal(err)
+		}
+		outPath := filepath.Join(t.TempDir(), "report.json")
+		args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-repeat=10", "-budget=20000", "-stages=baseline", "-out=" + outPath}
 		command := exec.CommandContext(t.Context(), binary, append(args, mode...)...)
+		beforeCalls := embeddingCalls.Load()
 		out, err := command.CombinedOutput()
 		if !wantFailure {
 			if err != nil {
 				t.Fatalf("평가 정상 실행 실패: %v\n%s", err, out)
+			}
+			if len(mode) > 0 && mode[0] == "-continual" {
+				requireContinualReport(t, outPath)
+			}
+			if len(mode) == 0 || mode[0] == "-adaptive" {
+				var after, active int
+				if err := connection.QueryRow(t.Context(), `SELECT count(*), count(*) FILTER (WHERE deleted_at IS NULL) FROM public.context_graph WHERE name = $1`, "eval "+set.Version).Scan(&after, &active); err != nil {
+					t.Fatal(err)
+				}
+				want := 10
+				if len(mode) > 0 {
+					want = 60 // 네 경로의 격자 40회 + auto/적응형 비교 20회.
+				}
+				if after-before != want || active != 0 {
+					t.Fatalf("조건·회차별 그래프 격리: created=%d active=%d want=%d", after-before, active, want)
+				}
+				wantCalls := int64(want * (len(set.Contexts) + len(queryInput.Queries)))
+				if calls := embeddingCalls.Load() - beforeCalls; calls != wantCalls {
+					t.Fatalf("독립 그래프 색인·질의 실행: calls=%d want=%d", calls, wantCalls)
+				}
 			}
 			return
 		}
 		status, ok := errors.AsType[*exec.ExitError](err)
 		if !ok || status.ExitCode() != 1 || !strings.Contains(string(out), "issue85 cleanup rejected") {
 			t.Fatalf("정리 실패 종료 = %v\n%s", err, out)
+		}
+		if _, err := os.Stat(outPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("정리 실패에서 정상 보고서가 기록됐다: %v", err)
 		}
 	}
 	modes := [][]string{nil, {"-adaptive", "-direct-thresholds=0.5", "-direct-margins=0"}, {"-continual"}, {"-consistency", "-consistency-requests=1", "-consistency-load=1", "-consistency-load-requests=1", "-consistency-write-pauses=1"}}
@@ -175,15 +220,18 @@ func TestConsistencyUnmeasuredResourcesIntegration(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		failed, err := scenario.measure(ctx, service, variant, conditions, time.Millisecond)
-		if err != nil || failed.Errors != conditions.Requests || failed.Connections != undefinedMetric || failed.PeakConnections != -1 || failed.HoldMS.Mean != undefinedMetric {
+		if !errors.Is(err, context.Canceled) || failed.Errors != conditions.Requests || failed.Connections != undefinedMetric || failed.PeakConnections != -1 || failed.HoldMS.Mean != undefinedMetric {
 			t.Fatalf("전 요청 실패의 미측정 자원 = %+v, %v", failed, err)
 		}
 		measured, err := scenario.measure(t.Context(), service, variant, conditions, time.Millisecond)
-		if err != nil || measured.Errors != 0 || measured.Connections < 0 || measured.PeakConnections < 0 {
+		if err != nil || measured.Errors != measured.RetryExhausted {
 			t.Fatalf("측정 자원 = %+v, %v", measured, err)
 		}
 		if variant.Consistency != search.ConsistencySnapshot && measured.HoldMS.Mean != undefinedMetric {
 			t.Fatalf("Read Committed의 스냅숏 시간 = %+v", measured.HoldMS)
+		}
+		if variant.Consistency != search.ConsistencySnapshot && (measured.Connections != -1 || measured.PeakConnections != -1) {
+			t.Fatalf("미측정 연결 수가 실제 0과 구분되지 않는다: %+v", measured)
 		}
 		if variant.Consistency == search.ConsistencySnapshot && measured.HoldMS.Mean < 0 {
 			t.Fatalf("스냅숏 시간이 미측정이다: %+v", measured.HoldMS)

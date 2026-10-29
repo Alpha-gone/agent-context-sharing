@@ -8,9 +8,7 @@
 package main
 
 import (
-	"context"
 	json "encoding/json/v2"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,28 +28,35 @@ import (
 // report는 결과 파일 전체다. 「검증」이 조건, 반복 회차, 지표 값과 데이터셋 판을
 // 함께 남기라고 요구한다.
 type report struct {
-	StartedAt      time.Time        `json:"started_at"`
-	ContextVersion string           `json:"context_dataset_version"`
-	QueryVersion   string           `json:"query_dataset_version"`
-	Conditions     conditions       `json:"conditions"`
-	Runs           []runMetrics     `json:"runs"`
-	Judgements     []stageJudgement `json:"judgements"`
-	Marginals      []marginal       `json:"marginal_contributions"`
+	InputPreparation *preparationReport     `json:"input_preparation,omitzero"`
+	StartedAt        time.Time              `json:"started_at"`
+	ContextVersion   string                 `json:"context_dataset_version"`
+	QueryVersion     string                 `json:"query_dataset_version"`
+	Conditions       conditions             `json:"conditions"`
+	Runs             []runMetrics           `json:"runs"`
+	Judgements       []stageJudgement       `json:"judgements"`
+	Marginals        []marginal             `json:"marginal_contributions"`
+	Assessments      []comparisonAssessment `json:"activation_assessments,omitempty"`
 }
 
 // conditions는 단계를 제외하고 회차마다 고정한 통제 조건이다.
 type conditions struct {
-	Stages            []string `json:"stages"`
-	Repeats           int      `json:"repeats"`
-	Budget            int      `json:"budget"`
-	MaxHops           int      `json:"max_hops"`
-	MaxHopNodes       int      `json:"max_hop_nodes"`
-	Execution         string   `json:"channel_execution"`
-	CandidateLimit    int      `json:"channel_candidate_limit"`
-	SemanticThreshold float64  `json:"semantic_similarity_threshold"`
-	FoldThreshold     float64  `json:"fold_threshold"`
-	EmbeddingModel    string   `json:"embedding_model"`
-	IndexTargets      string   `json:"index_targets"`
+	GraphGroups       int                 `json:"measured_graph_groups,omitzero"`
+	ComparisonAxis    string              `json:"comparison_axis,omitempty"`
+	Variants          []comparisonVariant `json:"variants,omitempty"`
+	PreparationPolicy string              `json:"preparation_policy,omitempty"`
+	AsOf              time.Time           `json:"default_as_of,omitzero"`
+	Stages            []string            `json:"stages"`
+	Repeats           int                 `json:"repeats"`
+	Budget            int                 `json:"budget"`
+	MaxHops           int                 `json:"max_hops"`
+	MaxHopNodes       int                 `json:"max_hop_nodes"`
+	Execution         string              `json:"channel_execution"`
+	CandidateLimit    int                 `json:"channel_candidate_limit"`
+	SemanticThreshold float64             `json:"semantic_similarity_threshold"`
+	FoldThreshold     float64             `json:"fold_threshold"`
+	EmbeddingModel    string              `json:"embedding_model"`
+	IndexTargets      string              `json:"index_targets"`
 }
 
 func main() {
@@ -61,52 +66,151 @@ func main() {
 	}
 }
 
-func run() (err error) {
+func run() error { return runEvaluation(os.Args[1:], nil) }
+
+func runEvaluation(args []string, trial *trialProgress) (err error) {
+	flags := flag.NewFlagSet("eval", flag.ContinueOnError)
+	manifestRun := flags.String("manifest", "", "manifest와 실제 입력을 대조해 결과 묶음을 새 디렉터리에 저장한다")
+	results := flags.String("results", "", "manifest 결과를 저장할 루트 디렉터리")
+	var bindings trialBindings
+	flags.Var(&bindings, "trial-input", "manifest input code=로컬 파일. 여러 번 지정할 수 있다")
+	trialPreparedDirectory := flags.String("trial-prepared", "", "manifest와 대조할 준비 데이터 디렉터리")
 	defaultLimits := plan.Default()
-	contextsPath := flag.String("contexts", "", "컨텍스트 집합 파일 경로")
-	queriesPath := flag.String("queries", "", "질의 집합 파일 경로")
-	stageList := flag.String("stages", "baseline,references,relations,global,evidence", "누적 비교 단계를 순서대로 지정한다")
-	repeats := flag.Int("repeat", minimumRepeats, "단계마다 반복할 회차 수")
-	budget := flag.Int("budget", 4000, "검색 예산 문자 수. 0은 한도 없음이다")
-	maxHops := flag.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
-	maxHopNodes := flag.Int("max-hop-nodes", defaultLimits.MaxHopNodes, "그래프 확장 최대 노드 수")
-	indexTargets := flag.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
-	convert := flag.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag, own, own-global, own-global-auto 또는 own-adversarial")
-	convertSource := flag.String("convert-source", "", "변환할 벤치마크 파일 경로")
-	convertName := flag.String("convert-name", "", "데이터셋 판에 넣을 세트 이름")
-	convertLimit := flag.Int("convert-questions", 0, "변환에 쓸 질의 수. 0이면 전부 쓴다")
-	convertUseCase := flag.String("convert-use-case", "", "변환 결과의 질의를 fact, associative 또는 global 사용 사례로 제한한다")
-	continual := flag.Bool("continual", false, "온라인 갱신부터 상충 해소까지 여섯 지속 평가 시나리오를 실행한다")
-	businessPath := flag.String("business", "", "업무 효과 통제 과업의 집계 지표 파일 경로")
-	adaptive := flag.Bool("adaptive", false, "기존 auto와 질의 적응형 라우팅을 세 검색 경로의 오프라인 최적 경로로 견준다")
-	adaptiveStage := flag.String("adaptive-stage", string(search.GraphStageRelations), "적응형 비교의 그래프 관계 범위. baseline은 쓸 수 없다")
-	adaptiveEvidence := flag.Bool("adaptive-evidence", false, "적응형 비교의 두 구성에 근거 경로 보존 선택을 켠다")
-	directThresholds := flag.String("direct-thresholds", "0.5,0.6,0.7,0.8", "직접 충분성 하한 후보. 쉼표로 나눈다")
-	directMargins := flag.String("direct-margins", "0,0.02,0.05,0.1", "직접 후보 분리 폭 후보. 쉼표로 나눈다")
-	consistency := flag.Bool("consistency", false, "Read Committed 검색과 동기화 스냅숏의 결과 동등성과 동시 쓰기 일관성을 견준다")
-	consistencyRequests := flag.Int("consistency-requests", 100, "동시 쓰기 비교에서 구성마다 보낼 요청 수")
-	consistencyLoad := flag.String("consistency-load", "1,8,16,32", "동시 요청 부하 비교의 동시 요청자 수 후보. 쉼표로 나눈다")
-	consistencyLoadRequests := flag.Int("consistency-load-requests", 200, "동시 요청 부하 비교에서 조건마다 보낼 요청 수")
-	consistencyPauses := flag.String("consistency-write-pauses", "0,50,250", "동시 쓰기 비교에서 쓰기 사이에 쉬는 밀리초 후보. 쉼표로 나눈다")
-	consistencyStage := flag.String("consistency-stage", string(search.GraphStageReferences), "일관 읽기 비교의 그래프 관계 범위")
-	adversarial := flag.Bool("adversarial", false, "관계·경로 오염 공격 표본을 공격 전후와 복구 후에 평가하고 홉별 첫 불일치를 진단한다")
-	attacksPath := flag.String("attacks", "", "공격 표본 파일 경로. -adversarial의 입력이자 own-adversarial 생성의 출력이다")
-	outPath := flag.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
-	flag.Parse()
+	manifestPath := flags.String("check-manifest", "", "실행 manifest만 검증한다. 데이터 읽기·DB 접속·평가는 실행하지 않는다")
+	prepareFormat := flags.String("prepare-data", "", "고정 공개 데이터 또는 자체 보완 세트를 준비한다. longmemeval, locomo, own-supplement")
+	prepareSource := flags.String("prepare-source", "", "고정 checksum을 확인할 로컬 원본 파일")
+	prepareOutput := flags.String("prepare-out", "", "준비 파일을 생성할 새 디렉터리")
+	preparedInput := flags.String("prepared-input", "", "통제 비교에 사용할 EVAL-02 준비 디렉터리")
+	contextsPath := flags.String("contexts", "", "컨텍스트 집합 파일 경로")
+	queriesPath := flags.String("queries", "", "질의 집합 파일 경로")
+	stageList := flags.String("stages", "baseline,references,relations,global,evidence", "누적 비교 단계를 순서대로 지정한다")
+	repeats := flags.Int("repeat", initialEvaluationRepeats, "조건별 대응 반복 회차 수. 초기 평가는 10회다")
+	budget := flags.Int("budget", 4000, "검색 예산 문자 수. 0은 한도 없음이다")
+	maxHops := flags.Int("max-hops", defaultLimits.MaxHops, "그래프 확장 최대 홉 수")
+	maxHopNodes := flags.Int("max-hop-nodes", defaultLimits.MaxHopNodes, "그래프 확장 최대 노드 수")
+	compareIndex := flags.Bool("compare-index-targets", false, "고정 그래프 단계에서 all_layers와 without_source를 별도로 비교한다")
+	indexTargets := flags.String("index-targets", string(store.IndexTargetsAllLayers), "색인 대상 계층. all_layers 또는 without_source")
+	convert := flags.String("convert", "", "데이터셋을 변환하거나 생성한다. hipporag, own, own-global, own-global-auto 또는 own-adversarial")
+	convertSource := flags.String("convert-source", "", "변환할 벤치마크 파일 경로")
+	convertName := flags.String("convert-name", "", "데이터셋 판에 넣을 세트 이름")
+	convertLimit := flags.Int("convert-questions", 0, "변환에 쓸 질의 수. 0이면 전부 쓴다")
+	convertUseCase := flags.String("convert-use-case", "", "변환 결과의 질의를 fact, associative 또는 global 사용 사례로 제한한다")
+	continual := flags.Bool("continual", false, "온라인 갱신부터 상충 해소까지 여섯 지속 평가 시나리오를 실행한다")
+	businessPath := flags.String("business", "", "업무 효과 통제 과업의 집계 지표 파일 경로")
+	businessTasksPath := flags.String("business-tasks", "", "비식별 과업 trace의 성공률·토큰·총비용·축소 통제 비교 입력")
+	unitPath := flags.String("unit-comparison", "", "원천을 공유하는 두 파생 경계 정책의 완전성·검색·과업 비교 입력")
+	embeddingPath := flags.String("embedding-comparison", "", "임베딩 한 축의 순위·관계/전역 임계값 통제 비교 입력")
+	originalPath := flags.String("original-reproduction", "", "수집 당시 원본과 승인한 HTTPS 출처의 판·범위·내용을 비교하는 입력")
+	adaptive := flags.Bool("adaptive", false, "기존 auto와 질의 적응형 라우팅을 세 검색 경로의 오프라인 최적 경로로 견준다")
+	adaptiveStage := flags.String("adaptive-stage", string(search.GraphStageRelations), "적응형 비교의 그래프 관계 범위. baseline은 쓸 수 없다")
+	adaptiveEvidence := flags.Bool("adaptive-evidence", false, "적응형 비교의 두 구성에 근거 경로 보존 선택을 켠다")
+	directThresholds := flags.String("direct-thresholds", "0.5,0.6,0.7,0.8", "직접 충분성 하한 후보. 쉼표로 나눈다")
+	directMargins := flags.String("direct-margins", "0,0.02,0.05,0.1", "직접 후보 분리 폭 후보. 쉼표로 나눈다")
+	consistency := flags.Bool("consistency", false, "Read Committed·동기화 스냅숏·평가 전용 내용 판 재시도의 동등성과 동시 쓰기를 견준다")
+	consistencyRequests := flags.Int("consistency-requests", 100, "동시 쓰기 비교에서 구성마다 보낼 요청 수")
+	consistencyLoad := flags.String("consistency-load", "1,8,16,32", "동시 요청 부하 비교의 동시 요청자 수 후보. 쉼표로 나눈다")
+	consistencyLoadRequests := flags.Int("consistency-load-requests", 200, "동시 요청 부하 비교에서 조건마다 보낼 요청 수")
+	consistencyPauses := flags.String("consistency-write-pauses", "0,50,250", "동시 쓰기 비교에서 쓰기 사이에 쉬는 밀리초 후보. 쉼표로 나눈다")
+	consistencyStage := flags.String("consistency-stage", string(search.GraphStageReferences), "일관 읽기 비교의 그래프 관계 범위")
+	adversarial := flags.Bool("adversarial", false, "관계·경로 오염 공격 표본을 공격 전후와 복구 후에 평가하고 홉별 첫 불일치를 진단한다")
+	attacksPath := flags.String("attacks", "", "공격 표본 파일 경로. -adversarial의 입력이자 own-adversarial 생성의 출력이다")
+	outPath := flags.String("out", "", "결과 JSON 경로. 비우면 표준 출력에 쓴다")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("위치 인자는 허용하지 않는다")
+	}
+	trialRequested := false
+	flags.Visit(func(f *flag.Flag) {
+		trialRequested = trialRequested || slices.Contains([]string{"manifest", "results", "trial-input", "trial-prepared"}, f.Name)
+	})
+	if trialRequested {
+		conflict := false
+		flags.Visit(func(f *flag.Flag) {
+			conflict = conflict || !slices.Contains([]string{"manifest", "results", "trial-input", "trial-prepared"}, f.Name)
+		})
+		if conflict || *manifestRun == "" || *results == "" {
+			return fmt.Errorf("manifest 실행에는 manifest·results·trial-input·trial-prepared만 지정할 수 있다")
+		}
+		return runManifestTrial(*manifestRun, *results, bindings, *trialPreparedDirectory)
+	}
+	manifestRequested := false
+	flags.Visit(func(f *flag.Flag) { manifestRequested = manifestRequested || f.Name == "check-manifest" })
+	if manifestRequested {
+		conflict := false
+		flags.Visit(func(f *flag.Flag) { conflict = conflict || f.Name != "check-manifest" })
+		if conflict || *manifestPath == "" {
+			return fmt.Errorf("manifest 검사 모드는 다른 실행 옵션과 함께 지정할 수 없다")
+		}
+		manifest, err := loadManifest(*manifestPath)
+		if err != nil {
+			return err
+		}
+		slog.Info("manifest 검증 완료", "trial_id", manifest.TrialID, "mode", manifest.Mode)
+		return nil
+	}
+	prepareRequested := false
+	prepareConflict := false
+	flags.Visit(func(f *flag.Flag) {
+		if strings.HasPrefix(f.Name, "prepare-") {
+			prepareRequested = true
+		} else {
+			prepareConflict = true
+		}
+	})
+	if prepareRequested {
+		if prepareConflict || *prepareFormat == "" {
+			return fmt.Errorf("데이터 준비 모드는 다른 실행 옵션과 함께 지정할 수 없다")
+		}
+		return runPrepareData(*prepareFormat, *prepareSource, *prepareOutput)
+	}
 	var modes []string
 	for _, mode := range []struct {
 		name    string
 		enabled bool
 	}{
-		{"convert", *convert != ""}, {"business", *businessPath != ""}, {"continual", *continual},
+		{"compare-index-targets", *compareIndex}, {"convert", *convert != ""}, {"business", *businessPath != ""}, {"continual", *continual},
 		{"adaptive", *adaptive}, {"consistency", *consistency}, {"adversarial", *adversarial},
+		{"unit-comparison", *unitPath != ""},
+		{"original-reproduction", *originalPath != ""},
+		{"embedding-comparison", *embeddingPath != ""},
+		{"business-tasks", *businessTasksPath != ""},
 	} {
 		if mode.enabled {
 			modes = append(modes, mode.name)
 		}
 	}
+	if *preparedInput != "" && ((*contextsPath != "" || *queriesPath != "") || (len(modes) > 0 && !*compareIndex)) {
+		return fmt.Errorf("prepared-input은 직접 contexts/queries 없이 통제 비교에만 지정할 수 있다")
+	}
 	if len(modes) > 1 {
 		return fmt.Errorf("평가 모드는 하나만 지정해야 한다: %s", strings.Join(modes, ", "))
+	}
+	if err := validateModeFlagsFor(flags, *convert, *adaptive, *consistency, *adversarial); err != nil {
+		return err
+	}
+	if *budget < 0 || *maxHops < 0 || *maxHopNodes < 0 || !slices.Contains([]string{string(store.IndexTargetsAllLayers), string(store.IndexTargetsWithoutSource)}, *indexTargets) {
+		return fmt.Errorf("문자·홉·노드 예산 또는 색인 대상이 올바르지 않다")
+	}
+	var consistencyOptions manifestConsistency
+	if *consistency {
+		candidateLimit, err := strconv.Atoi(strings.TrimSpace(envOr("SEARCH_CHANNEL_CANDIDATE_LIMIT", "50")))
+		if err != nil {
+			return fmt.Errorf("SEARCH_CHANNEL_CANDIDATE_LIMIT 해석: %w", err)
+		}
+		concurrency, err := parseIntegerOptions(*consistencyLoad, 1)
+		if err != nil {
+			return err
+		}
+		pauses, err := parseIntegerOptions(*consistencyPauses, 0)
+		if err != nil {
+			return err
+		}
+		consistencyOptions = manifestConsistency{Stage: *consistencyStage, Requests: *consistencyRequests, LoadRequests: *consistencyLoadRequests, Concurrency: concurrency, WritePauses: pauses}
+		if err := validateConsistencyOptions(consistencyOptions, candidateLimit); err != nil {
+			return err
+		}
 	}
 
 	// 변환은 데이터베이스에 닿지 않는다. 같은 두 경로를 출력 자리로 쓰므로 변환한
@@ -117,21 +221,93 @@ func run() (err error) {
 		}
 		return runConvert(*convert, *convertSource, *convertName, *convertLimit, *convertUseCase, *contextsPath, *queriesPath, *attacksPath)
 	}
+	if *businessTasksPath != "" {
+		conflict := false
+		flags.Visit(func(f *flag.Flag) { conflict = conflict || !slices.Contains([]string{"business-tasks", "out"}, f.Name) })
+		if conflict {
+			return fmt.Errorf("업무 과업 비교는 입력에 고정한 통제 조건만 사용한다")
+		}
+		return runBusinessTasks(*businessTasksPath, *outPath)
+	}
 	if *businessPath != "" {
 		return runBusiness(*businessPath, *outPath)
 	}
-	if *repeats < minimumRepeats {
-		return fmt.Errorf("반복 회차는 %d 이상이어야 한다. 「검증」이 최소 세 번으로 정했다", minimumRepeats)
+	if *repeats != initialEvaluationRepeats {
+		return fmt.Errorf("초기 평가의 조건별 반복 회차는 %d여야 한다", initialEvaluationRepeats)
+	}
+	if *embeddingPath != "" {
+		conflict := false
+		flags.Visit(func(f *flag.Flag) {
+			conflict = conflict || !slices.Contains([]string{"embedding-comparison", "out", "repeat"}, f.Name)
+		})
+		if conflict {
+			return fmt.Errorf("임베딩 비교는 입력에 고정한 통제 조건만 사용한다")
+		}
+		ctx, stop := trialContext(trial)
+		defer stop()
+		return runEmbeddingCommand(ctx, *embeddingPath, *outPath)
+	}
+	if *originalPath != "" {
+		conflict := false
+		flags.Visit(func(f *flag.Flag) {
+			conflict = conflict || !slices.Contains([]string{"original-reproduction", "out", "repeats"}, f.Name)
+		})
+		if conflict {
+			return fmt.Errorf("원본 비교는 입력에 고정한 출처·요청 설정만 사용한다")
+		}
+		ctx, stop := trialContext(trial)
+		defer stop()
+		return runOriginalCommand(ctx, *originalPath, *outPath)
+	}
+	if *unitPath != "" {
+		conflict := false
+		flags.Visit(func(f *flag.Flag) {
+			conflict = conflict || !slices.Contains([]string{"unit-comparison", "out", "repeats"}, f.Name)
+		})
+		if conflict {
+			return fmt.Errorf("검색 단위 비교는 입력에 고정한 통제 조건만 사용한다")
+		}
+		input, err := loadUnitInput(*unitPath)
+		if err != nil {
+			return err
+		}
+		settings, err := loadSettings()
+		if err != nil {
+			return err
+		}
+		ctx, stop := trialContext(trial)
+		defer stop()
+		return runUnitCommand(ctx, settings, input, *outPath)
 	}
 	if *continual {
-		return runContinual(*outPath, *repeats, *maxHops, *maxHopNodes)
+		ctx, stop := trialContext(trial)
+		defer stop()
+		return runContinual(ctx, *outPath, *repeats, *maxHops, *maxHopNodes)
 	}
-	if *contextsPath == "" || *queriesPath == "" {
+	if *preparedInput == "" && (*contextsPath == "" || *queriesPath == "") {
 		return fmt.Errorf("-contexts와 -queries가 필요하다")
+	}
+	if *adversarial && *attacksPath == "" {
+		return fmt.Errorf("-adversarial에는 -attacks가 필요하다")
 	}
 	stages, err := parseStages(*stageList)
 	if err != nil {
 		return err
+	}
+	if !*adaptive && !*consistency && !*adversarial {
+		if _, err := comparisonVariants(stages, *indexTargets, *compareIndex); err != nil {
+			return err
+		}
+		if *compareIndex {
+			var explicitStages, explicitTargets bool
+			flags.Visit(func(f *flag.Flag) {
+				explicitStages = explicitStages || f.Name == "stages"
+				explicitTargets = explicitTargets || f.Name == "index-targets"
+			})
+			if !explicitStages || explicitTargets {
+				return fmt.Errorf("색인 대상 비교에는 -stages의 고정 단계 하나가 필요하며 -index-targets를 함께 지정할 수 없다")
+			}
+		}
 	}
 	var directs, margins []float64
 	if *adaptive {
@@ -146,13 +322,23 @@ func run() (err error) {
 			return err
 		}
 	}
-	contexts, err := loadContextSet(*contextsPath)
-	if err != nil {
-		return err
-	}
-	queries, err := loadQuerySet(*queriesPath, contexts)
-	if err != nil {
-		return err
+	var contexts contextSet
+	var queries querySet
+	var prepared comparisonInput
+	if *preparedInput != "" {
+		prepared, err = loadPreparedComparison(*preparedInput)
+		if err != nil {
+			return err
+		}
+	} else {
+		contexts, err = loadContextSet(*contextsPath)
+		if err != nil {
+			return err
+		}
+		queries, err = loadQuerySet(*queriesPath, contexts)
+		if err != nil {
+			return err
+		}
 	}
 
 	var attacks attackSet
@@ -174,13 +360,22 @@ func run() (err error) {
 			return err
 		}
 	}
-	ctx := context.Background()
+	ctx, stop := trialContext(trial)
+	defer stop()
+	if !*adaptive && !*consistency && !*adversarial {
+		if *preparedInput != "" {
+			return runControlledInput(ctx, settings, prepared, controlledOptions{Stages: stages, IndexTargets: *indexTargets, CompareIndex: *compareIndex, Repeats: *repeats, Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes}, *outPath)
+		}
+		return runControlledCommand(ctx, settings, contexts, queries, controlledOptions{
+			Stages: stages, IndexTargets: *indexTargets, CompareIndex: *compareIndex,
+			Repeats: *repeats, Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
+		}, *outPath)
+	}
 	// 관계 후보 제안과 유예 기간을 주지 않는다. 제안은 확정되기 전까지 그래프 경로
 	// 채널에 쓰이지 않으므로 측정에 들어가지 않고, 끄면 회차마다 같은 그래프 상태에서
 	// 재는 것이 보장된다. 유예 판정은 주기 작업의 몫이며 평가는 그 경로를 타지 않는다.
 	// 색인 대상 계층은 적재 시점의 등록 조건이므로 그래프를 만들기 전에 정해야 한다.
-	// 「색인 대상 비교」는 이 값만 바꾼 두 실행의 결과를 견주는 것이며, 단계 비교처럼
-	// 한 실행 안에서 바꿀 수 있는 축이 아니다.
+	// 색인 대상 통제 비교는 위의 별도 실행 경로가 조건별 저장소를 만든다.
 	database, err := store.New(ctx, settings.databaseURL, settings.graphName, nil, nil, store.IndexTargets(*indexTargets))
 	if err != nil {
 		return fmt.Errorf("데이터베이스 풀 준비: %w", err)
@@ -203,45 +398,17 @@ func run() (err error) {
 			SemanticThreshold: settings.semanticThreshold, FoldThreshold: settings.foldThreshold, EmbeddingModel: worker.ModelID(),
 		}, *outPath)
 	}
-	graph, err := loadGraph(ctx, database, contexts)
-	if err != nil {
-		return err
-	}
-	// 평가 그래프는 측정이 끝나면 소프트 삭제해 다음 회차의 검색 대상에서 뺀다.
-	// 「소프트 삭제 수명주기」가 영구 삭제를 하지 않으므로 기록은 남는다.
-	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph)) }()
-	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(contexts.Contexts)*4+64); err != nil {
-		return err
-	}
-
 	if *consistency {
-		if !slices.Contains([]string{string(search.GraphStageReferences), string(search.GraphStageRelations), string(search.GraphStageGlobal)}, *consistencyStage) || *consistencyRequests < 1 {
-			return fmt.Errorf("-consistency-stage는 references, relations, global 중 하나이고 -consistency-requests는 양수여야 한다")
-		}
-		var pauses []int
-		for part := range strings.SplitSeq(*consistencyPauses, ",") {
-			pause, err := strconv.Atoi(strings.TrimSpace(part))
-			if err != nil || pause < 0 {
-				return fmt.Errorf("-consistency-write-pauses의 %q가 0 이상의 정수가 아니다", part)
-			}
-			pauses = append(pauses, pause)
-		}
-		var concurrency []int
-		for part := range strings.SplitSeq(*consistencyLoad, ",") {
-			value, err := strconv.Atoi(strings.TrimSpace(part))
-			if err != nil || value < 1 {
-				return fmt.Errorf("-consistency-load의 %q가 양의 정수가 아니다", part)
-			}
-			concurrency = append(concurrency, value)
-		}
-		if *consistencyLoadRequests < 1 {
-			return fmt.Errorf("-consistency-load-requests는 양수여야 한다")
-		}
-		result, err := runConsistency(ctx, database, worker, graph, contexts, queries, settings, consistencyConditions{
-			IndexTargets: *indexTargets, FoldThreshold: settings.foldThreshold,
-			Requests: *consistencyRequests, WritePausesMS: pauses, LoadConcurrency: concurrency, LoadRequests: *consistencyLoadRequests, ToggledContexts: consistencyToggled, GraphStage: *consistencyStage,
-			Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
-			CandidateLimit: settings.candidateLimit, SemanticThreshold: settings.semanticThreshold, EmbeddingModel: worker.ModelID(),
+		var result consistencyReport
+		err := withEvaluationGraph(ctx, database, worker, contexts, len(contexts.Contexts)*4+64, func(graph loadedGraph) error {
+			var measureErr error
+			result, measureErr = runConsistency(ctx, database, worker, graph, contexts, queries, settings, consistencyConditions{
+				IndexTargets: *indexTargets, FoldThreshold: settings.foldThreshold,
+				Requests: consistencyOptions.Requests, WritePausesMS: consistencyOptions.WritePauses, LoadConcurrency: consistencyOptions.Concurrency, LoadRequests: consistencyOptions.LoadRequests, ToggledContexts: consistencyToggled, GraphStage: consistencyOptions.Stage,
+				Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
+				CandidateLimit: settings.candidateLimit, SemanticThreshold: settings.semanticThreshold, EmbeddingModel: worker.ModelID(),
+			})
+			return measureErr
 		})
 		if err != nil {
 			return err
@@ -249,7 +416,7 @@ func run() (err error) {
 		return writeReport(*outPath, result)
 	}
 	if *adaptive {
-		result, err := runAdaptive(ctx, database, worker, graph, contexts, queries, settings, adaptiveConditions{
+		result, err := runAdaptive(ctx, database, worker, contexts, queries, settings, adaptiveConditions{
 			Repeats: *repeats, Budget: *budget, MaxHops: *maxHops, MaxHopNodes: *maxHopNodes,
 			GraphStage: *adaptiveStage, EvidencePathSelection: *adaptiveEvidence,
 			Execution: string(settings.execution), CandidateLimit: settings.candidateLimit,
@@ -261,69 +428,16 @@ func run() (err error) {
 		}
 		return writeReport(*outPath, result)
 	}
-	result := report{
-		StartedAt:      time.Now().UTC(),
-		ContextVersion: contexts.Version,
-		QueryVersion:   queries.Version,
-		Conditions: conditions{
-			Stages:            stages,
-			Repeats:           *repeats,
-			Budget:            *budget,
-			MaxHops:           *maxHops,
-			MaxHopNodes:       *maxHopNodes,
-			Execution:         string(settings.execution),
-			CandidateLimit:    settings.candidateLimit,
-			SemanticThreshold: settings.semanticThreshold,
-			FoldThreshold:     settings.foldThreshold,
-			EmbeddingModel:    worker.ModelID(),
-			IndexTargets:      *indexTargets,
-		},
-	}
-	runs := map[string][]runMetrics{}
-	services := make(map[string]*search.Service, len(stages))
-	for _, stage := range stages {
-		graphStage, evidence := stageConfig(stage)
-		service, err := search.New(database, worker, search.Config{
-			Execution:             settings.execution,
-			CandidateLimit:        settings.candidateLimit,
-			SemanticThreshold:     settings.semanticThreshold,
-			FoldThreshold:         settings.foldThreshold,
-			GraphStage:            graphStage,
-			GlobalFallback:        graphStage == search.GraphStageGlobal,
-			EvidencePathSelection: evidence,
-		}, slog.Default())
-		if err != nil {
-			return fmt.Errorf("단계 %q 검색 실행기 준비: %w", stage, err)
-		}
-		services[stage] = service
-	}
-	// 단계 순서를 회차마다 돌린다. 한 단계의 반복을 몰아 재면 뒤 단계만 데워진 캐시를 써서
-	// 단계 사이 지연 차이에 실행 순서가 섞인다.
-	for repeat := 1; repeat <= *repeats; repeat++ {
-		for offset := range stages {
-			stage := stages[(offset+repeat-1)%len(stages)]
-			service := services[stage]
-			started := time.Now()
-			measured, err := measure(ctx, service, graph, queries, *budget, *maxHops, *maxHopNodes)
-			if err != nil {
-				return fmt.Errorf("단계 %q 회차 %d: %w", stage, repeat, err)
-			}
-			elapsed := time.Since(started)
-			run := runMetrics{Stage: stage, Repeat: repeat, DurationMS: elapsed.Milliseconds(), UseCases: measured.UseCases, QuerySamples: measured.QuerySamples, recovered: measured.Recovered}
-			runs[stage] = append(runs[stage], run)
-			result.Runs = append(result.Runs, run)
-			slog.Info("회차 완료", "stage", stage, "repeat", repeat, "duration", elapsed.String())
-		}
-	}
-	result.Judgements = judge(stages, runs)
-	result.Marginals = marginals(stages, runs)
-	return writeReport(*outPath, result)
+	return fmt.Errorf("평가 모드 실행 경로가 없다")
 }
 
 // runConvert는 공개 벤치마크를 데이터셋 두 파일로 옮기고 끝낸다.
 func runConvert(format, source, name string, limit int, useCase, contextsPath, queriesPath, attacksPath string) error {
-	if format == convertOwnAdversarial && useCase != "" {
-		return fmt.Errorf("own-adversarial은 모든 공격 표본을 함께 생성하므로 -convert-use-case를 사용할 수 없다")
+	if err := validateConversion(format, useCase); err != nil {
+		return err
+	}
+	if limit < 0 {
+		return fmt.Errorf("변환 질의 수는 0 이상이어야 한다")
 	}
 	var contexts contextSet
 	var queries querySet

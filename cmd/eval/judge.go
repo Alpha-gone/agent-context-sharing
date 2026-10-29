@@ -11,8 +11,8 @@ import (
 	"slices"
 )
 
-// 「검증」이 각 조건을 최소 세 번 반복하라고 정했다. 신뢰구간의 폭이 판정에 필요한
-// 수준보다 넓으면 반복을 늘린다.
+// 기존 업무 집계 입력의 최소 대응 표본 수다. 초기 평가 실행의 10회 반복은
+// initialEvaluationRepeats로 별도 검증하며 표본 수와 반복 수를 혼동하지 않는다.
 const minimumRepeats = 3
 
 // metricNames는 판정에 쓰는 지표와 그 방향이다. 예산 효율은 문자 수, 단절 근거·허브
@@ -21,39 +21,43 @@ const minimumRepeats = 3
 var metricNames = []struct {
 	name          string
 	lowerIsBetter bool
-	value         func(useCaseMetrics) float64
 	sample        func(queryMetrics) float64
 }{
-	{"recall", false, func(m useCaseMetrics) float64 { return m.Recall }, func(q queryMetrics) float64 { return q.Recall }},
-	{"reciprocal_rank", false, func(m useCaseMetrics) float64 { return m.ReciprocalRank }, func(q queryMetrics) float64 { return q.ReciprocalRank }},
-	{"budget_per_hit", true, func(m useCaseMetrics) float64 { return m.BudgetPerHit }, func(q queryMetrics) float64 { return q.BudgetPerHit }},
-	{"evidence_completeness", false, func(m useCaseMetrics) float64 { return m.EvidenceCompleteness }, func(q queryMetrics) float64 { return q.EvidenceCompleteness }},
-	{"path_continuity", false, func(m useCaseMetrics) float64 { return m.PathContinuity }, func(q queryMetrics) float64 { return q.PathContinuity }},
-	{"disconnected_ratio", true, func(m useCaseMetrics) float64 { return m.DisconnectedRatio }, func(q queryMetrics) float64 { return q.DisconnectedRatio }},
-	{"hub_concentration", true, func(m useCaseMetrics) float64 { return m.HubConcentration }, func(q queryMetrics) float64 { return q.HubConcentration }},
-	{"duplicate_ratio", true, func(m useCaseMetrics) float64 { return m.DuplicateRatio }, func(q queryMetrics) float64 { return q.DuplicateRatio }},
-	{"latency_ms", true, func(m useCaseMetrics) float64 { return m.LatencyMS }, func(q queryMetrics) float64 { return q.LatencyMS }},
-	{"misroute_rate", true, func(m useCaseMetrics) float64 { return m.MisrouteRate }, func(q queryMetrics) float64 { return q.Misrouted }},
+	{"recall", false, func(q queryMetrics) float64 { return q.Recall }},
+	{"reciprocal_rank", false, func(q queryMetrics) float64 { return q.ReciprocalRank }},
+	{"budget_used", true, func(q queryMetrics) float64 { return float64(q.BudgetUsed) }},
+	{"budget_per_hit", true, func(q queryMetrics) float64 { return q.BudgetPerHit }},
+	{"evidence_completeness", false, func(q queryMetrics) float64 { return q.EvidenceCompleteness }},
+	{"path_continuity", false, func(q queryMetrics) float64 { return q.PathContinuity }},
+	{"disconnected_ratio", true, func(q queryMetrics) float64 { return q.DisconnectedRatio }},
+	{"hub_concentration", true, func(q queryMetrics) float64 { return q.HubConcentration }},
+	{"duplicate_ratio", true, func(q queryMetrics) float64 { return q.DuplicateRatio }},
+	{"latency_ms", true, func(q queryMetrics) float64 { return q.LatencyMS }},
+	{"misroute_rate", true, func(q queryMetrics) float64 { return q.Misrouted }},
 }
 
-// estimate는 한 지표의 반복 집계다.
+// estimate는 주어진 유효 표본의 집계다. 단계 판정에서는 독립 단위를 센다.
 type estimate struct {
-	Repeats  int     `json:"repeats"`
-	Mean     float64 `json:"mean"`
-	StdDev   float64 `json:"std_dev"`
-	Interval float64 `json:"interval_half_width"`
+	Samples        int     `json:"samples"`
+	DegreesFreedom int     `json:"degrees_of_freedom"`
+	Status         string  `json:"status"`
+	Mean           float64 `json:"mean"`
+	StdDev         float64 `json:"std_dev"`
+	Interval       float64 `json:"interval_half_width"`
 }
 
 // comparison은 한 단계를 이전 단계와 견준 결과다.
 type comparison struct {
-	Metric      string  `json:"metric"`
-	Samples     int     `json:"samples"`
-	Baseline    float64 `json:"baseline_mean"`
-	Current     float64 `json:"current_mean"`
-	Difference  float64 `json:"difference"`
-	Interval    float64 `json:"interval_half_width"`
-	Improved    bool    `json:"improved"`
-	Significant bool    `json:"significant"`
+	Metric         string  `json:"metric"`
+	DegreesFreedom int     `json:"degrees_of_freedom,omitzero"`
+	Status         string  `json:"status,omitempty"`
+	Samples        int     `json:"samples"`
+	Baseline       float64 `json:"baseline_mean"`
+	Current        float64 `json:"current_mean"`
+	Difference     float64 `json:"difference"`
+	Interval       float64 `json:"interval_half_width"`
+	Improved       bool    `json:"improved"`
+	Significant    bool    `json:"significant"`
 }
 
 // stageJudgement는 한 단계의 사용 사례별 집계와 이전 단계 대비 판정이다.
@@ -86,38 +90,30 @@ func judge(stages []string, runs map[string][]runMetrics) []stageJudgement {
 		if index > 0 {
 			previous := stages[index-1]
 			judgement.ComparedTo = previous
-			judgement.Comparisons = compareStages(querySamples[previous], querySamples[stage])
+			left, right := pairedIndependentSamples(querySamples[previous], querySamples[stage], queryUnits(runs[stage]))
+			judgement.Comparisons = compareStages(left, right)
 		}
 		judgements = append(judgements, judgement)
 	}
 	return judgements
 }
 
-// collectQuerySamples는 같은 질의의 반복값을 먼저 평균내 하나의 독립 표본으로 만든다.
+// collectQuerySamples는 같은 질의의 반복값을 먼저 평균낸다. 독립 단위 묶기는 다음 단계다.
 // 반복값을 그대로 쌓으면 결정적인 검색에서 같은 값을 여러 번 복제해 표본 수를 부풀린다.
 func collectQuerySamples(runs []runMetrics) map[string]map[string]map[string]float64 {
-	type values struct {
-		total float64
-		count int
-	}
-	totals := map[string]map[string]map[string]values{}
+	totals := map[string]map[string]map[string][]float64{}
 	for _, run := range runs {
 		for _, sample := range run.QuerySamples {
-			if _, present := totals[sample.UseCase]; !present {
-				totals[sample.UseCase] = map[string]map[string]values{}
+			if totals[sample.UseCase] == nil {
+				totals[sample.UseCase] = map[string]map[string][]float64{}
 			}
-			if _, present := totals[sample.UseCase][sample.ID]; !present {
-				totals[sample.UseCase][sample.ID] = map[string]values{}
+			if totals[sample.UseCase][sample.ID] == nil {
+				totals[sample.UseCase][sample.ID] = map[string][]float64{}
 			}
 			for _, metric := range metricNames {
-				value := metric.sample(sample)
-				if value < 0 {
-					continue
+				if v := metric.sample(sample); validMetric(v) {
+					totals[sample.UseCase][sample.ID][metric.name] = append(totals[sample.UseCase][sample.ID][metric.name], v)
 				}
-				current := totals[sample.UseCase][sample.ID][metric.name]
-				current.total += value
-				current.count++
-				totals[sample.UseCase][sample.ID][metric.name] = current
 			}
 		}
 	}
@@ -126,33 +122,32 @@ func collectQuerySamples(runs []runMetrics) map[string]map[string]map[string]flo
 		result[useCase] = map[string]map[string]float64{}
 		for id, metrics := range queries {
 			result[useCase][id] = map[string]float64{}
-			for name, value := range metrics {
-				result[useCase][id][name] = value.total / float64(value.count)
+			for name, values := range metrics {
+				if len(values) == len(runs) {
+					result[useCase][id][name] = mean(values)
+				}
 			}
 		}
 	}
 	return result
 }
 
-// collectSamples는 회차별 측정값을 사용 사례와 지표별 표본으로 옮긴다.
+// collectSamples의 표본은 회차가 아니라 반복 평균을 묶은 독립 대화·과업이다.
 func collectSamples(runs []runMetrics) map[string]map[string][]float64 {
-	samples := map[string]map[string][]float64{}
-	for _, run := range runs {
-		for useCase, metrics := range run.UseCases {
-			if _, present := samples[useCase]; !present {
-				samples[useCase] = map[string][]float64{}
-			}
-			for _, metric := range metricNames {
-				value := metric.value(metrics)
-				// 정답이나 기대 근거가 없어 정의되지 않은 값은 표본에서 뺀다.
-				if value < 0 {
-					continue
+	units := independentSamples(collectQuerySamples(runs), queryUnits(runs))
+	result := map[string]map[string][]float64{}
+	for useCase, groups := range units {
+		result[useCase] = map[string][]float64{}
+		for _, metric := range metricNames {
+			result[useCase][metric.name] = []float64{}
+			for _, id := range slices.Sorted(maps.Keys(groups)) {
+				if value, ok := groups[id][metric.name]; ok {
+					result[useCase][metric.name] = append(result[useCase][metric.name], value)
 				}
-				samples[useCase][metric.name] = append(samples[useCase][metric.name], value)
 			}
 		}
 	}
-	return samples
+	return result
 }
 
 func compareStages(baseline, current map[string]map[string]map[string]float64) map[string][]comparison {
@@ -175,16 +170,14 @@ func compareStages(baseline, current map[string]map[string]map[string]float64) m
 				left = append(left, previousValue)
 				right = append(right, currentValue)
 			}
-			if len(left) < 2 {
-				continue
-			}
 			difference, interval := pairedInterval(left, right)
-			improved := difference > 0
+			improved := len(left) > 0 && difference > 0
 			if metric.lowerIsBetter {
-				improved = difference < 0
+				improved = len(left) > 0 && difference < 0
 			}
 			comparisons[useCase] = append(comparisons[useCase], comparison{
-				Metric:     metric.name,
+				Metric:         metric.name,
+				DegreesFreedom: max(0, len(left)-1), Status: statisticalStatus(len(left)),
 				Samples:    len(left),
 				Baseline:   mean(left),
 				Current:    mean(right),
@@ -200,7 +193,8 @@ func compareStages(baseline, current map[string]map[string]map[string]float64) m
 }
 
 func estimateOf(values []float64) estimate {
-	result := estimate{Repeats: len(values), Mean: mean(values), StdDev: undefinedMetric, Interval: undefinedMetric}
+	values = slices.DeleteFunc(slices.Clone(values), func(v float64) bool { return !validMetric(v) })
+	result := estimate{Samples: len(values), DegreesFreedom: max(0, len(values)-1), Status: statisticalStatus(len(values)), Mean: mean(values), StdDev: undefinedMetric, Interval: undefinedMetric}
 	if len(values) < 2 {
 		return result
 	}
@@ -213,8 +207,14 @@ func estimateOf(values []float64) estimate {
 
 // pairedInterval은 같은 질의의 단계별 차이로 평균 개선폭과 95% 신뢰구간 반폭을 낸다.
 func pairedInterval(baseline, current []float64) (float64, float64) {
+	if len(baseline) != len(current) || len(baseline) == 0 {
+		return undefinedMetric, undefinedMetric
+	}
 	differences := make([]float64, len(baseline))
 	for index := range baseline {
+		if !validMetric(baseline[index]) || !validMetric(current[index]) {
+			return undefinedMetric, undefinedMetric
+		}
 		differences[index] = current[index] - baseline[index]
 	}
 	difference := mean(differences)
@@ -231,10 +231,10 @@ func pairedInterval(baseline, current []float64) (float64, float64) {
 
 func mean(values []float64) float64 {
 	if len(values) == 0 {
-		return 0
+		return undefinedMetric
 	}
 	total := 0.0
-	for _, value := range values {
+	for _, value := range slices.Sorted(slices.Values(values)) {
 		total += value
 	}
 	return total / float64(len(values))
@@ -246,7 +246,7 @@ func variance(values []float64) float64 {
 	}
 	average := mean(values)
 	total := 0.0
-	for _, value := range values {
+	for _, value := range slices.Sorted(slices.Values(values)) {
 		total += (value - average) * (value - average)
 	}
 	return total / float64(len(values)-1)
@@ -254,17 +254,17 @@ func variance(values []float64) float64 {
 
 // marginal은 한 단계가 바로 앞 단계에 더한 한계 기여다. 「검색 품질 평가」가 정답·필수
 // 근거 증가량과 문자 수·지연 증가량을 나란히 남기고 하나의 합성 점수로 줄이지 말라고
-// 정했다. 회수 수는 검색이 결정적이므로 첫 회차로 세고, 문자 수와 지연은 반복 평균의
-// 질의당 차이다.
+// 정했다. 회수 수와 비용은 대응 회차의 차이를 먼저 질의별로 평균한다.
 type marginal struct {
 	Stage          string  `json:"stage"`
 	ComparedTo     string  `json:"compared_to"`
 	UseCase        string  `json:"use_case"`
 	Queries        int     `json:"queries"`
-	Recovered      int     `json:"newly_recovered"`
-	Lost           int     `json:"lost"`
+	Recovered      float64 `json:"newly_recovered"`
+	Lost           float64 `json:"lost"`
 	AddedChars     float64 `json:"added_chars_per_query"`
 	AddedLatencyMS float64 `json:"added_latency_ms_per_query"`
+	LatencyQueries int     `json:"latency_queries"`
 }
 
 // marginals는 단계 목록을 받은 순서대로 바로 앞 단계와 견준 한계 기여를 낸다.
@@ -278,7 +278,8 @@ func marginals(stages []string, runs map[string][]runMetrics) []marginal {
 		before, after := queryCosts(previous), queryCosts(current)
 		for _, useCase := range useCases {
 			entry := marginal{Stage: stages[index], ComparedTo: stages[index-1], UseCase: useCase}
-			chars, latency := 0.0, 0.0
+			chars, latencies := []float64{}, []float64{}
+			recoveryMeasured := true
 			for _, id := range slices.Sorted(maps.Keys(after[useCase])) {
 				cost := after[useCase][id]
 				base, present := before[useCase][id]
@@ -286,24 +287,27 @@ func marginals(stages []string, runs map[string][]runMetrics) []marginal {
 					continue
 				}
 				entry.Queries++
-				chars += cost.chars - base.chars
-				latency += cost.latency - base.latency
-				for key := range current[0].recovered[id] {
-					if _, found := previous[0].recovered[id][key]; !found {
-						entry.Recovered++
-					}
+				chars = append(chars, cost.chars-base.chars)
+				if validMetric(cost.latency) && validMetric(base.latency) {
+					latencies = append(latencies, cost.latency-base.latency)
 				}
-				for key := range previous[0].recovered[id] {
-					if _, found := current[0].recovered[id][key]; !found {
-						entry.Lost++
-					}
+				gained, lost := recoveredDifference(previous, current, id)
+				if gained < 0 {
+					recoveryMeasured = false
+				} else {
+					entry.Recovered += gained
+					entry.Lost += lost
 				}
 			}
 			if entry.Queries == 0 {
 				continue
 			}
-			entry.AddedChars = chars / float64(entry.Queries)
-			entry.AddedLatencyMS = latency / float64(entry.Queries)
+			entry.AddedChars = mean(chars)
+			entry.AddedLatencyMS = mean(latencies)
+			entry.LatencyQueries = len(latencies)
+			if !recoveryMeasured {
+				entry.Recovered, entry.Lost = undefinedMetric, undefinedMetric
+			}
 			result = append(result, entry)
 		}
 	}
@@ -317,17 +321,73 @@ type queryCost struct {
 
 // queryCosts는 사용 사례와 질의별로 반복 회차의 문자 수와 지연을 평균낸다.
 func queryCosts(runs []runMetrics) map[string]map[string]queryCost {
-	totals := map[string]map[string]queryCost{}
+	type costs struct{ chars, latencies []float64 }
+	totals := map[string]map[string]costs{}
 	for _, run := range runs {
 		for _, sample := range run.QuerySamples {
 			if totals[sample.UseCase] == nil {
-				totals[sample.UseCase] = map[string]queryCost{}
+				totals[sample.UseCase] = map[string]costs{}
 			}
 			cost := totals[sample.UseCase][sample.ID]
-			cost.chars += float64(sample.BudgetUsed) / float64(len(runs))
-			cost.latency += sample.LatencyMS / float64(len(runs))
+			cost.chars = append(cost.chars, float64(sample.BudgetUsed))
+			if validMetric(sample.LatencyMS) {
+				cost.latencies = append(cost.latencies, sample.LatencyMS)
+			}
 			totals[sample.UseCase][sample.ID] = cost
 		}
 	}
-	return totals
+	result := map[string]map[string]queryCost{}
+	for useCase, queries := range totals {
+		result[useCase] = map[string]queryCost{}
+		for id, costs := range queries {
+			latency := undefinedMetric
+			if len(costs.latencies) == len(runs) {
+				latency = mean(costs.latencies)
+			}
+			result[useCase][id] = queryCost{chars: mean(costs.chars), latency: latency}
+		}
+	}
+	return result
+}
+
+func recoveredDifference(before, after []runMetrics, id string) (float64, float64) {
+	if len(before) != len(after) || len(before) == 0 {
+		return undefinedMetric, undefinedMetric
+	}
+	previous := map[int]runMetrics{}
+	for _, run := range before {
+		previous[run.Repeat] = run
+	}
+	gained, lost := []float64{}, []float64{}
+	for _, run := range after {
+		base, ok := previous[run.Repeat]
+		left, leftOK := base.recovered[id]
+		right, rightOK := run.recovered[id]
+		if !ok || !leftOK || !rightOK {
+			return undefinedMetric, undefinedMetric
+		}
+		add, remove := 0.0, 0.0
+		for key := range right {
+			if _, ok := left[key]; !ok {
+				add++
+			}
+		}
+		for key := range left {
+			if _, ok := right[key]; !ok {
+				remove++
+			}
+		}
+		gained, lost = append(gained, add), append(lost, remove)
+	}
+	return mean(gained), mean(lost)
+}
+
+func statisticalStatus(n int) string {
+	if n == 0 {
+		return "unmeasured"
+	}
+	if n == 1 {
+		return "insufficient_units"
+	}
+	return "measured"
 }

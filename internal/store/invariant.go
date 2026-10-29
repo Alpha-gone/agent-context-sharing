@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,6 +61,7 @@ type EmbeddingExpectation struct {
 
 type auditContext struct {
 	id, graphID, layer string
+	vertexID           int64
 	deleted            bool
 	start              time.Time
 	end                *time.Time
@@ -465,36 +467,45 @@ func (s *Store) loadDanglingAuditEdges(ctx context.Context, queryer cypherQuerye
 	contexts := pgx.Identifier{s.graphName, "Context"}.Sanitize()
 	var queries []string
 	var arguments []any
-	var scopeQuery string
 	filters := []string{`(e.properties ->> 'graph_id'::text = $1 OR a.properties ->> 'graph_id'::text = $1 OR b.properties ->> 'graph_id'::text = $1)`}
 	arguments = []any{snapshot.graphID}
 	if snapshot.scope != nil {
 		// 방향별로 나눠야 OR의 사후 필터 대신 start_id/end_id 인덱스로 좁힌다.
 		// 고아 간선은 살아 있는 끝점만 범위에 포함되므로 두 방향에서 중복되지 않는다.
-		scopeQuery = `WITH scope_ids AS MATERIALIZED (SELECT id FROM ` + contexts + ` WHERE ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '"context_id"'::ag_catalog.agtype]) IN (SELECT value::ag_catalog.agtype FROM unnest($1::text[]) value)) `
-		filters = []string{`e.start_id = ANY(ARRAY(SELECT id FROM scope_ids))`, `e.end_id = ANY(ARRAY(SELECT id FROM scope_ids))`}
 		ids := make([]string, 0, len(snapshot.scope))
 		for id := range snapshot.scope {
-			encoded, err := json.Marshal(id)
-			if err != nil {
-				return err
+			if value, ok := snapshot.contexts[id]; ok {
+				ids = append(ids, sqlString(strconv.FormatInt(value.vertexID, 10))+"::ag_catalog.graphid")
 			}
-			ids = append(ids, string(encoded))
 		}
-		arguments = []any{ids}
+		if len(ids) == 0 {
+			return nil
+		}
+		// 앞선 동일 스냅숏에서 읽은 물리 식별자를 사용한다. CTE의 미지수 배열은
+		// 허브의 평균 선택도로 추정되어 이웃이 없는 끝점까지 전체 스캔할 수 있다.
+		slices.Sort(ids)
+		values := "(" + strings.Join(ids, ",") + ")"
+		filters = []string{"e.start_id IN " + values, "e.end_id IN " + values}
+		arguments = nil
 	}
 	for _, label := range []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"} {
 		for _, filter := range filters {
+			edges := pgx.Identifier{s.graphName, label}.Sanitize() + ` e`
+			if snapshot.scope != nil {
+				// 끝점 누락 조인보다 먼저 영향 주변부를 확정해 전체 간선 스캔을 막는다.
+				edges = `(SELECT * FROM ` + edges + ` WHERE ` + filter + ` OFFSET 0) e`
+				filter = `true`
+			}
 			queries = append(queries, `SELECT '`+label+`', coalesce(e.properties ->> 'graph_id'::text, ''),
 			coalesce(e.properties ->> 'relation_id'::text, ''), coalesce(e.properties ->> 'state'::text, ''),
 			coalesce(a.properties ->> 'context_id'::text, 'age:' || e.start_id::text),
 			coalesce(b.properties ->> 'context_id'::text, 'age:' || e.end_id::text)
-			FROM `+pgx.Identifier{s.graphName, label}.Sanitize()+` e
+			FROM `+edges+`
 			LEFT JOIN `+contexts+` a ON a.id=e.start_id LEFT JOIN `+contexts+` b ON b.id=e.end_id
 			WHERE (a.id IS NULL OR b.id IS NULL) AND `+filter)
 		}
 	}
-	rows, err := queryer.Query(ctx, scopeQuery+strings.Join(queries, " UNION ALL "), arguments...)
+	rows, err := queryer.Query(ctx, strings.Join(queries, " UNION ALL "), arguments...)
 	if err != nil {
 		return fmt.Errorf("불변식 고아 간선 조회: %w", err)
 	}
@@ -637,15 +648,16 @@ func (s *Store) loadAuditEdges(ctx context.Context, queryer cypherQueryer, filte
 // 쓰지 않으므로 읽지 않는다.
 func (s *Store) loadAuditContexts(ctx context.Context, queryer cypherQueryer, filter string, contexts map[string]auditContext) error {
 	rows, err := queryer.Query(ctx, s.cypherSQL("MATCH (n:Context) WHERE "+filter+
-		" RETURN n.context_id, coalesce(n.graph_id, ''), coalesce(n.layer, ''), coalesce(n.deleted_at, ''), coalesce(n.event_start, ''), coalesce(n.event_end, '')",
-		"id agtype, graph agtype, layer agtype, deleted agtype, start agtype, finish agtype"), pgx.QueryExecModeExec)
+		" RETURN n.context_id, coalesce(n.graph_id, ''), coalesce(n.layer, ''), coalesce(n.deleted_at, ''), coalesce(n.event_start, ''), coalesce(n.event_end, ''), id(n)",
+		"id agtype, graph agtype, layer agtype, deleted agtype, start agtype, finish agtype, vertex agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return fmt.Errorf("불변식 정점 조회: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var raw [6]string
-		if err := rows.Scan(&raw[0], &raw[1], &raw[2], &raw[3], &raw[4], &raw[5]); err != nil {
+		var vertex string
+		if err := rows.Scan(&raw[0], &raw[1], &raw[2], &raw[3], &raw[4], &raw[5], &vertex); err != nil {
 			return fmt.Errorf("불변식 정점 행 해석: %w", err)
 		}
 		var values [6]string
@@ -655,6 +667,9 @@ func (s *Store) loadAuditContexts(ctx context.Context, queryer cypherQueryer, fi
 			}
 		}
 		value := auditContext{id: values[0], graphID: values[1], layer: values[2], deleted: values[3] != ""}
+		if err := json.Unmarshal([]byte(vertex), &value.vertexID); err != nil {
+			return fmt.Errorf("불변식 정점 물리 식별자 해석: %w", err)
+		}
 		if values[4] != "" {
 			start, err := time.Parse(time.RFC3339Nano, values[4])
 			if err != nil {

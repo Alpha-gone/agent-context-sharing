@@ -91,6 +91,15 @@ func (s *Store) hasAppliedDiscard(ctx context.Context, queryer cypherQueryer, gr
 // 존재하는지 확인한다. 지속 평가는 본문 대신 시나리오 표식을 판단 입력에
 // 남겨 반복 강화 여부를 검증한다.
 func (s *Store) HasOperationJudgment(ctx context.Context, graphID model.ID, judgmentInput string) (bool, error) {
+	return s.hasOperationJudgment(ctx, graphID, judgmentInput, false)
+}
+
+// HasAppliedOperationJudgment는 거부된 판단 기록을 적용 성공의 근거로 사용하지 않는다.
+func (s *Store) HasAppliedOperationJudgment(ctx context.Context, graphID model.ID, judgmentInput string) (bool, error) {
+	return s.hasOperationJudgment(ctx, graphID, judgmentInput, true)
+}
+
+func (s *Store) hasOperationJudgment(ctx context.Context, graphID model.ID, judgmentInput string, appliedOnly bool) (bool, error) {
 	if !graphID.IsV7() || judgmentInput == "" {
 		return false, fmt.Errorf("관리 연산 판단 조회 인자가 올바르지 않다")
 	}
@@ -99,7 +108,8 @@ func (s *Store) HasOperationJudgment(ctx context.Context, graphID model.ID, judg
 		SELECT EXISTS (
 			SELECT 1 FROM public.operation_log
 			WHERE graph_id = $1 AND judgment_input = $2
-		)`, graphID.String(), judgmentInput).Scan(&found); err != nil {
+			  AND (NOT $3::boolean OR result = 'applied')
+		)`, graphID.String(), judgmentInput, appliedOnly).Scan(&found); err != nil {
 		return false, fmt.Errorf("관리 연산 판단 입력 조회: %w", err)
 	}
 	return found, nil
@@ -190,7 +200,6 @@ func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contex
 	if err != nil {
 		return fmt.Errorf("색인 작업 식별자 생성: %w", err)
 	}
-	now := time.Now().UTC()
 	var correlationID *string
 	if id := model.CorrelationID(ctx); !id.IsZero() {
 		correlationID = new(id.String())
@@ -200,14 +209,14 @@ func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contex
 	err = tx.QueryRow(ctx, `
 		INSERT INTO public.index_task (
 			task_id, context_id, graph_id, attempts, state, enqueued_at, next_attempt_at, correlation_id
-		) VALUES ($1, $2, $3, 0, 'pending', $4, $4, $5)
+		) VALUES ($1, $2, $3, 0, 'pending', statement_timestamp(), statement_timestamp(), $4)
 		ON CONFLICT (context_id) DO UPDATE SET
 			attempts = 0, state = 'pending', last_error = NULL,
 			enqueued_at = EXCLUDED.enqueued_at, next_attempt_at = EXCLUDED.next_attempt_at,
 			correlation_id = EXCLUDED.correlation_id
 		WHERE index_task.graph_id = EXCLUDED.graph_id
  RETURNING task_id::text,enqueued_at`,
-		taskID.String(), contextID.String(), graphID.String(), now, correlationID).Scan(&storedTask, &generation)
+		taskID.String(), contextID.String(), graphID.String(), correlationID).Scan(&storedTask, &generation)
 	if err != nil {
 		return fmt.Errorf("색인 작업 등록: %w", err)
 	}

@@ -1,6 +1,6 @@
 # MCP 전송과 도구 계약
 
-목표 Streamable HTTP 전송, 도구 14종, 행위자 결합, 멱등성 외피, 입력·응답·오류의 정본이다. 보호 HTTP 전송과 기동 경로의 업무 연결·공통 HTTP 경계 및 [전체 서버 도구 계약](../reviews/2026-10-24-mcp-09.md)을 인수했다. 실제 호스트 인수는 대기다.
+목표 Streamable HTTP 전송, 도구 14종, 행위자 결합, 멱등성 외피, 입력·응답·오류의 정본이다. 보호 HTTP 전송과 기동 경로의 업무 연결·공통 HTTP 경계 및 [전체 서버 도구 계약](../reviews/2026-10-24-mcp-09.md)을 인수했다. [선정 CLI 인수](../reviews/2026-10-27-test-08-completion.md) 범위는 완료했고 다른 호스트/판·실행 표면·저장 모드는 미인수다.
 
 [설계 전체](../SDD.md) · [요구사항과 설계 대응](traceability.md)
 
@@ -18,7 +18,7 @@
 
 미지원 revision은 HTTP `400`·`UnsupportedProtocolVersion(-32022)`와 `data.supported: ["2026-07-28"]`·`data.requested`를 반환한다. 유효한 revision·외피의 미지원 RPC는 HTTP `404`·`-32601`이다. 이전 `initialize` 요청은 필수 외피 누락 또는 미지원 메서드로 거부하고 지원 revision을 진단에 표시한다. 요청 본문 상한과 업무·조회 시간 예산은 유지한다.
 
-완료 결과에는 `resultType: "complete"`를 포함하고 도구 결과의 표준 `content`, `structuredContent`, `isError`에 기존 도메인 결과·오류를 매핑한다. 도메인 오류 8종의 의미와 `context_flow_get` 평면 응답은 유지하고 기존 업무 도구 13종에 등록 도구 하나를 추가하여 목표 목록은 14종이다. SDK·호스트의 실제 적합성은 `TBD-AGENT_CONTEXT-064`에서 검증하며 revision 선정만으로 지원 완료를 주장하지 않는다.
+완료 결과에는 `resultType: "complete"`를 포함하고 도구 결과의 표준 `content`, `structuredContent`, `isError`에 기존 도메인 결과·오류를 매핑한다. 도메인 오류 8종의 의미와 `context_flow_get` 평면 응답은 유지하고 기존 업무 도구 13종에 등록 도구 하나를 추가하여 목표 목록은 14종이다. SDK·선정 CLI의 실제 적합성은 `TBD-AGENT_CONTEXT-064`의 [해소 범위](traceability.md#해소한-설계-선택)를 따른다. 다른 표면은 검증 전 지원을 주장하지 않는다.
 
 ### 보호 HTTP 구현 경계
 
@@ -161,7 +161,7 @@ UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용
 
 ## MCP 표면
 
-직접 연결의 표면은 [표준 MCP 경계](mcp.md#표준-mcp-경계)를 따른다. 현재 `internal/mcp`에는 최소 SDK 진입 경계와 [14종 도구 정의·검증](../reviews/2026-10-18-mcp-03.md)이 있다. 공통 instructions와 도구의 description·annotations·스키마를 실제 SDK 목록·호출로 인수했다. [MCP-09](../reviews/2026-10-24-mcp-09.md)에서 두 실제 조립 서버의 14종 성공·도메인 오류·정상 부분 결과와 발견/목록/전송 오류를 응답 스냅샷으로 인수했다. 취소·시간 예산은 MCP-08·ARCH-07·TEST-07의 새 실행으로 대조했으며 실제 호스트 인수는 대기 상태다. 실제 호스트 검증 전에는 지원을 주장하지 않는다.
+직접 연결의 표면은 [표준 MCP 경계](mcp.md#표준-mcp-경계)를 따른다. 현재 `internal/mcp`에는 최소 SDK 진입 경계와 [14종 도구 정의·검증](../reviews/2026-10-18-mcp-03.md)이 있다. 공통 instructions와 도구의 description·annotations·스키마를 실제 SDK 목록·호출로 인수했다. [MCP-09](../reviews/2026-10-24-mcp-09.md)에서 두 실제 조립 서버의 14종 성공·도메인 오류·정상 부분 결과와 발견/목록/전송 오류를 응답 스냅샷으로 인수했다. 취소·시간 예산은 MCP-08·ARCH-07·TEST-07의 새 실행으로 대조했으며 [선정 CLI 인수](../reviews/2026-10-27-test-08-completion.md) 범위는 완료했고 다른 호스트/판·실행 표면·저장 모드는 미인수다.
 
 ## 응답 직렬화
 
@@ -183,7 +183,7 @@ MCP 처리기는 `resultType: "complete"`와 표준 `content`, `structuredConten
 
 흐름 항목의 entry_distance·matched_channels·rank·origin_kinds와 선택 folded_count를 보존한다. budget은 used·limit, channels는 채널별 candidates·latency_ms·contribution·failure이며 내부 연결 계측과 후보 차수는 싣지 않는다. truncated.result_truncated는 정상 부분 결과의 표시다. 홉 절단에는 hop_boundary, 예산 절단에는 reason·excluded를 보존하며 두 절단이 겹치면 둘 다 싣는다. 일부 채널 실패·빈 결과·절단은 isError=false다. DB 내부 장애와 감싸진 부재·커서 오류를 조립 경계에서 구분하며 내부 원문은 응답에 포함하지 않는다.
 
-[MCP-07 모듈 인수](../reviews/2026-10-20-mcp-07.md)는 실제 저장·검색과 고정 SDK 외피를 각각 검증했다. 당시 후속이었던 보호 OAuth/TLS의 전체 조립·오류 계층·전체 응답 스냅샷은 [MCP-09](../reviews/2026-10-24-mcp-09.md)에서 인수했다. 시간 예산·단절은 MCP-08·ARCH-07·TEST-07의 증거를 따르며 실제 호스트 인수는 후속 범위다.
+[MCP-07 모듈 인수](../reviews/2026-10-20-mcp-07.md)는 실제 저장·검색과 고정 SDK 외피를 각각 검증했다. 당시 후속이었던 보호 OAuth/TLS의 전체 조립·오류 계층·전체 응답 스냅샷은 [MCP-09](../reviews/2026-10-24-mcp-09.md)에서 인수했다. 시간 예산·단절은 MCP-08·ARCH-07·TEST-07의 증거를 따르며 [선정 CLI 인수](../reviews/2026-10-27-test-08-completion.md) 범위는 완료했고 다른 호스트/판·실행 표면·저장 모드는 미인수다.
 
 ## 오류의 생성과 전달
 

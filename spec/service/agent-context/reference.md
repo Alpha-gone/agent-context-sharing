@@ -346,3 +346,8 @@
 ## 2026-10-28 TEST-09 색인 시계
 
 - 조회일 2026-10-28 KST. [PostgreSQL 18 현재 시각 함수](https://www.postgresql.org/docs/18/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT)에서 statement_timestamp()는 현재 명령의 시작, CURRENT_TIMESTAMP는 트랜잭션 시작, clock_timestamp()는 실제 현재 시각임을 확인했다. 색인 등록·재등록과 확보·리스·재시도·준비 검사를 같은 DB 시계로 맞추는 근거로 반영했다. 호스트 시각을 등록값으로 보내던 경로와 평가 실행기의 직접 DB 접근은 [TEST-09 검토](reviews/2026-10-28-test-09.md)에 수정·회귀 범위를 기록한다.
+
+## 2026-10-29 #146 색인 잠금 순서
+
+- 조회일 2026-10-29 KST. [PostgreSQL 18 교착 방지](https://www.postgresql.org/docs/18/explicit-locking.html#LOCKING-DEADLOCKS)에서 여러 대상을 잠그는 모든 경로가 같은 순서를 사용해야 함을 확인했다. [수명주기 공통 잠금 순서](sdd/context-lifecycle.md#판정의-직렬화)와 [색인 작업 큐](sdd/indexing.md#색인-작업-큐)의 그래프 선행 잠금에 반영했다.
+- [pgx v5.10.0 Tx](https://pkg.go.dev/github.com/jackc/pgx/v5@v5.10.0#Tx)의 중첩 트랜잭션은 저장점이며 중첩 Commit은 저장점을 해제한다. Begin의 컨텍스트 취소는 자동 롤백을 보장하지 않으므로 회귀 시험은 작업자 취소·종료 대기와 바깥 트랜잭션 롤백을 명시한다.

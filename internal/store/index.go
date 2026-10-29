@@ -238,7 +238,7 @@ func (s *Store) failIndexTask(ctx context.Context, task IndexTask, claim indexTa
 
 // storeIndexResult는 제공자 결과를 저장하고 처리한 작업을 지운다.
 //
-// 작업 삭제를 먼저 조건부로 수행해 재등록·재확보와 결과 공개를 직렬화한다.
+// 그래프를 먼저 잠근 뒤 작업을 조건부 삭제해 노드 쓰기·재확보와 결과 공개를 직렬화한다.
 // 무효 확보분이면 임베딩을 건드리지 않고, 뒤의 저장이 실패하면 삭제도 롤백한다.
 func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, claim indexTaskClaim, result IndexTaskResult) (stored bool, err error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -246,6 +246,10 @@ func (s *Store) storeIndexResult(ctx context.Context, task IndexTask, claim inde
 		return false, fmt.Errorf("색인 결과 트랜잭션 시작: %w", err)
 	}
 	defer finishWrite(ctx, tx, "storeIndexResult", &err)
+	// 노드 갱신·복구의 그래프→작업 순서와 맞춘다. 대기 뒤 세대를 다시 대조한다.
+	if _, err := lockGraphs(ctx, tx, []model.ID{task.GraphID}); err != nil {
+		return false, err
+	}
 	deleted, err := tx.Exec(ctx, `DELETE FROM public.index_task
 		WHERE task_id = $1 AND enqueued_at = $2 AND next_attempt_at = $3 AND state = 'pending'`,
 		task.ID.String(), claim.enqueuedAt, claim.leasedUntil)
@@ -530,6 +534,9 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 	}
 	tx = observeWriteTx(ctx, tx, false)
 	defer finishWrite(ctx, tx, "ReindexGraph", &err)
+	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
+		return err
+	}
 	rows, err := tx.Query(ctx, `SELECT properties ->> 'context_id'::text, properties ->> 'layer'::text,
 		properties ->> 'deleted_at'::text IS NOT NULL
 		FROM `+s.contextTable()+` WHERE properties ->> 'graph_id'::text = $1

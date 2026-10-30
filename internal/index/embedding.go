@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -61,8 +62,9 @@ func (cfg Config) ModelID() string {
 
 // ProviderError는 원문 응답 없이 장애 분류와 안전한 사유만 보존한다.
 type ProviderError struct {
-	Reason    string
-	Retryable bool
+	Reason     string
+	Retryable  bool
+	RetryAfter time.Duration
 }
 
 // Error는 저장·공개·로그에 남겨도 본문과 API 키가 없는 사유다.
@@ -121,7 +123,7 @@ func (worker *Worker) embedResponse(ctx context.Context, input string, document 
 	defer response.Body.Close()
 	status = uint16(response.StatusCode)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, status, ProviderError{Reason: fmt.Sprintf("임베딩 제공자 상태: %d", response.StatusCode), Retryable: response.StatusCode == 408 || response.StatusCode == 429 || (response.StatusCode >= 500 && response.StatusCode < 600)}
+		return nil, status, ProviderError{Reason: fmt.Sprintf("임베딩 제공자 상태: %d", response.StatusCode), RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), worker.providerTime()), Retryable: response.StatusCode == 408 || response.StatusCode == 429 || (response.StatusCode >= 500 && response.StatusCode < 600)}
 	}
 	// 전송 실패와 완전히 수신한 JSON의 계약 위반을 분리한다.
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxEmbeddingResponseBytes+1))

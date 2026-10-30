@@ -373,3 +373,9 @@
 
 - 조회일 2026-10-30 KST. [Apache AGE 저장 구조](https://age.apache.org/age-manual/master/intro/graphs.html#how-graphs-are-stored-in-postgres)의 label별 테이블과 부모 간선 테이블, [PostgreSQL 18 표현식 인덱스](https://www.postgresql.org/docs/18/indexes-expressional.html)의 질의 표현식 일치 조건을 확인했다. 적용 AGE 1.8.0/PG18 고정 이미지에서 실제 openCypher 번역 계획으로 label별 복합 인덱스를 검증한다. 최신 매뉴얼만으로 설치 판의 계획을 보장하지 않는다.
 - [PostgreSQL 18 EXPLAIN](https://www.postgresql.org/docs/18/using-explain.html)은 ANALYZE가 실제 문장을 실행하고 실제 행·loops와 버퍼를 보여준다고 정한다. [관계 계획 시험](sdd/testing.md#테스트-계층)은 쓰기 계획을 전용 DB의 롤백 트랜잭션에 한정하며, 강제 planner 설정 없이 기본 계획의 실제 읽기 범위를 대조한다.
+
+
+## 2026-10-30 #157 제공자 차단과 Retry-After
+
+- [RFC 9110 §10.2.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3)은 Retry-After를 HTTP-date 또는 음수가 아닌 초 단위 정수로 정의한다. 조회일 2026-10-30 KST. [색인 설계](sdd/indexing.md#제공자-장애-중-작업-확보-차단)는 이 지연을 탐침 백오프의 하한으로 사용하되 로컬 보호 상한 24시간을 둔다. 지터 범위·상한·차단 조건은 RFC 요구가 아니라 이 서비스의 운영 정책이다.
+- Go 1.27.1 SDK의 `net/http.ParseTime`, `math/rand/v2.Int64N`, `sync.Mutex.TryLock` 공식 API 문서와 구현을 확인했다. 기존 HTTPS·취소/30초 호출 상한·응답 크기/벡터 검증을 유지하고, 탐침과 실제 확보 회차를 Worker별로 직렬화한다.

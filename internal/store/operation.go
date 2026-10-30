@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -183,6 +184,10 @@ func validateRelationOperation(operation *OperationRecord, graphID, relationID m
 // enqueueIndexTask는 색인 대기 작업을 컨텍스트 변경과 같은 트랜잭션에서 등록한다.
 // 컨텍스트마다 한 행만 두므로 같은 행이 있으면 대기 상태로 되돌린다.
 func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contextID model.ID, layer model.Layer) error {
+	return s.registerIndexTask(ctx, tx, graphID, contextID, layer, false)
+}
+
+func (s *Store) registerIndexTask(ctx context.Context, tx pgx.Tx, graphID, contextID model.ID, layer model.Layer, preserveExisting bool) error {
 	if !graphID.IsV7() || !contextID.IsV7() {
 		return fmt.Errorf("색인 작업 식별자가 UUIDv7이 아니다")
 	}
@@ -206,17 +211,23 @@ func (s *Store) enqueueIndexTask(ctx context.Context, tx pgx.Tx, graphID, contex
 	}
 	var storedTask string
 	var generation time.Time
+	conflict := `ON CONFLICT (context_id) DO UPDATE SET
+		attempts = 0, state = 'pending', last_error = NULL,
+		enqueued_at = EXCLUDED.enqueued_at, next_attempt_at = EXCLUDED.next_attempt_at,
+		correlation_id = EXCLUDED.correlation_id
+		WHERE index_task.graph_id = EXCLUDED.graph_id`
+	if preserveExisting {
+		conflict = `ON CONFLICT (context_id) DO NOTHING`
+	}
 	err = tx.QueryRow(ctx, `
 		INSERT INTO public.index_task (
 			task_id, context_id, graph_id, attempts, state, enqueued_at, next_attempt_at, correlation_id
 		) VALUES ($1, $2, $3, 0, 'pending', statement_timestamp(), statement_timestamp(), $4)
-		ON CONFLICT (context_id) DO UPDATE SET
-			attempts = 0, state = 'pending', last_error = NULL,
-			enqueued_at = EXCLUDED.enqueued_at, next_attempt_at = EXCLUDED.next_attempt_at,
-			correlation_id = EXCLUDED.correlation_id
-		WHERE index_task.graph_id = EXCLUDED.graph_id
- RETURNING task_id::text,enqueued_at`,
+		`+conflict+` RETURNING task_id::text,enqueued_at`,
 		taskID.String(), contextID.String(), graphID.String(), correlationID).Scan(&storedTask, &generation)
+	if preserveExisting && errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("색인 작업 등록: %w", err)
 	}

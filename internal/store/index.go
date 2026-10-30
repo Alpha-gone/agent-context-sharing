@@ -404,7 +404,7 @@ func (s *Store) CheckEmbeddingSchema(ctx context.Context, vectorType string, dim
 	return nil
 }
 
-// ReindexOutdatedEmbeddings는 모델·대상 계층 전환이 필요한 그래프를 다시 등록한다.
+// ReindexOutdatedEmbeddings는 기동 시 현재 모델·대상 구성의 누락 작업만 보충한다.
 func (s *Store) ReindexOutdatedEmbeddings(ctx context.Context, modelID string) error {
 	if strings.TrimSpace(modelID) == "" {
 		return fmt.Errorf("현재 임베딩 모델 식별자가 없다")
@@ -416,8 +416,8 @@ func (s *Store) ReindexOutdatedEmbeddings(ctx context.Context, modelID string) e
 		LEFT JOIN public.context_embedding AS embedding
 		  ON embedding.context_id::text = node.properties ->> 'context_id'::text
 		 AND embedding.graph_id::text = node.properties ->> 'graph_id'::text
-		WHERE (node.properties ->> 'deleted_at'::text IS NULL AND embedding.model_id <> $1)
-		   OR (node.properties ->> 'deleted_at'::text IS NULL AND embedding.context_id IS NULL
+		WHERE (node.properties ->> 'deleted_at'::text IS NULL
+		       AND (embedding.context_id IS NULL OR embedding.model_id <> $1)
 		       AND (NOT $2::boolean OR node.properties ->> 'layer'::text <> 'source')
 		       AND NOT EXISTS (SELECT 1 FROM public.index_task AS task
 		           WHERE task.context_id::text = node.properties ->> 'context_id'::text
@@ -452,7 +452,7 @@ func (s *Store) ReindexOutdatedEmbeddings(ctx context.Context, modelID string) e
 		return fmt.Errorf("재색인 그래프 행 읽기: %w", err)
 	}
 	for _, graphID := range graphIDs {
-		if err := s.ReindexGraph(ctx, graphID); err != nil {
+		if err := s.reindexGraph(ctx, graphID, modelID); err != nil {
 			return err
 		}
 	}
@@ -525,6 +525,11 @@ func (s *Store) ReindexProgress(ctx context.Context, graphID model.ID, modelID s
 // 바꿔도 예전 구성이 남긴 원천 임베딩이 의미 유사도 채널에 계속 올라와 두 구성이
 // 등록 조건 말고도 달라진다.
 func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) {
+	return s.reindexGraph(ctx, graphID, "")
+}
+
+// modelID가 있으면 기동 보충이며 현재 모델·기존 작업을 보존한다. 빈 값은 명시적 재색인이다.
+func (s *Store) reindexGraph(ctx context.Context, graphID model.ID, modelID string) (err error) {
 	if !graphID.IsV7() {
 		return fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
 	}
@@ -537,10 +542,15 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT properties ->> 'context_id'::text, properties ->> 'layer'::text,
-		properties ->> 'deleted_at'::text IS NOT NULL
-		FROM `+s.contextTable()+` WHERE properties ->> 'graph_id'::text = $1
-		ORDER BY properties ->> 'context_id'::text`, graphID.String())
+	rows, err := tx.Query(ctx, `SELECT node.properties ->> 'context_id'::text, node.properties ->> 'layer'::text,
+		node.properties ->> 'deleted_at'::text IS NOT NULL,
+		($2::text = '' OR (NOT EXISTS (SELECT 1 FROM public.index_task AS task
+		    WHERE task.context_id = (node.properties ->> 'context_id'::text)::uuid AND task.graph_id=$1::uuid)
+		  AND NOT EXISTS (SELECT 1 FROM public.context_embedding AS embedding
+		    WHERE embedding.context_id = (node.properties ->> 'context_id'::text)::uuid
+		      AND embedding.graph_id=$1::uuid AND embedding.model_id=$2)))
+		FROM `+s.contextTable()+` AS node WHERE node.properties ->> 'graph_id'::text = $1::text
+		ORDER BY node.properties ->> 'context_id'::text`, graphID.String(), modelID)
 	if err != nil {
 		return fmt.Errorf("재색인 대상 조회: %w", err)
 	}
@@ -553,8 +563,8 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 	excluded := make([]string, 0)
 	for rows.Next() {
 		var rawID, rawLayer string
-		var deleted bool
-		if err := rows.Scan(&rawID, &rawLayer, &deleted); err != nil {
+		var deleted, needsTask bool
+		if err := rows.Scan(&rawID, &rawLayer, &deleted, &needsTask); err != nil {
 			return fmt.Errorf("재색인 대상 행 해석: %w", err)
 		}
 		contextID, err := model.ParseID(rawID)
@@ -562,7 +572,7 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 			return fmt.Errorf("재색인 대상 식별자 해석: %w", err)
 		}
 		if s.indexTargets.indexes(model.Layer(rawLayer)) {
-			if !deleted {
+			if !deleted && needsTask {
 				targets = append(targets, reindexTarget{id: contextID, layer: model.Layer(rawLayer)})
 			}
 			continue
@@ -573,7 +583,7 @@ func (s *Store) ReindexGraph(ctx context.Context, graphID model.ID) (err error) 
 		return fmt.Errorf("재색인 대상 행 읽기: %w", err)
 	}
 	for _, target := range targets {
-		if err := s.enqueueIndexTask(ctx, tx, graphID, target.id, target.layer); err != nil {
+		if err := s.registerIndexTask(ctx, tx, graphID, target.id, target.layer, modelID != ""); err != nil {
 			return err
 		}
 	}

@@ -355,6 +355,15 @@ type retentionSummary struct {
 	validBytes     int64
 }
 
+// 과거 행은 현재 판의 이벤트 허용 목록이 아니라 보존에 필요한 안정 외피만 읽는다.
+// 새 이벤트의 안전 필드·코드 검증은 Event.Validate가 계속 담당한다.
+type storedEventEnvelope struct {
+	Time       time.Time `json:"time"`
+	Kind       Kind      `json:"kind"`
+	InstanceID string    `json:"instance_id"`
+	BootID     string    `json:"boot_id"`
+}
+
 // 한 행의 버퍼는 16 KiB로 제한하며 혼합 파일의 유효 행은 원래 바이트를 보존한다.
 func visitLog(file *os.File, item storedLog, cutoff time.Time, valid func([]byte) error) (retentionSummary, error) {
 	var summary retentionSummary
@@ -367,8 +376,11 @@ func visitLog(file *os.File, item storedLog, cutoff time.Time, valid func([]byte
 		if err != nil || len(line) > maxEventBytes {
 			return summary, fileFailure("log_invalid", nil)
 		}
-		var event encodedEvent
-		if err := json.Unmarshal(line, &event, json.RejectUnknownMembers(true)); err != nil || event.Event.Validate() != nil || event.Kind != item.kind || event.InstanceID != item.instance {
+		var event storedEventEnvelope
+		if err := json.Unmarshal(line, &event); err != nil || event.Time.IsZero() || event.Time.Location() != time.UTC ||
+			event.Time.Year() < 1 || event.Time.Year() > 9999 || !validID(event.BootID) ||
+			!validKind(event.Kind) || !validInstance(event.InstanceID) ||
+			event.Kind != item.kind || event.InstanceID != item.instance {
 			return summary, fileFailure("log_invalid", nil)
 		}
 		if !event.Time.After(cutoff) {

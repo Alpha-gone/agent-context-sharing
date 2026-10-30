@@ -302,7 +302,7 @@ func (s *Store) KeepContext(ctx context.Context, graphID, contextID model.ID, ex
 func (s *Store) lockContext(ctx context.Context, tx pgx.Tx, graphID, contextID model.ID) error {
 	var found int
 	err := tx.QueryRow(ctx, `SELECT 1 FROM `+s.contextTable()+`
-		WHERE properties ->> 'graph_id'::text = $1 AND properties ->> 'context_id'::text = $2
+		WHERE properties ->> 'graph_id'::text = $1 AND (properties ->> 'context_id'::text) COLLATE "C" = $2 COLLATE "C"
 		FOR UPDATE`, graphID.String(), contextID.String()).Scan(&found)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
@@ -379,7 +379,7 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 	// 끼어들지 않도록 모든 계층의 정점을 잠그고, 잠금 대기 뒤 상태를 다시 읽는다.
 	var locked int
 	if err := tx.QueryRow(ctx, `SELECT 1 FROM `+s.contextTable()+`
-		WHERE properties ->> 'graph_id'::text = $1 AND properties ->> 'context_id'::text = $2
+		WHERE properties ->> 'graph_id'::text = $1 AND (properties ->> 'context_id'::text) COLLATE "C" = $2 COLLATE "C"
 		FOR UPDATE`, graphID.String(), contextID.String()).Scan(&locked); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return model.Context{}, ErrNotFound

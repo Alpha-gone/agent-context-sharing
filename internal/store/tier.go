@@ -57,7 +57,7 @@ func (s *Store) touchEmbeddings(ctx context.Context, graphID model.ID, contextID
 			WHERE candidate.graph_id = $1 AND candidate.context_id = ANY($2::uuid[])
 			  AND EXISTS (
 				SELECT 1 FROM `+s.contextTable()+` AS node
-				WHERE (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
+				WHERE (node.properties ->> 'context_id'::text) COLLATE "C" = candidate.context_id::text COLLATE "C"
 				  AND node.properties ->> 'graph_id'::text = $1::text
 				  AND node.properties ->> 'deleted_at'::text IS NULL
 			  )
@@ -152,7 +152,7 @@ func (s *Store) moveDeletedContextEmbeddingsCold(ctx context.Context, graphID mo
 			WHERE candidate.graph_id = $1 AND candidate.storage_tier = $3
 			  AND EXISTS (
 				SELECT 1 FROM `+s.contextTable()+` AS node
-				WHERE (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
+				WHERE (node.properties ->> 'context_id'::text) COLLATE "C" = candidate.context_id::text COLLATE "C"
 				  AND node.properties ->> 'graph_id'::text = $1::text
 				  AND node.properties ->> 'deleted_at'::text IS NOT NULL
 			  )
@@ -176,7 +176,7 @@ func (s *Store) moveInactiveEmbeddingsCold(ctx context.Context, graphID model.ID
 			  AND candidate.last_accessed_at < $2
 			  AND EXISTS (
 				SELECT 1 FROM `+s.contextTable()+` AS node
-				WHERE (node.properties ->> 'context_id'::text)::uuid = candidate.context_id
+				WHERE (node.properties ->> 'context_id'::text) COLLATE "C" = candidate.context_id::text COLLATE "C"
 				  AND node.properties ->> 'graph_id'::text = $1::text
 				  AND node.properties ->> 'deleted_at'::text IS NULL
 			  )

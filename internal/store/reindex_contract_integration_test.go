@@ -281,7 +281,11 @@ func TestReindexShapeTransitionIntegration(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				files := fstest.MapFS{"014_data09_transition.sql": {Data: data}}
+				var nextVersion int
+				if err := database.pool.QueryRow(t.Context(), "SELECT max(version)+1 FROM public.schema_migration").Scan(&nextVersion); err != nil {
+					t.Fatal(err)
+				}
+				files := fstest.MapFS{fmt.Sprintf("%03d_data09_transition.sql", nextVersion): {Data: data}}
 				target := migrate.Config{GraphName: "agent_context", VectorType: cfg.to, VectorDim: cfg.dimension, IndexTargetLayers: string(targets)}
 				loaded, err := migrate.Load(files, ".", target)
 				if err != nil {

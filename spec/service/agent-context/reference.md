@@ -356,3 +356,7 @@
 
 - 조회일 2026-10-29 KST. [Go 언어 명세의 panic 처리](https://go.dev/ref/spec#Handling_panics)는 같은 goroutine에서 실행되는 deferred 함수가 직접 recover를 호출해야 복구된다고 정한다. [go-sdk v1.8.0 jsonrpc2 실행 경계](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/internal/jsonrpc2/conn.go#L682-L689)와 같은 판의 모듈 캐시에서 비동기 handler 호출을 별도 goroutine으로 실행함을 확인했다.
 - HTTP 바깥의 recover에 의존하지 않고 도구 등록 콜백 안에서 복구하는 근거로 [MCP 오류 계약](sdd/mcp.md#오류의-생성과-전달)에 반영했다. panic 값은 보관·문자열화하지 않으며 고정 결과와 진단 코드만 사용한다.
+
+## 2026-10-30 #150 기동 색인 보충
+
+- 조회일 2026-10-30 KST. [PostgreSQL 18 INSERT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)는 `ON CONFLICT DO NOTHING`이 충돌 행을 갱신하지 않으며 `RETURNING`은 실제 삽입·갱신된 행만 반환한다고 정한다. 기동 보충은 기존 작업의 리스·실패·세대를 보존하도록 이 절을 사용하고, 반환 행이 없으면 새 등록 진단을 만들지 않는 근거로 [재색인 계약](sdd/indexing.md#재색인)에 반영했다.

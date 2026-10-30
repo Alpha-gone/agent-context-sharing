@@ -65,7 +65,8 @@ func TestReindexModelIsolationIntegration(t *testing.T) {
 				claimExec(t, database, `UPDATE public.index_task SET state='failed',attempts=5,last_error='fixture' WHERE graph_id=$1`, graph.String())
 				oldTask := registrationTaskFor(t, database, source.ID)
 				untouched := embeddingStateFingerprint(t, database, other)
-				if err := database.ReindexOutdatedEmbeddings(t.Context(), current); err != nil {
+				// 명시적 재색인 요청만 기존 실패 작업을 새 세대로 초기화한다.
+				if err := database.ReindexGraph(t.Context(), graph); err != nil {
 					t.Fatal(err)
 				}
 				if task := registrationTaskFor(t, database, source.ID); task.id != oldTask.id || task.attempts != 0 || task.state != "pending" || task.lastError != nil || task.correlation != nil {

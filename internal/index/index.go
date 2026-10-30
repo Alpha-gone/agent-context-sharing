@@ -158,7 +158,7 @@ func (worker *Worker) run(ctx context.Context) {
 		return
 	}
 	// 오래된 모델의 벡터를 다시 등록하는 일은 기동을 막을 이유가 없다. 대상이 많으면 그만큼
-	// 기동이 늦어지고, 등록이 끝나기 전에 죽어도 upsert라 다음 기동이 같은 일을 다시 한다.
+	// 기동이 늦어지고, 등록이 끝나기 전에 죽어도 다음 기동에서 누락만 보충한다.
 	if err := worker.store.ReindexOutdatedEmbeddings(ctx, worker.ModelID()); err != nil {
 		worker.logger.ErrorContext(ctx, "이전 임베딩 재색인 등록 실패", "reason_code", "reindex_registration_failed")
 	} else {

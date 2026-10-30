@@ -47,6 +47,8 @@ func TestQueryIndexCatalogIntegration(t *testing.T) {
 		{database.graphName, "Context", "context_graph_id_text_idx", false, []string{"properties ->> 'graph_id'::text"}},
 		{database.graphName, "Context", "context_context_id_agtype_idx", false, []string{"agtype_access_operator", `"context_id"`}},
 		{database.graphName, "Context", "context_active_graph_context_idx", false, []string{"properties ->> 'graph_id'::text", `COLLATE "C"`, "properties ->> 'context_id'::text", "deleted_at'::text) IS NULL"}},
+		{database.graphName, "Context", "context_graph_context_lookup_idx", false, []string{"properties ->> 'graph_id'::text", `COLLATE "C"`, "properties ->> 'context_id'::text"}},
+		{database.graphName, "Context", "context_active_event_proposal_idx", false, []string{"properties ->> 'graph_id'::text", `COLLATE "C"`, "DESC", "deleted_at'::text) IS NULL", "'event'"}},
 		{database.graphName, "Context", "context_body_fts_idx", false, []string{"USING gin", "to_tsvector('simple'::regconfig", "body'::text"}},
 		{database.graphName, "Context", "context_source_ref_idx", true, []string{"properties ->> 'graph_id'::text", "source_ref_locator'::text", "layer'::text) = 'source'"}},
 	}
@@ -63,6 +65,19 @@ func TestQueryIndexCatalogIntegration(t *testing.T) {
 			unique              bool
 			fragments           []string
 		}{database.graphName, label, strings.ToLower(label) + "_graph_id_agtype_idx", false, []string{"agtype_access_operator", `"graph_id"`}})
+	}
+	for label := range relationLabels {
+		for suffix, fields := range map[string][]string{
+			"_graph_relation_idx": {`"graph_id"`, `"relation_id"`},
+			"_graph_identity_idx": {`"graph_id"`, `"from_context_id"`, `"to_context_id"`},
+			"_graph_target_idx":   {`"graph_id"`, `"to_context_id"`},
+		} {
+			indexes = append(indexes, struct {
+				schema, table, name string
+				unique              bool
+				fragments           []string
+			}{database.graphName, label, strings.ToLower(label) + suffix, false, append([]string{"agtype_access_operator"}, fields...)})
+		}
 	}
 	for _, index := range indexes {
 		t.Run(index.name, func(t *testing.T) {

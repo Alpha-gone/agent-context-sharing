@@ -68,7 +68,7 @@ func newEmbeddingContractStore(t *testing.T, vectorType string, dimension int) *
 		t.Fatal("실제 연결이 시험 전용 DB가 아니므로 마이그레이션을 중단한다")
 	}
 	cfg := migrate.Config{GraphName: "agent_context", VectorType: vectorType, VectorDim: dimension, IndexTargetLayers: "all_layers"}
-	for _, want := range []int{6, 0} {
+	for _, want := range []int{7, 0} {
 		count := 0
 		err := migrate.WithLock(t.Context(), pool, func(ctx context.Context, conn *pgxpool.Conn) error {
 			loaded, applied, err := migrate.Prepare(ctx, conn, migrations.FS, ".", cfg)

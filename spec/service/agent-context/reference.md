@@ -368,3 +368,8 @@
 ## 2026-10-30 #152 키워드 제외 조건
 
 - 조회일 2026-10-30 KST. [PostgreSQL 18 질의 해석](https://www.postgresql.org/docs/18/textsearch-controls.html#TEXTSEARCH-PARSING-QUERIES)의 `websearch_to_tsquery` 인용구·OR·대시 부정과 [전문 검색 연산자](https://www.postgresql.org/docs/18/functions-textsearch.html)의 `tsquery && tsquery` 결합을 확인했다. [키워드 설계](sdd/search.md#채널-구현)는 긍정 OR와 제외 AND를 별도 해석한 뒤 타입 연산자로 결합한다. 격리 PostgreSQL에서 기존 `foo OR -bar`의 `querytree`는 `T`, `foo`와 `-bar`의 타입 AND는 `'foo'`임을 확인했다. 이는 혼합 질의의 긍정 검색 조건 보존 근거이며 실행 지연 개선이나 특정 실행 계획의 실측 결과로 취급하지 않는다.
+
+## 2026-10-30 #158 관계 질의 범위
+
+- 조회일 2026-10-30 KST. [Apache AGE 저장 구조](https://age.apache.org/age-manual/master/intro/graphs.html#how-graphs-are-stored-in-postgres)의 label별 테이블과 부모 간선 테이블, [PostgreSQL 18 표현식 인덱스](https://www.postgresql.org/docs/18/indexes-expressional.html)의 질의 표현식 일치 조건을 확인했다. 적용 AGE 1.8.0/PG18 고정 이미지에서 실제 openCypher 번역 계획으로 label별 복합 인덱스를 검증한다. 최신 매뉴얼만으로 설치 판의 계획을 보장하지 않는다.
+- [PostgreSQL 18 EXPLAIN](https://www.postgresql.org/docs/18/using-explain.html)은 ANALYZE가 실제 문장을 실행하고 실제 행·loops와 버퍼를 보여준다고 정한다. [관계 계획 시험](sdd/testing.md#테스트-계층)은 쓰기 계획을 전용 DB의 롤백 트랜잭션에 한정하며, 강제 planner 설정 없이 기본 계획의 실제 읽기 범위를 대조한다.

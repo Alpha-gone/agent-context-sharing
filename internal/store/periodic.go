@@ -102,7 +102,7 @@ func (s *Store) CleanupExpiredProposals(ctx context.Context, now time.Time, days
 				if relation.ProposedAt.After(cutoff) {
 					continue
 				}
-				removed, err := s.deleteProposedRelation(ctx, graph.id, relation.ID)
+				removed, err := s.deleteRelationProposal(ctx, s.pool, graph.id, relation)
 				if err != nil {
 					return deleted, err
 				}
@@ -269,11 +269,26 @@ func (s *Store) retentionGraphs(ctx context.Context) ([]retentionGraph, error) {
 // deleteProposedRelation은 아직 proposed인 관계만 지운다. 목록을 읽은 뒤 다른 요청이 확정하거나
 // 버린 관계는 대상이 없으므로 오류가 아니라 지우지 않은 것으로 돌려준다.
 func (s *Store) deleteProposedRelation(ctx context.Context, graphID, relationID model.ID) (bool, error) {
-	query := "MATCH ()-[edge]->() WHERE edge.graph_id = " + cypherString(graphID.String()) +
-		" AND edge.relation_id = " + cypherString(relationID.String()) +
+	relation, err := s.relationByID(ctx, s.pool, graphID, relationID)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return s.deleteRelationProposal(ctx, s.pool, graphID, relation)
+}
+
+func (s *Store) deleteRelationProposal(ctx context.Context, queryer cypherQueryer, graphID model.ID, relation model.Relation) (bool, error) {
+	label, err := relationLabel(relation.Type)
+	if err != nil {
+		return false, err
+	}
+	query := "MATCH ()-[edge:" + label + "]->() WHERE edge.graph_id = " + cypherString(graphID.String()) +
+		" AND edge.relation_id = " + cypherString(relation.ID.String()) +
 		" AND edge.state = 'proposed' DELETE edge RETURN 1"
 	var ignored string
-	err := s.pool.QueryRow(ctx, s.cypherSQL(query, "deleted agtype"), pgx.QueryExecModeExec).Scan(&ignored)
+	err = queryer.QueryRow(ctx, s.cypherSQL(query, "deleted agtype"), pgx.QueryExecModeExec).Scan(&ignored)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

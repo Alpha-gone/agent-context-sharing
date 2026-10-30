@@ -209,7 +209,7 @@ func TestData09ShapeTransitionAndPreservationIntegration(t *testing.T) {
 				if preservationQuery(t, pool, preservationMutable) != mutable || preservationQuery(t, pool, preservationOriginals) != before {
 					t.Fatal("실패한 전환이 기존 상태를 변경했다")
 				}
-				if count, err := applyTarget(t.Context(), pool, migrations.FS, target); err != nil || count != 2 {
+				if count, err := applyTarget(t.Context(), pool, migrations.FS, target); err != nil || count != 3 {
 					t.Fatalf("전환=%d: %v", count, err)
 				}
 				if preservationQuery(t, pool, preservationOriginals) != before || preservationQuery(t, pool, historySQL) != history {
@@ -238,12 +238,16 @@ func TestData09ShapeTransitionAndPreservationIntegration(t *testing.T) {
 						t.Fatal("요청 없는 재등록의 세대·예산·상관 ID 초기화 실패")
 					}
 					// 적용된 012를 재실행하지 않고 새 번호로 원래 형상에 복귀한다.
-					files := migrationFilesBefore(t, 14)
+					var nextVersion int
+					if err := pool.QueryRow(t.Context(), "SELECT max(version)+1 FROM public.schema_migration").Scan(&nextVersion); err != nil {
+						t.Fatal(err)
+					}
+					files := migrationFilesBefore(t, nextVersion)
 					data, err := migrations.FS.ReadFile("012_embedding_configuration.sql")
 					if err != nil {
 						t.Fatal(err)
 					}
-					files["014_data09_return.sql"] = &fstest.MapFile{Data: data}
+					files[fmt.Sprintf("%03d_data09_return.sql", nextVersion)] = &fstest.MapFile{Data: data}
 					if count, err := applyTarget(t.Context(), pool, files, original); err != nil || count != 1 {
 						t.Fatalf("새 번호 복귀=%d: %v", count, err)
 					}
@@ -305,7 +309,7 @@ func TestData09LegacyConfigurationBackfillAtomicIntegration(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), `UPDATE public.schema_migration SET checksum=$1 WHERE version=9`, loaded[1].Checksum); err != nil {
 		t.Fatal(err)
 	}
-	if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != 4 {
+	if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != 5 {
 		t.Fatalf("보충 후 적용=%d: %v", count, err)
 	}
 	if preservationQuery(t, pool, `SELECT count(*)::text FROM public.schema_migration WHERE render_config IS NULL`) != "0" {

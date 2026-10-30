@@ -364,3 +364,7 @@
 ## 2026-10-30 #151 질의 임베딩 전용 마감
 
 - 조회일 2026-10-30 KST. [Go context 공식 문서](https://pkg.go.dev/context#WithTimeout)와 적용 SDK Go 1.27.1의 `src/context/context.go`에서 `WithTimeout`의 자식 context·더 이른 부모 마감·부모 취소 전파·cancel 정리 계약을 확인했다. [검색 마감](sdd/search.md#작업-컨텍스트-흐름-조회)은 질의 제공자에만 자식 context를 사용하고 나머지 읽기에 부모 context를 유지한다. 전용 마감값은 외부 API 보장이나 실측 최적값이 아닌 서비스의 초기 설계값이다.
+
+## 2026-10-30 #152 키워드 제외 조건
+
+- 조회일 2026-10-30 KST. [PostgreSQL 18 질의 해석](https://www.postgresql.org/docs/18/textsearch-controls.html#TEXTSEARCH-PARSING-QUERIES)의 `websearch_to_tsquery` 인용구·OR·대시 부정과 [전문 검색 연산자](https://www.postgresql.org/docs/18/functions-textsearch.html)의 `tsquery && tsquery` 결합을 확인했다. [키워드 설계](sdd/search.md#채널-구현)는 긍정 OR와 제외 AND를 별도 해석한 뒤 타입 연산자로 결합한다. 격리 PostgreSQL에서 기존 `foo OR -bar`의 `querytree`는 `T`, `foo`와 `-bar`의 타입 AND는 `'foo'`임을 확인했다. 이는 혼합 질의의 긍정 검색 조건 보존 근거이며 실행 지연 개선이나 특정 실행 계획의 실측 결과로 취급하지 않는다.

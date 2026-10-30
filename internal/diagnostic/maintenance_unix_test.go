@@ -13,6 +13,7 @@ import (
 	"uuid"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/semaphore"
 )
 
 func TestOPS04MaintenanceStorageScopeIntegration(t *testing.T) {
@@ -246,4 +247,83 @@ func TestOPS04StopMaintenanceKeepsRecording(t *testing.T) {
 	if stats := recorder.Stats(); stats.Written != 1 || stats.MaintenanceFailures != 0 {
 		t.Fatal("정리와 기록 수명의 분리", stats)
 	}
+}
+
+func TestMaintenanceGuardSaturationKeepsRecording(t *testing.T) {
+	source := testSource(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reservations := semaphore.NewWeighted(2)
+	if err := reservations.Acquire(t.Context(), 2); err != nil {
+		t.Fatal(err)
+	}
+	held := true
+	defer func() {
+		if held {
+			reservations.Release(2)
+		}
+	}()
+	ticks := make(chan time.Time, 1)
+	entered := make(chan struct{}, 2)
+	cleaned := make(chan struct{}, 1)
+	upkeep := &recorderUpkeep{context: ctx, cancelMaintenance: cancel, cancel: cancel,
+		ticks: ticks, stop: func() {}, scope: 155,
+		run: func() error { cleaned <- struct{}{}; return nil }}
+	recorder := newRecorder(source, queueLimits{maxQueuedEvents, maxQueuedBytes, maxEventBytes},
+		func(Kind, []byte) error { return nil }, func() error { return nil }, upkeep)
+	t.Cleanup(func() { cancel(); recorder.Close(context.Background()) })
+	recorder.SetMaintenanceGuard(func(ctx context.Context, scope int64, run func() (int, error)) (int, bool, error) {
+		if scope != 155 {
+			return 0, false, fmt.Errorf("실행권 범위 변경")
+		}
+		entered <- struct{}{}
+		if err := reservations.Acquire(ctx, 2); err != nil {
+			return 0, false, err
+		}
+		defer reservations.Release(2)
+		count, err := run()
+		return count, true, err
+	})
+	ticks <- time.Now()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("정리 guard 미호출")
+	}
+	for range 64 {
+		if !recorder.Emit(t.Context(), obs03Event(t, source, Request)) {
+			t.Fatal("대기열 수락 실패")
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for recorder.Stats().Written != 64 {
+		if time.Now().After(deadline) {
+			t.Fatal("예약이 계속 포화된 동안 기록을 재개하지 못했다", recorder.Stats())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stats := recorder.Stats()
+	if stats.Dropped != 0 || stats.MaintenanceFailures != 1 {
+		t.Fatal("정리 마감과 이벤트 누락 집계 혼합", stats)
+	}
+	select {
+	case <-cleaned:
+		t.Fatal("실행권 없이 파일 정리 실행")
+	default:
+	}
+	reservations.Release(2)
+	held = false
+	ticks <- time.Now()
+	select {
+	case <-cleaned:
+	case <-time.After(3 * time.Second):
+		t.Fatal("다음 회차의 실행권·정리 회복 실패")
+	}
+	if err := recorder.Close(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("정리 마감 원인 유실", err)
+	}
+	if !reservations.TryAcquire(2) {
+		t.Fatal("정리 예약 미반환")
+	}
+	reservations.Release(2)
 }

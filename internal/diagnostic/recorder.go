@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	maxQueuedEvents = 1024
-	maxQueuedBytes  = 16 << 20
-	maxEventBytes   = 16 << 10
+	maxQueuedEvents        = 1024
+	maxQueuedBytes         = 16 << 20
+	maxEventBytes          = 16 << 10
+	maintenanceGuardBudget = time.Second
 )
 
 type lossReason uint8
@@ -322,7 +323,10 @@ func (recorder *Recorder) maintain() {
 	}
 	var err error
 	if guard != nil {
-		_, _, err = guard(recorder.upkeep.context, recorder.upkeep.scope, run)
+		// DB 예약·연결 획득 대기가 단일 기록 루프를 무기한 막지 않게 한다.
+		ctx, cancel := context.WithTimeout(recorder.upkeep.context, maintenanceGuardBudget)
+		defer cancel()
+		_, _, err = guard(ctx, recorder.upkeep.scope, run)
 	} else {
 		_, err = run()
 	}
@@ -365,6 +369,7 @@ func onlyMaintenanceCancellation(err error) bool {
 }
 
 // MaintenanceGuard는 파일 정리의 실행권을 저장소·인스턴스 범위로 주입한다.
+// context의 마감·취소를 예약과 연결 획득에 전달해야 한다.
 // callback의 건수는 제거한 회전 파일 수이며 실제 파일 잠금은 계속 적용된다.
 type MaintenanceGuard func(context.Context, int64, func() (int, error)) (int, bool, error)
 

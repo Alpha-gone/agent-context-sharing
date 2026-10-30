@@ -172,3 +172,116 @@ func obs08DenyWrite(t *testing.T, fd int, errno unix.Errno) {
 		t.Fatal("시험 자식의 fd 쓰기 제한을 설치하지 못했다", result, err)
 	}
 }
+
+func TestRotationCreateFailureRecoveryLinux(t *testing.T) {
+	for _, mode := range []string{"enospc", "emfile"} {
+		t.Run(mode, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestRotationCreateFailureHelperLinux$", "-test.timeout=25s")
+			cmd.Env = append(os.Environ(), "ACS_ROTATION_FAULT="+mode)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("회전 장애 자식 실패: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestRotationCreateFailureHelperLinux(t *testing.T) {
+	mode := os.Getenv("ACS_ROTATION_FAULT")
+	if mode == "" {
+		t.Skip("Linux 회전 장애 자식 전용")
+	}
+	errno := unix.ENOSPC
+	if mode == "emfile" {
+		errno = unix.EMFILE
+	}
+	directory := obs02Directory(t)
+	files := obs04Files(t, directory, "rotation")
+	line := obs04Line(t, files, Request, obs04Now)
+	files.policy.activeBytes = int64(len(line) * 2)
+	if err := files.appendLine(Request, line); err != nil {
+		t.Fatal(err)
+	}
+	// 회전이 여는 디렉터리의 exclusive 생성만 실패시킨다. 복구는 이미
+	// 검증된 slot fd를 사용하므로 장애 해소 뒤의 경로를 같은 자식에서 검증한다.
+	var arch uint32
+	switch runtime.GOARCH {
+	case "arm64":
+		arch = unix.AUDIT_ARCH_AARCH64
+	case "amd64":
+		arch = unix.AUDIT_ARCH_X86_64
+	default:
+		t.Fatal("시험 필터의 지원 ABI가 아니다")
+	}
+	filter := []unix.SockFilter{
+		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 4},
+		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jt: 1, K: arch},
+		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ALLOW},
+		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 0},
+		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jf: 5, K: uint32(unix.SYS_OPENAT)},
+		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 16},
+		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jt: 3, K: uint32(files.slot.Fd())},
+		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 32},
+		{Code: unix.BPF_JMP | unix.BPF_JSET | unix.BPF_K, Jf: 1, K: unix.O_EXCL},
+		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(errno)},
+		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ALLOW},
+	}
+	program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	result, _, err := unix.Syscall(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER, unix.SECCOMP_FILTER_FLAG_TSYNC, uintptr(unsafe.Pointer(&program)))
+	runtime.KeepAlive(filter)
+	if err != 0 || result != 0 {
+		t.Fatal("회전 생성 장애 필터 설치 실패", result, err)
+	}
+	var stderr bytes.Buffer
+	output := newFailureOutput(files.source, &stderr, time.Now)
+	recorder := startRecorder(files.source, queueLimits{maxQueuedEvents, maxQueuedBytes, maxEventBytes}, files.appendLine, files.Close, nil, output, flushBudget)
+	t.Cleanup(func() { recorder.Close(context.Background()) })
+	emit := func(kind Kind, completed uint64) {
+		t.Helper()
+		event := obs03Event(t, files.source, kind)
+		event.Time = obs04Now
+		if !recorder.Emit(t.Context(), event) {
+			t.Fatal("이벤트 수락 실패")
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			stats := recorder.Stats()
+			if stats.Written+stats.Dropped == completed {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("기록 완료 대기 초과", stats)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	emit(Request, 1)
+	if stats := recorder.Stats(); stats.Dropped != 1 {
+		t.Fatal("회전 생성 실패 누락 미집계", stats)
+	}
+	for i, kind := range fileKinds[1:] {
+		emit(kind, uint64(i+2))
+	}
+	emit(Request, 7)
+	if err := recorder.Close(context.Background()); !errors.Is(err, errno) {
+		t.Fatal("기존 회전 실패 원인 유실", err)
+	}
+	if stats := recorder.Stats(); stats.Accepted != 7 || stats.Written != 6 || stats.Dropped != 1 {
+		t.Fatal("종류 격리 또는 회복 집계 실패", stats)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte(`"reason_code":"file_unavailable"`)) {
+		t.Fatal("회전 실패 알림 누락", stderr.String())
+	}
+	for _, kind := range fileKinds {
+		events, _ := obs08ReadEvents(t, directory, files.source.instance, kind)
+		want := 1
+		if kind == Request {
+			want = 2
+		}
+		if len(events) != want {
+			t.Fatal("기록 행 유실", kind, len(events))
+		}
+	}
+}

@@ -290,10 +290,10 @@ func (files *Files) rotate(item storedLog, now time.Time) error {
 		if file == nil {
 			return fileFailure("file_unavailable", nil)
 		}
+		delete(files.active, item.kind)
 		if err := file.Close(); err != nil {
 			return fileFailure("close_failed", err)
 		}
-		delete(files.active, item.kind)
 	}
 	rotated := string(item.kind) + "." + now.Format(rotationTimeLayout) + "." + uuid.NewV7().String() + ".jsonl"
 	if err := renameExclusive(int(dir.Fd()), item.name, rotated); err != nil {
@@ -303,6 +303,9 @@ func (files *Files) rotate(item storedLog, now time.Time) error {
 			}
 		}
 		return fileFailure("rotation_failed", err)
+	}
+	if item.instance == files.source.instance {
+		delete(files.policy.days, item.kind)
 	}
 	active, err := createStorageFile(dir, item.name)
 	if err != nil {
@@ -486,7 +489,7 @@ func (files *Files) maintainLocked(now time.Time) error {
 	}
 	cutoff := now.Add(-files.policy.retention)
 	for _, item := range logs {
-		if !item.active || item.size == 0 {
+		if !item.active || item.size == 0 || item.instance == files.source.instance && files.active[item.kind] == nil {
 			continue
 		}
 		err := files.withIdleSlot(item.instance, func() error {
@@ -586,9 +589,6 @@ func (files *Files) maintain() error {
 
 func (files *Files) beforeAppend(kind Kind, size int, now time.Time) error {
 	policy := files.policy
-	if len(files.active) != len(fileKinds) {
-		return fileFailure("file_unavailable", nil)
-	}
 	if int64(size) >= policy.activeBytes {
 		return fileFailure("event_capacity", nil)
 	}
@@ -622,5 +622,38 @@ func (files *Files) beforeAppend(kind Kind, size int, now time.Time) error {
 		return err
 	}
 	policy.days[kind] = now.Format("2006-01-02")
+	return nil
+}
+
+// 회전 중 잃은 종류만 공유 잠금 안에서 다시 연다. 기존 파일은 안전성 검사를 유지한다.
+func (files *Files) recoverActive(kind Kind) error {
+	if files.active[kind] != nil {
+		return nil
+	}
+	name, err := kind.Filename()
+	if err != nil {
+		return fileFailure("file_unavailable", nil)
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstatat(int(files.slot.Fd()), name, &stat, unix.AT_SYMLINK_NOFOLLOW); errors.Is(err, unix.ENOENT) {
+		if err := files.makeRoom(files.source.instance, kind, 0, 1); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return fileFailure("file_unavailable", err)
+	}
+	file, err := openRegular(files.slot, name, true)
+	if err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return fileFailure("sync_failed", err)
+	}
+	if err := files.slot.Sync(); err != nil {
+		file.Close()
+		return fileFailure("sync_failed", err)
+	}
+	files.active[kind] = file
 	return nil
 }

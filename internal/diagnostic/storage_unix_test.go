@@ -629,3 +629,42 @@ func TestOBS04WriterProcessHelper(t *testing.T) {
 		t.Fatal("총상한 누락을 숨겼다")
 	}
 }
+
+func TestRotationRecoveryWithExistingActive(t *testing.T) {
+	for _, state := range []string{"reopen_failed", "close_failed"} {
+		t.Run(state, func(t *testing.T) {
+			directory := obs02Directory(t)
+			files := obs04Files(t, directory, "recover")
+			line := obs04Line(t, files, Request, obs04Now)
+			if err := files.appendLine(Request, line); err != nil {
+				t.Fatal(err)
+			}
+			if err := files.active[Request].Close(); err != nil {
+				t.Fatal(err)
+			}
+			if state == "close_failed" {
+				err := files.rotate(storedLog{instance: files.source.instance, kind: Request, name: "request.jsonl", active: true}, obs04Now)
+				if !errors.Is(err, os.ErrClosed) {
+					t.Fatal("close 오류 미재현", err)
+				}
+			} else {
+				// rename과 재열기가 실패한 뒤와 같은 상태: basename은 남고 핸들은 없다.
+				delete(files.active, Request)
+			}
+			// 회차가 밀려 있어도 누락된 종류 때문에 다른 종류를 차단하지 않는다.
+			files.policy.lastSweep = time.Time{}
+			for _, kind := range fileKinds[1:] {
+				if err := files.appendLine(kind, obs04Line(t, files, kind, obs04Now)); err != nil {
+					t.Fatal("다른 종류 기록 실패", kind, err)
+				}
+			}
+			if err := files.appendLine(Request, line); err != nil {
+				t.Fatal("기존 활성 파일 복구 실패", err)
+			}
+			events, _ := obs08ReadEvents(t, directory, files.source.instance, Request)
+			if len(events) != 2 {
+				t.Fatal("복구 중 기존 행 유실", len(events))
+			}
+		})
+	}
+}

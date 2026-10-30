@@ -360,3 +360,7 @@
 ## 2026-10-30 #150 기동 색인 보충
 
 - 조회일 2026-10-30 KST. [PostgreSQL 18 INSERT](https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT)는 `ON CONFLICT DO NOTHING`이 충돌 행을 갱신하지 않으며 `RETURNING`은 실제 삽입·갱신된 행만 반환한다고 정한다. 기동 보충은 기존 작업의 리스·실패·세대를 보존하도록 이 절을 사용하고, 반환 행이 없으면 새 등록 진단을 만들지 않는 근거로 [재색인 계약](sdd/indexing.md#재색인)에 반영했다.
+
+## 2026-10-30 #151 질의 임베딩 전용 마감
+
+- 조회일 2026-10-30 KST. [Go context 공식 문서](https://pkg.go.dev/context#WithTimeout)와 적용 SDK Go 1.27.1의 `src/context/context.go`에서 `WithTimeout`의 자식 context·더 이른 부모 마감·부모 취소 전파·cancel 정리 계약을 확인했다. [검색 마감](sdd/search.md#작업-컨텍스트-흐름-조회)은 질의 제공자에만 자식 context를 사용하고 나머지 읽기에 부모 context를 유지한다. 전용 마감값은 외부 API 보장이나 실측 최적값이 아닌 서비스의 초기 설계값이다.

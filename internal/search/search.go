@@ -29,6 +29,9 @@ const (
 	ExecutionSequential Execution = "sequential"
 )
 
+// 질의 임베딩은 요청의 나머지 채널·읽기 예산을 남기고 의미 채널만 실패시킨다.
+const queryEmbeddingTimeout = 5 * time.Second
+
 // GraphStage는 그래프 효과 비교에서 누적해 활성화할 범위다.
 type GraphStage string
 
@@ -202,14 +205,14 @@ func (service *Service) Flow(ctx context.Context, input Input) (flowResult Flow,
 		input.AsOf = time.Now().UTC()
 	}
 	if service.config.Consistency == "" {
-		return service.flow(ctx, input, func() ([]float64, error) { return service.embedder.Embed(ctx, input.WorkContext) })
+		return service.flow(ctx, input, func() ([]float64, error) { return service.queryEmbedding(ctx, input.WorkContext) })
 	}
 	// 질의 임베딩은 외부 호출이므로 읽기 경계를 열기 전에 끝낸다. 경계 안에서 기다리면
 	// 스냅숏과 연결을 제공자 지연만큼 붙잡는다. 전역 범위는 의미 채널을 돌리지 않는다.
 	var embedding []float64
 	var embedErr error
 	if input.Scope != "global" {
-		embedding, embedErr = service.embedder.Embed(ctx, input.WorkContext)
+		embedding, embedErr = service.queryEmbedding(ctx, input.WorkContext)
 	}
 	if err := ctx.Err(); err != nil {
 		return Flow{}, errors.Join(embedErr, err)
@@ -225,6 +228,16 @@ func (service *Service) Flow(ctx context.Context, input Input) (flowResult Flow,
 		return Flow{Read: stats}, err
 	}
 	return flow, err
+}
+
+func (service *Service) queryEmbedding(ctx context.Context, text string) ([]float64, error) {
+	embeddingContext, cancel := context.WithTimeout(ctx, queryEmbeddingTimeout)
+	defer cancel()
+	vector, err := service.embedder.Embed(embeddingContext, text)
+	if embeddingContext.Err() != nil {
+		return nil, errors.Join(err, embeddingContext.Err(), context.Cause(embeddingContext))
+	}
+	return vector, err
 }
 
 // flow는 한 번의 검색 흐름이다. embed는 의미 채널이 쓸 질의 벡터를 돌려준다.

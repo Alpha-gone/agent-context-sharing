@@ -139,10 +139,19 @@ func TestWorkerPublicationSignalIntegration(t *testing.T) {
 			if calls != wantCalls {
 				t.Fatalf("관계 후보 신호=%d want=%d", calls, wantCalls)
 			}
-			if len(sink.events) != 1 {
+			wantEvents := 1
+			if mode == "provider_failure" {
+				wantEvents = 2
+			}
+			if len(sink.events) != wantEvents {
 				t.Fatalf("제공자 진단 수: %d", len(sink.events))
 			}
-			e := sink.events[0]
+			var e diagnostic.Event
+			for _, event := range sink.events {
+				if event.Fields.Index.TaskID == jobID {
+					e = event
+				}
+			}
 			wantStatus := uint16(200)
 			if mode == "provider_failure" {
 				wantStatus = 503

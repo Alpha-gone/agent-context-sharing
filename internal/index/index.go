@@ -55,16 +55,19 @@ const maxEmbeddingResponseBytes = 8 << 20
 
 // Worker는 짧은 확보·저장 트랜잭션 사이에서 제공자를 호출하는 비동기 소비자다.
 type Worker struct {
-	diagnostics diagnostic.Observer
-	store       *store.Store
-	proposer    RelationProposer
-	config      Config
-	httpClient  *http.Client
-	logger      *slog.Logger
-	cancel      context.CancelFunc
-	done        chan struct{}
-	startOnce   sync.Once
-	stopOnce    sync.Once
+	cycleMu         sync.Mutex
+	providerCircuit providerCircuit
+	providerNow     func() time.Time
+	diagnostics     diagnostic.Observer
+	store           *store.Store
+	proposer        RelationProposer
+	config          Config
+	httpClient      *http.Client
+	logger          *slog.Logger
+	cancel          context.CancelFunc
+	done            chan struct{}
+	startOnce       sync.Once
+	stopOnce        sync.Once
 }
 
 // RelationProposer는 사건의 색인 공개 커밋 뒤 관계 후보 생성을 알리는 경계다.
@@ -228,6 +231,16 @@ func (worker *Worker) RunOnceInGraph(ctx context.Context, graphID model.ID) (boo
 
 func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error) {
 	ctx = diagnostic.ResumeJob(ctx, "")
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if !worker.cycleMu.TryLock() {
+		return false, nil
+	}
+	defer worker.cycleMu.Unlock()
+	if ready, err := worker.providerReady(ctx); !ready || err != nil {
+		return false, err
+	}
 	acquire := worker.store.ProcessNextIndexTask
 	if scope.IsV7() {
 		acquire = func(ctx context.Context, processor store.IndexTaskProcessor) (store.IndexProcessResult, error) {
@@ -237,6 +250,9 @@ func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error)
 	result, err := acquire(ctx, func(ctx context.Context, task store.IndexTask) store.IndexTaskResult {
 		started := time.Now()
 		embedding, status, err := worker.embedResponse(ctx, task.Body, true)
+		if providerWideFailure(ctx, status, err) {
+			worker.blockProvider(ctx, status, err)
+		}
 		result, reason, level := "completed", "completed", "INFO"
 		if err != nil {
 			result, reason, level = "failed", "provider_unavailable", "WARN"

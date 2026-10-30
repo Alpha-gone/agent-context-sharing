@@ -65,6 +65,9 @@ func (files *Files) appendLine(kind Kind, line []byte) error {
 		ctx = context.Background()
 	}
 	return files.withStorageLock(ctx, func() error {
+		if err := files.recoverActive(kind); err != nil {
+			return err
+		}
 		if files.policy != nil {
 			name, _ := kind.Filename()
 			if err := files.repairPartial(storedLog{instance: files.source.instance, name: name, kind: kind, active: true}, files.policy.now().UTC()); err != nil {

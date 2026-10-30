@@ -37,8 +37,8 @@ func (s *matrixStore) GraphVisualization(ctx context.Context, graph model.ID, ho
 	}
 	return store.HopResult{}, nil
 }
-func (s *matrixStore) ListGraphGrants(ctx context.Context, graph model.ID) ([]model.GrantSubject, error) {
-	grants, _ := s.fakeGraphStore.ListGraphGrants(ctx, graph)
+func (s *matrixStore) ListGraphGrants(ctx context.Context, graph, actor model.ID) ([]model.GrantSubject, error) {
+	grants, _ := s.fakeGraphStore.ListGraphGrants(ctx, graph, actor)
 	return grants, s.failing("access")
 }
 func (s *matrixStore) DeletionImpact(ctx context.Context, graph, contextID model.ID) (model.DeletionImpact, error) {

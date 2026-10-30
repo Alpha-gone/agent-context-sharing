@@ -52,7 +52,7 @@ func TestGrantRevokeAvailabilityMatchesMutationIntegration(t *testing.T) {
 			if test.targetTeam {
 				targetID, targetType = teamID, GrantSubjectTeam
 			}
-			grants, err := database.ListGraphGrants(t.Context(), graphID)
+			grants, err := database.ListGraphGrants(t.Context(), graphID, actorID)
 			if err != nil {
 				t.Fatal(err)
 			}

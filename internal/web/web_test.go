@@ -222,7 +222,7 @@ func (fake fakeGraphStore) ListDeletedContexts(context.Context, model.ID, int) (
 func (fake fakeGraphStore) ListOwnedDeletedGraphs(context.Context, model.ID) ([]model.Graph, error) {
 	return fake.ownedDeleted, nil
 }
-func (fake fakeGraphStore) ListGraphGrants(context.Context, model.ID) ([]model.GrantSubject, error) {
+func (fake fakeGraphStore) ListGraphGrants(context.Context, model.ID, model.ID) ([]model.GrantSubject, error) {
 	return fake.grants, nil
 }
 func (fake fakeGraphStore) ListManagedTeams(context.Context, model.ID) ([]model.Team, error) {

@@ -33,7 +33,7 @@ func (graphs *web04AccessStore) step(stage string) error {
 func (graphs *web04AccessStore) EffectiveGrade(context.Context, model.ID, model.ID) (model.GraphGrade, bool, error) {
 	return model.GraphGradeOwner, true, graphs.step("grade")
 }
-func (graphs *web04AccessStore) ListGraphGrants(context.Context, model.ID) ([]model.GrantSubject, error) {
+func (graphs *web04AccessStore) ListGraphGrants(context.Context, model.ID, model.ID) ([]model.GrantSubject, error) {
 	return nil, graphs.step("grants")
 }
 func (graphs *web04AccessStore) ListGrantableTeams(context.Context) ([]model.Team, error) {

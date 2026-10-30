@@ -322,7 +322,7 @@ func TestWEB05OperatorRestoreIntegration(t *testing.T) {
 	if web05Grade(t, database, automatic, former) != model.GraphGradeOwner || web05Grade(t, database, automatic, operator) != "" || web05Grade(t, database, automatic, creator) != "" {
 		t.Fatal("복구 뒤 등급이 요청자 직접 소유자 하나가 아니다")
 	}
-	grants, err := database.ListGraphGrants(t.Context(), automatic)
+	grants, err := database.ListGraphGrants(t.Context(), automatic, former)
 	if err != nil {
 		t.Fatal(err)
 	}

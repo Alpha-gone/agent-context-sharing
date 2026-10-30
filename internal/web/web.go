@@ -55,7 +55,7 @@ type GraphStore interface {
 	Context(context.Context, model.ID, model.ID) (model.Context, error)
 	ListActiveContexts(context.Context, model.ID, int) ([]model.Context, bool, error)
 	ListDeletedContexts(context.Context, model.ID, int) ([]model.Context, bool, error)
-	ListGraphGrants(context.Context, model.ID) ([]model.GrantSubject, error)
+	ListGraphGrants(context.Context, model.ID, model.ID) ([]model.GrantSubject, error)
 	ListManagedTeams(context.Context, model.ID) ([]model.Team, error)
 	ListGrantableTeams(context.Context) ([]model.Team, error)
 	AccountByLoginID(context.Context, string) (store.Account, error)
@@ -492,7 +492,7 @@ func (server *Server) graphAccess(writer http.ResponseWriter, request *http.Requ
 	}
 	value := pageData{Title: "권한과 팀 관리", GraphID: graphID, Owner: owner}
 	if owner {
-		grants, err := server.graphs.ListGraphGrants(request.Context(), graphID)
+		grants, err := server.graphs.ListGraphGrants(request.Context(), graphID, accountID)
 		if request.Context().Err() != nil {
 			return
 		}
@@ -1436,6 +1436,7 @@ range.addEventListener('input',applyScope);
 {{define "access"}}{{template "head" .}}
 <nav><h1>권한과 팀 관리</h1>{{if .GraphID.IsV7}}<a href="/graphs/{{.GraphID}}">그래프 상세</a>{{end}}<a href="/graphs">그래프 목록</a></nav>
 {{if .Owner}}<section class="panel"><h2>현재 등급</h2>
+<p>팀에 부여한 등급은 팀 구성원에게 상속됩니다. 구성원별 상속 행은 관리하는 활성 팀에 한해 표시합니다. 다른 팀의 구성원 정보는 표시하지 않으며, 팀 부여를 유지하면 그 구성원의 접근도 유지됩니다.</p>
 <div class="table-scroll" role="region" aria-labelledby="grants-caption" tabindex="0"><table><caption id="grants-caption">직접 부여와 팀 상속 등급</caption><thead><tr><th scope="col">대상</th><th scope="col">종류</th><th scope="col">등급</th><th scope="col">부여 방식</th><th scope="col">회수</th></tr></thead><tbody>
 {{range .Grants}}<tr><th scope="row">{{.Name}}<br><code>{{.ID}}</code></th><td>{{.Type}}</td><td>{{.Grade}}</td><td>{{if .Inherited}}팀 상속{{else}}직접{{end}}</td><td>
 {{if .Inherited}}상속 등급은 팀 부여 또는 구성원 관리에서 변경하십시오.

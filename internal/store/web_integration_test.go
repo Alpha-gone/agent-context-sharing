@@ -304,7 +304,7 @@ func TestGraphGrantsAndDeletionImpactExecute(t *testing.T) {
 		t.Fatalf("원천 생성: %v", err)
 	}
 
-	grants, err := store.ListGraphGrants(t.Context(), graphID)
+	grants, err := store.ListGraphGrants(t.Context(), graphID, ownerID)
 	if err != nil {
 		t.Fatalf("그래프 등급 목록 조회: %v", err)
 	}

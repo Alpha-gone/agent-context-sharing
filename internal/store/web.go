@@ -134,10 +134,10 @@ func requireGraphOwner(ctx context.Context, tx pgx.Tx, graphID, actorID model.ID
 	return nil
 }
 
-// ListGraphGrants는 직접 부여와 팀 상속 등급을 구분해 웹에 돌려준다.
-func (s *Store) ListGraphGrants(ctx context.Context, graphID model.ID) ([]model.GrantSubject, error) {
-	if !graphID.IsV7() {
-		return nil, fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
+// ListGraphGrants는 직접 부여와 요청 계정이 관리하는 팀의 구성원 상속을 반환한다.
+func (s *Store) ListGraphGrants(ctx context.Context, graphID, actorID model.ID) ([]model.GrantSubject, error) {
+	if !graphID.IsV7() || !actorID.IsV7() {
+		return nil, fmt.Errorf("그래프 또는 요청 계정 식별자가 UUIDv7이 아니다")
 	}
 	rows, err := s.pool.Query(ctx, `WITH usable_owners AS (`+usableOwnersSQL+`)
 		SELECT permission.subject_type, permission.subject_id, COALESCE(account.login_id, team.name), permission.grade, false,
@@ -154,7 +154,8 @@ func (s *Store) ListGraphGrants(ctx context.Context, graphID model.ID) ([]model.
 		JOIN public.team_member AS member ON member.team_id = team.team_id
 		JOIN public.account AS account ON account.account_id = member.account_id
 		WHERE team_grant.graph_id = $1 AND team_grant.subject_type = 'team'
-		ORDER BY 5, 1, 3`, graphID.String())
+			AND team.manager_account_id = $2
+		ORDER BY 5, 1, 3`, graphID.String(), actorID.String())
 	if err != nil {
 		return nil, fmt.Errorf("그래프 등급 목록 조회: %w", err)
 	}

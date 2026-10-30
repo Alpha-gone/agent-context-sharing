@@ -44,7 +44,7 @@ func TestTeamGrantInheritanceAndAuditIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertAccess(true)
-	grants, err := database.ListGraphGrants(t.Context(), graphID)
+	grants, err := database.ListGraphGrants(t.Context(), graphID, managerID)
 	if err != nil {
 		t.Fatal(err)
 	}

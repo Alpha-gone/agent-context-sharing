@@ -132,7 +132,7 @@ func TestWEB04OwnerRevocationIntegration(t *testing.T) {
 			if sample.additional {
 				grant(other, store.GrantSubjectAccount, model.GraphGradeOwner)
 			}
-			rows, err := database.ListGraphGrants(t.Context(), graph)
+			rows, err := database.ListGraphGrants(t.Context(), graph, actor)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -309,5 +309,90 @@ func TestWEB04StaleOwnerAndTeamIntegration(t *testing.T) {
 				t.Fatalf("거부한 부여가 반영됐다: %v", err)
 			}
 		})
+	}
+}
+
+func TestTeamInheritanceMemberVisibilityIntegration(t *testing.T) {
+	database := permissionDatabase(t)
+	owner, manager := permissionAccount(t, database), permissionAccount(t, database)
+	localMember, foreignMember := permissionAccount(t, database), permissionAccount(t, database)
+	graph := permissionGraph(t, database, owner)
+	local, err := database.CreateTeam(t.Context(), owner, "local visibility team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := database.CreateTeam(t.Context(), manager, "foreign visibility team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sample := range []struct{ team, manager, member model.ID }{
+		{local.ID, owner, localMember}, {foreign.ID, manager, foreignMember},
+	} {
+		if err := database.AddTeamMember(t.Context(), sample.team, sample.manager, sample.member); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.GrantGraph(t.Context(), graph, owner, sample.team, store.GrantSubjectTeam, model.GraphGradeViewer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.GrantGraph(t.Context(), graph, owner, manager, store.GrantSubjectAccount, model.GraphGradeOwner); err != nil {
+		t.Fatal(err)
+	}
+	ownerClient := web04Server(t, database, database, owner)
+	managerClient := web04Server(t, database, database, manager)
+	path := "/graphs/" + graph.String() + "/access"
+	for i, deleted := range []bool{false, true, false} {
+		if i > 0 {
+			if err := database.SetTeamDeleted(t.Context(), foreign.ID, manager, deleted); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, sample := range []struct {
+			actor           model.ID
+			client          web04Client
+			visible, hidden model.ID
+			show            bool
+		}{
+			{owner, ownerClient, localMember, foreignMember, true},
+			{manager, managerClient, foreignMember, localMember, !deleted},
+		} {
+			rows, err := database.ListGraphGrants(t.Context(), graph, sample.actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := sample.client.request(path, nil, http.StatusOK)
+			for _, forbidden := range []string{sample.hidden.String(), permissionLogin(sample.hidden)} {
+				if strings.Contains(body, forbidden) {
+					t.Fatal("다른 관리자 팀의 구성원 정보가 노출됐다")
+				}
+			}
+			if slices.ContainsFunc(rows, func(row model.GrantSubject) bool { return row.ID == sample.hidden }) {
+				t.Fatal("저장소의 관리자 조회 경계 위반")
+			}
+			_, table, foundTable := strings.Cut(body, "<tbody>")
+			table, _, closedTable := strings.Cut(table, "</tbody>")
+			if !foundTable || !closedTable {
+				t.Fatal("등급 표 누락")
+			}
+			for _, visible := range []string{sample.visible.String(), permissionLogin(sample.visible)} {
+				if strings.Contains(table, visible) != sample.show {
+					t.Fatal("관리 팀 구성원의 표시 범위 불일치")
+				}
+			}
+			if !strings.Contains(body, foreign.ID.String()) || !strings.Contains(body, "foreign visibility team") || !strings.Contains(body, "구성원별 상속 행은 관리하는 활성 팀에 한해 표시합니다.") {
+				t.Fatal("팀 요약·상속 안내 누락")
+			}
+		}
+		grade, found, err := database.EffectiveGrade(t.Context(), graph, foreignMember)
+		if err != nil || found == deleted || found && grade != model.GraphGradeViewer {
+			t.Fatal("표시 범위 변경이 실제 상속을 바꿨다", grade, found, err)
+		}
+	}
+	if err := database.GrantGraph(t.Context(), graph, owner, foreignMember, store.GrantSubjectAccount, model.GraphGradeEditor); err != nil {
+		t.Fatal(err)
+	}
+	body := ownerClient.request(path, nil, http.StatusOK)
+	if !strings.Contains(body, foreignMember.String()) || !strings.Contains(body, permissionLogin(foreignMember)) {
+		t.Fatal("명시적 계정 직접 부여를 숨겼다")
 	}
 }

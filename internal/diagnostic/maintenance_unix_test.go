@@ -173,32 +173,48 @@ func TestOPS04MaintenanceCancellationDoesNotHideFailure(t *testing.T) {
 			t.Fatal("의도적인 취소와 동반 실패를 구분하지 못했습니다", test.only)
 		}
 	}
-	source, err := NewSource("ops04_failure")
-	if err != nil {
-		t.Fatal(err)
-	}
-	recorder, err := prepareRecorder(t.Context(), obs02Directory(t), source, obs04Policy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { recorder.Close(context.Background()) })
-	started, done := make(chan struct{}), make(chan struct{})
-	recorder.SetMaintenanceGuard(func(ctx context.Context, _ int64, _ func() (int, error)) (int, bool, error) {
-		close(started)
-		<-ctx.Done()
-		return 0, true, errors.Join(ctx.Err(), cause)
-	})
-	go func() { recorder.maintain(); close(done) }()
-	<-started
-	if err := recorder.StopMaintenance(t.Context()); !errors.Is(err, cause) {
-		t.Fatal("작업자 정리가 동반 실패를 반환하지 않았습니다", err)
-	}
-	<-done
-	if err := recorder.Close(t.Context()); !errors.Is(err, cause) {
-		t.Fatal("동반 정리 실패 원인을 보존하지 않았습니다", err)
-	}
-	if recorder.Stats().MaintenanceFailures != 1 {
-		t.Fatal("동반 정리 실패를 누락했습니다")
+	// 중단한 진행 회차의 동반 실패는 작업자 정리에 전달한다. guard의 DB 실패는 기록 실패가
+	// 아니므로 기록기 종료 오류에 넣지 않고, 정리 실행의 파일 실패만 기록기 오류로 남긴다.
+	for _, test := range []struct {
+		name      string
+		fileRound bool
+	}{{"store", false}, {"file", true}} {
+		t.Run(test.name, func(t *testing.T) {
+			source, err := NewSource("ops04_failure")
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder, err := prepareRecorder(t.Context(), obs02Directory(t), source, obs04Policy())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { recorder.Close(context.Background()) })
+			if test.fileRound {
+				recorder.upkeep.run = func() error { return fileFailure("file_invalid", cause) }
+			}
+			started, done := make(chan struct{}), make(chan struct{})
+			recorder.SetMaintenanceGuard(func(ctx context.Context, _ int64, run func() (int, error)) (int, bool, error) {
+				close(started)
+				<-ctx.Done()
+				if test.fileRound {
+					_, err := run()
+					return 0, true, errors.Join(ctx.Err(), err)
+				}
+				return 0, true, errors.Join(ctx.Err(), cause)
+			})
+			go func() { recorder.maintain(); close(done) }()
+			<-started
+			if err := recorder.StopMaintenance(t.Context()); !errors.Is(err, cause) {
+				t.Fatal("작업자 정리가 동반 실패를 반환하지 않았습니다", err)
+			}
+			<-done
+			if err := recorder.Close(t.Context()); errors.Is(err, cause) != test.fileRound {
+				t.Fatal("동반 정리 실패의 기록기 종료 결과", err)
+			}
+			if recorder.Stats().MaintenanceFailures != 1 {
+				t.Fatal("동반 정리 실패를 누락했습니다")
+			}
+		})
 	}
 }
 
@@ -319,11 +335,71 @@ func TestMaintenanceGuardSaturationKeepsRecording(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("다음 회차의 실행권·정리 회복 실패")
 	}
-	if err := recorder.Close(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal("정리 마감 원인 유실", err)
+	// 실행권 마감은 회차 실패로 세지만 기록 실패가 아니므로 기록기 종료 오류에 넣지 않는다.
+	if err := recorder.Close(t.Context()); err != nil {
+		t.Fatal("실행권 마감을 기록 실패로 반환했다", err)
 	}
 	if !reservations.TryAcquire(2) {
 		t.Fatal("정리 예약 미반환")
 	}
 	reservations.Release(2)
+}
+
+// TestMaintenancePastFailureDoesNotFailShutdown은 이미 끝난 정리 회차의 실패가 종료 결과에
+// 고착되지 않는지 확인한다. guard의 DB 실패는 주기 작업 진단이 소유하므로 파일 장애 통지와
+// 첫 기록 오류에 넣지 않고, 파일 실패는 기존처럼 기록기 오류로 남긴다.
+func TestMaintenancePastFailureDoesNotFailShutdown(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		failRound     func(run func() (int, error)) (int, bool, error)
+		outputs       uint64
+		closeFailures bool
+	}{
+		{"store", func(func() (int, error)) (int, bool, error) {
+			return 0, false, errors.New("database unavailable")
+		}, 0, false},
+		{"file", func(run func() (int, error)) (int, bool, error) {
+			count, err := run()
+			return count, true, err
+		}, 1, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := testSource(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			failing := true
+			upkeep := &recorderUpkeep{context: ctx, cancelMaintenance: cancel, cancel: cancel, ticks: make(chan time.Time), stop: func() {}, scope: 183,
+				run: func() error {
+					if failing {
+						return fileFailure("file_invalid", nil)
+					}
+					return nil
+				}}
+			recorder := newRecorder(source, queueLimits{maxQueuedEvents, maxQueuedBytes, maxEventBytes},
+				func(Kind, []byte) error { return nil }, func() error { return nil }, upkeep)
+			t.Cleanup(func() { recorder.Close(context.Background()) })
+			recorder.SetMaintenanceGuard(func(_ context.Context, _ int64, run func() (int, error)) (int, bool, error) {
+				if failing {
+					return test.failRound(run)
+				}
+				count, err := run()
+				return count, true, err
+			})
+			recorder.maintain()
+			failing = false
+			recorder.maintain()
+			recorder.output.mu.Lock()
+			outputs := recorder.output.failures
+			recorder.output.mu.Unlock()
+			if stats := recorder.Stats(); stats.MaintenanceFailures != 1 || outputs != test.outputs {
+				t.Fatalf("과거 회차 집계 = 회차 실패 %d, 장애 통지 %d", stats.MaintenanceFailures, outputs)
+			}
+			if err := recorder.StopMaintenance(t.Context()); err != nil {
+				t.Fatal("이미 끝난 회차의 실패를 작업자 정리 결과로 반환했다", err)
+			}
+			if err := recorder.Close(t.Context()); (err != nil) != test.closeFailures {
+				t.Fatal("과거 회차 실패의 기록기 종료 결과", err)
+			}
+		})
+	}
 }

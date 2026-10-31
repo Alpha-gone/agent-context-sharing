@@ -283,3 +283,33 @@ type ops04Observation func(context.Context, string, string, string, string, bool
 func (observe ops04Observation) RecordFields(ctx context.Context, level, stage, result, reason string, verified bool, fields diagnostic.Fields) bool {
 	return observe(ctx, level, stage, result, reason, verified, fields)
 }
+
+// TestDiagnosticCleanupReportClassifiesFailures는 진단 정리 guard의 DB 실패가 파일 실패와
+// 구분된 주기 작업 진단 원인으로 남는지 확인한다.
+func TestDiagnosticCleanupReportClassifiesFailures(t *testing.T) {
+	for _, test := range []struct {
+		name, result, reason string
+		acquired             bool
+		err                  error
+	}{
+		{"completed", "completed", "completed", true, nil},
+		{"lock_skipped", "skipped", "lock_unavailable", false, nil},
+		{"store", "failed", "store_unavailable", false, errors.New("database unavailable")},
+		{"file", "failed", "file_unavailable", true, &diagnostic.FileError{Code: "file_invalid"}},
+		{"deadline", "failed", "deadline_exceeded", false, context.DeadlineExceeded},
+		{"canceled", "failed", "canceled", true, errors.Join(context.Canceled, errors.New("private"))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var result, reason, job string
+			worker := &periodicWorker{logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				diagnostics: ops04Observation(func(_ context.Context, _, _, gotResult, gotReason string, _ bool, fields diagnostic.Fields) bool {
+					result, reason, job = gotResult, gotReason, fields.System.Job
+					return true
+				})}
+			worker.reportTask(t.Context(), "diagnostic_cleanup", 0, test.acquired, test.err)
+			if result != test.result || reason != test.reason || job != "diagnostic_cleanup" {
+				t.Fatalf("진단 = %s/%s/%s, 기대 %s/%s", job, result, reason, test.result, test.reason)
+			}
+		})
+	}
+}

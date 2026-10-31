@@ -192,7 +192,7 @@ func (s *Store) RotateSigningKey(ctx context.Context, key SigningKey) error {
 	if err != nil {
 		return fmt.Errorf("서명 키 회전 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx)
 	if _, err := tx.Exec(ctx, `UPDATE public.signing_key SET state = 'retired' WHERE state = 'active'`); err != nil {
 		return fmt.Errorf("기존 서명 키 은퇴: %w", err)
 	}

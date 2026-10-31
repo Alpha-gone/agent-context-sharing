@@ -423,3 +423,9 @@
 ## 2026-10-31 #200 평가 실행기 모드 전용 옵션
 
 - Go 1.27.1 SDK의 `go doc flag.FlagSet.Visit`으로 [FlagSet.Visit](https://pkg.go.dev/flag@go1.27.1#FlagSet.Visit)이 명시적으로 설정된 플래그만 사전순으로 방문한다는 계약을 확인했다. 조회일 2026-10-31 KST. 기본값과 같은 값을 명시해도 설정된 플래그로 방문하므로 [평가 모드 배타성](sdd/evaluation.md#검증을-가능하게-하는-설계)의 모드별 허용 목록은 값이 아니라 지정 여부로 판정한다. 반복 회차 값은 기존 10회 검사가 따로 담당한다.
+
+
+## 2026-10-31 #160 저장소 계층 정합성
+
+- 조회일 2026-10-31 KST. [PostgreSQL 18 현재 날짜/시각](https://www.postgresql.org/docs/18/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT)에서 `clock_timestamp()`는 한 SQL 문 안에서도 바뀌는 실제 현재 시각이고, `now()`는 트랜잭션 시작 시각이라는 차이를 확인했다. [유예 만료](sdd/context-lifecycle.md#소프트-삭제-수명주기)는 유예 시작과 같은 DB 시계를 쓰되 `clock_timestamp()`를 한 번만 읽은 값으로 판정과 삭제 시각을 함께 정한다. [멱등성 정리](sdd/mcp.md)는 예약·재생과 같은 DB 시계로 만료를 판정한다.
+- pgx v5.10.0의 `go doc github.com/jackc/pgx/v5.Tx`에서 `Rollback`은 이미 닫힌 트랜잭션에는 `ErrTxClosed`를 돌려주고, 실제 트랜잭션의 그 밖의 실패는 연결을 닫는다는 계약을 확인했다. 따라서 요청 context가 취소된 뒤 같은 context로 롤백하면 연결이 폐기될 수 있다. [저장소 트랜잭션 정리](sdd/architecture.md#데이터베이스-연결)는 기존 `rollbackTransaction`의 취소 독립 최대 5초 예산을 모든 지연 롤백에 사용한다.

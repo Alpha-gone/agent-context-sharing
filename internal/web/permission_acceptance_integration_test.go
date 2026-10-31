@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// permissionPools는 시험 전용 DB의 연결을 저장소별로 보관한다. 업무 호출에는 쓰지 않고
+// DB 시계 기준의 유예 상태 준비에만 쓴다.
+var permissionPools sync.Map
 
 // 실제 서명 키를 쓰므로 공유 DB를 변경하지 않고 시험별 DB를 정식 적용한다.
 func permissionDatabase(t *testing.T) *store.Store {
@@ -99,7 +104,25 @@ func permissionDatabaseWithGrace(t *testing.T, graceDays store.RetentionDays) *s
 		t.Fatal(err)
 	}
 	t.Cleanup(database.Close)
+	permissionPools.Store(database, pool)
+	t.Cleanup(func() { permissionPools.Delete(database) })
 	return database
+}
+
+// permissionExpireGrace는 유예 만료 시각을 DB 시계의 현재로 옮긴 뒤 실제 유예 만료를 실행한다.
+// 만료 판정이 DB 시계를 쓰므로 호출자가 미래 시각을 넘겨 시간을 앞당길 수 없다.
+func permissionExpireGrace(t *testing.T, database *store.Store, graph model.ID) {
+	t.Helper()
+	pool, ok := permissionPools.Load(database)
+	if !ok {
+		t.Fatal("시험 전용 DB 연결이 없다")
+	}
+	if _, err := pool.(*pgxpool.Pool).Exec(t.Context(), `UPDATE public.context_graph SET grace_expires_at = clock_timestamp() WHERE graph_id = $1 AND grace_expires_at IS NOT NULL`, graph.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExpireGrace(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type permissionAuthentication struct{ *authz.Service }

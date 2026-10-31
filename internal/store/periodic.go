@@ -61,15 +61,14 @@ func (s *Store) WithTryAdvisoryLock(ctx context.Context, key int64, run func(con
 
 // ExpireGrace는 유예 시작 시점에 고정한 만료 시각이 지난 활성 그래프를 자동 소프트 삭제한다.
 // 한 갱신으로 판정과 삭제를 함께 해, 확인과 삭제 사이에 유예가 취소되거나 다시 시작된
-// 그래프를 옛 판정으로 지우지 않는다.
-func (s *Store) ExpireGrace(ctx context.Context, now time.Time) (int, error) {
-	if now.IsZero() {
-		return 0, fmt.Errorf("유예 만료 기준 시각이 없다")
-	}
+// 그래프를 옛 판정으로 지우지 않는다. 유예 시각을 DB 시계로 기록하므로 만료 판정과 삭제
+// 시각도 같은 시계를 써서 호스트와 DB의 시계 차이만큼 만료가 당겨지거나 늦어지지 않게 한다.
+func (s *Store) ExpireGrace(ctx context.Context) (int, error) {
 	result, err := s.pool.Exec(ctx, `
 		UPDATE public.context_graph
-		SET deleted_at = $1
-		WHERE deleted_at IS NULL AND grace_expires_at IS NOT NULL AND grace_expires_at <= $1`, now.UTC())
+		SET deleted_at = clock.now
+		FROM (SELECT clock_timestamp() AS now) AS clock
+		WHERE deleted_at IS NULL AND grace_expires_at IS NOT NULL AND grace_expires_at <= clock.now`)
 	if err != nil {
 		return 0, fmt.Errorf("유예 만료 그래프 삭제: %w", err)
 	}
@@ -77,6 +76,8 @@ func (s *Store) ExpireGrace(ctx context.Context, now time.Time) (int, error) {
 }
 
 // CleanupExpiredProposals는 보존 기간을 지난 proposed 사건 관계를 AGE 그래프에서 지운다.
+// 그래프는 graph_id 순서로 훑고, 한 그래프의 해석·삭제 오류는 모아 두고 다음 그래프를
+// 계속 정리한다. 취소·마감은 회차 전체를 멈춘다.
 func (s *Store) CleanupExpiredProposals(ctx context.Context, now time.Time, daysFor RetentionDays) (int, error) {
 	if now.IsZero() || daysFor == nil {
 		return 0, fmt.Errorf("관계 후보 정리 인자가 올바르지 않다")
@@ -86,37 +87,50 @@ func (s *Store) CleanupExpiredProposals(ctx context.Context, now time.Time, days
 		return 0, err
 	}
 	deleted := 0
+	var failures []error
 	for _, graph := range graphs {
 		days := daysFor(graph.createdBy)
 		if days == 0 {
 			continue
 		}
-		cursor := ""
-		for {
-			relations, next, err := s.listRelations(ctx, s.pool, graph.id, model.ID{}, []model.RelationState{model.RelationStateProposed}, nil, cursor, relationScanPageSize)
-			if err != nil {
-				return deleted, fmt.Errorf("관계 후보 정리 목록: %w", err)
-			}
-			cutoff := now.AddDate(0, 0, -days)
-			for _, relation := range relations {
-				if relation.ProposedAt.After(cutoff) {
-					continue
-				}
-				removed, err := s.deleteRelationProposal(ctx, s.pool, graph.id, relation)
-				if err != nil {
-					return deleted, err
-				}
-				if removed {
-					deleted++
-				}
-			}
-			if next == "" {
+		removed, err := s.cleanupGraphProposals(ctx, graph.id, now.AddDate(0, 0, -days))
+		deleted += removed
+		if err != nil {
+			failures = append(failures, err)
+			if ctx.Err() != nil {
 				break
 			}
-			cursor = next
 		}
 	}
-	return deleted, nil
+	return deleted, errors.Join(failures...)
+}
+
+// cleanupGraphProposals는 그래프 하나에서 cutoff 이전에 제안된 proposed 관계를 지운다.
+func (s *Store) cleanupGraphProposals(ctx context.Context, graphID model.ID, cutoff time.Time) (int, error) {
+	deleted := 0
+	cursor := ""
+	for {
+		relations, next, err := s.listRelations(ctx, s.pool, graphID, model.ID{}, []model.RelationState{model.RelationStateProposed}, nil, cursor, relationScanPageSize)
+		if err != nil {
+			return deleted, fmt.Errorf("관계 후보 정리 목록: %w", err)
+		}
+		for _, relation := range relations {
+			if relation.ProposedAt.After(cutoff) {
+				continue
+			}
+			removed, err := s.deleteRelationProposal(ctx, s.pool, graphID, relation)
+			if err != nil {
+				return deleted, err
+			}
+			if removed {
+				deleted++
+			}
+		}
+		if next == "" {
+			return deleted, nil
+		}
+		cursor = next
+	}
 }
 
 func (s *Store) cleanupTeamAuditRecords(ctx context.Context, now time.Time, auditDaysFor RetentionDays) (int, error) {
@@ -238,7 +252,7 @@ type retentionGraph struct {
 }
 
 func (s *Store) retentionGraphs(ctx context.Context) ([]retentionGraph, error) {
-	rows, err := s.pool.Query(ctx, `SELECT graph_id, created_by, deleted_at IS NOT NULL FROM public.context_graph`)
+	rows, err := s.pool.Query(ctx, `SELECT graph_id, created_by, deleted_at IS NOT NULL FROM public.context_graph ORDER BY graph_id`)
 	if err != nil {
 		return nil, fmt.Errorf("보존 기간 그래프 조회: %w", err)
 	}

@@ -273,9 +273,7 @@ func web05AutomaticGraph(t *testing.T, database *store.Store, creator, former mo
 	if err := database.RemoveTeamMemberWithAudit(t.Context(), team.ID, creator, creator); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExpireGrace(t.Context(), time.Now().Add(48*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	permissionExpireGrace(t, database, graph)
 	if value := web05Graph(t, database, graph); value.DeletedAt == nil || value.GraceStartedAt == nil {
 		t.Fatal("자동 삭제 상태를 만들지 못했다")
 	}

@@ -40,11 +40,10 @@ func ops06DeletedGraph(t *testing.T, database *Store) ops06RestoreFixture {
 	if err := database.RemoveTeamMemberWithAudit(t.Context(), f.team, f.creator, f.creator); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now().UTC()
-	if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_expires_at=$2 WHERE graph_id=$1`, f.graph.String(), now); err != nil {
+	if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_expires_at=clock_timestamp() WHERE graph_id=$1`, f.graph.String()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExpireGrace(t.Context(), now); err != nil {
+	if _, err := database.ExpireGrace(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	return f

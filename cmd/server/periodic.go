@@ -27,12 +27,12 @@ const (
 
 type periodicStore interface {
 	WithTryAdvisoryLock(context.Context, int64, func(context.Context) (int, error)) (int, bool, error)
-	ExpireGrace(context.Context, time.Time) (int, error)
+	ExpireGrace(context.Context) (int, error)
 	CleanupExpiredProposals(context.Context, time.Time, store.RetentionDays) (int, error)
 	CleanupAuditRecords(context.Context, time.Time, store.RetentionDays, store.RetentionDays) (int, error)
 	CleanupExpiredRevocations(context.Context, time.Time) (int, error)
 	CleanupRequestRateWindows(context.Context, time.Time) (int, error)
-	CleanupExpiredIdempotencyRecords(context.Context, time.Time) (int, error)
+	CleanupExpiredIdempotencyRecords(context.Context) (int, error)
 	MoveColdEmbeddings(context.Context, time.Time, store.RetentionDays) (int, error)
 	CleanupOAuthState(context.Context, time.Time) (int, error)
 }
@@ -69,7 +69,7 @@ func newPeriodicWorker(database *store.Store, plans plan.AccountPlans, logger *s
 	limits := func(accountID model.ID) plan.Limits { return plans.For(accountID) }
 	worker.tasks = []periodicTask{
 		{name: "grace_expiry", interval: time.Hour, lockKey: graceExpiryLockKey, run: func(ctx context.Context) (int, error) {
-			return database.ExpireGrace(ctx, worker.now().UTC())
+			return database.ExpireGrace(ctx)
 		}},
 		{name: "proposal_cleanup", interval: 24 * time.Hour, lockKey: proposalCleanupLockKey, run: func(ctx context.Context) (int, error) {
 			return database.CleanupExpiredProposals(ctx, worker.now().UTC(), func(accountID model.ID) int { return limits(accountID).ProposalRetentionDays })
@@ -88,7 +88,7 @@ func newPeriodicWorker(database *store.Store, plans plan.AccountPlans, logger *s
 			return database.MoveColdEmbeddings(ctx, worker.now().UTC(), func(accountID model.ID) int { return limits(accountID).TierMoveAfterDays })
 		}},
 		{name: "idempotency_cleanup", interval: time.Hour, lockKey: idempotencyCleanupLockKey, run: func(ctx context.Context) (int, error) {
-			return database.CleanupExpiredIdempotencyRecords(ctx, worker.now().UTC())
+			return database.CleanupExpiredIdempotencyRecords(ctx)
 		}},
 		{name: "oauth_cleanup", interval: time.Hour, lockKey: oauthCleanupLockKey, run: func(ctx context.Context) (int, error) {
 			return database.CleanupOAuthState(ctx, worker.now().UTC())

@@ -40,7 +40,8 @@ func (s *Store) finishManagement(ctx context.Context, observation *managementObs
 	level, result, reason := "INFO", "completed", "completed"
 	if err != nil {
 		level, result, reason = "WARN", "failed", "constraint_violation"
-		_, internal := errors.AsType[*StorageError](err)
+		// 웹·권한 트랜잭션은 DB 오류를 StorageError로 감싸지 않으므로 원인 타입으로 장애를 가린다.
+		internal := driverFailure(err)
 		if internal {
 			level, reason = "ERROR", "store_unavailable"
 		}

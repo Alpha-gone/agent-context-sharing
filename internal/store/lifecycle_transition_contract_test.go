@@ -273,6 +273,10 @@ func TestLifeGraceExpiryReconnectionIntegration(t *testing.T) {
 			if expires == nil {
 				t.Fatal("유예 만료가 없다")
 			}
+			// 만료 판정이 DB 시계를 쓰므로 유예 전체를 이틀 앞당겨 이미 만료된 상태로 만든다.
+			if err := database.pool.QueryRow(t.Context(), `UPDATE public.context_graph SET grace_started_at=grace_started_at-interval '2 days', grace_expires_at=grace_expires_at-interval '2 days' WHERE graph_id=$1 RETURNING grace_expires_at`, graph.String()).Scan(expires); err != nil {
+				t.Fatal(err)
+			}
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			tx, err := database.pool.Begin(ctx)
@@ -291,7 +295,7 @@ func TestLifeGraceExpiryReconnectionIntegration(t *testing.T) {
 			var group sync.WaitGroup
 			group.Go(func() {
 				if reconnectFirst {
-					_, err := database.ExpireGrace(ctx, *expires)
+					_, err := database.ExpireGrace(ctx)
 					done <- err
 				} else {
 					done <- database.AddTeamMember(ctx, team, actor, actor)

@@ -13,57 +13,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// CreateRelation은 같은 그래프의 사건 두 개를 잇는 사건 관계 간선을 만든다.
-func (s *Store) CreateRelation(ctx context.Context, graphID model.ID, relation model.Relation) (result model.Relation, err error) {
-	if !graphID.IsV7() || relation.GraphID != graphID {
-		return model.Relation{}, fmt.Errorf("요청 graph_id와 관계 graph_id가 일치하지 않는다")
-	}
-	tx, err := s.writeTransaction(ctx)
-	if err != nil {
-		return model.Relation{}, fmt.Errorf("관계 생성 트랜잭션 시작: %w", err)
-	}
-	defer finishWrite(ctx, tx, "CreateRelation", &err)
-	if err := requireActiveGraph(ctx, tx, graphID); err != nil {
-		return model.Relation{}, err
-	}
-
-	from, err := s.context(ctx, tx, graphID, relation.FromContextID)
-	if err != nil {
-		return model.Relation{}, fmt.Errorf("관계 시작 사건 조회: %w", err)
-	}
-	to, err := s.context(ctx, tx, graphID, relation.ToContextID)
-	if err != nil {
-		return model.Relation{}, fmt.Errorf("관계 대상 사건 조회: %w", err)
-	}
-	if err := model.ValidateRelation(relation, from, to); err != nil {
-		return model.Relation{}, fmt.Errorf("관계 검증: %w", errors.Join(ErrInvalidRelation, err))
-	}
-	properties, err := encodeProperties(relationProperties(relation))
-	if err != nil {
-		return model.Relation{}, err
-	}
-	label, err := relationLabel(relation.Type)
-	if err != nil {
-		return model.Relation{}, err
-	}
-	query := "MATCH (from:Context), (to:Context) WHERE from.context_id = " + cypherString(relation.FromContextID.String()) +
-		" AND from.graph_id = " + cypherString(graphID.String()) +
-		" AND to.context_id = " + cypherString(relation.ToContextID.String()) +
-		" AND to.graph_id = " + cypherString(graphID.String()) +
-		" CREATE (from)-[edge:" + label + " " + properties + "]->(to) RETURN edge, startNode(edge), endNode(edge)"
-	stored, err := s.relationFromCypher(ctx, tx, graphID, query)
-	if err != nil {
-		return model.Relation{}, fmt.Errorf("사건 관계 생성: %w", err)
-	}
-	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}); err != nil {
-		return model.Relation{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return model.Relation{}, fmt.Errorf("관계 생성 커밋: %w", err)
-	}
-	return stored, nil
-}
-
 // ConfirmRelation은 관계 정체성으로 후보를 확정하거나, 없는 관계를 에이전트 제안으로 만든다.
 // 같은 정체성의 재확정은 현재 관계를 돌려주는 멱등 연산이다.
 func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation model.Relation, operation *OperationRecord) (result model.Relation, err error) {
@@ -301,7 +250,8 @@ func (s *Store) ProposeEventRelations(ctx context.Context, graphID, eventID mode
 	if !graphID.IsV7() || !eventID.IsV7() {
 		return fmt.Errorf("그래프와 사건 식별자는 UUIDv7이어야 한다")
 	}
-	target, err := s.Context(ctx, graphID, eventID)
+	// 시스템 제안은 사용자 조회가 아니므로 접근 시각 갱신·계층 승격을 하지 않는 내부 조회를 쓴다.
+	target, err := s.context(ctx, s.pool, graphID, eventID)
 	if err != nil {
 		return err
 	}

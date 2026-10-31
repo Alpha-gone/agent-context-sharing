@@ -41,12 +41,11 @@ func operatorRestoreFixture(t *testing.T, database *Store, formerOwner bool) (mo
 	if err := database.RemoveTeamMember(t.Context(), teamID, requesterID); err != nil {
 		t.Fatalf("마지막 접근 계정 제거: %v", err)
 	}
-	// 이 표본의 유예만 과거로 옮기고 현재 시각으로 만료시킨다.
-	now := time.Now().UTC()
-	if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_started_at = $2, grace_expires_at = $3 WHERE graph_id = $1 AND grace_started_at IS NOT NULL`, graphID.String(), now.AddDate(0, 0, -30), now); err != nil {
+	// 이 표본의 유예만 DB 시계 기준 과거로 옮겨 현재 시각에 만료시킨다.
+	if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_started_at = clock_timestamp() - interval '30 days', grace_expires_at = clock_timestamp() WHERE graph_id = $1 AND grace_started_at IS NOT NULL`, graphID.String()); err != nil {
 		t.Fatalf("유예 만료 준비: %v", err)
 	}
-	if _, err := database.ExpireGrace(t.Context(), now); err != nil {
+	if _, err := database.ExpireGrace(t.Context()); err != nil {
 		t.Fatalf("자동 소프트 삭제: %v", err)
 	}
 	if err := database.RequestGraphRestore(t.Context(), graphID, requesterID); err != nil {

@@ -264,10 +264,10 @@ func TestOBS06InheritedRestoreRetentionIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 			now := time.Now().UTC()
-			if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_expires_at=$2 WHERE graph_id=$1 AND grace_started_at IS NOT NULL`, graph.String(), now); err != nil {
+			if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_expires_at=clock_timestamp() WHERE graph_id=$1 AND grace_started_at IS NOT NULL`, graph.String()); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := database.ExpireGrace(t.Context(), now); err != nil {
+			if _, err := database.ExpireGrace(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			if err := database.RequestGraphRestore(t.Context(), graph, newTestID(t)); !errors.Is(err, ErrNotFound) {

@@ -166,7 +166,7 @@ func TestARCH07AssembledHTTPEntriesIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest("GET", "https://service.test/connections", nil)
-	request.AddCookie(&http.Cookie{Name: "agent_context_session", Value: session.Raw})
+	request.AddCookie(&http.Cookie{Name: "__Host-agent_context_session", Value: session.Raw})
 	response := httptest.NewRecorder()
 	assembly.app.handler().ServeHTTP(response, request)
 	if response.Code != 200 || !strings.Contains(response.Body.String(), "연결") {
@@ -178,7 +178,7 @@ func TestARCH07AssembledHTTPEntriesIntegration(t *testing.T) {
 		request := httptest.NewRequest("POST", "https://service.test/graphs", nil)
 		request.Body, request.ContentLength = body, -1
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		request.AddCookie(&http.Cookie{Name: "agent_context_session", Value: session.Raw})
+		request.AddCookie(&http.Cookie{Name: "__Host-agent_context_session", Value: session.Raw})
 		response := httptest.NewRecorder()
 		assembly.app.handler().ServeHTTP(response, request)
 		if response.Code != 400 || body.read != 10<<20+1 {

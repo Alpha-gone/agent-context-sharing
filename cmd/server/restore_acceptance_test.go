@@ -41,7 +41,7 @@ func TestOPS06RestoreSessionHTTPIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		cookies[id] = &http.Cookie{Name: "agent_context_session", Value: session.Raw}
+		cookies[id] = &http.Cookie{Name: "__Host-agent_context_session", Value: session.Raw}
 	}
 	const secret = "ops06-private-context-marker"
 	args := f.args("node_create")

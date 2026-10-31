@@ -103,7 +103,7 @@ func TestAUTH10ConnectionsTLSIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cookie := &http.Cookie{Name: "agent_context_session", Value: session.Raw}
+	cookie := &http.Cookie{Name: "__Host-agent_context_session", Value: session.Raw}
 	do := func(index int, method, path, body string, cookie *http.Cookie, headers map[string]string) (*http.Response, []byte) {
 		t.Helper()
 		request, err := http.NewRequestWithContext(t.Context(), method, servers[index].URL+path, strings.NewReader(body))

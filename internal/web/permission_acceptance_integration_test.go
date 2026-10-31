@@ -177,7 +177,7 @@ func permissionRequest(t *testing.T, server *web.Server, token, method, path str
 	request := httptest.NewRequest(method, "https://permission.test"+path, strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Origin", "https://permission.test")
-	request.AddCookie(&http.Cookie{Name: "agent_context_session", Value: token})
+	request.AddCookie(&http.Cookie{Name: "__Host-agent_context_session", Value: token})
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != want {

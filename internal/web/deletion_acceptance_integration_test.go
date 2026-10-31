@@ -59,7 +59,7 @@ func (client web05Client) request(path string, form url.Values, status int, loca
 	}
 	request.Header.Set("Origin", client.base)
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	request.AddCookie(&http.Cookie{Name: "agent_context_session", Value: client.token})
+	request.AddCookie(&http.Cookie{Name: "__Host-agent_context_session", Value: client.token})
 	response, err := client.client.Do(request)
 	if err != nil {
 		client.t.Fatal(err)

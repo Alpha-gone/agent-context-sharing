@@ -3,7 +3,6 @@ package authz
 import (
 	"context"
 	"errors"
-	"maps"
 	"sync"
 	"time"
 
@@ -18,6 +17,9 @@ const revocationTTL = 10 * time.Second
 
 // keyMissTTL은 정상 적재한 목록에 없는 kid의 재조회를 제한한다.
 const keyMissTTL = time.Second
+
+// publicKeyTTL은 저장소에서 삭제된 키의 신뢰가 남는 캐시 간격이다.
+const publicKeyTTL = 10 * time.Second
 
 // cacheLookupTimeout은 캐시 미스의 대기·재시도·적재를 합산한 예산이다.
 const cacheLookupTimeout = 5 * time.Second
@@ -111,7 +113,7 @@ func (cache *verificationCache) publicKey(ctx context.Context, source authStore,
 			cache.mu.Unlock()
 			return jose.JSONWebKey{}, err
 		}
-		if key, found := cache.keys[keyID]; found {
+		if key, found := cache.keys[keyID]; found && time.Since(cache.keysLoadedAt) < publicKeyTTL {
 			cache.mu.Unlock()
 			return key, nil
 		}
@@ -150,11 +152,9 @@ func (cache *verificationCache) publicKey(ctx context.Context, source authStore,
 		}
 		cache.mu.Lock()
 		result = result.beforePublish(ctx)
-		if result.err == nil {
-			maps.Copy(cache.keys, loaded)
-			if cache.keysGeneration == generation {
-				cache.keysLoadedAt = time.Now()
-			}
+		if result.err == nil && cache.keysGeneration == generation {
+			cache.keys = loaded
+			cache.keysLoadedAt = time.Now()
 		}
 		load.err, load.retry = result.err, result.retry
 		cache.keyLoad = nil

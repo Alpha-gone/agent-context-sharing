@@ -185,7 +185,9 @@ func (s *Service) Authenticate(ctx context.Context, loginID, password string) (a
 		}
 		return model.ID{}, &credentialFailure{ErrUnavailable, err}
 	}
-	if legacy {
+	storedHash, _ := strings.CutPrefix(account.PasswordHash, passwordHashPrefix)
+	cost, costErr := bcrypt.Cost([]byte(storedHash))
+	if legacy || (costErr == nil && cost < s.config.BcryptCost) {
 		hash, err := s.passwords.generate(password, s.config.BcryptCost)
 		if err := ctx.Err(); err != nil {
 			return model.ID{}, err

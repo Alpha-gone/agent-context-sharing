@@ -106,7 +106,7 @@ func TestARCH08SharedStateAndReplacementIntegration(t *testing.T) {
 			r.Header.Set("Authorization", "Bearer "+bearer)
 		}
 		if cookie != "" {
-			r.AddCookie(&http.Cookie{Name: "agent_context_session", Value: cookie})
+			r.AddCookie(&http.Cookie{Name: "__Host-agent_context_session", Value: cookie})
 		}
 		if path == "/mcp" {
 			var envelope struct {

@@ -182,7 +182,7 @@ func actorFields(properties map[string]*jsonschema.Schema) {
 }
 
 func bodySchema() *jsonschema.Schema {
-	return textSchema("컨텍스트 본문. 유효한 UTF-8의 1~8000자이며 U+0000을 허용하지 않는다.", 1, 8000)
+	return textSchema("컨텍스트 본문. 유효한 UTF-8의 1~8000자이며 U+0000을 허용하지 않는다. 공백만인 본문도 허용하고 원문 그대로 저장·색인한다.", 1, 8000)
 }
 func versionSchema() *jsonschema.Schema {
 	return integerSchema("조회한 현재 양수 version. 충돌하면 대상을 재조회하며 자동 병합하지 않는다.", 1)

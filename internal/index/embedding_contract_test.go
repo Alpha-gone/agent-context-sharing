@@ -295,8 +295,11 @@ func TestGeminiInputContract(t *testing.T) {
 			name, input string
 			valid       bool
 		}{
-			{"empty", "", false}, {"space", "\t\n ", false}, {"invalid_utf8", string([]byte{0xff}), false},
+			{"empty", "", false}, {"space", "   ", document}, {"newline", "\t\n\r", document},
+			{"unicode_space", "\u00a0\u2003\u3000", document}, {"mixed_space", "\t\n \u3000", document},
+			{"invalid_utf8", string([]byte{0xff}), false},
 			{"ascii_limit", strings.Repeat("a", 8000), true}, {"unicode_limit", strings.Repeat("한", 8000), true},
+			{"space_limit", strings.Repeat(" ", 8000), document}, {"space_over_limit", strings.Repeat(" ", 8001), false},
 			{"over_limit", strings.Repeat("한", 8001), false}, {"escaped", "\x00\n\"\\한😀", true},
 		} {
 			t.Run(fmt.Sprintf("document=%t/%s", document, test.name), func(t *testing.T) {

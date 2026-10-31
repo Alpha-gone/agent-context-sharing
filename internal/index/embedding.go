@@ -96,7 +96,7 @@ func (worker *Worker) embed(ctx context.Context, input string, document bool) ([
 }
 
 func (worker *Worker) embedResponse(ctx context.Context, input string, document bool) (values []float64, status uint16, resultErr error) {
-	if !utf8.ValidString(input) || strings.TrimSpace(input) == "" || utf8.RuneCountInString(input) > 8000 {
+	if !utf8.ValidString(input) || input == "" || (!document && strings.TrimSpace(input) == "") || utf8.RuneCountInString(input) > 8000 {
 		return nil, status, ProviderError{Reason: "임베딩 입력이 비어 있거나 UTF-8·8000자 한도를 위반했다"}
 	}
 	endpoint := worker.config.BaseURL.Clone()

@@ -447,3 +447,9 @@
 
 - 조회일 2026-10-31 KST. [PostgreSQL 18 키워드](https://www.postgresql.org/docs/18/sql-keywords-appendix.html)와 [pg_get_keywords](https://www.postgresql.org/docs/18/functions-info.html#FUNCTIONS-INFO-CATALOG-TABLE)의 U/C/T/R 분류를 확인했다. 공식 PostgreSQL 18 parser의 ColId는 일반 식별자·비예약어·열 이름 키워드를 받는다. 고정 PG18.6 이미지의 실제 카탈로그(R 78개·T 23개)를 검증 목록과 대조하고 C 키워드 between의 전체 마이그레이션을 실행했다. 적용 SQL을 보존하면서 [스키마 적용](sdd/data.md#스키마-적용)의 무인용 치환 실패를 구성 검증에서 먼저 거부한다.
 - [SET TRANSACTION](https://www.postgresql.org/docs/18/sql-set-transaction.html)의 READ ONLY·REPEATABLE READ 계약과 [자문 잠금](https://www.postgresql.org/docs/18/explicit-locking.html#ADVISORY-LOCKS)을 확인했다. status의 이력 조회는 별도 읽기 전용 스냅숏으로 수행하고 up의 자문 잠금을 얻지 않는다. 소유 DB에서 실제 CLI의 빈/구형 이력 무변경과 다른 연결의 적용 잠금 보유 중 종료를 대조했다. 이는 낮은 권한 role의 LOAD 'age' 권한이나 임의 DDL과의 무대기를 보증하지 않는다. [검토 기록](reviews/2026-10-31-issue-162.md)에 시험 범위와 기존 실패를 구분했다.
+
+
+## 2026-10-31 #174 인증 캐시 적재 취소 격리
+
+- 조회일 2026-10-31 KST. Go 1.27.1 SDK `src/context/context.go`의 [WithTimeout](https://pkg.go.dev/context@go1.27.1#WithTimeout)·[WithDeadline](https://pkg.go.dev/context@go1.27.1#WithDeadline) 주석과 구현을 확인했다. 파생 마감은 부모보다 늦어지지 않으며 CancelFunc는 자식·타이머 자원을 해제한다. 부모 요청 취소를 유지하면서 한 번의 저장소 적재에 최대 5초를 적용하는 [토큰 검증](sdd/authentication.md#토큰-검증)의 근거다. 파생 context의 Err는 CancelFunc 호출 전에 확인한다.
+- SDK의 [errors.Is](https://pkg.go.dev/errors@go1.27.1#Is) 계약에 따라 감싸진 원인까지 비교한다. 적재 부모의 실제 취소·마감과 일치하는 오류만 대기 요청의 재시도 대상으로 구분한다. 부모가 정상인 저장소의 취소·마감 오류나 적재 자체의 5초 상한 초과는 계속 저장소 장애로 전달하는 회귀를 확인했다. [검토 기록](reviews/2026-10-31-issue-174.md)에 재현·범위·결과를 기록한다.

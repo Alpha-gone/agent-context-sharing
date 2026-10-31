@@ -25,9 +25,11 @@ const (
 
 // EffectiveGrade는 직접 부여와 활성 팀의 상속 부여를 한 질의로 합쳐 최고 등급을 계산한다.
 // 소프트 삭제한 그래프는 소유자가 웹에서 복구할 수 있도록 여기서 제외하지 않는다. 자동
-// 삭제 그래프에는 접근 가능한 계정이 없으므로 유효 등급도 남지 않는다. 삭제 상태에 따른
-// 화면과 연산의 가용성은 이 계산과 별도로 각 조회·처리 경로가 판정한다. 부여가 하나도
-// 없으면 집계가 NULL을 돌려주므로 등급을 nullable로 받아 부재와 구분한다.
+// 삭제 그래프(`deleted_at`과 `grace_started_at`이 함께 남은 그래프)는 운영자 복구 전까지
+// 유효 등급을 갖지 않는다. 삭제 뒤 팀 복구나 구성원 추가로 부여 경로가 다시 이어져도 유예
+// 취소는 활성 그래프만 대상으로 하므로, 여기서 제외하지 않으면 소유자가 되살아난다. 그 밖의
+// 삭제 상태에 따른 화면과 연산의 가용성은 이 계산과 별도로 각 조회·처리 경로가 판정한다.
+// 부여가 하나도 없으면 집계가 NULL을 돌려주므로 등급을 nullable로 받아 부재와 구분한다.
 func (s *Store) EffectiveGrade(ctx context.Context, graphID, accountID model.ID) (model.GraphGrade, bool, error) {
 	return effectiveGrade(ctx, s.pool, graphID, accountID)
 }
@@ -53,7 +55,11 @@ func effectiveGrade(ctx context.Context, queryer gradeQueryer, graphID, accountI
 		)
 		SELECT CASE MAX(CASE grade WHEN 'owner' THEN 3 WHEN 'editor' THEN 2 WHEN 'viewer' THEN 1 END)
 			WHEN 3 THEN 'owner' WHEN 2 THEN 'editor' WHEN 1 THEN 'viewer' END
-		FROM candidate`, graphID.String(), accountID.String()).Scan(&grade)
+		FROM candidate
+		WHERE NOT EXISTS (
+			SELECT 1 FROM public.context_graph
+			WHERE graph_id = $1 AND deleted_at IS NOT NULL AND grace_started_at IS NOT NULL
+		)`, graphID.String(), accountID.String()).Scan(&grade)
 	if err != nil {
 		return "", false, fmt.Errorf("유효 등급 조회: %w", err)
 	}
@@ -68,7 +74,9 @@ func effectiveGrade(ctx context.Context, queryer gradeQueryer, graphID, accountI
 }
 
 // RevokeGraphGrant는 그래프 행을 잠근 뒤 직접 또는 팀 등급을 회수한다. 마지막 소유자
-// 등급은 회수하지 않으며, 마지막 접근 가능 계정이 사라지면 유예를 시작한다.
+// 등급은 회수하지 않으며, 마지막 접근 가능 계정이 사라지면 유예를 시작한다. 행위자 인가와
+// 웹 감사를 적용하지 않으므로 다른 패키지 시험의 상태 준비에만 쓴다. 웹 회수는
+// RevokeGraphGrantWithAudit를 사용한다.
 func (s *Store) RevokeGraphGrant(ctx context.Context, graphID model.ID, subjectType GrantSubjectType, subjectID model.ID) error {
 	if !graphID.IsV7() || !subjectID.IsV7() || !subjectType.valid() {
 		return fmt.Errorf("그래프 등급 회수 인자가 올바르지 않다")
@@ -77,7 +85,7 @@ func (s *Store) RevokeGraphGrant(ctx context.Context, graphID model.ID, subjectT
 	if err != nil {
 		return fmt.Errorf("그래프 등급 회수 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx)
 
 	graphIDs, err := lockGraphs(ctx, tx, []model.ID{graphID})
 	if err != nil {
@@ -101,70 +109,6 @@ func (s *Store) RevokeGraphGrant(ctx context.Context, graphID model.ID, subjectT
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("그래프 등급 회수 커밋: %w", err)
-	}
-	return nil
-}
-
-// RemoveTeamMember는 팀의 모든 영향 그래프를 정해진 순서로 잠근 뒤 구성원을 제거하고,
-// 마지막 접근 가능 계정이 사라진 그래프의 유예를 시작한다.
-func (s *Store) RemoveTeamMember(ctx context.Context, teamID, accountID model.ID) error {
-	if !teamID.IsV7() || !accountID.IsV7() {
-		return fmt.Errorf("팀 구성원 제거 인자가 올바르지 않다")
-	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return fmt.Errorf("팀 구성원 제거 트랜잭션 시작: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	graphIDs, err := lockTeamGraphs(ctx, tx, teamID)
-	if err != nil {
-		return err
-	}
-	result, err := tx.Exec(ctx, `DELETE FROM public.team_member WHERE team_id = $1 AND account_id = $2`, teamID.String(), accountID.String())
-	if err != nil {
-		return fmt.Errorf("팀 구성원 제거: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	if err := s.startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("팀 구성원 제거 커밋: %w", err)
-	}
-	return nil
-}
-
-// DeleteTeam은 팀의 모든 영향 그래프를 정해진 순서로 잠근 뒤 팀을 소프트 삭제하고,
-// 마지막 접근 가능 계정이 사라진 그래프의 유예를 시작한다.
-func (s *Store) DeleteTeam(ctx context.Context, teamID model.ID) error {
-	if !teamID.IsV7() {
-		return fmt.Errorf("팀 삭제 인자가 올바르지 않다")
-	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return fmt.Errorf("팀 삭제 트랜잭션 시작: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	graphIDs, err := lockTeamGraphs(ctx, tx, teamID)
-	if err != nil {
-		return err
-	}
-	result, err := tx.Exec(ctx, `UPDATE public.team SET deleted_at = clock_timestamp() WHERE team_id = $1 AND deleted_at IS NULL`, teamID.String())
-	if err != nil {
-		return fmt.Errorf("팀 삭제: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	if err := s.startGraceForDisconnectedGraphs(ctx, tx, graphIDs); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("팀 삭제 커밋: %w", err)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type obs05Sink struct {
@@ -221,5 +223,31 @@ func TestOBS05StorageFailureIsNotDomainRejection(t *testing.T) {
 	events := sink.snapshot(t)
 	if len(events) != 1 || events[0].ReasonCode != "store_unavailable" || events[0].Fields.Management.ValidationField != "" {
 		t.Fatalf("저장 장애가 도메인 거부로 바뀜: %+v", events)
+	}
+}
+
+// TestOBS05WrappedDriverFailureIsNotConstraintViolation은 웹·권한 트랜잭션처럼 DB 오류를
+// fmt.Errorf로만 감싼 실패도 저장소 장애로, 도메인 거부는 계속 제약 위반으로 분류하는지 확인한다.
+func TestOBS05WrappedDriverFailureIsNotConstraintViolation(t *testing.T) {
+	for _, test := range []struct {
+		name, level, reason string
+		err                 error
+	}{
+		{"connection", "ERROR", "store_unavailable", fmt.Errorf("그래프 등급 부여: %w", &pgconn.PgError{Code: "08006", Message: "private connection failure"})},
+		{"closed", "ERROR", "store_unavailable", fmt.Errorf("팀 삭제: %w", pgx.ErrTxClosed)},
+		{"domain", "WARN", "constraint_violation", fmt.Errorf("소유자 회수: %w", ErrLastOwner)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sink := &obs05Sink{}
+			database := &Store{}
+			database.SetOperationDiagnostics(obs05Reporter(t, diagnostic.Management, sink), nil)
+			ctx, observation := beginManagement(obs05Context(t), "grade_grant")
+			observation.stage, observation.state = "write", "rolled_back"
+			database.finishManagement(ctx, observation, test.err)
+			events := sink.snapshot(t)
+			if len(events) != 1 || events[0].Level != test.level || events[0].ReasonCode != test.reason {
+				t.Fatalf("관리 실패 분류: %+v", events)
+			}
+		})
 	}
 }

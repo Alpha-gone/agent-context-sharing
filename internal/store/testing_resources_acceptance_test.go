@@ -150,7 +150,7 @@ func TestTEST05MixedRequestsRecoverSmallPoolIntegration(t *testing.T) {
 				case "periodic":
 					var acquired bool
 					_, acquired, err = database.WithTryAdvisoryLock(request, 9500500+int64(i), func(ctx context.Context) (int, error) {
-						return database.ExpireGrace(ctx, time.Now().UTC())
+						return database.ExpireGrace(ctx)
 					})
 					if err == nil && !acquired {
 						err = errors.New("서로 다른 주기 작업의 잠금 확보 실패")

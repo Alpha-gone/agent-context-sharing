@@ -10,13 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// TryIncrementRequestRate는 1분 고정 창 카운터를 한 문장으로 늘린다. allowed가 0이면
-// 플랜 한도가 없으므로 행을 만들지 않는다.
-func (s *Store) TryIncrementRequestRate(ctx context.Context, accountID model.ID, now time.Time, allowed int) (int, bool, error) {
-	count, accepted, err := tryIncrementRequestRate(ctx, s.pool, accountID, now, int64(allowed))
-	return int(count), accepted, err
-}
-
 // tryIncrementRequestRate는 같은 갱신을 풀과 저장 트랜잭션에서 함께 쓰도록 분리한 것이다.
 //
 // 「계정 플랜 값」이 이 갱신을 이미 열려 있는 저장 트랜잭션 안에서 하기로 확정했다.
@@ -48,12 +41,6 @@ func tryIncrementRequestRate(ctx context.Context, queryer cypherQueryer, account
 		return count, false, nil
 	}
 	return 0, false, fmt.Errorf("요청 빈도 증가: %w", err)
-}
-
-// OwnedGraphCount는 계정이 직접 또는 팀 상속으로 소유자 등급을 가진 활성 그래프 수를 센다.
-func (s *Store) OwnedGraphCount(ctx context.Context, accountID model.ID) (int, error) {
-	count, err := ownedGraphCount(ctx, s.pool, accountID)
-	return int(count), err
 }
 
 // ownedGraphCount는 같은 질의를 풀과 트랜잭션에서 함께 쓰도록 분리한 것이다. 생성

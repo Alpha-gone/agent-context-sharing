@@ -191,17 +191,17 @@ func TestWebRestoreRejectsAutoDeletedGraphIntegration(t *testing.T) {
 	graphID := createTestGraph(t, database, accountID)
 	grantAccount(t, database, graphID, accountID, model.GraphGradeOwner)
 
-	now := time.Now().UTC()
-	if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_started_at = $2, grace_expires_at = $3 WHERE graph_id = $1`, graphID.String(), now.AddDate(0, 0, -30), now); err != nil {
+	if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_started_at = clock_timestamp() - interval '30 days', grace_expires_at = clock_timestamp() WHERE graph_id = $1`, graphID.String()); err != nil {
 		t.Fatalf("유예 시작 시각 준비: %v", err)
 	}
-	if _, err := database.ExpireGrace(t.Context(), now); err != nil {
+	if _, err := database.ExpireGrace(t.Context()); err != nil {
 		t.Fatalf("유예 만료: %v", err)
 	}
 
+	// 자동 삭제 그래프에는 유효 등급이 없으므로 소유자 확인에서 먼저 거부한다.
 	err := database.SetGraphDeleted(t.Context(), graphID, accountID, false)
-	if !errors.Is(err, ErrInvalidState) {
-		t.Fatalf("자동 삭제 그래프의 웹 복구 = %v, want ErrInvalidState", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("자동 삭제 그래프의 웹 복구 = %v, want ErrNotFound", err)
 	}
 	graph, err := database.Graph(t.Context(), graphID)
 	if err != nil || graph.DeletedAt == nil {
@@ -364,4 +364,40 @@ func lastGrantAudit(t *testing.T, database *Store, graphID, subjectID model.ID) 
 		t.Fatalf("등급 감사 기록 조회: %v", err)
 	}
 	return kind, action
+}
+
+// TestAutoDeletedGraphGradeNotRevivedIntegration은 자동 삭제 뒤 팀 구성원 추가로 부여 경로가
+// 다시 이어져도 운영자 복구 전에는 유효 등급과 등급 부여 권한이 되살아나지 않는지 확인한다.
+func TestAutoDeletedGraphGradeNotRevivedIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	database.graceDays = func(model.ID) int { return 30 }
+	accountID, otherID, teamID := newTestID(t), newTestID(t), newTestID(t)
+	createTestAccount(t, database, accountID)
+	createTestAccount(t, database, otherID)
+	createTestTeam(t, database, teamID, accountID, false)
+	addTestTeamMember(t, database, teamID, accountID)
+	graphID := createTestGraph(t, database, accountID)
+	grantTeam(t, database, graphID, teamID, model.GraphGradeOwner)
+	if err := database.RemoveTeamMember(t.Context(), teamID, accountID); err != nil {
+		t.Fatalf("마지막 접근 계정 제거: %v", err)
+	}
+	if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_expires_at = clock_timestamp() WHERE graph_id = $1 AND grace_started_at IS NOT NULL`, graphID.String()); err != nil {
+		t.Fatalf("유예 만료 준비: %v", err)
+	}
+	if _, err := database.ExpireGrace(t.Context()); err != nil {
+		t.Fatalf("유예 만료: %v", err)
+	}
+	if err := database.AddTeamMember(t.Context(), teamID, accountID, accountID); err != nil {
+		t.Fatalf("자동 삭제 뒤 팀 구성원 추가: %v", err)
+	}
+	if grade, found, err := database.EffectiveGrade(t.Context(), graphID, accountID); err != nil || found {
+		t.Fatalf("자동 삭제 그래프의 유효 등급 = %q found:%t err:%v", grade, found, err)
+	}
+	if err := database.GrantGraph(t.Context(), graphID, accountID, otherID, GrantSubjectAccount, model.GraphGradeViewer); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("자동 삭제 그래프의 등급 부여 = %v, want ErrNotFound", err)
+	}
+	graph, err := database.Graph(t.Context(), graphID)
+	if err != nil || graph.DeletedAt == nil || graph.GraceStartedAt == nil {
+		t.Fatalf("자동 삭제 상태 유지 = %#v, %v", graph, err)
+	}
 }

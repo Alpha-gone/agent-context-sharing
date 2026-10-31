@@ -34,14 +34,19 @@ func writeFailure(ctx context.Context, operation string, cause error) error {
 	if ctx.Err() != nil {
 		cause = errors.Join(cause, ctx.Err(), context.Cause(ctx))
 	}
+	if driverFailure(cause) {
+		return storageError(operation, cause)
+	}
+	return cause
+}
+
+// driverFailure는 도메인 거부가 아니라 DB·연결·취소로 실패했는지 판정한다.
+func driverFailure(cause error) bool {
 	_, stored := errors.AsType[*StorageError](cause)
 	_, postgres := errors.AsType[*pgconn.PgError](cause)
 	_, connect := errors.AsType[*pgconn.ConnectError](cause)
 	_, network := errors.AsType[net.Error](cause)
-	if stored || postgres || connect || network || errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) || errors.Is(cause, pgx.ErrTxClosed) || errors.Is(cause, pgx.ErrTxCommitRollback) {
-		return storageError(operation, cause)
-	}
-	return cause
+	return stored || postgres || connect || network || errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) || errors.Is(cause, pgx.ErrTxClosed) || errors.Is(cause, pgx.ErrTxCommitRollback)
 }
 
 // finishWrite는 실제 트랜잭션과 저장점 모두 바깥 예약이 해제되기 전에 정리한다.

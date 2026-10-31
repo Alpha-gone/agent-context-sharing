@@ -36,15 +36,6 @@ type afterWriteCommit struct {
 // ErrIdempotencyConflict는 같은 키를 다른 도구 또는 인자에 쓴 경우다.
 var ErrIdempotencyConflict = errors.New("멱등성 키가 다른 요청에 쓰였다")
 
-// ReplayIdempotent는 기존 UUID 호출의 호환 진입점이다. 새 MCP 호출은
-// 문자열 키·현재 권한 재검사를 필수로 받는 ExecuteWrite를 사용한다.
-func (s *Store) ReplayIdempotent(ctx context.Context, request IdempotencyRequest, run func(context.Context) ([]byte, error)) ([]byte, error) {
-	if !request.AccountID.IsV7() || !request.Key.IsV7() || request.ToolName == "" || run == nil {
-		return nil, fmt.Errorf("멱등성 요청 인자가 올바르지 않다")
-	}
-	return s.replayWrite(ctx, request.AccountID, request.Key.String(), request.ToolName, request.Fingerprint, func(context.Context) error { return nil }, run)
-}
-
 // ExecuteWrite는 완료 도메인 객체만 보관하며 check를 잠금 대기 뒤에도 실행한다.
 // check는 읽기 전용이고, apply의 결정적 거부는 JSON 객체·nil error로 반환한다.
 // error는 미완료 실패이며 바깥 예약·쓰기를 모두 되돌린다.
@@ -249,7 +240,12 @@ func (s *Store) writeTransaction(ctx context.Context) (pgx.Tx, error) {
 	return observeWriteTx(ctx, tx, false), storageError("write_begin", connectionError(ctx, "쓰기 트랜잭션 시작", err))
 }
 
-// CleanupExpiredIdempotencyRecords는 보관 기간이 끝난 재시도 결과를 지운다.
-func (s *Store) CleanupExpiredIdempotencyRecords(ctx context.Context, now time.Time) (int, error) {
-	return s.deleteBefore(ctx, "멱등성 결과 정리", `DELETE FROM public.idempotency_record WHERE expires_at <= $1`, now)
+// CleanupExpiredIdempotencyRecords는 보관 기간이 끝난 재시도 결과를 지운다. 보관 만료를
+// 예약 시점의 DB 시계로 기록하고 재생도 DB 시계로 판정하므로 정리도 같은 시계를 쓴다.
+func (s *Store) CleanupExpiredIdempotencyRecords(ctx context.Context) (int, error) {
+	result, err := s.pool.Exec(ctx, `DELETE FROM public.idempotency_record WHERE expires_at <= clock_timestamp()`)
+	if err != nil {
+		return 0, fmt.Errorf("멱등성 결과 정리: %w", err)
+	}
+	return int(result.RowsAffected()), nil
 }

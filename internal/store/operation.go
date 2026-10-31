@@ -61,15 +61,6 @@ func (s *Store) RecordRejectedOperation(ctx context.Context, operation Operation
 	return s.insertOperation(ctx, queryer, operation, "rejected", reason)
 }
 
-// HasAppliedDiscard는 현재 삭제에 대응하는 MCP 폐기 기록이 있는지 확인한다.
-// 상태 변경의 허용 판정은 RestoreContext가 정점 잠금 뒤 같은 트랜잭션에서 다시 수행한다.
-func (s *Store) HasAppliedDiscard(ctx context.Context, graphID, contextID model.ID) (bool, error) {
-	if !graphID.IsV7() || !contextID.IsV7() {
-		return false, fmt.Errorf("그래프와 컨텍스트 식별자는 UUIDv7이어야 한다")
-	}
-	return s.hasAppliedDiscard(ctx, s.pool, graphID, contextID)
-}
-
 func (s *Store) hasAppliedDiscard(ctx context.Context, queryer cypherQueryer, graphID, contextID model.ID) (bool, error) {
 	var found bool
 	if err := queryer.QueryRow(ctx, `

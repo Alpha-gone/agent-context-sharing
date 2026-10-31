@@ -128,7 +128,7 @@ func (fake *fakePeriodicStore) WithTryAdvisoryLock(ctx context.Context, key int6
 	return count, true, err
 }
 
-func (*fakePeriodicStore) ExpireGrace(context.Context, time.Time) (int, error) {
+func (*fakePeriodicStore) ExpireGrace(context.Context) (int, error) {
 	return 0, nil
 }
 
@@ -148,7 +148,7 @@ func (*fakePeriodicStore) CleanupRequestRateWindows(context.Context, time.Time) 
 	return 0, nil
 }
 
-func (*fakePeriodicStore) CleanupExpiredIdempotencyRecords(context.Context, time.Time) (int, error) {
+func (*fakePeriodicStore) CleanupExpiredIdempotencyRecords(context.Context) (int, error) {
 	return 0, nil
 }
 

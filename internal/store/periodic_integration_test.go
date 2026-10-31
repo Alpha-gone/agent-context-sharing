@@ -71,12 +71,13 @@ func TestPeriodicCleanupExpiresGraceAndOldRowsIntegration(t *testing.T) {
 	if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_started_at = $2, grace_expires_at = $3 WHERE graph_id = $1`, graphID.String(), now.AddDate(0, 0, -30), now); err != nil {
 		t.Fatalf("유예 시작 시각 준비: %v", err)
 	}
-	expired, err := database.ExpireGrace(t.Context(), now)
+	expired, err := database.ExpireGrace(t.Context())
 	if err != nil || expired < 1 {
 		t.Fatalf("유예 만료 = %d, %v", expired, err)
 	}
+	// 삭제 시각은 만료를 판정한 DB 시계이므로 고정한 만료 시각보다 앞설 수 없다.
 	graph, err := database.Graph(t.Context(), graphID)
-	if err != nil || graph.DeletedAt == nil || !graph.DeletedAt.Equal(now) {
+	if err != nil || graph.DeletedAt == nil || graph.DeletedAt.Before(now) {
 		t.Fatalf("자동 소프트 삭제 상태 = %#v, %v", graph, err)
 	}
 
@@ -185,14 +186,23 @@ func TestGraceExpiryIsFixedAtGraceStartIntegration(t *testing.T) {
 		t.Fatalf("유예 만료 시각 = started:%v expires:%v", started, expires)
 	}
 
-	// 유예 중에 유예 일수가 줄어도 이미 고정한 만료 시각을 쓴다.
+	// 유예 중에 유예 일수가 줄어도 이미 고정한 만료 시각을 쓴다. 만료 판정은 DB 시계를 쓰므로
+	// 유예 전체를 이틀 앞당겨, 줄어든 일수로 다시 계산했다면 이미 만료됐을 상태를 만든다.
 	graceDays = 1
-	if expired, err := database.ExpireGrace(t.Context(), started.AddDate(0, 0, 2)); err != nil {
+	shiftGrace := func(graphID model.ID, query string) {
+		t.Helper()
+		if _, err := database.pool.Exec(t.Context(), `UPDATE public.context_graph SET `+query+` WHERE graph_id = $1`, graphID.String()); err != nil {
+			t.Fatalf("유예 시각 이동: %v", err)
+		}
+	}
+	shiftGrace(graphID, `grace_started_at = grace_started_at - interval '2 days', grace_expires_at = grace_expires_at - interval '2 days'`)
+	if expired, err := database.ExpireGrace(t.Context()); err != nil {
 		t.Fatalf("만료 전 유예 만료 실행: %v", err)
 	} else if graph, err := database.Graph(t.Context(), graphID); err != nil || graph.DeletedAt != nil {
 		t.Fatalf("플랜 변경이 소급되어 그래프가 삭제됐다: expired=%d graph=%#v err=%v", expired, graph, err)
 	}
-	if _, err := database.ExpireGrace(t.Context(), *expires); err != nil {
+	shiftGrace(graphID, `grace_expires_at = clock_timestamp()`)
+	if _, err := database.ExpireGrace(t.Context()); err != nil {
 		t.Fatalf("만료 시각 유예 만료 실행: %v", err)
 	}
 	if graph, err := database.Graph(t.Context(), graphID); err != nil || graph.DeletedAt == nil || graph.GraceStartedAt == nil {
@@ -212,7 +222,8 @@ func TestGraceExpiryIsFixedAtGraceStartIntegration(t *testing.T) {
 	if started, expires := graceTimes(t, database, unlimitedGraphID); started == nil || expires != nil {
 		t.Fatalf("무기한 유예 시각 = started:%v expires:%v", started, expires)
 	}
-	if _, err := database.ExpireGrace(t.Context(), time.Now().UTC().AddDate(1, 0, 0)); err != nil {
+	shiftGrace(unlimitedGraphID, `grace_started_at = grace_started_at - interval '1 year'`)
+	if _, err := database.ExpireGrace(t.Context()); err != nil {
 		t.Fatalf("무기한 유예 만료 실행: %v", err)
 	}
 	if graph, err := database.Graph(t.Context(), unlimitedGraphID); err != nil || graph.DeletedAt != nil {

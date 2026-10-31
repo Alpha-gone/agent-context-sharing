@@ -1003,7 +1003,8 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 	if s.relationProposals == nil {
 		return nil
 	}
-	target, err := s.Context(ctx, graphID, eventID)
+	// 시스템 제안은 사용자 조회가 아니므로 접근 시각 갱신·계층 승격을 하지 않는 내부 조회를 쓴다.
+	target, err := s.context(ctx, s.pool, graphID, eventID)
 	if err != nil {
 		return err
 	}
@@ -1030,7 +1031,7 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 	if err != nil {
 		return fmt.Errorf("의미 관계 후보 트랜잭션 시작: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx)
 	if err := enableIterativeScan(ctx, tx); err != nil {
 		return err
 	}

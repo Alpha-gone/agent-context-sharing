@@ -25,7 +25,7 @@ func (s *Store) GrantGraph(ctx context.Context, graphID, actorID, subjectID mode
 		return fmt.Errorf("그래프 등급 부여 트랜잭션 시작: %w", err)
 	}
 	tx = observeWriteTx(ctx, tx, false)
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx)
 	if subjectType == GrantSubjectTeam {
 		deletedAt, err := lockTeam(ctx, tx, subjectID)
 		if err != nil {
@@ -99,7 +99,7 @@ func (s *Store) RevokeGraphGrantWithAudit(ctx context.Context, graphID, actorID,
 		return fmt.Errorf("그래프 등급 회수 트랜잭션 시작: %w", err)
 	}
 	tx = observeWriteTx(ctx, tx, false)
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx)
 	graphIDs, err := lockGraphs(ctx, tx, []model.ID{graphID})
 	if err != nil {
 		return err
@@ -205,7 +205,7 @@ func (s *Store) CreateTeam(ctx context.Context, actorID model.ID, name string) (
 		return model.Team{}, fmt.Errorf("팀 생성 트랜잭션 시작: %w", err)
 	}
 	tx = observeWriteTx(ctx, tx, false)
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx)
 	if err := requireAccount(ctx, tx, actorID); err != nil {
 		return model.Team{}, err
 	}
@@ -302,7 +302,7 @@ func (s *Store) AddTeamMember(ctx context.Context, teamID, actorID, accountID mo
 		return fmt.Errorf("팀 구성원 추가 트랜잭션 시작: %w", err)
 	}
 	tx = observeWriteTx(ctx, tx, false)
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx)
 	if err := requireTeamManager(ctx, tx, teamID, actorID); err != nil {
 		return err
 	}
@@ -338,7 +338,7 @@ func (s *Store) RemoveTeamMemberWithAudit(ctx context.Context, teamID, actorID, 
 		return fmt.Errorf("팀 구성원 제거 트랜잭션 시작: %w", err)
 	}
 	tx = observeWriteTx(ctx, tx, false)
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx)
 	if err := requireTeamManager(ctx, tx, teamID, actorID); err != nil {
 		return err
 	}
@@ -372,7 +372,7 @@ func (s *Store) SetTeamDeleted(ctx context.Context, teamID, actorID model.ID, de
 		return fmt.Errorf("팀 상태 변경 트랜잭션 시작: %w", err)
 	}
 	tx = observeWriteTx(ctx, tx, false)
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx)
 	if err := requireTeamManager(ctx, tx, teamID, actorID); err != nil {
 		return err
 	}
@@ -636,7 +636,7 @@ func (s *Store) SetGraphDeleted(ctx context.Context, graphID, actorID model.ID, 
 		return fmt.Errorf("그래프 상태 변경 트랜잭션 시작: %w", err)
 	}
 	tx = observeWriteTx(ctx, tx, false)
-	defer tx.Rollback(ctx)
+	defer rollbackTransaction(ctx, tx)
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return err
 	}

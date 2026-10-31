@@ -1072,7 +1072,8 @@ func (s *Store) updateGraphActivity(ctx context.Context, tx pgx.Tx, graphID mode
 }
 
 // graphActivityRejection은 갱신이 걸리지 않은 이유를 다시 읽어 없는 그래프와 한도 초과를
-// 구분한다. 구분하지 않으면 한도 초과가 not_found로 나간다.
+// 구분한다. 구분하지 않으면 한도 초과가 not_found로 나간다. 그래프가 있고 한도도 넘지 않는데
+// 갱신되지 않았다면 저장 문자 수가 음수가 되는 불변식 위반이므로 내부 장애로 돌려준다.
 func (s *Store) graphActivityRejection(ctx context.Context, tx pgx.Tx, graphID model.ID, characterDelta int, maxStoredChars int64) error {
 	var stored int64
 	if err := tx.QueryRow(ctx, `SELECT stored_chars FROM public.context_graph WHERE graph_id = $1 AND deleted_at IS NULL`, graphID.String()).Scan(&stored); err != nil {
@@ -1084,7 +1085,7 @@ func (s *Store) graphActivityRejection(ctx context.Context, tx pgx.Tx, graphID m
 	if err := plan.CheckIncrease("stored_characters_per_graph", stored, int64(characterDelta), maxStoredChars); err != nil {
 		return err
 	}
-	return ErrNotFound
+	return storageError("graph_stored_chars", fmt.Errorf("%w: 저장 문자 수 %d에 변화량 %d를 적용할 수 없다", ErrInvariantViolation, stored, characterDelta))
 }
 
 // contextVersionConflict은 같은 트랜잭션에서 현재 판 번호를 읽어 충돌 또는 부재를 구분한다.

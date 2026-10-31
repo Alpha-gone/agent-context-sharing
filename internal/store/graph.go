@@ -12,8 +12,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// CreateGraph는 준비된 그래프 메타데이터 행만 저장한다.
-// 사용자 생성은 초기 소유자도 함께 저장하는 CreateGraphWithOwner를 사용한다.
+// CreateGraph는 준비된 그래프 메타데이터 행만 저장한다. 소유자 등급·한도를 적용하지 않으며
+// 다른 패키지 시험의 그래프 준비에만 쓴다. 사용자 생성은 초기 소유자도 함께 저장하는
+// CreateGraphWithOwner를 사용한다.
 func (s *Store) CreateGraph(ctx context.Context, graph model.Graph) (model.Graph, error) {
 	if err := graph.Validate(); err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 검증: %w", err)

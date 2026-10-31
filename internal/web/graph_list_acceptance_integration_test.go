@@ -65,9 +65,7 @@ func web03AutomaticGraph(t *testing.T, database *store.Store, creator, former, v
 	if err := database.RemoveTeamMemberWithAudit(t.Context(), team.ID, creator, creator); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExpireGrace(t.Context(), time.Now().Add(48*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	permissionExpireGrace(t, database, graph.ID)
 	return graph
 }
 

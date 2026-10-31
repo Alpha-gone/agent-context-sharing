@@ -48,15 +48,14 @@ func TestOPS06RestoreSessionHTTPIntegration(t *testing.T) {
 	args["layer"], args["body"], args["origin_kind"], args["occurred_at"] = "source", secret, "user_utterance", "2026-10-23T00:00:00Z"
 	args["source_ref"] = map[string]any{"channel": "file", "locator": "file:///ops06/private"}
 	f.id(t, "node_create", args, "node", "context_id")
-	// 시험이 소유한 그래프만 접근 소멸 상태로 옮기고 실제 유예 만료를 실행한다.
-	now := time.Now().UTC()
+	// 시험이 소유한 그래프만 DB 시계 기준의 접근 소멸 상태로 옮기고 실제 유예 만료를 실행한다.
 	if _, err := f.pool.Exec(t.Context(), `DELETE FROM public.graph_grant WHERE graph_id=$1`, f.graph.String()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_started_at=$2,grace_expires_at=$3 WHERE graph_id=$1`, f.graph.String(), now.Add(-24*time.Hour), now); err != nil {
+	if _, err := f.pool.Exec(t.Context(), `UPDATE public.context_graph SET grace_started_at=clock_timestamp()-interval '1 day',grace_expires_at=clock_timestamp() WHERE graph_id=$1`, f.graph.String()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.database.ExpireGrace(t.Context(), now); err != nil {
+	if _, err := a.database.ExpireGrace(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewTLSServer(a.app.handler())

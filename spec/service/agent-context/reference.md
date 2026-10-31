@@ -390,3 +390,8 @@
 ## 2026-10-31 #184 일괄 진단 append와 sync
 
 - Go 1.27.1 SDK의 `src/os/file.go`·`src/os/file_posix.go`와 [File.Write](https://pkg.go.dev/os@go1.27.1#File.Write)·[File.Sync](https://pkg.go.dev/os@go1.27.1#File.Sync) 공식 API를 확인했다. 조회일 2026-10-31 KST. Write의 바이트 수와 오류를 함께 판정하고 Sync 성공 뒤에만 Written을 증가시킨다. sync 실패여도 이미 append한 완전 행이 파일에 남을 수 있으므로 실패한 묶음을 재시도하지 않는다. [관측성 설계](sdd/observability.md#민감정보와-크기-제한)의 일괄 처리 크기·분할·집계 및 처리량 기준은 이 서비스의 정책이다.
+
+
+## 2026-10-31 #188 출처 조회의 읽기·오류 경계
+
+- 적용 판 pgx v5.10.0의 공급자 소스/API 주석인 [`Tx`](https://github.com/jackc/pgx/blob/v5.10.0/tx.go)·[`PgError`](https://github.com/jackc/pgx/blob/v5.10.0/pgconn/errors.go)를 로컬 모듈 캐시에서 확인했다. 조회일 2026-10-31 KST. `Tx.Query`는 해당 트랜잭션의 연결에서 실행하고 `PgError.Error()`는 DB 메시지를 포함하므로, [저장 계층화](sdd/data.md#저장-계층화)의 출처 해석은 기존 읽기 경계의 reader를 재사용하되 기존 StorageError 정규화를 유지한다. 실제 DB 회귀와 드라이버 오류 대역으로 검증하며 드라이버 판·연결 정책은 변경하지 않았다.

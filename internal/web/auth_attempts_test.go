@@ -97,7 +97,7 @@ func TestAuthenticationFormBoundary(t *testing.T) {
 				if response.Code != test.status || response.Header().Get("Cache-Control") != "no-store" || (body.reads > 0) != test.read || (auth.calls.Load() > 0) != test.authenticate {
 					t.Fatalf("양식 경계: status=%d reads=%d auth=%d", response.Code, body.reads, auth.calls.Load())
 				}
-				if server.attempts.global.count != 1 {
+				if server.attempts.sources[netip.MustParsePrefix("192.0.2.1/32")].count != 1 {
 					t.Fatal("양식 오류가 공유 예산을 소비하지 않았습니다")
 				}
 			})
@@ -139,13 +139,13 @@ func TestAuthenticationCancellationAndEarlyRejection(t *testing.T) {
 					t.Fatal("선행 거부에서 인증 호출·쿠키 발급 또는 캐시 허용")
 				}
 				if mode == "body cancellation" {
-					if body.reads == 0 || server.attempts.global.count != 1 || response.Body.Len() != 0 {
+					if body.reads == 0 || server.attempts.sources[netip.MustParsePrefix("192.0.2.1/32")].count != 1 || response.Body.Len() != 0 {
 						t.Fatal("읽기 중 취소 경계가 다릅니다")
 					}
 				} else if body.reads != 0 {
 					t.Fatal("선행 거부에서 본문을 읽었습니다")
 				}
-				if mode == "address cancellation" && (server.attempts.global.count != 0 || response.Body.Len() != 0) {
+				if mode == "address cancellation" && (len(server.attempts.sources) != 0 || response.Body.Len() != 0) {
 					t.Fatal("주소 해석 중 취소가 예산·응답을 생성했습니다")
 				}
 				if mode == "cross origin" && response.Code != 403 {
@@ -178,14 +178,8 @@ func TestAuthenticationCapacityRetryUsesRemainingWindows(t *testing.T) {
 		}
 		now = now.Add(time.Second)
 	}
-	server.attempts.global = attemptWindow{until: now.Add(20 * time.Second), count: authGlobalLimit}
-	response := httptest.NewRecorder()
-	server.ServeHTTP(response, credentialRequest("/login", "192.0.2.1:1234", "tester"))
-	if response.Header().Get("Retry-After") != "20" {
-		t.Fatal("가득 찬 상태에서 전체 제한 창을 누락했습니다")
-	}
 	now = now.Add(20 * time.Second)
-	response = httptest.NewRecorder()
+	response := httptest.NewRecorder()
 	server.ServeHTTP(response, credentialRequest("/register", "192.0.2.1:1234", "tester"))
 	if response.Code != 303 || len(server.attempts.sources) != 1 {
 		t.Fatal("만료 상태 정리 뒤 회복하지 못했습니다")
@@ -215,7 +209,7 @@ func TestAuthenticationMalformedPeersShareUnknownBudget(t *testing.T) {
 	}
 }
 
-func TestAuthenticationHTTPConcurrentGlobalBound(t *testing.T) {
+func TestAuthenticationHTTPConcurrentDistinctSources(t *testing.T) {
 	auth := &countingCredentials{loginError: errors.New("wrong"), registerError: errors.New("duplicate")}
 	server, err := New(auth, &fakeGraphStore{}, Config{SecureCookie: func(*http.Request) bool { return true }})
 	if err != nil {
@@ -223,9 +217,9 @@ func TestAuthenticationHTTPConcurrentGlobalBound(t *testing.T) {
 	}
 	now := time.Now()
 	server.attempts.now = func() time.Time { return now }
-	var limited, unexpected atomic.Int32
+	var unexpected atomic.Int32
 	var workers sync.WaitGroup
-	for i := range authGlobalLimit * 2 {
+	for i := range 120 {
 		workers.Go(func() {
 			path, expected := "/login", 401
 			if i%2 == 1 {
@@ -233,16 +227,14 @@ func TestAuthenticationHTTPConcurrentGlobalBound(t *testing.T) {
 			}
 			response := httptest.NewRecorder()
 			server.ServeHTTP(response, credentialRequest(path, fmt.Sprintf("192.0.2.%d:1234", i+1), "tester"))
-			if response.Code == 429 && response.Header().Get("Retry-After") == "60" {
-				limited.Add(1)
-			} else if response.Code != expected {
+			if response.Code != expected {
 				unexpected.Add(1)
 			}
 		})
 	}
 	workers.Wait()
-	if limited.Load() != authGlobalLimit || unexpected.Load() != 0 || auth.calls.Load() != authGlobalLimit {
-		t.Fatal("동시 HTTP 로그인·가입이 전체 예산을 초과했습니다")
+	if unexpected.Load() != 0 || auth.calls.Load() != 120 {
+		t.Fatal("다른 출처의 HTTP 로그인·가입을 전역 시도 횟수로 제한했습니다")
 	}
 }
 
@@ -300,26 +292,32 @@ func TestAuthenticationAttemptsSharedAcrossRoutesAndRecover(t *testing.T) {
 	}
 }
 
-func TestAuthenticationAttemptsConcurrentGlobalBound(t *testing.T) {
+func TestAuthenticationAttemptsConcurrentSourceBounds(t *testing.T) {
 	attempts := newAuthAttempts()
 	now := time.Now()
 	attempts.now = func() time.Time { return now }
+	const sources = 12
 	var allowed atomic.Int32
 	var group sync.WaitGroup
-	for i := range authGlobalLimit * 2 {
+	for i := range sources * authSourceLimit * 2 {
 		group.Go(func() {
-			if attempts.allow(netip.MustParseAddr(fmt.Sprintf("192.0.2.%d", i+1))) == 0 {
+			if attempts.allow(netip.MustParseAddr(fmt.Sprintf("192.0.2.%d", i%sources+1))) == 0 {
 				allowed.Add(1)
 			}
 		})
 	}
 	group.Wait()
-	if allowed.Load() != authGlobalLimit || attempts.global.count != authGlobalLimit || len(attempts.sources) > authGlobalLimit {
-		t.Fatal("동시 전체 상한 또는 메모리 상한이 다릅니다")
+	if allowed.Load() != sources*authSourceLimit || len(attempts.sources) != sources {
+		t.Fatal("다른 출처가 공유 제한에 걸리거나 출처별 상한이 다릅니다")
+	}
+	for _, window := range attempts.sources {
+		if window.count != authSourceLimit {
+			t.Fatal("동시 요청이 출처별 상한을 초과했습니다")
+		}
 	}
 	now = now.Add(time.Minute)
 	if attempts.allow(netip.MustParseAddr("198.51.100.1")) != 0 || len(attempts.sources) != 1 {
-		t.Fatal("전체 창 회복·만료 정리에 실패했습니다")
+		t.Fatal("출처 창 회복·만료 정리에 실패했습니다")
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 const (
 	authAttemptWindow  = time.Minute
 	authSourceLimit    = 10
-	authGlobalLimit    = 60
 	authSourceCapacity = 4096
 	authFormLimit      = 8 << 10
 )
@@ -32,7 +31,6 @@ type attemptWindow struct {
 type authAttempts struct {
 	mu      sync.Mutex
 	now     func() time.Time
-	global  attemptWindow
 	sources map[netip.Prefix]attemptWindow
 }
 
@@ -65,30 +63,15 @@ func (attempts *authAttempts) allow(address netip.Addr) time.Duration {
 			}
 		}
 		if len(attempts.sources) >= authSourceCapacity {
-			if attempts.global.count >= authGlobalLimit {
-				remaining = max(remaining, attempts.global.until.Sub(now))
-			}
 			return remaining
 		}
 		source = attemptWindow{until: now.Add(authAttemptWindow)}
 	}
-	global := attempts.global
-	if !now.Before(global.until) {
-		global = attemptWindow{until: now.Add(authAttemptWindow)}
-	}
-	var retry time.Duration
 	if source.count >= authSourceLimit {
-		retry = source.until.Sub(now)
-	}
-	if global.count >= authGlobalLimit {
-		retry = max(retry, global.until.Sub(now))
-	}
-	if retry > 0 {
-		return retry
+		return source.until.Sub(now)
 	}
 	source.count++
-	global.count++
-	attempts.sources[key], attempts.global = source, global
+	attempts.sources[key] = source
 	return 0
 }
 

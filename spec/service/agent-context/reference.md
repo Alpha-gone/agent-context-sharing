@@ -453,3 +453,9 @@
 
 - 조회일 2026-10-31 KST. Go 1.27.1 SDK `src/context/context.go`의 [WithTimeout](https://pkg.go.dev/context@go1.27.1#WithTimeout)·[WithDeadline](https://pkg.go.dev/context@go1.27.1#WithDeadline) 주석과 구현을 확인했다. 파생 마감은 부모보다 늦어지지 않으며 CancelFunc는 자식·타이머 자원을 해제한다. 부모 요청 취소를 유지하면서 한 번의 저장소 적재에 최대 5초를 적용하는 [토큰 검증](sdd/authentication.md#토큰-검증)의 근거다. 파생 context의 Err는 CancelFunc 호출 전에 확인한다.
 - SDK의 [errors.Is](https://pkg.go.dev/errors@go1.27.1#Is) 계약에 따라 감싸진 원인까지 비교한다. 적재 부모의 실제 취소·마감과 일치하는 오류만 대기 요청의 재시도 대상으로 구분한다. 부모가 정상인 저장소의 취소·마감 오류나 적재 자체의 5초 상한 초과는 계속 저장소 장애로 전달하는 회귀를 확인했다. [검토 기록](reviews/2026-10-31-issue-174.md)에 재현·범위·결과를 기록한다.
+
+
+## 2026-10-31 #193 인증 전역 시도 예산과 정상 사용자 가용성
+
+- 조회일 2026-10-31 KST. [#109](https://github.com/Alpha-gone/agent-context-sharing/issues/109)의 출처 시도·bcrypt 자원 보호·계정 잠금 악용 검토 범위와 [#193](https://github.com/Alpha-gone/agent-context-sharing/issues/193)의 여섯 /64 전역 창 소진 문제를 확인했다. [공개 로그인·가입 자원 보호](sdd/authentication.md#공개-로그인가입-자원-보호)는 전체 60회/분을 제거하고 출처별 10회/60초·4096개 상태·기존 4개 비밀번호 작업 상한을 유지하도록 선택했다. 이는 외부 표준의 권고 수치가 아닌 이 서비스의 가용성·자원 보호 결정이다.
+- 여섯 출처가 각 10회 요청한 뒤 다른 출처의 로그인·가입·동의가 처리되는 웹 회귀로 결정을 대조했다. 동의 분리나 세션 예외만으로는 미인증 사용자의 로그인 전역 차단이 남는다. 작업 자리 점유·공유 /64·출처 상태 포화에 따른 잔여 거부와 미측정 운영 부하는 정본·[검토 기록](reviews/2026-10-31-issue-193.md)에 구분했으며 실제 외부 방어 정책을 확인하거나 변경하지 않았다.

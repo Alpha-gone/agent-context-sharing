@@ -127,7 +127,7 @@ func TestConfigRejectsInvalidBoundariesWithoutInputEcho(t *testing.T) {
 		"RELATION_ADJACENCY_WINDOW":      {"-1h", "999999999999999h", "synthetic-secret"},
 		"RELATION_PROPOSAL_LIMIT":        {"-1", "1.5", "9223372036854775808"},
 		"TLS_TERMINATION":                {"synthetic-secret"},
-		"TRUSTED_PROXY_CIDRS":            {"synthetic-secret", "10.0.0.1/8", "::ffff:10.0.0.0/104", "fe80::1%eth0", "127.0.0.1,127.0.0.1/32", "::ffff:127.0.0.1,127.0.0.1"},
+		"TRUSTED_PROXY_CIDRS":            {"synthetic-secret", "10.0.0.1/8", "::ffff:10.0.0.0/104", "fe80::1%eth0", "127.0.0.1,127.0.0.1/32", "::ffff:127.0.0.1,127.0.0.1", "0.0.0.0/0", "::/0", "10.204.0.1/32,0.0.0.0/0"},
 		"MCP_RESOURCE_URL":               {"http://host/mcp", "https://host/", "https://host/mcp/", "https://host/%6dcp", "https://host/mcp?", "https://host/mcp#", "https://synthetic-secret@host/mcp", "https://*.test/mcp"},
 		"MCP_ALLOWED_ORIGINS":            {"http://host", "https://host/", "https://host?", "https://host#", "*", "https://*.test", "https://host,", "https://host,https://host", "https://synthetic-secret@host"},
 		"DIAGNOSTIC_LOG_DIR":             {"relative", "/", "/var/log/../logs", "/var/log//logs", "/var/log/./logs", "/var/log/logs/", "/tmp/log", "/var/tmp/log", "/private/tmp/log", "/private/var/tmp/log", "/private/var/folders/log", "/var/folders/log", "/dev/shm/log", "/srv/assets/log", "/srv/public/log", "/srv/STATIC/log", "/var/log/secret\\dir", "/var/log/secret\n"},

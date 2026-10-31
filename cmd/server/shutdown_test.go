@@ -103,6 +103,24 @@ func TestServerResourceCleanupPoolSafety(t *testing.T) {
 	}
 }
 
+// TestServerResourcesBoundPoolClose는 요청·작업자 종료가 성공해도 미반환 연결로 막힌 풀 종료를
+// 기한 안에서만 기다리고 실패로 보고하는지 확인한다.
+func TestServerResourcesBoundPoolClose(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	release := make(chan struct{})
+	defer close(release)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := closeServerResources(ctx, logger, func() { <-release }, true)
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > time.Second {
+		t.Fatalf("막힌 풀 종료 = %v, %v", err, time.Since(started))
+	}
+	if err := closeServerResources(t.Context(), logger, func() {}, true); err != nil {
+		t.Fatalf("정상 풀 종료 = %v", err)
+	}
+}
+
 func TestStartupCleanupPreservesOriginalAndWorkerErrors(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	startupErr, workerErr := errors.New("기동 실패"), errors.New("작업자 종료 실패")

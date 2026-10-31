@@ -25,7 +25,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := configureAndRun(ctx, os.Getenv, runConfigured); err != nil {
-		slog.Error("색인 실행기 종료", "reason_code", "indexer_failed")
+		slog.Error("색인 실행기 종료", "reason_code", "indexer_failed", "error", err)
 		os.Exit(1)
 	}
 }
@@ -50,14 +50,23 @@ func runConfigured(ctx context.Context, cfg config.Config) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("진단 파일 준비: %w", err)
 	}
-	sink, _ := diagnostic.LevelSink(recorder, cfg.Diagnostic.Level)
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		resultErr = errors.Join(resultErr, recorder.Close(cleanup))
 	}()
-	indexReporter, _ := diagnostic.NewReporter(diagnostic.Index, sink, source)
-	systemReporter, _ := diagnostic.NewReporter(diagnostic.System, sink, source)
+	sink, err := diagnostic.LevelSink(recorder, cfg.Diagnostic.Level)
+	if err != nil {
+		return fmt.Errorf("진단 수준 준비: %w", err)
+	}
+	indexReporter, err := diagnostic.NewReporter(diagnostic.Index, sink, source)
+	if err != nil {
+		return fmt.Errorf("진단 종류 준비: %w", err)
+	}
+	systemReporter, err := diagnostic.NewReporter(diagnostic.System, sink, source)
+	if err != nil {
+		return fmt.Errorf("진단 종류 준비: %w", err)
+	}
 
 	database, err := store.New(ctx, cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
 		AdjacencyWindow: cfg.RelationAdjacencyWindow, SimilarityThreshold: cfg.RelationSimilarityThreshold, Limit: cfg.RelationProposalLimit,

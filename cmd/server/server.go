@@ -325,12 +325,28 @@ func closeWorkers(ctx context.Context, logger *slog.Logger, workers ...worker) e
 
 // closeServerResources는 정상 종료와 기동 실패에 같은 풀 종료 조건을 적용한다.
 // 종료 실패 뒤 풀을 닫으면 아직 반환되지 않은 연결을 기다려 오류를 보고하지 못한다.
+// 요청·작업자가 모두 끝나도 처리기 반환 뒤의 SDK 작업이 연결을 쥐고 있을 수 있으므로
+// 풀 종료도 기한 안에서만 기다리고, 넘기면 남은 해제를 프로세스 종료에 맡긴다.
 func closeServerResources(ctx context.Context, logger *slog.Logger, closePool func(), poolCloseSafe bool, workers ...worker) error {
 	workerErr := closeWorkers(ctx, logger, workers...)
-	if poolCloseSafe && workerErr == nil {
-		closePool()
+	if !poolCloseSafe || workerErr != nil {
+		return workerErr
 	}
-	return workerErr
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		closePool()
+	}()
+	deadline, cancel := context.WithTimeout(ctx, poolCloseTimeout)
+	defer cancel()
+	select {
+	case <-closed:
+		return nil
+	case <-deadline.Done():
+		err := fmt.Errorf("연결 풀 종료: 반환되지 않은 연결 대기 %w", deadline.Err())
+		logger.Error("연결 풀 종료", "error", err)
+		return err
+	}
 }
 
 // logRequests는 본문·자격 증명·쿼리 문자열을 기록하지 않고 요청 결과만 남긴다.

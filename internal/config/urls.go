@@ -142,5 +142,9 @@ func parsePrefix(name, value string) (netip.Prefix, error) {
 	if prefix.Addr().Is4In6() || prefix.Masked() != prefix {
 		return netip.Prefix{}, invalid(name, "IPv4-mapped 대역 또는 호스트 비트가 남은 대역이다", nil)
 	}
+	// 전체 주소 대역을 신뢰하면 누구나 전달 헤더를 위조할 수 있어 대역 제한이 의미를 잃는다.
+	if prefix.Bits() == 0 {
+		return netip.Prefix{}, invalid(name, "전체 주소 대역은 신뢰할 수 없다", nil)
+	}
 	return prefix, nil
 }

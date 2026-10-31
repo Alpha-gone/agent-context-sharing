@@ -53,6 +53,9 @@ func (c Config) Validate() error {
 	if len(c.GraphName) > 63 || !graphNamePattern.MatchString(c.GraphName) {
 		return fmt.Errorf("그래프 이름 %q가 형식 %s에 맞지 않는다", c.GraphName, graphNamePattern)
 	}
+	if unquotedKeyword(c.GraphName) {
+		return fmt.Errorf("그래프 이름 %q는 따옴표 없이 치환할 수 없는 PostgreSQL 키워드다", c.GraphName)
+	}
 	if !slices.Contains(vectorTypes, c.VectorType) {
 		return fmt.Errorf("벡터 타입 %q는 %v 중 하나여야 한다", c.VectorType, vectorTypes)
 	}
@@ -64,6 +67,9 @@ func (c Config) Validate() error {
 	}
 	if c.ColdTablespace != "" && (len(c.ColdTablespace) > 63 || !tablespacePattern.MatchString(c.ColdTablespace)) {
 		return fmt.Errorf("콜드 tablespace 이름 %q가 형식 %s에 맞지 않는다", c.ColdTablespace, tablespacePattern)
+	}
+	if unquotedKeyword(c.ColdTablespace) {
+		return fmt.Errorf("콜드 tablespace 이름 %q는 따옴표 없이 치환할 수 없는 PostgreSQL 키워드다", c.ColdTablespace)
 	}
 	if c.IndexTargetLayers != "" && c.IndexTargetLayers != "all_layers" && c.IndexTargetLayers != "without_source" {
 		return fmt.Errorf("색인 대상 계층은 all_layers 또는 without_source여야 한다")
@@ -262,7 +268,16 @@ func EnsureHistory(ctx context.Context, db database) error {
 
 // AppliedVersions는 이미 적용된 기록을 버전으로 색인해 돌려준다.
 func AppliedVersions(ctx context.Context, db database) (map[int]Applied, error) {
-	rows, err := db.Query(ctx, `SELECT version, name, checksum, render_config FROM public.schema_migration`)
+	return appliedVersions(ctx, db, true)
+}
+
+// appliedVersions는 구성 열이 없는 구형 이력 테이블을 바꾸지 않고 읽도록 configured를 받는다.
+func appliedVersions(ctx context.Context, db database, configured bool) (map[int]Applied, error) {
+	column := "render_config"
+	if !configured {
+		column = "NULL::jsonb"
+	}
+	rows, err := db.Query(ctx, `SELECT version, name, checksum, `+column+` FROM public.schema_migration`)
 	if err != nil {
 		return nil, fmt.Errorf("이력 조회: %w", err)
 	}

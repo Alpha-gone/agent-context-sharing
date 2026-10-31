@@ -29,6 +29,9 @@ const (
 	RuleRelationAcyclic      = "relation_acyclic"
 	RuleRelationTime         = "relation_time"
 	RuleEmbeddingLink        = "embedding_link"
+	// RuleGraphRegistration은 그래프 단위 규칙 목록 밖에서 전체 감사만 실행한다. 등록되지 않은
+	// graph_id는 그래프 단위 감사 범위에 들어오지 않기 때문이다.
+	RuleGraphRegistration = "graph_registration"
 )
 
 // 위반 대상 종류다.
@@ -549,6 +552,67 @@ func (s *Store) AuditGraph(ctx context.Context, graphID model.ID, expect Embeddi
 	}
 	snapshot.pathExists = memoryPaths(snapshot.edges)
 	return runInvariantRules(snapshot)
+}
+
+// AuditUnregisteredGraphs는 context_graph에 없는 graph_id를 가진 정점·간선·임베딩을 읽기 전용
+// 트랜잭션에서 찾는다. 잘못된 복원이나 직접 SQL로 생긴 고아 행은 그래프 단위 감사 범위
+// 밖에 있으므로 전체 감사가 따로 보고한다. 저장 상태는 바꾸지 않는다.
+func (s *Store) AuditUnregisteredGraphs(ctx context.Context) (violations []InvariantViolation, err error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, connectionError(ctx, "미등록 그래프 감사 트랜잭션 시작", err)
+	}
+	defer func() {
+		err = errors.Join(connectionError(ctx, "미등록 그래프 감사", err), storageError("audit_rollback", rollbackTransaction(ctx, tx)))
+		if err != nil {
+			violations = nil
+		}
+	}()
+	unregistered := func(alias string) string {
+		return `NOT EXISTS (SELECT 1 FROM public.context_graph AS registered
+			WHERE registered.graph_id::text = ` + alias + `.properties ->> 'graph_id'::text)`
+	}
+	contexts := s.contextTable()
+	queries := []string{`SELECT 'Context', coalesce(c.properties ->> 'graph_id'::text, ''), '',
+		coalesce(c.properties ->> 'context_id'::text, 'age:' || c.id::text), ''
+		FROM ` + contexts + ` c WHERE ` + unregistered("c")}
+	for _, label := range []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"} {
+		queries = append(queries, `SELECT '`+label+`', coalesce(e.properties ->> 'graph_id'::text, ''),
+			coalesce(e.properties ->> 'relation_id'::text, ''),
+			coalesce(a.properties ->> 'context_id'::text, 'age:' || e.start_id::text),
+			coalesce(b.properties ->> 'context_id'::text, 'age:' || e.end_id::text)
+			FROM `+pgx.Identifier{s.graphName, label}.Sanitize()+` e
+			LEFT JOIN `+contexts+` a ON a.id=e.start_id LEFT JOIN `+contexts+` b ON b.id=e.end_id
+			WHERE `+unregistered("e"))
+	}
+	queries = append(queries, `SELECT 'embedding', embedding.graph_id::text, '', embedding.context_id::text, ''
+		FROM public.context_embedding AS embedding
+		WHERE NOT EXISTS (SELECT 1 FROM public.context_graph AS registered WHERE registered.graph_id = embedding.graph_id)`)
+	rows, err := tx.Query(ctx, strings.Join(queries, " UNION ALL ")+" ORDER BY 2, 1, 4, 5, 3")
+	if err != nil {
+		return nil, fmt.Errorf("미등록 그래프 행 조회: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kind, graphID, relationID, first, second string
+		if err := rows.Scan(&kind, &graphID, &relationID, &first, &second); err != nil {
+			return nil, fmt.Errorf("미등록 그래프 행 해석: %w", err)
+		}
+		violation := InvariantViolation{Rule: RuleGraphRegistration, GraphID: graphID}
+		switch kind {
+		case "Context":
+			violation.Target, violation.IDs = TargetContext, []string{first}
+		case "embedding":
+			violation.Target, violation.IDs = TargetEmbedding, []string{first}
+		default:
+			violation = auditSnapshot{graphID: graphID}.edgeViolation(RuleGraphRegistration, auditEdge{label: kind, relationID: relationID, from: first, to: second})
+		}
+		violations = append(violations, violation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("미등록 그래프 행 순회: %w", err)
+	}
+	return violations, nil
 }
 
 // AuditGraphIDs는 전체 감사의 기본 범위인 활성·삭제 그래프 식별자를 모두 돌려준다.

@@ -16,10 +16,10 @@
 - 새 DB에서 `001_init.sql`과 같은 결과만 내는 개발 중복 파일은 제거할 수 있다. 파일이 사라진 적용 이력은 보존하고 실행기는 무시한다. 001에 통합되지 않은 효과를 담은 파일은 제거하지 않는다.
 - 보존해야 할 운영 데이터가 생기기 전에는 **사용자 승인**으로 개발 파일을 001에 통합·제거할 수 있다. 적용 SQL 불변 규칙의 유일한 예외다. checksum 변경 후 이전 개발·시험 DB는 재생성하고 이력을 덮어쓰지 않는다. 운영 데이터 보존 단계부터는 새 번호만 추가한다.
 - [스키마 적용 순서](../spec/service/agent-context/sdd/data.md#스키마-적용)는 확장→그래프→label→관계형 테이블→인덱스다. 관계형 테이블·인덱스는 `public`을 명시하여 `ag_catalog`에 생성되지 않게 한다.
-- `text/template`의 `GraphName`·`VectorType`·`VectorDim`·`ColdTablespaceClause`·`IndexTargetLayers`는 검증 후 치환한다.
+- `text/template`의 `GraphName`·`VectorType`·`VectorDim`·`ColdTablespaceClause`·`IndexTargetLayers`는 검증 후 치환한다. 따옴표 없이 치환되는 그래프·tablespace 이름의 키워드 제약은 [스키마 적용](../spec/service/agent-context/sdd/data.md#스키마-적용)을 따른다.
 - 이력의 `render_config`는 당시 치환 구성을 보존한다. 구형 이력은 DB 열·tablespace로 복원한 구성이 기존 checksum과 일치할 때만 보충하며 checksum·적용 시각을 덮어쓰지 않는다.
 - checksum은 치환 SQL의 SHA-256이다. 적용 파일은 당시 `render_config`, 미적용 파일은 현재 구성으로 검증한다. 구성 변경만으로 기존 스키마를 변경하지 않으며 원본 SQL·주석 변경은 계속 거부한다.
-- 적용 전에 [기동 계약](../spec/service/agent-context/sdd/operations.md#기동과-종료)의 자문 잠금을 얻고 `IF NOT EXISTS`·존재 확인으로 반복 실행을 보호한다.
+- 적용 전에 [기동 계약](../spec/service/agent-context/sdd/operations.md#기동과-종료)의 자문 잠금을 얻고 `IF NOT EXISTS`·존재 확인으로 반복 실행을 보호한다. `status`는 잠금 없이 읽기 전용으로 조회하며 이력을 바꾸지 않는다.
 
 ## 작업 지침
 

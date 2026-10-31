@@ -62,6 +62,8 @@ func lockHeld(t *testing.T, pool *pgxpool.Pool) bool {
 // 쓰는지 확인한다. 이 패키지의 테스트는 외부 패키지라 정규식 변수를 직접 볼 수 없으므로
 // 공개 검증 함수의 수용·거부 결과로 같은 경계를 확인한다. 세 패키지가 어긋나면 한 계층만
 // 통과하고 다른 계층에서 기동이 실패하므로 표본에 밑줄 시작 이름을 반드시 남긴다.
+// 따옴표 없는 치환의 키워드 제약은 치환을 소유하는 마이그레이션만 추가로 검증한다.
+// 열 이름 키워드(between)는 스키마 자리에서 쓸 수 있어 허용한다.
 func TestGraphNameBoundary(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -72,6 +74,10 @@ func TestGraphNameBoundary(t *testing.T) {
 		{name: "1agent_context", valid: false},
 		{name: "agent-context", valid: false},
 		{name: "AgentContext", valid: false},
+		{name: "user", valid: false},
+		{name: "order", valid: false},
+		{name: "authorization", valid: false},
+		{name: "between", valid: true},
 	}
 	for _, test := range tests {
 		cfg := migrate.Config{GraphName: test.name, VectorType: "vector", VectorDim: 1024}
@@ -91,6 +97,8 @@ func TestColdTablespaceBoundary(t *testing.T) {
 		{name: "cold_storage", valid: true, clause: " TABLESPACE cold_storage"},
 		{name: "ColdStorage", valid: false},
 		{name: "cold-storage", valid: false},
+		{name: "user", valid: false},
+		{name: "time", valid: true, clause: " TABLESPACE time"},
 	}
 	for _, test := range tests {
 		cfg := migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: 1024, ColdTablespace: test.name}

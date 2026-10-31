@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -156,5 +158,65 @@ func TestCleanupExpiredProposalsContinuesAfterGraphFailureIntegration(t *testing
 	}
 	if strings.Contains(err.Error(), broken.String()) {
 		t.Fatal("정리 오류에 그래프 식별자가 섞였다")
+	}
+}
+
+// TestAuditUnregisteredGraphsIntegration은 context_graph에 없는 graph_id의 정점·간선·임베딩을
+// graph_registration으로 보고하고, 등록된 그래프의 행은 보고하지 않는지 확인한다.
+func TestAuditUnregisteredGraphsIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	registered, _, _ := boundaryGraph(t, database)
+	orphan, from, to, relation := newTestID(t), newTestID(t), newTestID(t), newTestID(t)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+		defer cancel()
+		if _, err := database.pool.Exec(ctx, `SELECT * FROM cypher('`+database.graphName+`', $$ MATCH (n:Context) WHERE n.graph_id = '`+orphan.String()+`' DETACH DELETE n $$) AS (v agtype)`); err != nil {
+			t.Error(err)
+		}
+		if _, err := database.pool.Exec(ctx, `DELETE FROM public.context_embedding WHERE graph_id=$1`, orphan.String()); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := database.pool.Exec(t.Context(), `SELECT * FROM cypher('`+database.graphName+`', $$
+		CREATE (:Context {graph_id: '`+orphan.String()+`', context_id: '`+from.String()+`', layer: 'event'})
+			-[:RELATES_TO {graph_id: '`+orphan.String()+`', relation_id: '`+relation.String()+`', state: 'proposed'}]->
+			(:Context {graph_id: '`+orphan.String()+`', context_id: '`+to.String()+`', layer: 'event'}) $$) AS (v agtype)`); err != nil {
+		t.Fatal(err)
+	}
+	vector := make([]float64, embeddingDimension(t, database))
+	vector[0] = 1
+	if _, err := database.pool.Exec(t.Context(), `INSERT INTO public.context_embedding
+		(context_id,graph_id,embedding,model_id,indexed_at,last_accessed_at,storage_tier)
+		VALUES ($1,$2,$3,'synthetic-model',now(),now(),'hot')`, from.String(), orphan.String(), vectorText(vector)); err != nil {
+		t.Fatal(err)
+	}
+	violations, err := database.AuditUnregisteredGraphs(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]string{}
+	for _, violation := range violations {
+		if violation.GraphID == registered.String() {
+			t.Fatalf("등록된 그래프를 미등록으로 보고했다: %+v", violation)
+		}
+		if violation.GraphID != orphan.String() {
+			continue
+		}
+		if violation.Rule != RuleGraphRegistration {
+			t.Fatalf("규칙 = %s", violation.Rule)
+		}
+		got[violation.Target+"/"+violation.Label] = append(got[violation.Target+"/"+violation.Label], strings.Join(violation.IDs, ","))
+	}
+	want := map[string][]string{
+		TargetContext + "/":            {from.String(), to.String()},
+		TargetRelation + "/relates_to": {relation.String() + "," + from.String() + "," + to.String()},
+		TargetEmbedding + "/":          {from.String()},
+	}
+	for key, ids := range want {
+		slices.Sort(ids)
+		slices.Sort(got[key])
+		if !slices.Equal(got[key], ids) {
+			t.Fatalf("미등록 그래프 보고 %s = %v, want %v (전체 %v)", key, got[key], ids, got)
+		}
 	}
 }

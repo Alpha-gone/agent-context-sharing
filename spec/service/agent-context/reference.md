@@ -441,3 +441,9 @@
 
 - 조회일 2026-10-31 KST. Go 1.27.1 SDK의 `go doc net/http.Response`에서 기본 Transport가 본문을 끝까지 읽고 닫지 않으면 HTTP/1.x keep-alive 연결을 재사용하지 못할 수 있고, 닫기만 해도 보수적 상한까지 비동기로 읽는다는 계약을 확인했다. 비동기 소진은 바로 다음 호출의 재사용을 보장하지 않으므로 [제공자 전송](sdd/indexing.md#임베딩-제공자-전환)은 2xx가 아닌 응답을 최대 64 KiB까지 동기적으로 비운다.
 - macOS `flock(2)` 매뉴얼에서 `LOCK_NB`가 잠금을 기다리지 않고 `EWOULDBLOCK`을 돌려준다는 동작을 확인했다. [진단 기록자 잠금](sdd/observability.md)은 다른 instance의 비활성 슬롯 정리가 저장소 잠금 안에서만 기록자 잠금을 쥔다는 순서를 이용해, 저장소 잠금을 얻은 뒤 한 번 더 비차단으로 시도한다. Linux 동작은 기존 [OBS-08 분야 인수](reviews/2026-10-23-obs-08.md)의 같은 잠금 경로에 기대며 이번 변경에서 Linux 컨테이너 인수를 다시 실행하지 않았다.
+
+
+## 2026-10-31 #162 마이그레이션 식별자와 읽기 전용 조사
+
+- 조회일 2026-10-31 KST. [PostgreSQL 18 키워드](https://www.postgresql.org/docs/18/sql-keywords-appendix.html)와 [pg_get_keywords](https://www.postgresql.org/docs/18/functions-info.html#FUNCTIONS-INFO-CATALOG-TABLE)의 U/C/T/R 분류를 확인했다. 공식 PostgreSQL 18 parser의 ColId는 일반 식별자·비예약어·열 이름 키워드를 받는다. 고정 PG18.6 이미지의 실제 카탈로그(R 78개·T 23개)를 검증 목록과 대조하고 C 키워드 between의 전체 마이그레이션을 실행했다. 적용 SQL을 보존하면서 [스키마 적용](sdd/data.md#스키마-적용)의 무인용 치환 실패를 구성 검증에서 먼저 거부한다.
+- [SET TRANSACTION](https://www.postgresql.org/docs/18/sql-set-transaction.html)의 READ ONLY·REPEATABLE READ 계약과 [자문 잠금](https://www.postgresql.org/docs/18/explicit-locking.html#ADVISORY-LOCKS)을 확인했다. status의 이력 조회는 별도 읽기 전용 스냅숏으로 수행하고 up의 자문 잠금을 얻지 않는다. 소유 DB에서 실제 CLI의 빈/구형 이력 무변경과 다른 연결의 적용 잠금 보유 중 종료를 대조했다. 이는 낮은 권한 role의 LOAD 'age' 권한이나 임의 DDL과의 무대기를 보증하지 않는다. [검토 기록](reviews/2026-10-31-issue-162.md)에 시험 범위와 기존 실패를 구분했다.

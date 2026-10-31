@@ -141,3 +141,13 @@ func relationObject(relation model.Relation) map[string]any {
 	}
 	return value
 }
+
+// nodeCreationObject는 기존 폐기 원천의 반환을 새 생성·복구와 구분한다.
+func nodeCreationObject(node model.Context) map[string]any {
+	value := map[string]any{"node": nodeObject(node)}
+	if node.Layer == model.LayerSource && node.DeletedAt != nil {
+		value["creation_status"] = "existing_deleted"
+		value["warning"] = "기존의 폐기·삭제된 원천을 반환했습니다. 새 생성이나 자동 복구가 아니며 활성 근거로 사용할 수 없습니다. MCP 폐기분은 node_restore로, 웹 삭제분은 웹에서 복구해 주십시오. request_id 재생은 최초 결과이므로 복구 후 활성 원천 조회는 node_get을 사용해 주십시오."
+	}
+	return value
+}

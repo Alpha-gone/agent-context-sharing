@@ -153,7 +153,7 @@ FR 171건과 NFR 13건, 총 184건을 각 한 행으로 추적한다. 폐기된 
 | `FR-AGENT_CONTEXT-143` | 관계 목록 | [페이지 처리](mcp.md#페이지-처리) | `relation_id`를 담는 커서 | 같은 관계가 건너뛰거나 중복되지 않는지 확인 | 설계 반영 |
 | `FR-AGENT_CONTEXT-144` | 팀 삭제 | [테이블 열 정의](data.md#테이블-열-정의) | `team`의 `deleted_at`과 등급 계산의 제외 | 삭제된 팀의 등급이 적용되지 않는지 확인 | 설계 반영 |
 | `FR-AGENT_CONTEXT-145` | 파생 불변 | [그래프 스키마](data.md#그래프-스키마) | 접근 계층의 수정 대상 목록 강제 | 목록 밖 속성의 수정 요청이 거부되는지 확인 | 설계 반영 |
-| `FR-AGENT_CONTEXT-146` | 원천 중복 | [컨텍스트 저장과 색인](indexing.md#컨텍스트-저장과-색인) | 1a단계의 조회와 부분 유일 인덱스 | 같은 `source_ref`의 동시 요청이 하나만 남는지 확인 | 설계 반영 |
+| `FR-AGENT_CONTEXT-146` | 원천 중복 | [컨텍스트 저장과 색인](indexing.md#컨텍스트-저장과-색인) | 1a단계의 조회와 부분 유일 인덱스, 폐기·삭제 상태 응답 | 같은 `source_ref`의 동시 요청 유일성, 웹 삭제·MCP 폐기분의 중복 반환과 상태·복구 안내 확인 | 설계 반영 |
 | `FR-AGENT_CONTEXT-147` | 클라이언트 등록 | [OAuth discovery와 최초 인가](authentication.md#oauth-discovery와-최초-인가) | 등록 클라이언트 대조와 `redirect_uri` 완전 일치 | 등록되지 않은 `client_id`와 어긋난 `redirect_uri`가 리다이렉트 없이 거부되는지 확인 | 설계 반영 |
 | `FR-AGENT_CONTEXT-148` | 인가 코드 | [OAuth discovery와 최초 인가](authentication.md#oauth-discovery와-최초-인가) | 해시 저장·60초·단일 소비·결합 검증과 재사용 시 계열 폐기 | 같은 코드의 두 번째 교환이 거부되고 발급된 토큰이 폐기되는지 확인 | 설계 반영 |
 | `FR-AGENT_CONTEXT-149` | 전송 계층 검증 | [표준 MCP 경계](mcp.md#표준-mcp-경계) | Origin·요청별 메타데이터·표준 헤더 일치와 오류 계층 분리 | 메타데이터 누락·헤더 누락/불일치·미지원 revision/RPC의 HTTP·JSON-RPC 오류를 확인 | 설계 반영 |

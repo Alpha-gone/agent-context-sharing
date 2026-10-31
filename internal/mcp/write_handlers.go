@@ -164,7 +164,7 @@ func applyWrite(ctx context.Context, d Dependencies, principal Principal, tool s
 			if node.GraphID != graphID {
 				return nil, &DependencyFailure{}
 			}
-			value = map[string]any{"node": nodeObject(node)}
+			value = nodeCreationObject(node)
 		}
 	case "node_update", "node_discard", "node_restore":
 		op.ContextID, op.TargetVersion = contextID, 1

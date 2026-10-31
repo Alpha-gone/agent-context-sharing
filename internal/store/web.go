@@ -977,13 +977,14 @@ func (s *Store) ListActiveContexts(ctx context.Context, graphID model.ID, limit 
 //
 // 최신순으로 두는 이유는 상한에 걸릴 때 남는 것이 무엇인지 때문이다. 오래된 순으로 자르면
 // 방금 만든 컨텍스트가 화면에서 사라져 삭제도 복구도 할 수 없다. context_id가 UUIDv7이라
-// 내림차순이 곧 최신순이다. 잘림 여부는 상한보다 한 건 더 읽어 판정한다.
+// 내림차순이 곧 최신순이다. 잘림 여부는 상한보다 한 건 더 읽어 판정한다. 상한이 정수
+// 최댓값이면 그보다 많은 컨텍스트가 있을 수 없으므로 더 읽지 않는다.
 func (s *Store) graphContextPage(ctx context.Context, graphID model.ID, predicate string, limit int) ([]model.Context, bool, error) {
 	if limit < 0 {
 		return nil, false, fmt.Errorf("그래프 정점 조회 인자가 올바르지 않다")
 	}
 	fetch := limit
-	if fetch > 0 {
+	if fetch > 0 && fetch < math.MaxInt {
 		fetch++
 	}
 	contexts, err := s.graphContexts(ctx, graphID, predicate, fetch)

@@ -105,22 +105,24 @@ func TestGeminiFailureClassificationAndNoSecretDisclosure(t *testing.T) {
 		name, body string
 		status     int
 		retryable  bool
+		reason     string
 	}{
-		{"입력 한도", testGeminiKey + " original-body", 400, false},
-		{"인증", testGeminiKey, 401, false},
-		{"권한", testGeminiKey, 403, false},
-		{"모델", testGeminiKey, 404, false},
-		{"408", testGeminiKey, 408, true},
-		{"429", testGeminiKey, 429, true},
-		{"서버", testGeminiKey, 503, true},
-		{"5xx 하한", testGeminiKey, 500, true},
-		{"5xx 상한", testGeminiKey, 599, true},
-		{"5xx 초과", testGeminiKey, 600, false},
-		{"redirect", testGeminiKey, 302, false},
-		{"해석", `{"embedding":{"values":["` + testGeminiKey + `"]}}`, 200, false},
-		{"차원", `{"embedding":{"values":[1]}}`, 200, false},
-		{"영벡터", `{"embedding":{"values":[` + strings.TrimSuffix(strings.Repeat("0,", 128), ",") + `]}}`, 200, false},
-		{"수치 범위", `{"embedding":{"values":[1e400]}}`, 200, false},
+		{"입력 한도", testGeminiKey + " original-body", 400, false, "provider_contract_violation"},
+		{"인증", testGeminiKey, 401, false, "provider_contract_violation"},
+		{"권한", testGeminiKey, 403, false, "provider_contract_violation"},
+		{"모델", testGeminiKey, 404, false, "provider_contract_violation"},
+		{"408", testGeminiKey, 408, true, "provider_unavailable"},
+		{"429", testGeminiKey, 429, true, "provider_unavailable"},
+		{"서버", testGeminiKey, 503, true, "provider_unavailable"},
+		{"5xx 하한", testGeminiKey, 500, true, "provider_unavailable"},
+		{"5xx 상한", testGeminiKey, 599, true, "provider_unavailable"},
+		{"5xx 초과", testGeminiKey, 600, false, "provider_contract_violation"},
+		{"redirect", testGeminiKey, 302, false, "provider_contract_violation"},
+		{"해석", `{"embedding":{"values":["` + testGeminiKey + `"]}}`, 200, false, "provider_contract_violation"},
+		{"차원", `{"embedding":{"values":[1]}}`, 200, false, "dimension_mismatch"},
+		{"영벡터", `{"embedding":{"values":[` + strings.TrimSuffix(strings.Repeat("0,", 128), ",") + `]}}`, 200, false, "provider_contract_violation"},
+		{"수치 범위", `{"embedding":{"values":[1e400]}}`, 200, false, "provider_contract_violation"},
+		{"NaN", `{"embedding":{"values":["NaN"]}}`, 200, false, "provider_contract_violation"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			worker, _ := geminiWorker(t, func(writer http.ResponseWriter, _ *http.Request) {
@@ -130,6 +132,13 @@ func TestGeminiFailureClassificationAndNoSecretDisclosure(t *testing.T) {
 			_, err := worker.EmbedDocument(t.Context(), "original-body")
 			if err == nil || retryableEmbeddingError(err) != test.retryable {
 				t.Fatalf("오류 분류: %v", err)
+			}
+			wantLevel := "ERROR"
+			if test.retryable {
+				wantLevel = "WARN"
+			}
+			if result, reason, level := providerOutcome(t.Context(), err); result != "failed" || reason != test.reason || level != wantLevel {
+				t.Fatalf("제공자 진단=%s/%s/%s, want=failed/%s/%s", result, reason, level, test.reason, wantLevel)
 			}
 			if strings.Contains(err.Error(), testGeminiKey) || strings.Contains(err.Error(), "original-body") {
 				t.Fatal("제공자 오류에 키·본문이 노출됐다")
@@ -271,8 +280,12 @@ func TestProviderOutcomeSeparatesCancellation(t *testing.T) {
 	}{
 		{"completed", t.Context(), nil, "completed", "completed", "INFO"},
 		{"provider", t.Context(), failure, "failed", "provider_unavailable", "WARN"},
+		{"provider_timeout", t.Context(), context.DeadlineExceeded, "failed", "provider_unavailable", "WARN"},
+		{"provider_cancel_without_task_cancel", t.Context(), context.Canceled, "failed", "provider_unavailable", "WARN"},
 		{"canceled", canceled, context.Canceled, "failed", "canceled", "INFO"},
 		{"deadline", expired, failure, "failed", "deadline_exceeded", "INFO"},
+		{"canceled_contract", canceled, ProviderError{}, "failed", "canceled", "INFO"},
+		{"deadline_dimension", expired, DimensionError{}, "failed", "deadline_exceeded", "INFO"},
 	} {
 		if result, reason, level := providerOutcome(test.ctx, test.err); result != test.result || reason != test.reason || level != test.level {
 			t.Fatalf("%s: %s/%s/%s", test.name, result, reason, level)

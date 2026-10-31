@@ -124,6 +124,35 @@ MCP 도구 등록 경계의 panic 복구는 [MCP 오류 계약](mcp.md#오류의
 
 색인 등록의 RETURNING으로 실제 task_id와 DB 정밀도의 enqueued_at을 읽고 등록 트랜잭션 종료 뒤 이벤트를 전달한다. 등록 세대는 enqueued_at의 Unix 마이크로초 값이다. 확보한 같은 세대·상관 ID·시도 횟수와 새 job_id를 제공자·적용·재시도에 전달하고 제공자 HTTP 상태는 실제 응답에서만 얻는다. 무효 확보의 결과/실패 갱신은 현재 세대를 변경하지 않으며 stale_generation으로 구분한다. 주기 작업은 회차별 job_id·작업 이름·처리 수·실패/건너뜀을 기록한다. DB 스키마·환경 키·외부 의존성은 추가하지 않았다.
 
+### 실패 원인과 수준의 대응
+
+`FR-AGENT_CONTEXT-174`의 처리 지점 진단은 오류 원문 대신 아래 고정 코드로 기록한다. HTTP는 상태만으로 저장소 장애를 추정하지 않는다. 응답 본문을 읽어 원인을 추측하지 않고 TLS·예산·panic 미들웨어의 내부 사유를 전달한다. 이미 전송한 상태와 분류는 별개로 보존한다.
+
+| 처리 지점·조건 | 결과 / 사유 코드 / 수준 |
+|---|---|
+| HTTP 401·403·404 | rejected / invalid_credential·permission_denied·not_found / WARN |
+| HTTP 405·413·429 | rejected / method_not_allowed·payload_too_large·capacity_exceeded / WARN |
+| HTTP 평문 거부 | rejected / https_required / WARN |
+| HTTP 요청 취소·공통 예산/408/504 | failed / canceled·deadline_exceeded / INFO |
+| HTTP 처리기 panic | failed / handler_panic / ERROR |
+| HTTP 502·503, 나머지 5xx | failed / target_unavailable, internal_error / ERROR |
+| HTTP 나머지 4xx·정상 | rejected / invalid_argument / WARN, completed / completed / INFO |
+| MCP 취소·마감 | failed / canceled·deadline_exceeded / INFO |
+| MCP invalid_argument·invalid_credential·permission_denied·not_found | rejected / 같은 이름의 코드 / WARN |
+| MCP limit_exceeded·version_conflict·not_supported | rejected / capacity_exceeded·constraint_violation·channel_unavailable / WARN |
+| MCP internal·예상치 못한 오류·nil 결과 | failed / store_unavailable / ERROR |
+| MCP 알 수 없는 오류 code 또는 손상된 오류 결과 | rejected / constraint_violation / WARN |
+| MCP 정상·result_truncated | completed / completed / INFO |
+| 색인 재시도 가능한 제공자/전송 장애 | failed / provider_unavailable / WARN |
+| 색인 비재시도 HTTP·응답 해석·영벡터·NaN 등 계약 위반 | failed / provider_contract_violation / ERROR |
+| 색인 차원 불일치 | failed / dimension_mismatch / ERROR |
+| 인증 요청 취소·마감(ErrUnavailable과 함께 감싼 원인 포함) | failed / canceled·deadline_exceeded / INFO |
+| 인증 저장/검증 기반 장애 | failed / authentication_unavailable / ERROR |
+
+MCP 결과 code는 structuredContent의 JSON 객체에서 확인하고 structuredContent 자체가 없을 때만 text JSON 객체를 확인한다. 구조화 값에 code가 없거나 손상되면 text로 덮지 않고 손상된 오류 결과로 분류한다. 임의 code·message를 진단에 복사하지 않는다. 요청 취소·마감은 일반 실패보다 먼저 분류한다. provider 취소 경계와 종료 시 재시도 정책은 [색인 설계](indexing.md)를 유지한다. 이 변경은 업무 오류·HTTP/OAuth 응답·재시도 횟수를 바꾸지 않는다.
+
+기동은 진단 기록기 준비 후 startup/pending을 기록하고, 수신 전 의존성 조립 완료 시 startup/completed를 남긴다. 실패는 조립 단계에 따라 configuration_invalid·database_unavailable·embedding_schema_mismatch·authentication_unavailable의 ERROR로 기록하며 취소·마감은 INFO의 canceled·deadline_exceeded를 우선한다. PostgreSQL 오류·접속 오류 타입 또는 DB 조립/스키마 조회 단계의 네트워크 오류는 database_unavailable로 분류하고, 스키마 불일치와 조회 장애를 혼동하지 않는다. 조립 완료는 실제 수신 성공이나 배포 인수를 뜻하지 않는다. 구성 검증·기록기 자체 준비처럼 기록기가 생기기 전 실패는 파일 이벤트를 만들 수 없으며 기존 stderr 보고 경계를 유지한다. 조립 실패 뒤 자원 정리 성공은 startup/failed와 shutdown/completed로 나누고 기동 원인을 반환 오류 체인에 보존한다. 종료 실패도 저장소 장애로 단정하지 않고 취소·마감 또는 target_unavailable로 구분한다.
+
 ### 민감정보와 크기 제한
 
 컨텍스트·질의·판단 입력, 요청·응답 전체, 원본 URI·query string·양식·제공자 응답, 자격 증명과 오류 원문은 어느 수준에서도 기록하지 않는다. 입력·오류에 포함된 비밀을 치환하는 방식에 의존하지 않고 구조화 허용 필드로만 이벤트를 만든다. 업무 감사의 판단 입력은 기존 DB에 남으며 진단 파일로 복사하지 않는다.

@@ -23,10 +23,18 @@ func withRequestBudget(next http.Handler, budget time.Duration, failure func(htt
 		controller := http.NewResponseController(w)
 		if err := controller.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
 			failure(w, request)
+			markHTTPReason(request, "internal_error")
 			return
 		}
 		// 읽기 마감은 net/http가 응답 뒤 본문 정리와 다음 요청 경계까지 소유한다.
 		// 여기서 지우면 미완성 본문의 자동 drain이 시간 제한 없이 기다릴 수 있다.
+		defer func() {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				markHTTPReason(request, "deadline_exceeded")
+			} else if errors.Is(ctx.Err(), context.Canceled) {
+				markHTTPReason(request, "canceled")
+			}
+		}()
 		response := &requestBudgetResponse{ResponseWriter: w}
 		next.ServeHTTP(response, request.WithContext(ctx))
 		// 소켓 마감이 context 타이머보다 먼저 깨어나는 경우도 같은 예산 소진이다.
@@ -37,6 +45,7 @@ func withRequestBudget(next http.Handler, budget time.Duration, failure func(htt
 }
 
 func httpBudgetFailure(w http.ResponseWriter, request *http.Request) {
+	markHTTPReason(request, "deadline_exceeded")
 	if request.URL.Path == "/mcp" || request.URL.Path == "/token" {
 		mcpBudgetFailure(w)
 		return

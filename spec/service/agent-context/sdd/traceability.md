@@ -177,7 +177,7 @@ FR 171건과 NFR 13건, 총 184건을 각 한 행으로 추적한다. 폐기된 
 | `FR-AGENT_CONTEXT-171` | 호환성 판정 | [첫 Codex CLI 상호운용 시험](testing.md#첫-codex-cli-상호운용-시험) | macOS Codex CLI 0.160.1·고정 callback·정확한 표면별 판정 | 발견·인가·읽기/쓰기·만료/회전·재시작·폐기의 관찰 증거 확인 | 설계 반영 |
 | `FR-AGENT_CONTEXT-172` | 직접 연결 전환 인수 | [인수·마이그레이션·복귀](testing.md#인수마이그레이션복귀) | 호환성 파괴 이행·사용자 인가/등록·후속 스키마·복귀 | 별도 배포·백업·현재 도메인 보존과 호스트 인수를 함께 확인 | 설계 반영 |
 | `FR-AGENT_CONTEXT-173` | 진단 로그 분리 저장 | [종류별 진단 로그](observability.md#종류별-진단-로그) | 여섯 종류별 JSON Lines·재시작 append·진단/업무 감사 분리 | 종류별 정상/경고/실패와 기존 파일 보존을 확인 | 설계 반영 |
-| `FR-AGENT_CONTEXT-174` | 진단 흐름 추적 | [이벤트 외피와 흐름 추적](observability.md#이벤트-외피와-흐름-추적) | 상관·흐름·작업·시험·instance/boot와 단계/원인 연결 | 관계 실패·인증 반복·비동기 세대를 자격/원문 없이 대조 | 설계 반영 |
+| `FR-AGENT_CONTEXT-174` | 진단 흐름 추적 | [이벤트 외피와 흐름 추적](observability.md#이벤트-외피와-흐름-추적) | 상관·흐름·작업·시험·instance/boot와 단계/원인 연결 | 관계 실패·인증 반복·비동기 세대 및 HTTP/MCP/기동/provider 실패 원인·수준을 자격/원문 없이 대조 | 설계 반영 |
 | `FR-AGENT_CONTEXT-175` | 진단 파일 보호 | [회전·보존과 총상한](observability.md#회전보존과-총상한) | 권한·민감정보 제외·7일/용량/대기 제한과 실패/종료 | 회전·누락·총상한·다중 instance·쓰기 실패와 5초 flush 확인 | 설계 반영 |
 | `NFR-AGENT_CONTEXT-001` | 데이터 저장 | [버전 요구](architecture.md#버전-요구) | PostgreSQL 13~18, AGE 1.8.0 이상, pgvector 0.7.0 이상 | 선언한 범위의 조합에서 모든 연산이 동작하는지 확인 | 설계 반영 |
 | `NFR-AGENT_CONTEXT-002` | 추적성 | [비기능 요구사항의 성립 근거](architecture.md#비기능-요구사항의-성립-근거) | `source_ref`, 유효 기간 property, `version`과 `SUPERSEDES` | 출처·시간·이력 셋이 모두 추적되는지 확인 | 설계 반영 |

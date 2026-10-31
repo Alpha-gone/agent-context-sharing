@@ -228,9 +228,14 @@ func providerOutcome(ctx context.Context, err error) (result, reason, level stri
 		return "failed", "deadline_exceeded", "INFO"
 	case ctx.Err() != nil:
 		return "failed", "canceled", "INFO"
-	default:
-		return "failed", "provider_unavailable", "WARN"
 	}
+	if _, mismatch := errors.AsType[DimensionError](err); mismatch {
+		return "failed", "dimension_mismatch", "ERROR"
+	}
+	if !retryableEmbeddingError(err) {
+		return "failed", "provider_contract_violation", "ERROR"
+	}
+	return "failed", "provider_unavailable", "WARN"
 }
 
 // logReindexProgress는 현재 대상의 옛 벡터·현재 모델 누락과 큐 상태를 함께 기록한다.

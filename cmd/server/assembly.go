@@ -44,9 +44,14 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 		logger = slog.Default()
 	}
 	a := &serverAssembly{logger: logger, placement: cfg.IndexWorkerPlacement}
+	startupReason := "configuration_invalid"
 	defer func() {
 		if resultErr != nil {
-			resultErr = a.close(resultErr, true)
+			if a.system != nil {
+				level, reason := systemDiagnosticResult(resultErr, startupReason)
+				a.system.RecordFields(a.jobContext, level, "startup", "failed", reason, false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup"}})
+			}
+			resultErr = errors.Join(resultErr, a.close(nil, true))
 		}
 	}()
 	source, err := diagnostic.NewSource(cfg.Diagnostic.InstanceID)
@@ -72,6 +77,7 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	a.system = reports[diagnostic.System]
 	a.jobContext = diagnostic.WithTrace(context.Background(), diagnostic.Trace{}.NewJob())
 	a.system.RecordFields(a.jobContext, "INFO", "startup", "pending", "completed", false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup"}})
+	startupReason = "database_unavailable"
 	a.database, err = store.New(ctx, cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
 		AdjacencyWindow: cfg.RelationAdjacencyWindow, SimilarityThreshold: cfg.RelationSimilarityThreshold, Limit: cfg.RelationProposalLimit,
 	}, func(id model.ID) int { return cfg.AccountPlans.For(id).GraceDays }, store.IndexTargets(cfg.IndexTargetLayers))
@@ -80,6 +86,7 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	}
 	a.database.SetDiagnostics(a.system)
 	a.database.SetOperationDiagnostics(reports[diagnostic.Management], reports[diagnostic.Index])
+	startupReason = "configuration_invalid"
 	a.periodic, err = newPeriodicWorker(a.database, cfg.AccountPlans, logger)
 	if err != nil {
 		return nil, fmt.Errorf("주기 작업 준비: %w", err)
@@ -102,9 +109,11 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	// external에서도 질의 임베딩 transport를 소유한다. 시작 여부와 별개로 정리한다.
 	a.workers = append(a.workers, a.indexer)
 	a.indexer.SetDiagnostics(reports[diagnostic.Index])
+	startupReason = "embedding_schema_mismatch"
 	if err := a.database.CheckEmbeddingSchema(ctx, cfg.EmbeddingVectorType, cfg.EmbeddingDimension); err != nil {
 		return nil, fmt.Errorf("임베딩 DB 구성 확인: %w", err)
 	}
+	startupReason = "configuration_invalid"
 	flow, err := search.New(a.database, a.indexer, search.Config{
 		Execution: search.Execution(cfg.SearchExecution), CandidateLimit: cfg.SearchCandidateLimit,
 		SemanticThreshold: cfg.SearchSemanticThreshold, FoldThreshold: cfg.SearchFoldThreshold,
@@ -117,6 +126,7 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 		return nil, fmt.Errorf("검색 실행기 준비: %w", err)
 	}
 	flow.SetDiagnostics(reports[diagnostic.Search])
+	startupReason = "authentication_unavailable"
 	authorization, err := authz.New(a.database, authz.Config{
 		Issuer: cfg.AuthorizationServerURL.String(), BcryptCost: cfg.BcryptCost, OAuth: oauthConfiguration(cfg),
 		AuthorizationCodes: a.database, AccessTokens: a.database, RefreshTokens: a.database, Connections: a.database,
@@ -125,6 +135,7 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 		return nil, fmt.Errorf("인가 서버 준비: %w", err)
 	}
 	authorization.SetDiagnostics(reports[diagnostic.Auth])
+	startupReason = "configuration_invalid"
 	transport := transportSecurity{directTLS: cfg.TLSMode == config.TLSModeDirect, trustedProxies: cfg.TrustedProxies}
 	webServer, err := web.New(webAuthentication{service: authorization}, a.database, web.Config{
 		Authorization: webAuthentication{service: authorization}, Connections: webAuthentication{service: authorization},
@@ -161,6 +172,7 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	a.system.RecordFields(a.jobContext, "INFO", "startup", "completed", "completed", false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup"}})
 	return a, nil
 }
 
@@ -189,7 +201,8 @@ func (a *serverAssembly) close(cause error, poolCloseSafe bool) error {
 		if a.system != nil {
 			result, reason, level := "completed", "completed", "INFO"
 			if cause != nil || resourceErr != nil {
-				result, reason, level = "failed", "store_unavailable", "ERROR"
+				result = "failed"
+				level, reason = systemDiagnosticResult(errors.Join(cause, resourceErr), "target_unavailable")
 			}
 			a.system.RecordFields(a.jobContext, level, "shutdown", result, reason, false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "shutdown"}})
 		}

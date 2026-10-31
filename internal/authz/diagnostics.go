@@ -34,14 +34,18 @@ func (s *Service) authObservation(ctx context.Context, stage string, account mod
 				account, client, grant = e.Binding.AccountID, e.Binding.ClientID, e.Binding.ID
 			}
 		}
-		switch {
-		case errors.Is(err, ErrUnavailable):
-			level, reason = "ERROR", "authentication_unavailable"
-		case errors.Is(err, context.DeadlineExceeded):
-			reason = "deadline_exceeded"
-		case errors.Is(err, context.Canceled):
-			reason = "canceled"
-		}
+	}
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		level, result, reason = "INFO", "failed", "deadline_exceeded"
+	case errors.Is(ctx.Err(), context.Canceled):
+		level, result, reason = "INFO", "failed", "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		level, result, reason = "INFO", "failed", "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		level, result, reason = "INFO", "failed", "canceled"
+	case errors.Is(err, ErrUnavailable):
+		level, reason = "ERROR", "authentication_unavailable"
 	}
 	observer, ok := s.diagnostics.(diagnostic.Observer)
 	if !ok {

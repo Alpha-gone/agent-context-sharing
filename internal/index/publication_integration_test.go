@@ -35,7 +35,7 @@ func TestWorkerPublicationSignalIntegration(t *testing.T) {
 		}
 		t.Skip("TEST_DATABASE_URL이 없어 작업자 공개 시험을 건너뛴다")
 	}
-	for _, mode := range []string{"source", "event", "provider_failure", "stale", "proposal_failure"} {
+	for _, mode := range []string{"source", "event", "provider_failure", "provider_unauthorized", "provider_contract_failure", "provider_dimension_failure", "stale", "proposal_failure"} {
 		t.Run(mode, func(t *testing.T) {
 			database, err := store.New(t.Context(), address, "agent_context", nil, nil, "")
 			if err != nil {
@@ -70,9 +70,20 @@ func TestWorkerPublicationSignalIntegration(t *testing.T) {
 			}
 			dimension := embeddingDimension(t, address)
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if mode == "provider_failure" {
-					w.WriteHeader(http.StatusServiceUnavailable)
+				switch mode {
+				case "provider_failure", "provider_unauthorized":
+					status := http.StatusServiceUnavailable
+					if mode == "provider_unauthorized" {
+						status = http.StatusUnauthorized
+					}
+					w.WriteHeader(status)
 					fmt.Fprint(w, "private response marker")
+					return
+				case "provider_contract_failure":
+					fmt.Fprint(w, `{"embedding":{"values":["private response marker"]}}`)
+					return
+				case "provider_dimension_failure":
+					fmt.Fprint(w, `{"embedding":{"values":[1]}}`)
 					return
 				}
 				if mode == "stale" {
@@ -140,7 +151,7 @@ func TestWorkerPublicationSignalIntegration(t *testing.T) {
 				t.Fatalf("관계 후보 신호=%d want=%d", calls, wantCalls)
 			}
 			wantEvents := 1
-			if mode == "provider_failure" {
+			if mode == "provider_failure" || mode == "provider_unauthorized" {
 				wantEvents = 2
 			}
 			if len(sink.events) != wantEvents {
@@ -153,10 +164,20 @@ func TestWorkerPublicationSignalIntegration(t *testing.T) {
 				}
 			}
 			wantStatus := uint16(200)
-			if mode == "provider_failure" {
+			wantResult, wantReason, wantLevel := "completed", "completed", "INFO"
+			switch mode {
+			case "provider_failure":
 				wantStatus = 503
+				wantResult, wantReason, wantLevel = "failed", "provider_unavailable", "WARN"
+			case "provider_unauthorized":
+				wantStatus = 401
+				wantResult, wantReason, wantLevel = "failed", "provider_contract_violation", "ERROR"
+			case "provider_contract_failure":
+				wantResult, wantReason, wantLevel = "failed", "provider_contract_violation", "ERROR"
+			case "provider_dimension_failure":
+				wantResult, wantReason, wantLevel = "failed", "dimension_mismatch", "ERROR"
 			}
-			if e.Validate() != nil || e.CorrelationID != correlation.String() || e.JobID == "" || e.Fields.Index.TaskID != jobID || e.Fields.Index.Generation == 0 || e.Fields.Index.ProviderStatus != wantStatus {
+			if e.Validate() != nil || e.CorrelationID != correlation.String() || e.JobID == "" || e.Fields.Index.TaskID != jobID || e.Fields.Index.Generation == 0 || e.Fields.Index.ProviderStatus != wantStatus || e.Result != wantResult || e.ReasonCode != wantReason || e.Level != wantLevel {
 				t.Fatalf("실제 제공자 계측: %+v", e)
 			}
 			eventBytes, _ := json.Marshal(sink.events)

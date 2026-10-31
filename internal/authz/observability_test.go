@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"agent_context_sharing/internal/model"
 )
 
 type obs05Events struct{ events []diagnostic.Event }
@@ -15,6 +18,53 @@ type obs05Events struct{ events []diagnostic.Event }
 func (s *obs05Events) Emit(_ context.Context, e diagnostic.Event) bool {
 	s.events = append(s.events, e)
 	return false
+}
+
+func TestAuthenticationObservationFailureReasons(t *testing.T) {
+	for _, sample := range []struct {
+		name, level, reason string
+		cause               error
+		requestError        error
+	}{
+		{"wrapped cancellation", "INFO", "canceled", context.Canceled, nil},
+		{"wrapped deadline", "INFO", "deadline_exceeded", context.DeadlineExceeded, nil},
+		{"storage failure", "ERROR", "authentication_unavailable", errors.New("private-storage-error"), nil},
+		{"request cancellation", "INFO", "canceled", nil, context.Canceled},
+		{"request deadline", "INFO", "deadline_exceeded", nil, context.DeadlineExceeded},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			ctx := t.Context()
+			if sample.requestError == context.Canceled {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			} else if sample.requestError == context.DeadlineExceeded {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				defer cancel()
+			}
+			sink := &obs05Events{}
+			source, _ := diagnostic.NewSource("failure-reasons")
+			reporter, _ := diagnostic.NewReporter(diagnostic.Auth, sink, source)
+			service := &Service{diagnostics: reporter}
+			var failure error
+			if sample.cause != nil {
+				failure = &credentialFailure{ErrUnavailable, fmt.Errorf("lookup: %w", sample.cause)}
+			}
+			ctx = diagnostic.WithTrace(ctx, diagnostic.NewRequestTrace())
+			service.authObservation(ctx, "token_validation", model.ID{}, "", model.ID{}, failure)
+			if len(sink.events) != 1 {
+				t.Fatalf("events = %d", len(sink.events))
+			}
+			event := sink.events[0]
+			if err := event.Validate(); err != nil || event.Level != sample.level || event.Result != "failed" || event.ReasonCode != sample.reason {
+				t.Fatalf("event = %+v, validation = %v", event, err)
+			}
+			if failure != nil && (!errors.Is(failure, ErrUnavailable) || !errors.Is(failure, sample.cause) || failure.Error() != "unavailable") {
+				t.Fatal("인증 오류의 외부 계약 또는 내부 원인 변경")
+			}
+		})
+	}
 }
 func TestOBS05AuthenticationCausesAndSafeFields(t *testing.T) {
 	service := testService(t, newMemoryStore())

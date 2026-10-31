@@ -161,6 +161,7 @@ func (app *application) recoverPanics(next http.Handler) http.Handler {
 			if cause == http.ErrAbortHandler {
 				panic(cause)
 			}
+			markHTTPReason(request, "handler_panic")
 			app.logger.Error("요청 처리 중 panic",
 				"correlation_id", requestID(request.Context()),
 				"method", diagnosticMethod(request.Method), "route", diagnosticRoute(request.URL.Path), "reason_code", "handler_panic")
@@ -177,6 +178,7 @@ func (app *application) requireTLS(next http.Handler) http.Handler {
 			(request.URL.Path == "/healthz" || request.URL.Path == "/readyz")
 		// ServeMux의 경로 정규화 리디렉션도 전송 판정 뒤에서만 실행한다.
 		if !probe && !app.isTLSRequest(request) {
+			markHTTPReason(request, "https_required")
 			writeStatus(writer, http.StatusBadRequest, "https_required")
 			return
 		}
@@ -360,6 +362,8 @@ func (app *application) logRequests(next http.Handler) http.Handler {
 			return
 		}
 		ctx, _ := model.WithCorrelationID(diagnostic.WithTrace(request.Context(), trace), id)
+		outcome := &httpDiagnosticOutcome{}
+		ctx = context.WithValue(ctx, httpDiagnosticKey{}, outcome)
 		request = request.WithContext(context.WithValue(ctx, correlationIDKey{}, id.String()))
 		writer.Header().Set("X-Correlation-ID", id.String())
 		startedAt := time.Now()
@@ -369,13 +373,7 @@ func (app *application) logRequests(next http.Handler) http.Handler {
 		next.ServeHTTP(recorder, request)
 		fields.Request.Status = uint16(recorder.status)
 		fields.Request.LatencyMS = uint64(time.Since(startedAt).Milliseconds())
-		result, reason, level := "completed", "completed", "INFO"
-		if recorder.status >= 400 {
-			result, reason, level = "rejected", "invalid_argument", "WARN"
-		}
-		if recorder.status >= 500 {
-			result, reason, level = "failed", "store_unavailable", "ERROR"
-		}
+		result, reason, level := httpDiagnosticResult(request.Context(), recorder.status, outcome.reason)
 		diagnostic.Observe(app.diagnostics, request.Context(), level, "response", result, reason, false, fields)
 		app.logger.Info("HTTP 요청 완료",
 			"correlation_id", id.String(),

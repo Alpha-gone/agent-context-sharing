@@ -480,3 +480,9 @@
 - 근거: [MDN Set-Cookie](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie), [MDN frame-ancestors](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/frame-ancestors). `__Host-`의 Secure·Path=/·Domain 생략 조건과 문서 삽입 차단 지시를 확인했다.
 - bcrypt는 적용 모듈 `golang.org/x/crypto@v0.41.0/bcrypt/bcrypt.go`의 공급자 API 주석과 `Cost` 구현을 로컬 모듈 캐시에서 확인했다. [공식 소스](https://github.com/golang/crypto/blob/v0.41.0/bcrypt/bcrypt.go)의 웹 조회는 실패했으므로 적용 판 로컬 소스를 근거로 사용했다.
 - 반영: [인증](sdd/authentication.md)의 성공 시 비용 상향과 잔여 경계, [웹](sdd/web.md)의 공통 프레임·쿠키 경계.
+
+## 진단 실패 원인 분류 (#199)
+
+- 조회 시각: 2026-10-31 현재 세션. 적용 SDK Go 1.27.1의 `go doc errors.AsType`과 적용 pgx v5.10.0의 `go doc pgconn.PgError`를 확인했다. AsType의 error 타입 제약과 감싼 오류 탐색, PostgreSQL 오류의 SQLState 메서드로 원문을 사용하지 않고 오류 종류를 구분한다. 서버에 DB 드라이버 의존성을 추가하지 않는다.
+- MCP SDK v1.8.0 `mcp/protocol.go`의 공급자 API 주석에서 CallToolResult.StructuredContent가 임의 JSON 값임을 확인했다. struct·map·JSON 원시 값의 code를 JSON 객체로 검사하고 임의 code·message는 진단 값으로 복사하지 않는다. 공식 소스: [Go errors](https://pkg.go.dev/errors@go1.27.1#AsType), [pgx v5.10.0](https://pkg.go.dev/github.com/jackc/pgx/v5@v5.10.0/pgconn#PgError), [MCP SDK v1.8.0](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/protocol.go).
+- 반영: [실패 원인과 수준 대응](sdd/observability.md#실패-원인과-수준의-대응).

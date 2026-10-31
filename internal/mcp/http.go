@@ -4,6 +4,8 @@ import (
 	"agent_context_sharing/internal/diagnostic"
 	"bytes"
 	"context"
+	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -74,10 +76,7 @@ func NewHandler(config HTTPConfig) (http.Handler, error) {
 			}
 			diagnostic.Observe(config.Diagnostics, ctx, "INFO", "dispatch", "pending", "completed", true, diagnostic.Fields{Identity: diagnostic.IdentityFields{AccountID: principal.AccountID.String()}, Request: diagnostic.RequestFields{Route: "mcp", Tool: name}})
 			result, err := handler(ctx, principal, request)
-			outcome, reason, level := "completed", "completed", "INFO"
-			if err != nil || result == nil || result.IsError || ctx.Err() != nil {
-				outcome, reason, level = "failed", "constraint_violation", "WARN"
-			}
+			level, outcome, reason := toolResponseObservation(ctx, result, err)
 			diagnostic.Observe(config.Diagnostics, ctx, level, "response", outcome, reason, true, diagnostic.Fields{Identity: diagnostic.IdentityFields{AccountID: principal.AccountID.String()}, Request: diagnostic.RequestFields{Route: "mcp", Tool: name, LatencyMS: uint64(time.Since(started).Milliseconds())}})
 			if ctx.Err() != nil {
 				return writeErrorResult(ctx.Err())
@@ -155,6 +154,71 @@ func NewHandler(config HTTPConfig) (http.Handler, error) {
 		forward.ContentLength = int64(len(data))
 		protected.ServeHTTP(w, forward)
 	}), nil
+}
+
+func toolResponseObservation(ctx context.Context, result *sdk.CallToolResult, err error) (level, outcome, reason string) {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return "INFO", "failed", "deadline_exceeded"
+	case errors.Is(ctx.Err(), context.Canceled):
+		return "INFO", "failed", "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "INFO", "failed", "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "INFO", "failed", "canceled"
+	}
+	if err != nil {
+		value, _ := writeFailureObject(err)
+		return toolFailureObservation(value["code"].(string))
+	}
+	if result == nil {
+		return "ERROR", "failed", "store_unavailable"
+	}
+	if !result.IsError {
+		return "INFO", "completed", "completed"
+	}
+	var code string
+	if result.StructuredContent != nil {
+		if data, marshalErr := json.Marshal(result.StructuredContent); marshalErr == nil {
+			code = toolFailureCode(data)
+		}
+	} else {
+		// 구조화 값이 없는 처리기도 JSON text 외피의 고정 code만 사용한다.
+		for _, content := range result.Content {
+			if text, ok := content.(*sdk.TextContent); ok && text != nil {
+				code = toolFailureCode([]byte(text.Text))
+				if code != "" {
+					break
+				}
+			}
+		}
+	}
+	return toolFailureObservation(code)
+}
+
+func toolFailureCode(data []byte) string {
+	var failure struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(data, &failure) != nil {
+		return ""
+	}
+	return failure.Code
+}
+
+func toolFailureObservation(code string) (level, outcome, reason string) {
+	switch code {
+	case "internal":
+		return "ERROR", "failed", "store_unavailable"
+	case "permission_denied", "not_found", "invalid_argument", "invalid_credential":
+		return "WARN", "rejected", code
+	case "limit_exceeded":
+		return "WARN", "rejected", "capacity_exceeded"
+	case "not_supported":
+		return "WARN", "rejected", "channel_unavailable"
+	default:
+		return "WARN", "rejected", "constraint_violation"
+	}
 }
 
 func acceptsMCP(values []string) bool {

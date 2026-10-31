@@ -146,7 +146,14 @@ func TestEvaluationCommandCleanupFailsExitIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		outPath := filepath.Join(t.TempDir(), "report.json")
-		args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-repeat=10", "-budget=20000", "-stages=baseline", "-out=" + outPath}
+		args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-repeat=10", "-out=" + outPath}
+		// 지속 평가는 내장 시나리오를, 비교 모드는 각자 고정한 그래프 단계를 쓴다.
+		switch {
+		case len(mode) == 0:
+			args = append(args, "-contexts="+contexts, "-queries="+queries, "-budget=20000", "-stages=baseline")
+		case mode[0] != "-continual":
+			args = append(args, "-contexts="+contexts, "-queries="+queries, "-budget=20000")
+		}
 		command := exec.CommandContext(t.Context(), binary, append(args, mode...)...)
 		beforeCalls := embeddingCalls.Load()
 		out, err := command.CombinedOutput()

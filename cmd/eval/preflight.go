@@ -21,6 +21,9 @@ func validateModeFlagsFor(flags *flag.FlagSet, convert string, adaptive, consist
 			invalid = invalid || !consistency
 		case strings.HasPrefix(f.Name, "adaptive-") || f.Name == "direct-thresholds" || f.Name == "direct-margins":
 			invalid = invalid || !adaptive
+		case f.Name == "stages":
+			// 적응형·일관성·적대적 비교는 각자 고정한 그래프 단계를 쓴다.
+			invalid = invalid || adaptive || consistency || adversarial
 		case f.Name == "attacks":
 			invalid = invalid || (!adversarial && convert != convertOwnAdversarial)
 		}

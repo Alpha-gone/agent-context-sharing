@@ -61,7 +61,13 @@ func TestEvaluationCommandSignalCleansGraphIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 			outPath := filepath.Join(dir, "report.json")
-			args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-contexts=" + contexts, "-queries=" + queries, "-stages=baseline", "-out=" + outPath}
+			args := []string{"-test.run=^TestEvalCommandProcess$", "--", "-out=" + outPath}
+			if mode != "continual" {
+				args = append(args, "-contexts="+contexts, "-queries="+queries)
+			}
+			if mode == "basic" || mode == "index" {
+				args = append(args, "-stages=baseline")
+			}
 			if mode == "index" {
 				args = append(args, "-compare-index-targets")
 			} else if mode != "basic" {

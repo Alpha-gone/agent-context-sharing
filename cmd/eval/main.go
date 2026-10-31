@@ -230,6 +230,11 @@ func runEvaluation(args []string, trial *trialProgress) (err error) {
 		return runBusinessTasks(*businessTasksPath, *outPath)
 	}
 	if *businessPath != "" {
+		conflict := false
+		flags.Visit(func(f *flag.Flag) { conflict = conflict || !slices.Contains([]string{"business", "out"}, f.Name) })
+		if conflict {
+			return fmt.Errorf("업무 효과 비교는 입력에 고정한 통제 조건만 사용한다")
+		}
 		return runBusiness(*businessPath, *outPath)
 	}
 	if *repeats != initialEvaluationRepeats {
@@ -250,7 +255,7 @@ func runEvaluation(args []string, trial *trialProgress) (err error) {
 	if *originalPath != "" {
 		conflict := false
 		flags.Visit(func(f *flag.Flag) {
-			conflict = conflict || !slices.Contains([]string{"original-reproduction", "out", "repeats"}, f.Name)
+			conflict = conflict || !slices.Contains([]string{"original-reproduction", "out", "repeat"}, f.Name)
 		})
 		if conflict {
 			return fmt.Errorf("원본 비교는 입력에 고정한 출처·요청 설정만 사용한다")
@@ -262,7 +267,7 @@ func runEvaluation(args []string, trial *trialProgress) (err error) {
 	if *unitPath != "" {
 		conflict := false
 		flags.Visit(func(f *flag.Flag) {
-			conflict = conflict || !slices.Contains([]string{"unit-comparison", "out", "repeats"}, f.Name)
+			conflict = conflict || !slices.Contains([]string{"unit-comparison", "out", "repeat"}, f.Name)
 		})
 		if conflict {
 			return fmt.Errorf("검색 단위 비교는 입력에 고정한 통제 조건만 사용한다")
@@ -280,6 +285,14 @@ func runEvaluation(args []string, trial *trialProgress) (err error) {
 		return runUnitCommand(ctx, settings, input, *outPath)
 	}
 	if *continual {
+		// 지속 평가는 내장 시나리오의 그래프·단계·색인 대상과 고정 예산을 쓴다.
+		conflict := false
+		flags.Visit(func(f *flag.Flag) {
+			conflict = conflict || !slices.Contains([]string{"continual", "out", "repeat", "max-hops", "max-hop-nodes"}, f.Name)
+		})
+		if conflict {
+			return fmt.Errorf("지속 평가는 내장 시나리오와 고정 검색 예산만 사용한다")
+		}
 		ctx, stop := trialContext(trial)
 		defer stop()
 		return runContinual(ctx, *outPath, *repeats, *maxHops, *maxHopNodes)

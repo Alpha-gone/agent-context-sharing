@@ -358,6 +358,11 @@ func (m executionManifest) validate() error {
 	if len(costCodes) != len(allCosts) {
 		return invalid("cost.items coverage")
 	}
+	// 실제 비용 항목을 산정하는 모드는 확장 업무 과업뿐이다. 다른 모드는 결과에서 항목을 모두
+	// 미측정으로 남기므로, 다른 선언은 측정 뒤 대조에서 반드시 어긋난다. 데이터 읽기·DB 접속 전에 거부한다.
+	if m.Mode != "business_tasks" && slices.ContainsFunc(m.Cost.Items, func(item manifestCostItem) bool { return item.Status != "unmeasured" }) {
+		return invalid("cost.items status for mode")
+	}
 	return nil
 }
 

@@ -95,6 +95,34 @@ func assertTrialFiles(t *testing.T, root, id string, success bool) {
 	}
 }
 
+// TestManifestTrialBusinessCostMismatch는 실제 비용을 산정하는 확장 업무 과업이 측정 뒤 산정
+// 금액과 다른 선언을 cost_mismatch로 거부하는 사후 대조를 유지하는지 확인한다.
+func TestManifestTrialBusinessCostMismatch(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EVAL_TEST_COMMAND_PROCESS", "1")
+	t.Setenv("DATABASE_URL", "private-do-not-connect")
+	m, bindings, _ := trialFixture(t, "lookup")
+	index := slices.IndexFunc(m.Cost.Items, func(item manifestCostItem) bool { return item.Status == "measured" })
+	if index < 0 {
+		t.Fatal("측정 비용 항목이 없다")
+	}
+	m.Cost.Items[index].Value = new(*m.Cost.Items[index].Value + 1)
+	root := filepath.Join(t.TempDir(), "results")
+	logs, err := exec.CommandContext(t.Context(), binary, "-test.run=^TestEvalCommandProcess$", "--", "-manifest="+writeManifestFixture(t, m), "-results="+root, "-trial-input=tasks="+bindings["tasks"]).CombinedOutput()
+	if err == nil {
+		t.Fatalf("산정 금액과 다른 선언을 허용했다: %s", logs)
+	}
+	assertTrialFiles(t, root, m.TrialID, false)
+	var failure trialFailureReport
+	readTrialFile(t, root, m.TrialID, "failure.json", &failure)
+	if failure.Code != "cost_mismatch" {
+		t.Fatalf("실패 코드 = %s", failure.Code)
+	}
+}
+
 func TestManifestTrialActualBusinessCommands(t *testing.T) {
 	binary, err := os.Executable()
 	if err != nil {

@@ -159,8 +159,9 @@ func assessUnits(provenance string, entry unitCohort) (string, string) {
 		if metric.Metric == "unit_completeness" {
 			regressed = regressed || metric.Significant && !metric.Improved
 		}
+		// 성공률 하락도 확장 업무 판정과 같이 유의한 악화일 때만 거부한다.
 		if metric.Metric == "task_success" {
-			successLost = metric.Difference < 0 && metric.Samples > 0
+			successLost = metric.Significant && !metric.Improved
 		}
 		if metric.Metric == "total_cost" {
 			costMeasured = metric.Samples == entry.Samples && metric.Status == "measured"

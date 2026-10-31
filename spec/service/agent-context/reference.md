@@ -395,3 +395,9 @@
 ## 2026-10-31 #188 출처 조회의 읽기·오류 경계
 
 - 적용 판 pgx v5.10.0의 공급자 소스/API 주석인 [`Tx`](https://github.com/jackc/pgx/blob/v5.10.0/tx.go)·[`PgError`](https://github.com/jackc/pgx/blob/v5.10.0/pgconn/errors.go)를 로컬 모듈 캐시에서 확인했다. 조회일 2026-10-31 KST. `Tx.Query`는 해당 트랜잭션의 연결에서 실행하고 `PgError.Error()`는 DB 메시지를 포함하므로, [저장 계층화](sdd/data.md#저장-계층화)의 출처 해석은 기존 읽기 경계의 reader를 재사용하되 기존 StorageError 정규화를 유지한다. 실제 DB 회귀와 드라이버 오류 대역으로 검증하며 드라이버 판·연결 정책은 변경하지 않았다.
+
+
+## 2026-10-31 #189 원천 중복 조회와 표현식 인덱스
+
+- 조회일 2026-10-31 KST. [PostgreSQL 18 표현식 인덱스](https://www.postgresql.org/docs/18/indexes-expressional.html)와 [부분 인덱스](https://www.postgresql.org/docs/18/indexes-partial.html)는 질의 표현식·부분 조건과 인덱스의 대응을 확인하는 근거다. [AGE 저장 구조](https://age.apache.org/age-manual/master/intro/graphs.html#how-graphs-are-stored-in-postgres)의 label별 PostgreSQL 테이블을 기존 `context_source_ref_idx`와 같은 SQL 식으로 읽는다. layer 조건은 고정 source 리터럴로 두고 그래프·locator는 바인딩한다. 문서만으로 적용 판의 계획을 단정하지 않고 고정 AGE 1.8.0/PG18 로컬 이미지의 실제 질의 계획으로 확인했다.
+- [인덱스 정본](sdd/data.md#인덱스)은 SQL 중복 판정과 openCypher 영향 주변부 조회의 표현식 경계를 구분한다. AGE 비공개 정점 생성 함수 대신 `properties::text`를 고정 Context 외피에 넣어 기존 `parseContext`의 속성·그래프 검증을 적용하며, 마이그레이션과 드라이버 판은 변경하지 않는다.

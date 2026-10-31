@@ -352,3 +352,82 @@ func TestQueryUniqueIndexRacesIntegration(t *testing.T) {
 		})
 	}
 }
+
+func (q *indexPlanQueryer) QueryRow(ctx context.Context, sql string, arguments ...any) pgx.Row {
+	q.queries = append(q.queries, sql)
+	q.arguments = append(q.arguments, arguments)
+	return q.cypherQueryer.QueryRow(ctx, sql, arguments...)
+}
+
+func TestQuerySourceReferenceIndexPlanIntegration(t *testing.T) {
+	for _, size := range []int{1000, 10000} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			database := newIsolatedIntegrationStore(t)
+			actor := newTestID(t)
+			createTestAccount(t, database, actor)
+			graph := createTestGraph(t, database, actor)
+			other := createTestGraph(t, database, actor)
+			locator := "api://source-index/O'Brien?tag=$store0$"
+			source, err := database.CreateContext(t.Context(), graph, testSourceContext(t, graph, actor, locator), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign, err := database.CreateContext(t.Context(), other, testSourceContext(t, other, actor, locator), nil)
+			if err != nil || foreign.ID == source.ID {
+				t.Fatalf("foreign=%+v,%v", foreign, err)
+			}
+			// 대상 그래프의 1,000개 원천은 고정하고 다른 그래프의 원천만 늘린다.
+			for _, seed := range []struct {
+				graph         model.ID
+				count, offset int
+			}{{graph, 1000, 0}, {other, size, 100000}} {
+				properties, err := json.Marshal(contextProperties(testSourceContext(t, seed.graph, actor, "api://source-index/noise")))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = database.pool.Exec(t.Context(), `INSERT INTO `+database.contextTable()+` (properties)
+					SELECT ($1::jsonb || jsonb_build_object(
+					  'context_id','019b0189-0000-7000-8000-' || lpad((n+$3::int)::text,12,'0'),
+					  'source_ref_locator','api://source-index/noise/' || n))::text::ag_catalog.agtype
+					FROM generate_series(1,$2::int) n`, string(properties), seed.count, seed.offset)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := database.pool.Exec(t.Context(), "ANALYZE "+database.contextTable()); err != nil {
+				t.Fatal(err)
+			}
+			for _, scenario := range []string{"active", "missing", "discarded"} {
+				t.Run(scenario, func(t *testing.T) {
+					lookup := locator
+					if scenario == "missing" {
+						lookup += "-missing"
+					}
+					if scenario == "discarded" {
+						if _, err := database.DiscardContext(t.Context(), graph, source.ID, nil, WriteLimits{}); err != nil {
+							t.Fatal(err)
+						}
+					}
+					recorder := &indexPlanQueryer{cypherQueryer: database.pool}
+					got, err := database.findSourceWith(t.Context(), recorder, graph, lookup)
+					if scenario == "missing" {
+						if !errors.Is(err, ErrNotFound) {
+							t.Fatalf("missing=%v", err)
+						}
+					} else if err != nil || got.ID != source.ID || got.Source.Reference.Locator != locator || got.Body != source.Body || (got.DeletedAt != nil) != (scenario == "discarded") {
+						t.Fatalf("source=%+v,%v", got, err)
+					}
+					if len(recorder.queries) != 1 {
+						t.Fatalf("queries=%d", len(recorder.queries))
+					}
+					plan := explainHop(t, database, recorder.queries[0], recorder.arguments[0]...)
+					logQueryIndexPlan(t, "source_ref_"+scenario, plan)
+					if !planUsesIndex(plan.Root, "context_source_ref_idx") || plan.Root.scanned("Context") > 1 {
+						t.Error("source_ref index missing or unrelated contexts scanned")
+					}
+				})
+			}
+			assertConnectionRecovery(t, database, nil, 0)
+		})
+	}
+}

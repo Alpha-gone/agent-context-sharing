@@ -492,25 +492,40 @@ func (s *Store) ReindexProgress(ctx context.Context, graphID model.ID, modelID s
 		scope = graphID.String()
 	}
 	var progress IndexProgress
+	// 작은 대상 집합만 UUID로 묶어 조회하고, 큰 집합은 플래너의 집합 조인을 유지한다.
+	// 유휴/대량 상태의 선택도가 달라 generic prepared plan을 재사용하지 않는다.
 	err := s.pool.QueryRow(ctx, `WITH targets AS (
-		SELECT properties ->> 'context_id'::text AS context_id,
-		       properties ->> 'graph_id'::text AS graph_id
+		SELECT (properties ->> 'context_id'::text)::uuid AS context_id,
+		       (properties ->> 'graph_id'::text)::uuid AS graph_id
 		FROM `+s.contextTable()+`
 		WHERE ($1::uuid IS NULL OR properties ->> 'graph_id'::text = $1::text)
 		  AND properties ->> 'deleted_at'::text IS NULL
 		  AND ($3::boolean OR properties ->> 'layer'::text <> 'source')
 	), tasks AS (
-		SELECT state FROM public.index_task WHERE $1::uuid IS NULL OR graph_id = $1
+		SELECT state FROM public.index_task WHERE $1::uuid IS NULL OR graph_id = $1::uuid
+	), batch AS (
+		SELECT count(*) <= 64 AS enabled FROM targets
+	), vectors AS MATERIALIZED (
+		SELECT embedding.context_id,embedding.graph_id,embedding.model_id
+		FROM public.context_embedding AS embedding
+		WHERE embedding.context_id = ANY (ARRAY(SELECT context_id FROM targets))
 	)
-	SELECT (SELECT count(*) FROM public.context_embedding AS embedding JOIN targets
-	          ON embedding.context_id::text = targets.context_id AND embedding.graph_id::text = targets.graph_id
-	        WHERE embedding.model_id <> $2),
-	       (SELECT count(*) FROM targets WHERE NOT EXISTS (
+	SELECT CASE WHEN (SELECT enabled FROM batch) THEN (SELECT count(*) FROM vectors AS embedding JOIN targets
+	          ON embedding.context_id = targets.context_id AND embedding.graph_id = targets.graph_id
+	        WHERE embedding.model_id <> $2)
+	       ELSE (SELECT count(*) FROM public.context_embedding AS embedding JOIN targets
+	          ON embedding.context_id = targets.context_id AND embedding.graph_id = targets.graph_id
+	        WHERE embedding.model_id <> $2) END,
+	       CASE WHEN (SELECT enabled FROM batch) THEN (SELECT count(*) FROM targets WHERE NOT EXISTS (
+	          SELECT 1 FROM vectors AS embedding
+	          WHERE embedding.context_id = targets.context_id AND embedding.graph_id = targets.graph_id
+	            AND embedding.model_id = $2))
+	       ELSE (SELECT count(*) FROM targets WHERE NOT EXISTS (
 	          SELECT 1 FROM public.context_embedding AS embedding
-	          WHERE embedding.context_id::text = targets.context_id AND embedding.graph_id::text = targets.graph_id
-	            AND embedding.model_id = $2)),
+	          WHERE embedding.context_id = targets.context_id AND embedding.graph_id = targets.graph_id
+	            AND embedding.model_id = $2)) END,
 	       (SELECT count(*) FROM tasks WHERE state = 'pending'),
-	       (SELECT count(*) FROM tasks WHERE state = 'failed')`, scope, modelID,
+	       (SELECT count(*) FROM tasks WHERE state = 'failed')`, pgx.QueryExecModeExec, scope, modelID,
 		s.indexTargets != IndexTargetsWithoutSource).Scan(&progress.OldModelEmbeddings, &progress.Missing, &progress.Pending, &progress.Failed)
 	if err != nil {
 		return IndexProgress{}, fmt.Errorf("재색인 진행 조회: %w", err)

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"agent_context_sharing/internal/plan"
 	"bytes"
 	"encoding/json/v2"
+	"slices"
 	"testing"
 )
 
@@ -72,5 +74,43 @@ func TestMCPDiscardedEventMemberRejectionIntegration(t *testing.T) {
 				t.Fatal("거부 재생이 결과를 바꾸거나 업무·감사·재생 기록을 중복 적용했다")
 			}
 		})
+	}
+}
+
+func TestMCPEventMemberOrderAndReplayIntegration(t *testing.T) {
+	f := newMCPWriteFixture(t)
+	want := []string{f.source.String(), f.derived.String()}
+	slices.Sort(want)
+	reversed := slices.Clone(want)
+	slices.Reverse(reversed)
+	assertMembers := func(stage string, node map[string]any) {
+		t.Helper()
+		got, _ := json.Marshal(node["member_refs"])
+		expected, _ := json.Marshal(want)
+		if !bytes.Equal(got, expected) {
+			t.Errorf("%s member_refs=%s want=%s", stage, got, expected)
+		}
+	}
+	create := f.args("node_create")
+	create["layer"], create["body"], create["member_refs"] = "event", "member order", reversed
+	create["event_start"], create["event_end"] = "2026-10-20T11:00:00Z", "2026-10-20T13:00:00Z"
+	created := f.call(t, "node_create", create, "")["node"].(map[string]any)
+	assertMembers("create", created)
+	update := f.args("node_update")
+	update["context_id"], update["expected_version"], update["member_refs"] = created["context_id"], created["version"], reversed
+	update["request_id"] = "member_order_201"
+	response := f.call(t, "node_update", update, "")
+	assertMembers("update", response["node"].(map[string]any))
+	handlers := newMCP07Reads(t, f, plan.AccountPlans{})
+	read := readMCP07(t, handlers, f.principal, "node_get", map[string]any{"graph_id": f.graph.String(), "context_id": created["context_id"], "hops": 0}, "")
+	assertMembers("get", read["contexts"].([]any)[0].(map[string]any))
+	before := mcpWriteFingerprint(t, f.pool)
+	result, err := callMCPWrite(t.Context(), f.other, f.principal, "node_update", update)
+	replay := writeContent(t, result, err, "")
+	assertMembers("replay", replay["node"].(map[string]any))
+	firstJSON, _ := json.Marshal(response, json.Deterministic(true))
+	replayJSON, _ := json.Marshal(replay, json.Deterministic(true))
+	if !bytes.Equal(firstJSON, replayJSON) || before != mcpWriteFingerprint(t, f.pool) {
+		t.Fatal("replay changed response or write state")
 	}
 }

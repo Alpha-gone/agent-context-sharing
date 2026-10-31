@@ -748,7 +748,7 @@ func attachReferences(value model.Context, derivedFrom, members []model.ID) mode
 	}
 	if value.Event != nil {
 		value.Event = new(*value.Event)
-		value.Event.MemberIDs = slices.Clone(members)
+		value.Event.MemberIDs = sortedMemberIDs(members)
 	}
 	return value
 }
@@ -935,11 +935,16 @@ func (s *Store) replaceEventMembers(ctx context.Context, tx pgx.Tx, graphID mode
 	return s.createReferenceEdges(ctx, tx, graphID, event, nil)
 }
 
+// 구성원은 집합이다. 비교·응답의 순서만 정규화하고 중복 입력은 숨기지 않는다.
+func sortedMemberIDs(ids []model.ID) []model.ID {
+	return slices.SortedFunc(slices.Values(ids), model.ID.Compare)
+}
+
 func eventProposalInputChanged(previous, next model.Context) bool {
 	if previous.Event == nil || next.Event == nil {
 		return false
 	}
-	if !slices.Equal(previous.Event.MemberIDs, next.Event.MemberIDs) || !previous.Event.Start.Equal(next.Event.Start) {
+	if !slices.Equal(sortedMemberIDs(previous.Event.MemberIDs), sortedMemberIDs(next.Event.MemberIDs)) || !previous.Event.Start.Equal(next.Event.Start) {
 		return true
 	}
 	if previous.Event.End == nil || next.Event.End == nil {

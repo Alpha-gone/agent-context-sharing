@@ -1023,9 +1023,23 @@ func (s *Store) findSource(ctx context.Context, graphID model.ID, locator string
 
 // findSourceWith는 같은 그래프와 locator를 모두 대조해 원천 중복을 찾는다.
 func (s *Store) findSourceWith(ctx context.Context, queryer cypherQueryer, graphID model.ID, locator string) (model.Context, error) {
-	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) +
-		" AND node.layer = 'source' AND node.source_ref_locator = " + cypherString(locator) + " RETURN node"
-	return s.contextFromCypher(ctx, queryer, graphID, query)
+	// 저장할 수 없는 문자열은 기존 Cypher null 비교와 같이 일치하지 않는다.
+	if !utf8.ValidString(locator) || strings.ContainsRune(locator, '\x00') {
+		return model.Context{}, ErrNotFound
+	}
+	var properties string
+	err := queryer.QueryRow(ctx, `SELECT properties::text FROM `+s.contextTable()+`
+		WHERE properties ->> 'graph_id'::text = $1
+		  AND properties ->> 'layer'::text = 'source'
+		  AND properties ->> 'source_ref_locator'::text = $2`, graphID.String(), locator).Scan(&properties)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Context{}, ErrNotFound
+		}
+		return model.Context{}, storageError("context_query", connectionError(ctx, "원천 조회", err))
+	}
+	// 고정 Context label의 property를 기존 정점 해석기로 검증한다.
+	return parseContext(`{"label":"Context","properties":`+properties+`}`, graphID)
 }
 
 // updateGraphActivity는 컨텍스트 변경과 같은 트랜잭션에서 저장 문자 수와 최근 활동을 갱신한다.

@@ -416,7 +416,7 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 | 활성 `Context` 정점의 `graph_id`, `context_id` | SQL 속성 표현식의 복합 부분 인덱스, `context_id`는 `C` 정렬 | 작은 홉 상한의 정렬된 후보 선택 |
 | 일곱 참조·관계 edge label | `(start_id, end_id)` 복합 인덱스 | 후보 관계 존재와 선택 노드 간선 조회 |
 | `PRECEDES`·`CAUSES`·`PART_OF` 간선의 `graph_id` | openCypher 속성 접근과 같은 `agtype` 표현식 인덱스 | 그래프 불변식 쓰기 검사의 순환 판정 |
-| `Context` 정점의 원천 `source_ref` | `graph_id`와 `source_ref_locator`의 부분 유일 인덱스 | 원천 중복 판정                             |
+| `Context` 정점의 원천 `source_ref` | `properties ->> 'graph_id'`와 `properties ->> 'source_ref_locator'`, `layer=source` 부분 유일 인덱스 | 생성 전 SQL 중복 조회·23505 재조회·동시 중복 거부                             |
 | `index_task`                       | `state`와 `next_attempt_at`                          | 색인 작업자의 대기 작업 조회               |
 | `index_task`                       | `context_id` 유일 인덱스                             | 컨텍스트당 한 작업과 등록 upsert           |
 | `operation_log`                    | `context_id`, `applied_at`                           | 복구 판정과 보존 기간 정리                 |
@@ -436,6 +436,8 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 벡터 인덱스는 HNSW로 고정한다. `hot`·`cold` 두 파티션에 동일한 모델·차원·거리 연산에 맞는 HNSW를 두며 부모 테이블을 통해 두 계층을 검색한다. 인덱스 종류를 배포 선택으로 열지 않는다. 재현율과 지연은 [SRS 검색 품질 평가](../SRS.md#검색-품질-평가)로 검증한다.
 
 `Context` 정점의 인덱스는 AGE가 만든 label 테이블에 건다. AGE의 label이 일반 PostgreSQL 테이블이므로 property를 꺼내는 표현식에 인덱스를 걸 수 있다. 다만 가변 길이 탐색이 이 인덱스를 쓰는지는 확인이 필요하며, [격리 강제의 구현](data.md#격리-강제의-구현)이 두는 응답 재검사는 인덱스 사용 여부와 무관하게 동작한다.
+
+원천 중복 판정은 `Context` label 테이블에서 `properties ->> 'graph_id'::text = $1`·`properties ->> 'source_ref_locator'::text = $2`와 `properties ->> 'layer'::text = 'source'`의 SQL 조건을 사용한다. 기존 `context_source_ref_idx`와 같은 표현식 및 부분 조건을 유지하여 생성 트랜잭션의 선조회와 23505 뒤 새 트랜잭션의 재조회에 함께 사용한다. `deleted_at`으로 거르지 않으므로 폐기된 원천도 같은 locator의 기존 원천으로 반환한다. SQL로 읽은 property는 기존 Context 해석·그래프/속성 검증을 거쳐 반환하며 조회를 위해 새 인덱스나 마이그레이션을 추가하지 않는다.
 
 `context_id`와 간선 `graph_id` 인덱스는 SQL의 `->>`가 아니라 openCypher 속성 접근이 번역되는 `agtype_access_operator(VARIADIC ARRAY[properties, '"<키>"'::agtype])` 표현식에 건다. 쓰기 검사는 openCypher로 읽으므로 `->>` 표현식 인덱스는 쓰이지 않는다. 인덱스가 없으면 쓰기 한 번마다 모든 그래프의 간선과 `Context` 정점 전체를 해시 조인해, 비용이 쓰기가 바꾼 범위가 아니라 데이터베이스 전체 크기에 비례한다. 2026-09-28 개발 데이터베이스의 정점 약 2만 개에서 이 조회는 21ms였고, 인덱스를 건 뒤에는 0.1ms 아래였다. 표현식 인덱스는 `ANALYZE` 전까지 표현식 통계가 없어 플래너가 선택도를 과대 추정하고 간선 label 전체를 해시 조인하므로, 인덱스를 만드는 마이그레이션이 같은 적용에서 통계를 모은다. 기존 세 순환 검사 label의 단일 `graph_id` 인덱스는 보존한다. 사건 관계의 식별자·정체성·목록·정리는 아래 복합 인덱스를 함께 사용한다.
 

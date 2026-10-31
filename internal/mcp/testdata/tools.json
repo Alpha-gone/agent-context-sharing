@@ -237,7 +237,7 @@
           },
           "derivation_kind": {
             "type": "string",
-            "description": "파생의 생성 목적. 생성 후 변경할 수 없다.",
+            "description": "derived 전용 필수 필드. 파생의 생성 목적이며 생성 후 변경할 수 없다.",
             "enum": [
               "proposition",
               "summary",
@@ -252,25 +252,25 @@
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
               "format": "uuid-v7"
             },
-            "description": "파생의 원천·파생 근거 UUIDv7. 1~100개이며 생성 후 불변이다.",
+            "description": "derived 전용 필수 필드. 이 파생이 근거로 삼는 기존 원천·파생 UUIDv7 1~100개이며 생성 후 불변이다. 근거 참조이며 사건 관계가 아니다.",
             "minItems": 1,
             "maxItems": 100
           },
           "event_end": {
             "type": "string",
-            "description": "사건 종료 UTC 시각. 생략하면 진행 중이다.",
+            "description": "event 전용 선택 필드. 사건 종료 UTC 시각이며 생략하면 진행 중이다.",
             "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
             "format": "date-time"
           },
           "event_start": {
             "type": "string",
-            "description": "사건 시작 UTC 시각. 구성원과의 시간 관계는 모델·저장소에서 검사한다.",
+            "description": "event 전용 필수 필드. 사건 시작 UTC 시각이다. 원천 구성원의 occurred_at은 event_start~event_end 범위 안이어야 하며 파생 구성원은 검사하지 않는다.",
             "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
             "format": "date-time"
           },
           "evidence_state": {
             "type": "string",
-            "description": "파생 근거 성격. 생성 후 불변이다.",
+            "description": "derived 전용 필수 필드. 파생 근거의 성격이며 생성 후 불변이다.",
             "enum": [
               "observation",
               "experience",
@@ -292,7 +292,7 @@
           },
           "layer": {
             "type": "string",
-            "description": "생성할 계층. source·derived·event에 따라 필요한 속성이 다르다.",
+            "description": "생성할 계층. source(원천 기록)는 source_ref·occurred_at·origin_kind, derived(파생)는 derived_from·derivation_kind·evidence_state, event(사건)는 member_refs·event_start가 필수다. 다른 계층의 필드는 거부한다.",
             "enum": [
               "source",
               "derived",
@@ -307,19 +307,19 @@
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
               "format": "uuid-v7"
             },
-            "description": "사건의 원천·파생 구성원 UUIDv7. 1~1000개이며 사건을 구성원으로 넣지 않는다.",
+            "description": "event 전용 필수 필드. 이 사건이 묶는 기존 원천·파생 구성원 UUIDv7 1~1000개다. 사건은 구성원이 될 수 없으며 사건 사이 연결은 relation_confirm으로 확정한다.",
             "minItems": 1,
             "maxItems": 1000
           },
           "occurred_at": {
             "type": "string",
-            "description": "원본 내용이 발생한 UTC 시각. 시스템 기록 시각과 구분한다.",
+            "description": "source 전용 필수 필드. 원본 내용이 발생한 UTC 시각이며 시스템 기록 시각과 구분한다.",
             "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
             "format": "date-time"
           },
           "origin_kind": {
             "type": "string",
-            "description": "원천 내용의 생성 주체. 생성 후 불변이다.",
+            "description": "source 전용 필수 필드. 원천 내용의 생성 주체이며 생성 후 불변이다.",
             "enum": [
               "user_utterance",
               "agent_output",
@@ -373,7 +373,7 @@
           },
           "supersedes_context_id": {
             "type": "string",
-            "description": "새 파생이 대체할 기존 파생 UUIDv7. 새 파생에서 이전 파생으로 대체 간선을 남긴다.",
+            "description": "derived 전용 선택 필드. 새 파생이 대체할 같은 계열의 기존 파생 UUIDv7이며 새 파생에서 이전 파생으로 대체 간선을 남긴다. 근거 목록인 derived_from과 별개다.",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
             "format": "uuid-v7"
           },
@@ -725,7 +725,7 @@
           },
           "direction": {
             "type": "string",
-            "description": "탐색 방향. 생략하면 양방향 both다.",
+            "description": "저장된 간선 방향 기준의 탐색 방향. out은 시작 노드에서 나가는 간선(파생→근거, 새 파생→이전 파생, 사건→구성원, 관계 시작→대상), in은 들어오는 간선을 따른다. 생략하면 양방향 both다.",
             "enum": [
               "in",
               "out",
@@ -740,7 +740,7 @@
           },
           "hops": {
             "type": "integer",
-            "description": "탐색 깊이. 0은 시작 노드만 반환하며 최대 홉 수는 계정 플랜이 제한한다.",
+            "description": "탐색 깊이(간선 수). 0은 시작 노드만 반환하며 최대 홉 수는 계정 플랜이 제한한다.",
             "minimum": 0
           },
           "traversal_filter": {
@@ -758,7 +758,7 @@
                 "relates_to"
               ]
             },
-            "description": "탐색할 확정 참조·사건 관계. 빈 배열·중복을 허용하며 최대 7개다.",
+            "description": "탐색할 확정 참조·사건 관계. 생략하거나 빈 배열이면 7종 모두를 탐색하며 중복을 허용하되 최대 7개다.",
             "maxItems": 7
           }
         },
@@ -820,7 +820,7 @@
           },
           "event_start": {
             "type": "string",
-            "description": "사건의 새 시작 UTC 시각.",
+            "description": "사건의 새 시작 UTC 시각. 원천 구성원의 occurred_at이 갱신된 시간 범위 안이어야 한다.",
             "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
             "format": "date-time"
           },
@@ -858,7 +858,7 @@
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
               "format": "uuid-v7"
             },
-            "description": "사건의 교체할 구성원 목록. 1~1000개다.",
+            "description": "사건의 교체할 원천·파생 구성원 UUIDv7 목록. 1~1000개이며 사건은 넣지 않는다.",
             "minItems": 1,
             "maxItems": 1000
           },
@@ -1231,7 +1231,7 @@
           },
           "relation_type": {
             "type": "string",
-            "description": "확정할 사건 관계 유형. 정체성은 그래프·유형·양 끝의 조합이며 재확정은 기존 현재 상태를 반환한다.",
+            "description": "확정할 사건 관계 유형과 방향. precedes는 앞선 사건→뒤따르는 사건, causes는 원인→결과, part_of는 부분→전체이며 relates_to는 방향이 없어 양 끝 순서를 정규화한다. 정체성은 그래프·유형·양 끝의 조합이며 재확정은 기존 현재 상태를 반환한다.",
             "enum": [
               "precedes",
               "causes",

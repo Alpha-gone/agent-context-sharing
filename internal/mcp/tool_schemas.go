@@ -48,7 +48,7 @@ func toolDefinitions() []*sdk.Tool {
 	updateGraph["request_id"] = requestKeySchema()
 
 	createNode := graph()
-	createNode["layer"] = enumSchema("생성할 계층. source·derived·event에 따라 필요한 속성이 다르다.", "source", "derived", "event")
+	createNode["layer"] = enumSchema("생성할 계층. source(원천 기록)는 source_ref·occurred_at·origin_kind, derived(파생)는 derived_from·derivation_kind·evidence_state, event(사건)는 member_refs·event_start가 필수다. 다른 계층의 필드는 거부한다.", "source", "derived", "event")
 	createNode["body"] = bodySchema()
 	actorFields(createNode)
 	createNode["source_ref"] = objectSchema(map[string]*jsonschema.Schema{
@@ -56,19 +56,19 @@ func toolDefinitions() []*sdk.Tool {
 		"locator": {Type: "string", Description: "scheme을 가진 원본 URI. 1~1024자이며 서버는 원본에 접근하지 않는다.", MinLength: new(1), MaxLength: new(1024), Pattern: "^[A-Za-z][A-Za-z0-9+.-]*:", Format: "uri"},
 	}, "channel", "locator")
 	createNode["source_ref"].Description = "원천의 자연 키인 출처 참조. 같은 그래프에서 같은 참조는 폐기·삭제 상태도 포함해 기존 원천을 반환한다. 삭제 시각과 creation_status=existing_deleted를 확인하며 자동 복구하지 않는다."
-	createNode["occurred_at"] = utcSchema("원본 내용이 발생한 UTC 시각. 시스템 기록 시각과 구분한다.", false)
-	createNode["origin_kind"] = enumSchema("원천 내용의 생성 주체. 생성 후 불변이다.", "user_utterance", "agent_output", "external_content")
-	createNode["derived_from"] = refsSchema("파생의 원천·파생 근거 UUIDv7. 1~100개이며 생성 후 불변이다.", 100)
-	createNode["derivation_kind"] = enumSchema("파생의 생성 목적. 생성 후 변경할 수 없다.", "proposition", "summary", "reflection")
+	createNode["occurred_at"] = utcSchema("source 전용 필수 필드. 원본 내용이 발생한 UTC 시각이며 시스템 기록 시각과 구분한다.", false)
+	createNode["origin_kind"] = enumSchema("source 전용 필수 필드. 원천 내용의 생성 주체이며 생성 후 불변이다.", "user_utterance", "agent_output", "external_content")
+	createNode["derived_from"] = refsSchema("derived 전용 필수 필드. 이 파생이 근거로 삼는 기존 원천·파생 UUIDv7 1~100개이며 생성 후 불변이다. 근거 참조이며 사건 관계가 아니다.", 100)
+	createNode["derivation_kind"] = enumSchema("derived 전용 필수 필드. 파생의 생성 목적이며 생성 후 변경할 수 없다.", "proposition", "summary", "reflection")
 	createNode["summary_scope"] = enumSchema("summary일 때만 필수인 요약 범위. 다른 파생에는 지정하지 않는다.", "local", "global")
-	createNode["evidence_state"] = enumSchema("파생 근거 성격. 생성 후 불변이다.", "observation", "experience", "opinion")
+	createNode["evidence_state"] = enumSchema("derived 전용 필수 필드. 파생 근거의 성격이며 생성 후 불변이다.", "observation", "experience", "opinion")
 	createNode["confidence_state"] = enumSchema("opinion일 때만 필수인 신뢰 상태. 다른 파생에는 지정하지 않는다.", "supported", "uncertain", "disputed")
 	createNode["valid_from"] = utcSchema("파생의 유효 시작 UTC 시각. 생략하면 열린 시작이다.", false)
 	createNode["valid_to"] = utcSchema("파생의 유효 종료 UTC 시각. 생략하면 계속 유효하다.", false)
-	createNode["supersedes_context_id"] = idSchema("새 파생이 대체할 기존 파생 UUIDv7. 새 파생에서 이전 파생으로 대체 간선을 남긴다.")
-	createNode["member_refs"] = refsSchema("사건의 원천·파생 구성원 UUIDv7. 1~1000개이며 사건을 구성원으로 넣지 않는다.", 1000)
-	createNode["event_start"] = utcSchema("사건 시작 UTC 시각. 구성원과의 시간 관계는 모델·저장소에서 검사한다.", false)
-	createNode["event_end"] = utcSchema("사건 종료 UTC 시각. 생략하면 진행 중이다.", false)
+	createNode["supersedes_context_id"] = idSchema("derived 전용 선택 필드. 새 파생이 대체할 같은 계열의 기존 파생 UUIDv7이며 새 파생에서 이전 파생으로 대체 간선을 남긴다. 근거 목록인 derived_from과 별개다.")
+	createNode["member_refs"] = refsSchema("event 전용 필수 필드. 이 사건이 묶는 기존 원천·파생 구성원 UUIDv7 1~1000개다. 사건은 구성원이 될 수 없으며 사건 사이 연결은 relation_confirm으로 확정한다.", 1000)
+	createNode["event_start"] = utcSchema("event 전용 필수 필드. 사건 시작 UTC 시각이다. 원천 구성원의 occurred_at은 event_start~event_end 범위 안이어야 하며 파생 구성원은 검사하지 않는다.", false)
+	createNode["event_end"] = utcSchema("event 전용 선택 필드. 사건 종료 UTC 시각이며 생략하면 진행 중이다.", false)
 	creation := objectSchema(createNode, "graph_id", "layer", "body", "agent_id")
 	sourceFields := []string{"source_ref", "occurred_at", "origin_kind"}
 	derivedFields := []string{"derived_from", "derivation_kind", "summary_scope", "evidence_state", "confidence_state", "valid_from", "valid_to", "supersedes_context_id"}
@@ -84,9 +84,9 @@ func toolDefinitions() []*sdk.Tool {
 	}
 
 	getNode := node()
-	getNode["hops"] = integerSchema("탐색 깊이. 0은 시작 노드만 반환하며 최대 홉 수는 계정 플랜이 제한한다.", 0)
-	getNode["direction"] = enumSchema("탐색 방향. 생략하면 양방향 both다.", "in", "out", "both")
-	getNode["traversal_filter"] = enumArray("탐색할 확정 참조·사건 관계. 빈 배열·중복을 허용하며 최대 7개다.", 7, "derived_from", "supersedes", "member_refs", "precedes", "causes", "part_of", "relates_to")
+	getNode["hops"] = integerSchema("탐색 깊이(간선 수). 0은 시작 노드만 반환하며 최대 홉 수는 계정 플랜이 제한한다.", 0)
+	getNode["direction"] = enumSchema("저장된 간선 방향 기준의 탐색 방향. out은 시작 노드에서 나가는 간선(파생→근거, 새 파생→이전 파생, 사건→구성원, 관계 시작→대상), in은 들어오는 간선을 따른다. 생략하면 양방향 both다.", "in", "out", "both")
+	getNode["traversal_filter"] = enumArray("탐색할 확정 참조·사건 관계. 생략하거나 빈 배열이면 7종 모두를 탐색하며 중복을 허용하되 최대 7개다.", 7, "derived_from", "supersedes", "member_refs", "precedes", "causes", "part_of", "relates_to")
 	updateNode := node()
 	actorFields(updateNode)
 	updateNode["expected_version"] = versionSchema()
@@ -95,8 +95,8 @@ func toolDefinitions() []*sdk.Tool {
 	updateNode["confidence_state"] = enumSchema("의견 파생의 새 신뢰 상태. 기존 계층·의견 여부는 모델에서 검사한다.", "supported", "uncertain", "disputed")
 	updateNode["valid_from"] = utcSchema("파생의 새 유효 시작. null이면 열린 시작으로 비운다.", true)
 	updateNode["valid_to"] = utcSchema("파생의 새 유효 종료. null이면 열린 종료로 비운다.", true)
-	updateNode["member_refs"] = refsSchema("사건의 교체할 구성원 목록. 1~1000개다.", 1000)
-	updateNode["event_start"] = utcSchema("사건의 새 시작 UTC 시각.", false)
+	updateNode["member_refs"] = refsSchema("사건의 교체할 원천·파생 구성원 UUIDv7 목록. 1~1000개이며 사건은 넣지 않는다.", 1000)
+	updateNode["event_start"] = utcSchema("사건의 새 시작 UTC 시각. 원천 구성원의 occurred_at이 갱신된 시간 범위 안이어야 한다.", false)
 	updateNode["event_end"] = utcSchema("사건의 새 종료 UTC 시각. null이면 진행 중으로 비운다.", true)
 	updating := objectSchema(updateNode, "graph_id", "context_id", "expected_version", "agent_id")
 	updating.AllOf = []*jsonschema.Schema{conditional("management_action", "keep", nil, []string{"body", "confidence_state", "valid_from", "valid_to", "member_refs", "event_start", "event_end"})}
@@ -114,7 +114,7 @@ func toolDefinitions() []*sdk.Tool {
 	relations["cursor"], relations["page_size"] = cursorSchema(), integerSchema("양수 페이지 크기. 생략하면 계정 플랜 기본값이며 상한도 플랜이 정한다.", 1)
 	confirm := graph()
 	actorFields(confirm)
-	confirm["relation_type"] = enumSchema("확정할 사건 관계 유형. 정체성은 그래프·유형·양 끝의 조합이며 재확정은 기존 현재 상태를 반환한다.", "precedes", "causes", "part_of", "relates_to")
+	confirm["relation_type"] = enumSchema("확정할 사건 관계 유형과 방향. precedes는 앞선 사건→뒤따르는 사건, causes는 원인→결과, part_of는 부분→전체이며 relates_to는 방향이 없어 양 끝 순서를 정규화한다. 정체성은 그래프·유형·양 끝의 조합이며 재확정은 기존 현재 상태를 반환한다.", "precedes", "causes", "part_of", "relates_to")
 	confirm["from_context_id"] = idSchema("같은 그래프의 활성 시작 사건(layer=event) UUIDv7. precedes·causes에서는 대상보다 늦게 시작할 수 없고 part_of에서는 부분 사건이다.")
 	confirm["to_context_id"] = idSchema("같은 그래프의 활성 대상 사건(layer=event) UUIDv7. part_of에서는 시작 사건의 기간을 포함하는 전체 사건이다.")
 	discardRelation := graph()

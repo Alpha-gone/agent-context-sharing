@@ -348,16 +348,30 @@ func convertHippoRAGSet(sourcePath, name string, limit int) (contextSet, querySe
 		if len(supporting) == 1 {
 			useCase = useCaseFact
 		}
+		// 원 질문과 하위 홉은 하나의 독립 과업이며 데이터셋 사이의 같은 ID는 구분한다.
+		digest := sha256.Sum256([]byte(fmt.Sprintf("hipporag2:%q:%q", name, question.ID)))
+		unit := "hippo_" + hex.EncodeToString(digest[:])
 		queries.Queries = append(queries.Queries, querySpec{
-			ID:          question.ID,
-			UseCase:     useCase,
-			WorkContext: question.Question,
-			Answers:     supporting,
+			ID:              question.ID,
+			IndependentUnit: unit,
+			UseCase:         useCase,
+			WorkContext:     question.Question,
+			Answers:         supporting,
 		})
-		queries.Queries = append(queries.Queries, factQueries(question, byIndex)...)
+		queries.Queries = append(queries.Queries, factQueries(question, byIndex, unit)...)
 	}
 	if len(queries.Queries) == 0 {
 		return contextSet{}, querySet{}, fmt.Errorf("%s: 정답을 가진 질의가 없다", sourcePath)
+	}
+	ids := make(map[string]struct{}, len(queries.Queries))
+	for _, query := range queries.Queries {
+		if err := trialSafeCode(query.ID); err != nil {
+			return contextSet{}, querySet{}, fmt.Errorf("HippoRAG 질의 ID의 manifest 코드 형식·길이 오류: %w", err)
+		}
+		if _, exists := ids[query.ID]; exists {
+			return contextSet{}, querySet{}, fmt.Errorf("HippoRAG 질의 ID 중복")
+		}
+		ids[query.ID] = struct{}{}
 	}
 	return contexts, queries, nil
 }
@@ -367,7 +381,7 @@ func convertHippoRAGSet(sourcePath, name string, limit int) (contextSet, querySe
 // `#1`처럼 앞선 답을 가리키는 자리 표시가 있는 하위 질의는 그 자체로 읽을 수 없으므로
 // 버린다. 자리 표시를 앞 단계의 답으로 채우면 정답을 질의문에 넣는 셈이 되어 그 홉을
 // 검색이 아니라 주입으로 푼다.
-func factQueries(question hippoQuestion, byIndex map[int]string) []querySpec {
+func factQueries(question hippoQuestion, byIndex map[int]string, unit string) []querySpec {
 	steps := make([]querySpec, 0, len(question.Decomposition))
 	for order, step := range question.Decomposition {
 		if step.SupportIndex == nil || strings.Contains(step.Question, "#") {
@@ -378,10 +392,11 @@ func factQueries(question hippoQuestion, byIndex map[int]string) []querySpec {
 			continue
 		}
 		steps = append(steps, querySpec{
-			ID:          fmt.Sprintf("%s#hop%d", question.ID, order+1),
-			UseCase:     useCaseFact,
-			WorkContext: step.Question,
-			Answers:     []string{key},
+			ID:              fmt.Sprintf("%s.hop%d", question.ID, order+1),
+			IndependentUnit: unit,
+			UseCase:         useCaseFact,
+			WorkContext:     step.Question,
+			Answers:         []string{key},
 		})
 	}
 	return steps

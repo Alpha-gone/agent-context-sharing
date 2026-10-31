@@ -465,3 +465,11 @@
 
 - 조회일 2026-10-31 KST. Go 1.27.1 SDK `src/testing/synctest/synctest.go`와 [testing/synctest](https://pkg.go.dev/testing/synctest)의 Test·Wait·가상 시간·격리 규칙을 확인했다. 각 하위 사례를 별도 bubble에서 실행하고, T.Run·T.Parallel은 bubble 안에서 호출하지 않는다. 채널 대기·타이머와 달리 sync.Mutex 대기는 durably blocked가 아니라는 제약도 적용했다. #174 취소·상한 시험의 벽시계 대기를 없애고 연속 적재 취소 뒤 남은 예산을 결정적으로 대조한다.
 - SDK `src/context/context.go`의 [Context](https://pkg.go.dev/context#Context)·WithTimeout 계약으로 부모 마감 우선과 비동기 Done 통지를 확인했다. 재시도 전 마감 시각도 확인하여 타이머 콜백이 지연돼도 소진된 예산으로 새 적재를 시작하지 않는다. [토큰 검증](sdd/authentication.md#토큰-검증)은 각 캐시 미스의 대기·적재·재시도를 합산하는 5초 예산으로 변경했으며 캐시 적중에는 타이머를 추가하지 않는다. [후속 검토](reviews/2026-10-31-issue-174-budget.md)에 재현·반복 시험과 한계를 기록했다.
+
+
+### 2026-10-31 #196 HippoRAG 독립 과업 코드
+
+- 조회 시각: 2026-10-31 18:04 KST.
+- 근거: 적용 SDK Go 1.27.1의 `go doc crypto/sha256.Sum256`과 `src/fmt/doc.go`의 `%q` 문자열 형식 설명을 확인했다. 공식 API: [crypto/sha256.Sum256](https://pkg.go.dev/crypto/sha256@go1.27.1#Sum256), [fmt](https://pkg.go.dev/fmt@go1.27.1).
+- 확인: `Sum256`은 입력 바이트의 SHA-256을 반환하고 문자열 `%q`는 Go 구문에 맞게 이스케이프한 큰따옴표 문자열을 만든다. 데이터셋명과 원 질문 ID를 각각 인용해 경계가 구분되는 입력을 만든다.
+- 반영: [반복·통계](sdd/evaluation.md#반복통계와-실행-순서)의 원 질문·하위 홉 공통 비식별 코드와 [검토](reviews/2026-10-31-issue-196.md). 해시는 익명성 보장이나 공개 데이터의 효과 실증을 뜻하지 않는다.

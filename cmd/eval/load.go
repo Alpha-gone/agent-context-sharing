@@ -48,13 +48,17 @@ func withEvaluationGraph(ctx context.Context, database *store.Store, worker *ind
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err != nil {
-			trialFailed(ctx, "measurement")
-		}
-		err = errors.Join(err, dropGraph(ctx, database, graph), ctx.Err())
-	}()
+	defer releaseEvaluationGraph(ctx, database, graph, &err)
 	return run(graph)
+}
+
+// releaseEvaluationGraph는 측정 실패를 정리 단계보다 먼저 기록한 뒤 평가 그래프를 정리하고
+// 정리 실패와 취소를 원래 오류에 합친다. 그래프를 직접 준비하는 실행 경로도 같은 경계를 쓴다.
+func releaseEvaluationGraph(ctx context.Context, database *store.Store, graph loadedGraph, err *error) {
+	if *err != nil {
+		trialFailed(ctx, "measurement")
+	}
+	*err = errors.Join(*err, dropGraph(ctx, database, graph), ctx.Err())
 }
 
 // dropGraph는 취소와 독립된 제한 시간에 평가 그래프를 소프트 삭제하고 실패를 반환한다.

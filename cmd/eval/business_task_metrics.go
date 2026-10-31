@@ -262,7 +262,8 @@ func judgeBusinessTasks(input businessTaskInput, entry businessTaskComparison) (
 		return "deferred", "synthetic_trace"
 	}
 	for _, metric := range entry.Metrics {
-		if metric.Samples != entry.IndependentUnits {
+		// 재색인 시간 생략(-1)은 허용 입력이며 보류 사유가 아니다. 표본 수는 결과에 그대로 남는다.
+		if metric.Samples != entry.IndependentUnits && metric.Metric != "reindex_ms" {
 			return "deferred", "usage_or_cost_unmeasured"
 		}
 		if input.Experiment == "reduction" && metric.Metric == "evidence_available" && (metric.Baseline < 1 || metric.Current < 1) {

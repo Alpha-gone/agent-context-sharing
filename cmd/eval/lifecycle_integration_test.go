@@ -206,3 +206,26 @@ func TestEvaluationPreparedGroupsIntegration(t *testing.T) {
 		})
 	}
 }
+
+// TestEvaluationMeasurementFailureStageIntegration은 그래프를 직접 준비하는 적대·지속 평가와
+// 같은 정리 경계에서 측정 실패가 cleanup이 아니라 measurement 단계로 보고되는지 확인한다.
+func TestEvaluationMeasurementFailureStageIntegration(t *testing.T) {
+	database, worker, connection := evalDatabase(t, nil)
+	set := lifecycleInput(t)
+	progress := newTrialProgress(manifestExecution{TimeoutMS: 30000, RequestLimit: 100, IndexRoundLimit: 100})
+	ctx := context.WithValue(t.Context(), trialContextKey{}, progress)
+	graph, err := prepareEvaluationGraph(ctx, database, worker, set, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := errors.New("measurement failure")
+	err = func() (err error) {
+		defer releaseEvaluationGraph(ctx, database, graph, &err)
+		return marker
+	}()
+	snapshot := progress.snapshot()
+	if !errors.Is(err, marker) || snapshot.Stage != "measurement" || snapshot.Cleanup != "completed" || snapshot.ActiveGraphs != 0 {
+		t.Fatalf("측정 실패 보고 = %v, %+v", err, snapshot)
+	}
+	requireEvaluationDeleted(t, connection, set.Version)
+}

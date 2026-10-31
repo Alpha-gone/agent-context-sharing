@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -69,11 +71,28 @@ type trialError struct {
 	Cause error
 }
 
-func (e *trialError) Error() string          { return "평가 실행 실패: " + e.Code }
+// Error는 로컬 실행 로그에 원인 코드와 함께 내부 원인을 남긴다. 공개 failure.json은
+// 원문 오류 없이 Code만 기록한다.
+func (e *trialError) Error() string {
+	if e.Cause == nil {
+		return "평가 실행 실패: " + e.Code
+	}
+	return "평가 실행 실패: " + e.Code + ": " + e.Cause.Error()
+}
 func (e *trialError) Unwrap() error          { return e.Cause }
 func failTrial(code string, err error) error { return &trialError{code, err} }
 
-func runManifestTrial(manifestPath, root string, bindings trialBindings, prepared string) (err error) {
+func runManifestTrial(manifestPath, root string, bindings trialBindings, prepared string) error {
+	// 입력 스냅숏 복사부터 결과 공개까지 종료 신호를 받아 두어, 신호가 와도 잠금과 비공개
+	// 입력 사본을 정리하는 finish를 거친 뒤 종료한다. 실행 단계는 trialContext가 같은 신호로
+	// 측정을 취소한다.
+	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runManifestTrialContext(signals, manifestPath, root, bindings, prepared)
+}
+
+// runManifestTrialContext는 signals가 끝나면 다음 단계로 넘어가지 않고 정리·실패 보고를 거친다.
+func runManifestTrialContext(signals context.Context, manifestPath, root string, bindings trialBindings, prepared string) (err error) {
 	m, err := loadManifest(manifestPath)
 	if err != nil {
 		return failTrial("manifest_invalid", err)
@@ -90,6 +109,9 @@ func runManifestTrial(manifestPath, root string, bindings trialBindings, prepare
 	if err = trial.bindInputs(bindings, prepared); err != nil {
 		return failTrial("input_mismatch", err)
 	}
+	if err = signals.Err(); err != nil {
+		return failTrial("cancelled", err)
+	}
 	trial.Progress.setStage("configuration")
 	args, err := trial.arguments(prepared != "")
 	if err != nil {
@@ -98,6 +120,9 @@ func runManifestTrial(manifestPath, root string, bindings trialBindings, prepare
 	trial.Progress.setStage("execution")
 	if err = runEvaluation(args, trial.Progress); err != nil {
 		return failTrial("execution_failed", err)
+	}
+	if err = signals.Err(); err != nil {
+		return failTrial("cancelled", err)
 	}
 	return nil
 }
@@ -109,12 +134,14 @@ func newManifestTrial(m executionManifest, root string) (*manifestTrial, error) 
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, failTrial("output_unavailable", err)
 	}
-	if _, err := os.Lstat(filepath.Join(root, m.TrialID)); !os.IsNotExist(err) {
-		return nil, failTrial("trial_id_exists", err)
-	}
+	// 예약을 먼저 얻은 뒤 기존 결과를 확인한다. 확인 뒤 예약하면 그 사이 같은 ID의 다른
+	// 실행이 공개·해제한 경우를 측정이 끝난 뒤의 배타적 rename에서야 알게 된다.
 	lock := filepath.Join(root, "."+m.TrialID+".lock")
 	if err := os.Mkdir(lock, 0700); err != nil {
 		return nil, failTrial("trial_id_locked", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, m.TrialID)); !os.IsNotExist(err) {
+		return nil, errors.Join(failTrial("trial_id_exists", err), os.Remove(lock))
 	}
 	stage, err := os.MkdirTemp(root, "."+m.TrialID+"-")
 	if err != nil {
@@ -314,7 +341,9 @@ func (t *manifestTrial) finish(cause error) (err error) {
 		if errors.Is(cause, context.Canceled) {
 			code = "cancelled"
 		}
-		if errors.Is(cause, context.DeadlineExceeded) {
+		// 제공자 HTTP timeout도 DeadlineExceeded를 감싸므로 시험 기한이 실제로 지난 때만
+		// manifest timeout_ms 소진으로 분류한다.
+		if errors.Is(cause, context.DeadlineExceeded) && !time.Now().Before(t.Progress.deadline) {
 			code = "deadline_exceeded"
 		}
 		failure := struct {

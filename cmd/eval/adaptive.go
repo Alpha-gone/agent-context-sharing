@@ -297,24 +297,47 @@ func qualityOf(sample queryMetrics) []float64 {
 }
 
 // outcomes는 반복 회차를 질의별로 평균낸다. 경로는 검색이 결정적이므로 첫 회차 값을 쓴다.
+// 품질 지표는 정의된 회차 값만 평균하고, 어느 회차에서도 정의되지 않으면 미정의 값으로 둔다.
+// 미정의 표식 -1을 평균에 섞으면 정의된 낮은 값이나 음수 평균이 된다.
 func outcomes(runs []runMetrics, queries querySet) map[string]queryOutcome {
 	result := make(map[string]queryOutcome, len(queries.Queries))
+	qualities := make(map[string][][]float64, len(queries.Queries))
 	for _, run := range orderedRuns(runs) {
 		for _, sample := range run.QuerySamples {
 			current, present := result[sample.ID]
 			if !present {
-				current = queryOutcome{useCase: sample.UseCase, route: sample.Route, quality: make([]float64, len(qualityOf(sample)))}
+				current = queryOutcome{useCase: sample.UseCase, route: sample.Route}
 			}
-			for index, value := range qualityOf(sample) {
-				current.quality[index] += value / float64(len(runs))
-			}
+			qualities[sample.ID] = append(qualities[sample.ID], qualityOf(sample))
 			current.chars += float64(sample.BudgetUsed) / float64(len(runs))
 			current.latency += sample.LatencyMS / float64(len(runs))
 			current.latencies = append(current.latencies, sample.LatencyMS)
 			result[sample.ID] = current
 		}
 	}
+	for id, current := range result {
+		current.quality = definedQualityMeans(qualities[id])
+		result[id] = current
+	}
 	return result
+}
+
+// definedQualityMeans는 회차별 품질 지표를 자리마다 정의된 값만으로 평균낸다.
+func definedQualityMeans(samples [][]float64) []float64 {
+	if len(samples) == 0 {
+		return nil
+	}
+	means := make([]float64, len(samples[0]))
+	for index := range means {
+		values := []float64{}
+		for _, sample := range samples {
+			if index < len(sample) && validMetric(sample[index]) {
+				values = append(values, sample[index])
+			}
+		}
+		means[index] = mean(values)
+	}
+	return means
 }
 
 // compareOutcome은 품질이 높고 문자 수와 지연이 작은 쪽을 앞에 둔다. 지연 차이가 잡음 안이면

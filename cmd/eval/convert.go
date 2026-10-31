@@ -10,6 +10,7 @@ import (
 	json "encoding/json/v2"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -415,14 +416,63 @@ func contextKey(body string) string {
 	return "p_" + hex.EncodeToString(digest[:6])
 }
 
-// writeDataset은 변환 결과를 읽기 좋은 JSON으로 남긴다.
+// writeDataset은 변환 결과를 읽기 좋은 JSON으로 남긴다. 임시 파일을 다 쓴 뒤 바꿔 기존
+// 파일이 쓰다 만 상태로 남지 않게 한다.
 func writeDataset(path string, value any) error {
+	temporary, err := stageDataset(path, value)
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(temporary)
+		return fmt.Errorf("데이터셋 교체: %w", err)
+	}
+	return nil
+}
+
+// stageDataset은 대상과 같은 디렉터리의 임시 파일에 JSON을 쓰고 동기화한 경로를 돌려준다.
+func stageDataset(path string, value any) (_ string, err error) {
 	raw, err := json.Marshal(value, json.Deterministic(true))
 	if err != nil {
-		return fmt.Errorf("데이터셋 직렬화: %w", err)
+		return "", fmt.Errorf("데이터셋 직렬화: %w", err)
 	}
-	if err := os.WriteFile(path, append(raw, '\n'), 0o644); err != nil {
-		return fmt.Errorf("데이터셋 기록: %w", err)
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return "", fmt.Errorf("데이터셋 기록: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = file.Close()
+			_ = os.Remove(file.Name())
+		}
+	}()
+	if _, err := file.Write(append(raw, '\n')); err != nil {
+		return "", fmt.Errorf("데이터셋 기록: %w", err)
+	}
+	if err := file.Chmod(0o644); err != nil {
+		return "", fmt.Errorf("데이터셋 기록: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return "", fmt.Errorf("데이터셋 기록: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("데이터셋 기록: %w", err)
+	}
+	return file.Name(), nil
+}
+
+// distinctOutputPaths는 변환 출력 경로가 서로 다른 파일을 가리키는지 확인한다.
+func distinctOutputPaths(paths []string) error {
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("변환 출력 경로 해석: %w", err)
+		}
+		if seen[absolute] {
+			return fmt.Errorf("변환 출력 경로가 중복된다")
+		}
+		seen[absolute] = true
 	}
 	return nil
 }

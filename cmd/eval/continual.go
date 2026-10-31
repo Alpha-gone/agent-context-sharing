@@ -3,7 +3,6 @@ package main
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -130,7 +129,7 @@ func runContinualScenario(ctx context.Context, database *store.Store, worker *in
 	if err != nil {
 		return continualRun{}, err
 	}
-	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph), ctx.Err()) }()
+	defer releaseEvaluationGraph(ctx, database, graph, &err)
 	service, err := search.New(database, worker, search.Config{
 		Execution: settings.execution, CandidateLimit: settings.candidateLimit,
 		SemanticThreshold: settings.semanticThreshold, FoldThreshold: settings.foldThreshold,
@@ -371,7 +370,13 @@ func applyContinualMutation(ctx context.Context, database *store.Store, graph lo
 			return err
 		}
 		value.Version++
-		value.Derived.ValidTo = new(time.Now().UTC().Add(-time.Hour))
+		// 의미·키워드 채널의 기본 유효성은 실제 현재 시각으로, 직접 조회 판정은 고정 조회 시각으로
+		// 본다. 둘 중 이른 시각보다 앞서 만료시켜 실행 날짜와 무관하게 같은 판정을 낸다.
+		expiresAt := time.Now().UTC()
+		if continualAsOf.Before(expiresAt) {
+			expiresAt = continualAsOf
+		}
+		value.Derived.ValidTo = new(expiresAt.Add(-time.Hour))
 		if _, err := database.UpdateContextWithOperation(ctx, graph.GraphID, value.Version-1, value, operation(store.OperationUpdate, id, scenario.judgments[0]), store.WriteLimits{}); err != nil {
 			return err
 		}

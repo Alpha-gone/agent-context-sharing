@@ -22,8 +22,9 @@ const reindexProgressInterval = time.Minute
 
 // 대기 작업이 없는 회차의 간격이다. 회차마다 트랜잭션을 열어 대기 작업을 찾으므로 간격이
 // 고정이면 유휴 상태에서도 쉬지 않고 초당 한 트랜잭션을 낸다. 빈 회차가 이어지면 간격을 두
-// 배로 늘리고 작업을 처리한 회차에서 최소값으로 되돌려, 유휴 부하를 줄이면서 작업이 들어온
-// 뒤의 처리 지연은 idleIntervalMax 안으로 묶는다.
+// 배로 늘리고 작업을 처리한 회차 뒤에는 기다리지 않고 다음 작업을 찾는다. 유휴 부하를
+// 줄이면서 처리량을 조회 간격에 묶지 않고, 작업이 들어온 뒤의 시작 지연은 idleIntervalMax
+// 안으로 묶는다.
 const (
 	idleIntervalMin = time.Second
 	idleIntervalMax = 30 * time.Second
@@ -52,6 +53,10 @@ func (error DimensionError) Error() string {
 // 상한이 없으면 잘못 설정된 제공자가 보낸 큰 응답이 작업자와 검색 경로의 메모리를 그대로
 // 늘린다. HNSW가 허용하는 벡터를 넉넉히 담을 수 있는 크기로 둔다.
 const maxEmbeddingResponseBytes = 8 << 20
+
+// maxDiscardedResponseBytes는 2xx가 아닌 응답에서 연결 재사용을 위해 비울 최대 본문 크기다.
+// 넘으면 연결을 닫고, 큰 오류 본문을 읽느라 작업 회차가 늘어지지 않게 한다.
+const maxDiscardedResponseBytes = 64 << 10
 
 // Worker는 짧은 확보·저장 트랜잭션 사이에서 제공자를 호출하는 비동기 소비자다.
 type Worker struct {
@@ -192,10 +197,17 @@ func (worker *Worker) consume(ctx context.Context, once func(context.Context) (b
 		if err != nil {
 			worker.logger.ErrorContext(ctx, "색인 작업 처리 실패", "reason_code", "index_cycle_failed")
 		}
-		if processed {
+		switch {
+		case processed && err == nil:
+			// 대기 작업이 남아 있을 수 있으므로 바로 다음 작업을 찾는다. 이어지는 빈 회차는
+			// 최소 간격부터 다시 늘린다.
+			interval = 0
+			continue
+		case processed:
+			// 같은 오류로 쉬지 않고 재시도하지 않도록 최소 간격을 둔다.
 			interval = idleIntervalMin
-		} else {
-			interval = min(interval*2, idleIntervalMax)
+		default:
+			interval = max(idleIntervalMin, min(interval*2, idleIntervalMax))
 		}
 		timer.Reset(interval)
 		select {
@@ -203,6 +215,21 @@ func (worker *Worker) consume(ctx context.Context, once func(context.Context) (b
 			return
 		case <-timer.C:
 		}
+	}
+}
+
+// providerOutcome은 문서 임베딩 호출 결과를 진단 결과·원인·수준으로 분류한다. 작업 context가
+// 끝나 끊긴 호출은 제공자 장애가 아니라 취소·마감이다.
+func providerOutcome(ctx context.Context, err error) (result, reason, level string) {
+	switch {
+	case err == nil:
+		return "completed", "completed", "INFO"
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return "failed", "deadline_exceeded", "INFO"
+	case ctx.Err() != nil:
+		return "failed", "canceled", "INFO"
+	default:
+		return "failed", "provider_unavailable", "WARN"
 	}
 }
 
@@ -253,11 +280,16 @@ func (worker *Worker) runOnce(ctx context.Context, scope model.ID) (bool, error)
 		if providerWideFailure(ctx, status, err) {
 			worker.blockProvider(ctx, status, err)
 		}
-		result, reason, level := "completed", "completed", "INFO"
-		if err != nil {
-			result, reason, level = "failed", "provider_unavailable", "WARN"
-		}
+		result, reason, level := providerOutcome(ctx, err)
+		// 종료·취소로 끊긴 호출은 제공자 장애가 아니다. 확보 세대는 리스 만료 뒤 다시 집힌다.
+		canceled := err != nil && ctx.Err() != nil
 		diagnostic.Observe(worker.diagnostics, ctx, level, "provider", result, reason, true, diagnostic.Fields{Identity: diagnostic.IdentityFields{GraphID: task.GraphID.String(), ContextID: task.ContextID.String()}, Index: diagnostic.IndexFields{TaskID: task.ID.String(), Generation: uint64(task.Generation.UnixMicro()), Attempts: uint64(task.Attempts), ProviderStatus: status, LatencyMS: uint64(time.Since(started).Milliseconds())}})
+		if canceled {
+			worker.logger.InfoContext(ctx, "임베딩 제공자 호출 취소",
+				"context_id", task.ContextID.String(), "graph_id", task.GraphID.String(),
+				"job_id", task.ID.String(), "correlation_id", task.CorrelationID, "reason_code", reason)
+			return store.IndexTaskResult{Failure: "색인 작업 취소", Retryable: true}
+		}
 		if err != nil {
 			// 사유를 그대로 남긴다. 고정 문구만 남기면 「색인 재시도」가 운영자 개입이
 			// 필요하다고 한 차원 불일치를 실패한 행에서 구분할 수 없다.

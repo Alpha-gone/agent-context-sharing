@@ -96,11 +96,11 @@ func PrepareFiles(ctx context.Context, directory string, source Source) (_ *File
 	if err != nil {
 		return nil, err
 	}
-	if err = unix.Flock(int(files.writerLock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		return nil, fileFailure("instance_busy", err)
-	}
 	files.storageLock, err = openRegular(files.root, storageLockName, true)
 	if err != nil {
+		return nil, err
+	}
+	if err = files.lockWriter(ctx); err != nil {
 		return nil, err
 	}
 	err = files.withStorageLock(ctx, func() error {
@@ -314,6 +314,33 @@ func (files *Files) checkBindings() error {
 		if err := sameEntry(files.slot, name, file, false); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// lockWriter는 슬롯의 기록자 잠금을 즉시 얻는다. 다른 instance의 비활성 슬롯 정리는 저장소
+// 잠금을 쥔 동안에만 이 잠금을 잠시 쥐므로, 사용 중이면 저장소 잠금을 얻은 뒤 한 번 더
+// 시도해 정리 중인 슬롯과 같은 instance_id의 실제 동시 기동을 구분한다. 실행 중인 기록자는
+// 저장소 잠금과 무관하게 수명 동안 이 잠금을 유지하므로 다시 시도해도 instance_busy다.
+func (files *Files) lockWriter(ctx context.Context) error {
+	err := unix.Flock(int(files.writerLock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, unix.EWOULDBLOCK) {
+		return fileFailure("instance_busy", err)
+	}
+	lockCtx, cancel := context.WithTimeout(ctx, storageLockBudget)
+	defer cancel()
+	if err := files.lockStorage(lockCtx); err != nil {
+		return err
+	}
+	err = unix.Flock(int(files.writerLock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	if unlockErr := files.unlockStorage(); unlockErr != nil {
+		return errors.Join(fileFailure("storage_unlock_failed", unlockErr), err)
+	}
+	if err != nil {
+		return fileFailure("instance_busy", err)
 	}
 	return nil
 }

@@ -429,3 +429,9 @@
 
 - 조회일 2026-10-31 KST. [PostgreSQL 18 현재 날짜/시각](https://www.postgresql.org/docs/18/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT)에서 `clock_timestamp()`는 한 SQL 문 안에서도 바뀌는 실제 현재 시각이고, `now()`는 트랜잭션 시작 시각이라는 차이를 확인했다. [유예 만료](sdd/context-lifecycle.md#소프트-삭제-수명주기)는 유예 시작과 같은 DB 시계를 쓰되 `clock_timestamp()`를 한 번만 읽은 값으로 판정과 삭제 시각을 함께 정한다. [멱등성 정리](sdd/mcp.md)는 예약·재생과 같은 DB 시계로 만료를 판정한다.
 - pgx v5.10.0의 `go doc github.com/jackc/pgx/v5.Tx`에서 `Rollback`은 이미 닫힌 트랜잭션에는 `ErrTxClosed`를 돌려주고, 실제 트랜잭션의 그 밖의 실패는 연결을 닫는다는 계약을 확인했다. 따라서 요청 context가 취소된 뒤 같은 context로 롤백하면 연결이 폐기될 수 있다. [저장소 트랜잭션 정리](sdd/architecture.md#데이터베이스-연결)는 기존 `rollbackTransaction`의 취소 독립 최대 5초 예산을 모든 지연 롤백에 사용한다.
+
+
+## 2026-10-31 #161 서버 조립·종료·구성 검증
+
+- 조회일 2026-10-31 KST. Go 1.27.1 SDK의 `go doc net/http.Server`에서 `WriteTimeout`이 요청 헤더를 읽을 때마다 다시 정해지는 응답 쓰기의 최대 시간이라는 계약을 확인했다. [HTTP 진입점](sdd/architecture.md#http-진입점)은 30초 처리 예산 뒤 전송 30초를 남기는 60초 쓰기 마감을 둔다. MCP 전송은 `Stateless`·`JSONResponse` 구성이라 장기 SSE 응답이 없음을 `internal/mcp/sdk_transport.go`에서 확인했다.
+- 같은 SDK의 `signal.NotifyContext`·`tls.LoadX509KeyPair`와 `Server.ListenAndServeTLS`(인증서 경로가 비면 `TLSConfig.Certificates`를 사용)로 [기동과 종료](sdd/operations.md#기동과-종료)의 조립 중 신호 취소와 직접 TLS 사전 검증을 구성했다. pgx v5.10.0의 `go doc github.com/jackc/pgx/v5/pgxpool.Pool.Close`에서 풀 종료가 모든 연결의 반환까지 막힌다는 계약을 확인하여 풀 종료에 5초 기한을 둔다. `pgxpool.NewWithConfig`는 전달한 context를 초기 유휴 연결 생성에만 사용하므로 조립 뒤 신호 context를 해제해도 풀 수명에 영향이 없음을 로컬 공식 소스로 확인했다.

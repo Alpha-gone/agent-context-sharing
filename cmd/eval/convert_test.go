@@ -305,7 +305,7 @@ func TestConvertHippoRAGSet(t *testing.T) {
 	}
 	// q2는 답이 없다고 표시되어 빠지고, q1의 두 번째 하위 질의는 `#1` 자리 표시가 있어
 	// 빠진다. 남는 것은 q1 전체, q1의 첫 하위 질의, q3 전체 셋이다.
-	want := []string{"q1", "q1#hop1", "q3"}
+	want := []string{"q1", "q1.hop1", "q3"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("질의 목록 = %v; %v여야 한다", ids, want)
 	}
@@ -317,8 +317,8 @@ func TestConvertHippoRAGSet(t *testing.T) {
 	if byID["q1"].UseCase != useCaseAssociative || len(byID["q1"].Answers) != 2 {
 		t.Fatalf("근거가 둘인 질의는 연상 검색이어야 한다: %+v", byID["q1"])
 	}
-	if byID["q1#hop1"].UseCase != useCaseFact || len(byID["q1#hop1"].Answers) != 1 {
-		t.Fatalf("자립형 하위 질의는 정답 하나의 사실 검색이어야 한다: %+v", byID["q1#hop1"])
+	if byID["q1.hop1"].UseCase != useCaseFact || len(byID["q1.hop1"].Answers) != 1 {
+		t.Fatalf("자립형 하위 질의는 정답 하나의 사실 검색이어야 한다: %+v", byID["q1.hop1"])
 	}
 	if byID["q3"].UseCase != useCaseFact {
 		t.Fatalf("근거가 하나인 질의는 사실 검색이어야 한다: %+v", byID["q3"])
@@ -334,6 +334,100 @@ func TestConvertHippoRAGSet(t *testing.T) {
 				t.Fatalf("질의 %q의 정답 %q가 컨텍스트 집합에 없다", query.ID, answer)
 			}
 		}
+	}
+}
+
+func TestConvertHippoRAGIndependentUnitsAndManifest(t *testing.T) {
+	// 각 원 질문에서 자립형 홉 둘을 만든다. 150개 질의·10회 반복도 독립 과업은 50개다.
+	questions := make([]hippoQuestion, 50)
+	for i := range questions {
+		questions[i] = hippoQuestion{
+			ID: fmt.Sprintf("q%02d", i), Question: "합성 원 질문", Answerable: true,
+			Paragraphs: []hippoParagraph{{Index: 0, Text: fmt.Sprintf("합성 근거 %d", i), IsSupporting: true}},
+			Decomposition: []hippoStep{
+				{Question: "첫 자립형 홉", SupportIndex: new(0)},
+				{Question: "둘째 자립형 홉", SupportIndex: new(0)},
+			},
+		}
+	}
+	path := writeManifestFixture(t, questions)
+	contexts, queries, err := convertHippoRAGSet(path, "synthetic", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queries.Queries) != 150 {
+		t.Fatalf("질의 수 = %d", len(queries.Queries))
+	}
+	for i := range questions {
+		group := queries.Queries[i*3 : i*3+3]
+		if group[0].IndependentUnit == "" || group[0].IndependentUnit == questions[i].ID {
+			t.Fatalf("비식별 독립 과업 코드 누락: %+v", group[0])
+		}
+		for _, query := range group {
+			if !manifestCode.MatchString(query.ID) || !manifestCode.MatchString(query.IndependentUnit) || query.IndependentUnit != group[0].IndependentUnit {
+				t.Fatalf("원 질문·홉의 manifest 코드/독립 단위 불일치: %+v", group)
+			}
+		}
+	}
+	_, repeated, err := convertHippoRAGSet(path, "synthetic", 1)
+	if err != nil || repeated.Queries[0].IndependentUnit != queries.Queries[0].IndependentUnit {
+		t.Fatalf("입력 개수에 따라 독립 단위가 달라졌다: %v", err)
+	}
+	_, other, err := convertHippoRAGSet(path, "other-dataset", 1)
+	if err != nil || other.Queries[0].IndependentUnit == queries.Queries[0].IndependentUnit {
+		t.Fatalf("다른 데이터셋의 같은 ID를 합쳤다: %v", err)
+	}
+	m, bindings := trialGraphManifest(t, contexts, queries)
+	trial, err := newManifestTrial(m, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = trial.finish(fmt.Errorf("input_validation_only")) })
+	if err := trial.bindInputs(bindings, ""); err != nil {
+		t.Fatalf("변환 결과의 실물 checksum·manifest 매핑 검증: %v", err)
+	}
+	if trial.Preparation.Units != 150 || trial.Preparation.Independent != 50 {
+		t.Fatalf("manifest 문항/독립 단위 수: %+v", trial.Preparation)
+	}
+	runs := map[string][]runMetrics{}
+	stages := []string{"baseline", "references"}
+	for _, stage := range stages {
+		values := stageRuns(stage, make([]float64, len(queries.Queries))...)
+		for r := range values {
+			for q, query := range queries.Queries {
+				values[r].QuerySamples[q].ID = query.ID
+				values[r].QuerySamples[q].IndependentUnit = query.IndependentUnit
+			}
+		}
+		runs[stage] = values
+	}
+	if err := validateMeasuredRuns(stages, runs); err != nil {
+		t.Fatal(err)
+	}
+	comparison := findComparison(t, judge(stages, runs)[1], "recall")
+	if comparison.Samples != 50 || comparison.DegreesFreedom != 49 {
+		t.Fatalf("하위 홉·반복을 독립 과업으로 부풀렸다: %+v", comparison)
+	}
+}
+
+func TestConvertHippoRAGRejectsUnusableIDs(t *testing.T) {
+	for name, ids := range map[string][]string{
+		"unsafe": {"q#1"}, "too_long_hop": {strings.Repeat("q", 128)},
+		"collision": {"q1", "q1.hop1"}, "duplicate": {"q1", "q1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var questions []hippoQuestion
+			for _, id := range ids {
+				questions = append(questions, hippoQuestion{
+					ID: id, Question: "합성 질문", Answerable: true,
+					Paragraphs:    []hippoParagraph{{Index: 0, Text: "합성 근거", IsSupporting: true}},
+					Decomposition: []hippoStep{{Question: "자립형 홉", SupportIndex: new(0)}},
+				})
+			}
+			if _, _, err := convertHippoRAGSet(writeManifestFixture(t, questions), "synthetic", 0); err == nil {
+				t.Fatal("manifest에 선언할 수 없는 질의 ID 허용")
+			}
+		})
 	}
 }
 

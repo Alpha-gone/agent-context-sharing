@@ -895,7 +895,7 @@ func (s *Store) searchCandidates(ctx context.Context, graphID model.ID, ids []mo
 //
 // 컨텍스트마다 근거 트리를 따로 타면 같은 원천을 후보 수만큼 다시 읽고 질의가 후보 수에
 // 비례해 늘어난다. 흐름 응답은 담긴 컨텍스트 전부의 출처가 필요하므로, 한 깊이씩 넓혀 가며
-// 묶어 읽고 방문한 정점을 호출 전체에서 공유한다.
+// 묶어 읽고 방문한 정점을 호출 전체에서 공유한다. 출처 해석은 임베딩 접근으로 기록하지 않는다.
 func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contextIDs []model.ID) (result map[model.ID][]model.OriginKind, err error) {
 	if !graphID.IsV7() {
 		return nil, model.FieldError{Field: "graph_id", Message: "출처 조회 그래프는 UUIDv7이어야 한다"}
@@ -934,9 +934,9 @@ func (s *Store) ContextOriginKinds(ctx context.Context, graphID model.ID, contex
 		}
 		slices.SortFunc(pending, func(left, right model.ID) int { return cmp.Compare(left.String(), right.String()) })
 		pending = slices.Compact(pending)
-		values, err := s.ContextsByIDs(ctx, graphID, pending)
+		values, err := s.contextsByIDs(ctx, s.reader(ctx), graphID, pending)
 		if err != nil {
-			return nil, err
+			return nil, writeFailure(ctx, "context_batch", err)
 		}
 		next := make([]model.ID, 0)
 		for _, value := range values {

@@ -235,10 +235,10 @@ func TestSnapshotAccessFailurePropagatesIntegration(t *testing.T) {
 			t.Fatalf("접근 기록 실패의 홉 결과 = %+v, %v", hop, err)
 		}
 	})
-	t.Run("origins", func(t *testing.T) {
+	t.Run("origins_without_access", func(t *testing.T) {
 		origins, err := database.ContextOriginKinds(scoped, graphID, []model.ID{source.ID})
-		if !errors.Is(err, context.Canceled) || origins != nil {
-			t.Fatalf("접근 기록 실패의 출처 = %+v, %v", origins, err)
+		if err != nil || len(origins[source.ID]) != 1 || origins[source.ID][0] != source.Source.OriginKind {
+			t.Fatalf("출처 해석이 불필요한 접근 기록에 실패했다 = %+v, %v", origins, err)
 		}
 	})
 	t.Run("request_cancel", func(t *testing.T) {

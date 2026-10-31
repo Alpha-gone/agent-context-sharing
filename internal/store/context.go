@@ -885,7 +885,7 @@ func (s *Store) validateEventMembers(ctx context.Context, tx pgx.Tx, graphID mod
 	}
 	for _, member := range members {
 		if member.DeletedAt != nil {
-			return fmt.Errorf("사건 구성원은 활성 상태여야 한다")
+			return model.FieldError{Field: "member_refs", Message: "사건 구성원은 활성 상태여야 한다"}
 		}
 	}
 	if err := model.ValidateEventMembers(event, members); err != nil {

@@ -25,5 +25,7 @@ RUN apt-get update \
 # 기존 DB에서 실행되지 않는다. 매번 볼륨 마운트 뒤 준비한 다음 공식 entrypoint에
 # 위임한다. ENTRYPOINT를 바꾸면 부모 CMD가 초기화되므로 AGE의 CMD도 명시한다.
 COPY --chmod=0755 docker-db-entrypoint.sh /usr/local/bin/agent-context-db-entrypoint.sh
+# WAL 보관 명령. 같은 내용의 재보관은 성공시키고 부분 파일을 보관본으로 남기지 않는다.
+COPY --chmod=0755 docker-wal-archive.sh /usr/local/bin/agent-context-wal-archive
 ENTRYPOINT ["/usr/local/bin/agent-context-db-entrypoint.sh"]
 CMD ["postgres", "-c", "shared_preload_libraries=age"]

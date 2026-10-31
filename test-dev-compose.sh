@@ -66,7 +66,7 @@ check_config() {
         (.services.db.volumes | length == 1) and
         (.services.db.volumes[0] | .type == "volume" and .source == "db_data" and .target == "/var/lib/postgresql") and
         (.services.wal_cleanup.volumes == .services.db.volumes) and
-        (.services.db.command == ["postgres", "-c", "shared_preload_libraries=age", "-c", "archive_mode=on", "-c", "archive_command=test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f"]) and
+        (.services.db.command == ["postgres", "-c", "shared_preload_libraries=age", "-c", "archive_mode=on", "-c", "archive_command=/usr/local/bin/agent-context-wal-archive %p %f"]) and
         (.services.wal_cleanup.depends_on.db.condition == "service_healthy") and
         (.services.wal_cleanup.user == "postgres") and
         (.services.wal_cleanup.entrypoint == ["/bin/sh", "-c"]) and

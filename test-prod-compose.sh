@@ -26,6 +26,7 @@ check_config() {
         (.services.server.ports | length == 1) and
         (.services.server.ports[0] | .host_ip == "127.0.0.1" and .target == 8080 and .published == $http_port) and
         (.services.db.command | index("archive_mode=on") != null) and
+        (.services.db.command | index("archive_command=/usr/local/bin/agent-context-wal-archive %p %f") != null) and
         (.services.db.volumes | length == 2) and
         (.services.db.volumes | map(.target) | index("/var/lib/postgresql/wal_archive") != null) and
         (.services.server.environment.TLS_TERMINATION == "proxy") and
@@ -66,6 +67,14 @@ export TLS_CERT_FILE="$test_dir/unused-cert.pem" TLS_KEY_FILE="$test_dir/unused-
 export DIAGNOSTIC_LOG_DIR=/tmp/unsafe-override
 compose config --no-env-resolution --format json > "$test_dir/port.json"
 check_config "$test_dir/port.json" 18080
+
+# 개발·운영·PITR 시험 구성은 같은 WAL 보관 명령을 사용해야 한다.
+archive_commands=$(grep -h 'archive_command=' "$repo_root/compose.dev.yaml" "$repo_root/compose.prod.yaml" "$repo_root/compose.pitr-test.yaml" | sed 's/^[[:space:]]*-[[:space:]]*//' | sort -u)
+if [ "$archive_commands" != 'archive_command=/usr/local/bin/agent-context-wal-archive %p %f' ]; then
+    echo "운영 구성 검사 실패: 세 구성의 WAL 보관 명령이 다릅니다." >&2
+    exit 1
+fi
+grep -Eq '^COPY --chmod=0755 docker-wal-archive[.]sh /usr/local/bin/agent-context-wal-archive$' "$repo_root/Dockerfile"
 
 grep -Eq '^FROM golang:1[.]27[.]1-trixie@sha256:3b77fc618ec235a1ab412de7737f120dd507c57e8d87de4cbb7994fb94275ed5 AS build$' "$repo_root/Dockerfile.server"
 grep -Eq '^FROM alpine:3[.]23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0$' "$repo_root/Dockerfile.server"

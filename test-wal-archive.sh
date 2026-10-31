@@ -73,6 +73,45 @@ fresh_failed=$(sql 'SELECT failed_count FROM pg_stat_archiver')
 [ "$fresh_failed" -eq 0 ] || fail '새 볼륨에서 WAL 보관에 실패했다.'
 printf 'fresh: archived=%s failed=%s owner=postgres mode=700\n' "$fresh_archived" "$fresh_failed"
 
+# 보관 명령 계약: 같은 이름·같은 내용은 성공, 다른 내용은 거부하고 기존 보관본을 보존한다.
+# 기존 명령은 같은 내용의 재보관도 실패시켰다. 같은 WAL의 남은 임시 파일은 정리한다.
+contract_wal=$(sql 'SELECT last_archived_wal FROM pg_stat_archiver')
+docker exec --user postgres -e WAL="$contract_wal" "$db_container" /bin/sh -eu -c '
+    archive=/var/lib/postgresql/wal_archive
+    cp "$archive/$WAL" /tmp/wal-same
+    agent-context-wal-archive /tmp/wal-same "$WAL"
+    if test ! -f "$archive/$WAL" && cp /tmp/wal-same "$archive/$WAL"; then
+        echo "기존 명령이 같은 내용의 재보관을 허용했다" >&2; exit 1
+    fi
+    before=$(sha256sum < "$archive/$WAL")
+    cp /tmp/wal-same /tmp/wal-different
+    printf x | dd of=/tmp/wal-different bs=1 seek=4096 conv=notrunc 2>/dev/null
+    if agent-context-wal-archive /tmp/wal-different "$WAL" 2>/dev/null; then
+        echo "다른 내용의 재보관을 허용했다" >&2; exit 1
+    fi
+    [ "$(sha256sum < "$archive/$WAL")" = "$before" ] || { echo "기존 보관본이 바뀌었다" >&2; exit 1; }
+    printf partial > "$archive/.test-contract.partial"
+    agent-context-wal-archive /tmp/wal-same test-contract
+    cmp -s /tmp/wal-same "$archive/test-contract"
+    [ ! -e "$archive/.test-contract.partial" ] || { echo "임시 파일이 남았다" >&2; exit 1; }
+    rm -f "$archive/test-contract" /tmp/wal-same /tmp/wal-different
+' || fail 'WAL 보관 명령 계약을 만족하지 않는다.'
+
+# .done 기록 전 중단을 재현한다. 보관된 WAL의 상태를 .ready로 되돌리면 PostgreSQL이 같은
+# WAL을 다시 보관하며, 같은 내용의 보관본이 있어도 실패하지 않아야 한다.
+docker exec --user postgres -e WAL="$contract_wal" "$db_container" /bin/sh -eu -c '
+    cd "$PGDATA/pg_wal"
+    test -f "$WAL"
+    mv "archive_status/$WAL.done" "archive_status/$WAL.ready"
+' || fail '재보관 재현용 WAL 상태를 준비하지 못했다.'
+wait_archived
+rearchived=$(sql 'SELECT archived_count FROM pg_stat_archiver')
+rearchive_failed=$(sql 'SELECT failed_count FROM pg_stat_archiver')
+[ "$rearchived" -gt "$fresh_archived" ] || fail '같은 WAL의 재보관이 완료되지 않았다.'
+[ "$rearchive_failed" -eq "$fresh_failed" ] || fail '같은 WAL의 재보관이 실패로 기록됐다.'
+fresh_archived=$rearchived
+printf 'contract: same_content=accepted different_content=rejected partial_removed=true rearchive_failed=0\n'
+
 # 기존 볼륨을 연결하지 않은 별도 컨테이너에서 준비 실패 시 기동 차단을 확인한다.
 if failure_output=$(docker run --rm --pull=never --entrypoint /bin/sh "$image_id" -eu -c \
     'touch /var/lib/postgresql/wal_archive; exec /usr/local/bin/agent-context-db-entrypoint.sh postgres' 2>&1); then

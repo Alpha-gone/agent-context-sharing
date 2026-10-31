@@ -336,16 +336,18 @@ func (recorder *Recorder) maintain() {
 		recorder.maintenanceDone = nil
 		recorder.mu.Unlock()
 	}()
+	// 정리 실행 자체의 실패만 파일 장애다. guard의 예약·연결·잠금 실패는 DB 장애로 구분한다.
+	var runErr error
 	run := func() (int, error) {
 		var before uint64
 		if recorder.upkeep.removed != nil {
 			before = recorder.upkeep.removed()
 		}
-		err := recorder.upkeep.run()
+		runErr = recorder.upkeep.run()
 		if recorder.upkeep.removed != nil {
-			return int(recorder.upkeep.removed() - before), err
+			return int(recorder.upkeep.removed() - before), runErr
 		}
-		return 0, err
+		return 0, runErr
 	}
 	var err error
 	if guard != nil {
@@ -363,12 +365,16 @@ func (recorder *Recorder) maintain() {
 			return
 		}
 		recorder.maintenanceFailures++
-		if recorder.maintenanceErr == nil {
+		// 종료가 중단한 진행 회차의 비취소 오류만 작업자 정리 결과로 전달한다.
+		if recorder.maintenanceStopped {
 			recorder.maintenanceErr = err
 		}
-		recorder.output.add(System, failureCode(err), false)
-		if recorder.firstErr == nil {
-			recorder.firstErr = err
+		// DB 실패는 guard 호출자가 주기 작업 진단으로 남기므로 파일 장애 통지와 첫 기록 오류에 넣지 않는다.
+		if runErr != nil {
+			recorder.output.add(System, failureCode(err), false)
+			if recorder.firstErr == nil {
+				recorder.firstErr = err
+			}
 		}
 		recorder.mu.Unlock()
 	}
@@ -408,7 +414,8 @@ func (recorder *Recorder) SetMaintenanceGuard(guard MaintenanceGuard) {
 }
 
 // StopMaintenance는 DB 풀 종료 전에 시간 기반 정리를 취소하고 진행 회차를 기다린다.
-// 새 기록·파일 정책·flush는 계속 사용할 수 있으며 다시 시작하지 않는다.
+// 새 기록·파일 정책·flush는 계속 사용할 수 있으며 다시 시작하지 않는다. 반환 오류는
+// 이번 종료가 중단한 회차의 비취소 오류뿐이며 이미 끝난 회차의 실패는 포함하지 않는다.
 func (recorder *Recorder) StopMaintenance(ctx context.Context) error {
 	recorder.mu.Lock()
 	recorder.maintenanceStopped = true

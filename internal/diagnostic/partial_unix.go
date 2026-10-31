@@ -46,6 +46,8 @@ func (files *Files) repairPartial(item storedLog, now time.Time) (repairErr erro
 	if last[0] == '\n' {
 		return nil
 	}
+	files.usageCache = nil
+	defer func() { files.usageCache = nil }()
 	data := make([]byte, min(info.Size(), int64(maxEventBytes)))
 	if _, err := file.ReadAt(data, info.Size()-int64(len(data))); err != nil {
 		return fileFailure("file_unavailable", err)

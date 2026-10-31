@@ -12,6 +12,8 @@ import (
 )
 
 const (
+	maxBatchEvents         = 128
+	maxBatchBytes          = 256 << 10
 	maxQueuedEvents        = 1024
 	maxQueuedBytes         = 16 << 20
 	maxEventBytes          = 16 << 10
@@ -42,7 +44,7 @@ type DropCount struct {
 	Count  uint64
 }
 
-// RecorderStats의 대기량은 쓰는 중인 한 이벤트도 포함한다.
+// RecorderStats의 대기량은 쓰는 중인 일괄 기록도 포함한다.
 // Written은 완전한 행의 append·sync 성공이며 업무 감사 성공을 뜻하지 않는다.
 type RecorderStats struct {
 	Accepted            uint64
@@ -83,6 +85,7 @@ type Recorder struct {
 	source              Source
 	limits              queueLimits
 	writeLine           func(Kind, []byte) error
+	writeBatch          func([]queuedLine) []error
 	closeFile           func() error
 	wake                chan struct{}
 	done                chan struct{}
@@ -112,10 +115,13 @@ func newRecorder(source Source, limits queueLimits, writeLine func(Kind, []byte)
 	return startRecorder(source, limits, writeLine, closeFile, upkeep, newFailureOutput(source, os.Stderr, time.Now), flushBudget)
 }
 
-func startRecorder(source Source, limits queueLimits, writeLine func(Kind, []byte) error, closeFile func() error, upkeep *recorderUpkeep, output *failureOutput, budget time.Duration) *Recorder {
+func startRecorder(source Source, limits queueLimits, writeLine func(Kind, []byte) error, closeFile func() error, upkeep *recorderUpkeep, output *failureOutput, budget time.Duration, batch ...func([]queuedLine) []error) *Recorder {
 	recorder := &Recorder{source: source, limits: limits, writeLine: writeLine, closeFile: closeFile,
 		wake: make(chan struct{}, 1), done: make(chan struct{}), queue: make([]queuedLine, limits.events), upkeep: upkeep,
 		output: output, flushTime: budget, deadline: make(chan struct{})}
+	if len(batch) != 0 {
+		recorder.writeBatch = batch[0]
+	}
 	go recorder.run()
 	return recorder
 }
@@ -265,11 +271,29 @@ func (recorder *Recorder) run() {
 			}
 			continue
 		}
-		item := recorder.queue[recorder.head]
+		limit := 1
+		if recorder.writeBatch != nil {
+			limit = min(recorder.count, maxBatchEvents)
+		}
+		batch := make([]queuedLine, 0, limit)
+		bytes := 0
+		for i := range limit {
+			item := recorder.queue[(recorder.head+i)%len(recorder.queue)]
+			if bytes+len(item.data) > maxBatchBytes {
+				break
+			}
+			batch = append(batch, item)
+			bytes += len(item.data)
+		}
 		recorder.writing = true
 		recorder.mu.Unlock()
 
-		err := recorder.writeLine(item.kind, item.data)
+		var results []error
+		if recorder.writeBatch != nil {
+			results = recorder.writeBatch(batch)
+		} else {
+			results = []error{recorder.writeLine(batch[0].kind, batch[0].data)}
+		}
 
 		recorder.mu.Lock()
 		if recorder.expired {
@@ -277,19 +301,21 @@ func (recorder *Recorder) run() {
 			recorder.mu.Unlock()
 			continue
 		}
-		recorder.queue[recorder.head] = queuedLine{}
-		recorder.head = (recorder.head + 1) % len(recorder.queue)
-		recorder.count--
-		recorder.bytes -= len(item.data)
-		recorder.writing = false
-		if err != nil {
-			recorder.lossLocked(item.kind, writeFailed, failureCode(err))
-			if recorder.firstErr == nil {
-				recorder.firstErr = err
+		for i, item := range batch {
+			recorder.queue[recorder.head] = queuedLine{}
+			recorder.head = (recorder.head + 1) % len(recorder.queue)
+			recorder.count--
+			recorder.bytes -= len(item.data)
+			if err := results[i]; err != nil {
+				recorder.lossLocked(item.kind, writeFailed, failureCode(err))
+				if recorder.firstErr == nil {
+					recorder.firstErr = err
+				}
+			} else {
+				recorder.written++
 			}
-		} else {
-			recorder.written++
 		}
+		recorder.writing = false
 		recorder.mu.Unlock()
 	}
 }

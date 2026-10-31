@@ -18,7 +18,7 @@ import (
 
 // 필터·프로세스 한도는 원상 복구할 수 없는 효과가 있어 반드시 자식에 한정한다.
 func TestOBS08LinuxWriteErrors(t *testing.T) {
-	for _, mode := range []string{"enospc", "erofs", "partial"} {
+	for _, mode := range []string{"enospc", "erofs", "partial", "sync"} {
 		t.Run(mode, func(t *testing.T) {
 			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestOBS08LinuxFaultHelper$", "-test.timeout=25s")
 			cmd.Env = append(os.Environ(), "ACS_OBS08_FAULT="+mode)
@@ -37,7 +37,7 @@ func TestOBS08LinuxWriteErrors(t *testing.T) {
 					cause = notice.Reason
 				}
 			}
-			want := map[string]string{"enospc": "storage_full", "erofs": "storage_read_only", "partial": "partial_recovered"}[mode]
+			want := map[string]string{"enospc": "storage_full", "erofs": "storage_read_only", "partial": "partial_recovered", "sync": "sync_failed"}[mode]
 			if cause != want && !bytes.Contains(stderr.Bytes(), []byte(`"reason_code":"`+want+`"`)) {
 				t.Fatal("커널 원인이 stderr에 전달되지 않았다", mode, stderr.String())
 			}
@@ -58,7 +58,7 @@ func TestOBS08LinuxFaultHelper(t *testing.T) {
 	source := files.source
 	output := newFailureOutput(source, os.Stderr, time.Now)
 	files.notice = func(kind Kind, code string) { output.add(kind, code, false) }
-	recorder := startRecorder(source, queueLimits{4, maxQueuedBytes, maxEventBytes}, files.appendLine, files.Close, nil, output, flushBudget)
+	recorder := startRecorder(source, queueLimits{4, maxQueuedBytes, maxEventBytes}, files.appendLine, files.Close, nil, output, flushBudget, files.appendBatch)
 	defer recorder.Close(context.Background())
 	event := obs03Event(t, source, Request)
 	event.Time = obs04Now
@@ -83,11 +83,17 @@ func TestOBS08LinuxFaultHelper(t *testing.T) {
 		errno := unix.ENOSPC
 		if mode == "erofs" {
 			errno = unix.EROFS
+		} else if mode == "sync" {
+			errno = unix.EIO
 		} else if mode != "enospc" {
 			t.Fatal("알 수 없는 커널 오류")
 		}
 		wanted = errno
-		obs08DenyWrite(t, int(oldFile.Fd()), errno)
+		if mode == "sync" {
+			obs08DenySyscall(t, int(oldFile.Fd()), unix.SYS_FSYNC, errno)
+		} else {
+			obs08DenyWrite(t, int(oldFile.Fd()), errno)
+		}
 	}
 	if !recorder.Emit(t.Context(), event) {
 		t.Fatal("첫 이벤트 수락 실패")
@@ -133,12 +139,21 @@ func TestOBS08LinuxFaultHelper(t *testing.T) {
 		t.Fatal("복구가 과거 누락을 성공으로 바꿨다", stats)
 	}
 	events, _ := obs08ReadEvents(t, directory, source.instance, Request)
-	if len(events) != 1 || events[0].BootID != source.boot {
+	wantRows := 1
+	if mode == "sync" {
+		wantRows = 2
+	} // sync 실패의 완전 행은 파일에 남을 수 있다.
+	if len(events) != wantRows || events[0].BootID != source.boot {
 		t.Fatal("복구 뒤 정상 파일 행이 보존되지 않았다")
 	}
 }
 
 func obs08DenyWrite(t *testing.T, fd int, errno unix.Errno) {
+	t.Helper()
+	obs08DenySyscall(t, fd, unix.SYS_WRITE, errno)
+}
+
+func obs08DenySyscall(t *testing.T, fd, syscallNumber int, errno unix.Errno) {
 	t.Helper()
 	var arch uint32
 	switch runtime.GOARCH {
@@ -154,7 +169,7 @@ func obs08DenyWrite(t *testing.T, fd int, errno unix.Errno) {
 		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jt: 1, K: arch},
 		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ALLOW},
 		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 0},
-		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jf: 3, K: uint32(unix.SYS_WRITE)},
+		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jf: 3, K: uint32(syscallNumber)},
 		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 16},
 		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jf: 1, K: uint32(fd)},
 		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(errno)},
@@ -236,7 +251,7 @@ func TestRotationCreateFailureHelperLinux(t *testing.T) {
 	}
 	var stderr bytes.Buffer
 	output := newFailureOutput(files.source, &stderr, time.Now)
-	recorder := startRecorder(files.source, queueLimits{maxQueuedEvents, maxQueuedBytes, maxEventBytes}, files.appendLine, files.Close, nil, output, flushBudget)
+	recorder := startRecorder(files.source, queueLimits{maxQueuedEvents, maxQueuedBytes, maxEventBytes}, files.appendLine, files.Close, nil, output, flushBudget, files.appendBatch)
 	t.Cleanup(func() { recorder.Close(context.Background()) })
 	emit := func(kind Kind, completed uint64) {
 		t.Helper()

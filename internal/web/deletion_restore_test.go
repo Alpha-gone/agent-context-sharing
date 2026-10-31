@@ -367,6 +367,9 @@ func TestWEB05OperatorConfirmation(t *testing.T) {
 	server := newWEB05Server(t, backend)
 
 	body := web05Get(t, server, "/operator/restores", http.StatusOK)
+	if !strings.Contains(body, "오래된 순서로 최대 100건") || !strings.Contains(body, "요청을 처리하면 다음 대기 요청이 표시됩니다.") {
+		t.Fatal("대기 목록 상한과 후속 요청 안내가 없다")
+	}
 	for _, want := range []string{`role="region" aria-labelledby="restore-requests-caption" tabindex="0"><table><caption id="restore-requests-caption">대기 중인 복구 요청</caption>`, `<th scope="col">요청 계정</th>`, graph.String(), other.String(), second.String(), "/operator/restores?graph_id=" + graph.String(), "&lt;같은 이름&gt;"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("대기 목록에 %q가 없다", want)

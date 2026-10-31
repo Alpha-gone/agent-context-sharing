@@ -747,7 +747,7 @@ func (s *Store) ListOwnedDeletedGraphs(ctx context.Context, accountID model.ID) 
 	return graphs, nil
 }
 
-// RequestGraphRestore는 소유자였던 계정의 자동 삭제 그래프 복구 요청을 기록한다.
+// RequestGraphRestore는 과거 소유자의 자동 삭제 그래프 복구 요청을 대기 중 한 번만 기록한다.
 func (s *Store) RequestGraphRestore(ctx context.Context, graphID, actorID model.ID) (resultErr error) {
 	ctx, observation := beginManagement(ctx, "restore_request")
 	defer func() { s.finishManagement(ctx, observation, resultErr) }()
@@ -775,10 +775,25 @@ func (s *Store) RequestGraphRestore(ctx context.Context, graphID, actorID model.
 	if !eligible {
 		return ErrNotFound
 	}
+	// 그래프 잠금 뒤 별도 명령으로 읽어 앞선 요청·운영자 처리의 커밋을 반영한다.
+	var pending bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM public.web_audit_log AS request
+		WHERE request.graph_id=$1 AND request.requester_account_id=$2
+		  AND request.target_kind='restore_request' AND request.action='request'
+		  AND NOT EXISTS (`+laterOperatorRestoreSQL+`))`, graphID.String(), actorID.String()).Scan(&pending); err != nil {
+		return fmt.Errorf("중복 복구 요청 확인: %w", err)
+	}
+	if pending {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("기존 복구 요청 확인 커밋: %w", err)
+		}
+		return nil
+	}
 	return s.commitWebAudit(ctx, tx, webAuditRecord{TargetKind: "restore_request", Action: "request", ActorID: actorID, GraphID: graphID, RequesterAccountID: actorID})
 }
 
-// PendingRestoreRequests는 아직 운영자 복구 기록이 뒤따르지 않은 요청만 표시한다.
+// PendingRestoreRequests는 미처리 요청을 오래된 순서의 최대 100건으로 제한한다.
 func (s *Store) PendingRestoreRequests(ctx context.Context) ([]model.RestoreRequest, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT request.graph_id, graph.name, request.requester_account_id, request.occurred_at
@@ -787,7 +802,7 @@ func (s *Store) PendingRestoreRequests(ctx context.Context) ([]model.RestoreRequ
 		WHERE request.target_kind = 'restore_request' AND request.action = 'request'
 		  AND NOT EXISTS (`+laterOperatorRestoreSQL+`)
 		  AND graph.deleted_at IS NOT NULL AND graph.grace_started_at IS NOT NULL
-		ORDER BY request.occurred_at ASC, request.audit_id ASC`)
+		ORDER BY request.occurred_at ASC, request.audit_id ASC LIMIT 100`)
 	if err != nil {
 		return nil, fmt.Errorf("대기 복구 요청 목록 조회: %w", err)
 	}

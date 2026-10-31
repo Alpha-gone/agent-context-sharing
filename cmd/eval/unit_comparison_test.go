@@ -177,11 +177,6 @@ func TestUnitCandidateBoundaries(t *testing.T) {
 				runs[j].Review.Disagreements = 1
 			}
 		}},
-		{"partial_annotation", "deferred", func(_ *unitInput, runs []unitRun) {
-			for j := range runs {
-				runs[j].Metrics.QuerySamples[0].PathContinuity = -1
-			}
-		}},
 		{"unit_regression", "rejected", func(_ *unitInput, runs []unitRun) {
 			for j := range runs {
 				if runs[j].Metrics.Stage == "current" {
@@ -228,6 +223,56 @@ func TestUnitCandidateBoundaries(t *testing.T) {
 			for _, cohort := range cohorts {
 				if cohort.Status != test.status || cohort.Activated {
 					t.Fatalf("want=%s: %+v", test.status, cohort)
+				}
+			}
+		})
+	}
+}
+
+// 근거 주석 완전성은 입력 주석으로 판단하고, 검색 결과로 생긴 미정의 지표는 판정 표본에서만 뺀다.
+func TestUnitRetrievalAnnotationsFromInput(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		annotated bool
+		status    string
+		change    func(*unitInput, []unitRun)
+	}{
+		{"unreturned_path_start", true, "candidate", func(input *unitInput, runs []unitRun) {
+			for j := range runs {
+				if runs[j].Sample == input.Samples[0].Code && runs[j].Metrics.Repeat == 1 {
+					runs[j].Metrics.QuerySamples[0].EvidenceCompleteness = 0
+					runs[j].Metrics.QuerySamples[0].PathContinuity = -1
+				}
+			}
+		}},
+		{"missing_annotation", false, "deferred", func(input *unitInput, runs []unitRun) {
+			input.Samples[0].Variants[1].Answers[0].Paths = nil
+			for j := range runs {
+				if runs[j].Sample == input.Samples[0].Code && runs[j].Metrics.Stage == "semantic" {
+					runs[j].Metrics.QuerySamples[0].PathContinuity = -1
+				}
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := unitFixture(t, 2)
+			input.Provenance = "agent_trace"
+			runs := unitFixtureRuns(input)
+			test.change(&input, runs)
+			cohorts, err := aggregateUnits(input, runs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cohort := cohorts[0]
+			if cohort.Cohort != input.Samples[0].Cohort || cohort.Annotated != test.annotated || cohort.Status != test.status {
+				t.Fatalf("annotated=%v status=%s: %+v", test.annotated, test.status, cohort)
+			}
+			if !test.annotated && cohort.Reason != "unmeasured_or_insufficient_independent_units" {
+				t.Fatal(cohort.Reason)
+			}
+			for _, other := range cohorts[1:] {
+				if !other.Annotated || other.Status != "candidate" {
+					t.Fatalf("다른 표본군 오염: %+v", other)
 				}
 			}
 		})

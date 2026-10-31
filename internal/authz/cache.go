@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"sync"
 	"time"
@@ -18,14 +19,25 @@ const revocationTTL = 10 * time.Second
 // keyMissTTL은 정상 적재한 목록에 없는 kid의 재조회를 제한한다.
 const keyMissTTL = time.Second
 
+// cacheLoadTimeout은 한 번의 저장소 적재가 요청 마감보다 오래 지속되지 않게 제한한다.
+const cacheLoadTimeout = 5 * time.Second
+
 type cacheLoad struct {
 	done chan struct{}
 	err  error
+	// retry는 저장소 장애와 구분되는 적재 요청 자체의 취소·마감일 때만 설정한다.
+	retry bool
 }
 
 func (load *cacheLoad) wait(ctx context.Context) error {
 	select {
 	case <-load.done:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if load.retry {
+			return nil
+		}
 		return load.err
 	case <-ctx.Done():
 		return ctx.Err()
@@ -56,6 +68,9 @@ func newVerificationCache() *verificationCache {
 // publicKey는 알려진 공개 키를 돌려주거나, 짧은 재조회 제한 안에서 키 목록을 적재한다.
 func (cache *verificationCache) publicKey(ctx context.Context, source authStore, keyID string) (jose.JSONWebKey, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return jose.JSONWebKey{}, err
+		}
 		cache.mu.Lock()
 		if key, found := cache.keys[keyID]; found {
 			cache.mu.Unlock()
@@ -77,7 +92,12 @@ func (cache *verificationCache) publicKey(ctx context.Context, source authStore,
 		generation := cache.keysGeneration
 		cache.mu.Unlock()
 
-		items, err := source.SigningKeys(ctx)
+		loadCtx, cancel := context.WithTimeout(ctx, cacheLoadTimeout)
+		items, err := source.SigningKeys(loadCtx)
+		if err == nil {
+			err = loadCtx.Err()
+		}
+		cancel()
 		loaded := make(map[string]jose.JSONWebKey, len(items))
 		if err == nil {
 			for _, item := range items {
@@ -97,6 +117,7 @@ func (cache *verificationCache) publicKey(ctx context.Context, source authStore,
 			}
 		}
 		load.err = err
+		load.retry = ctx.Err() != nil && errors.Is(err, ctx.Err())
 		cache.keyLoad = nil
 		close(load.done)
 		cache.mu.Unlock()
@@ -116,6 +137,9 @@ func (cache *verificationCache) invalidateKeys() {
 // isRevoked는 토큰 식별자가 폐기 목록에 있는지 본다. 목록이 오래되면 먼저 다시 읽는다.
 func (cache *verificationCache) isRevoked(ctx context.Context, source authStore, tokenID string, now time.Time) (bool, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		cache.mu.Lock()
 		if now.Sub(cache.loadedAt) < revocationTTL {
 			_, revoked := cache.revoked[tokenID]
@@ -133,7 +157,12 @@ func (cache *verificationCache) isRevoked(ctx context.Context, source authStore,
 		cache.revocationLoad = load
 		generation := cache.generation
 		cache.mu.Unlock()
-		ids, err := source.RevokedTokenIDs(ctx, now)
+		loadCtx, cancel := context.WithTimeout(ctx, cacheLoadTimeout)
+		ids, err := source.RevokedTokenIDs(loadCtx, now)
+		if err == nil {
+			err = loadCtx.Err()
+		}
+		cancel()
 		loaded := make(map[string]struct{}, len(ids))
 		for _, id := range ids {
 			loaded[id] = struct{}{}
@@ -141,6 +170,7 @@ func (cache *verificationCache) isRevoked(ctx context.Context, source authStore,
 		cache.mu.Lock()
 		defer cache.mu.Unlock()
 		load.err = err
+		load.retry = ctx.Err() != nil && errors.Is(err, ctx.Err())
 		cache.revocationLoad = nil
 		defer close(load.done)
 		if err != nil {

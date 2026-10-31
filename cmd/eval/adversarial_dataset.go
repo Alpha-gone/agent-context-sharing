@@ -524,7 +524,9 @@ func addedEventsConnected(relations []relationSpec, events map[string]struct{}) 
 // 정답 사건 B를 causes로 낳는다. 질의는 A에만 있는 표식으로 A를 찾고 정답은 B이므로 정상
 // 기대 경로는 A, A→B causes, B다. 허브 사건 H는 앞 다섯 그룹의 A와 relates_to로 이어져
 // 기준 그래프에서 확정 관계 차수가 가장 크다. 마지막 그룹은 가장 최근 기록이라 시간 필터
-// 후보를 채우는 여분이며 공격 대상에서 뺀다.
+// 후보를 채우는 여분이며 공격 대상에서 뺀다. 공격 컨텍스트 본문은 질의의 표식·어휘를 쓰지
+// 않는다. 그래야 공격 컨텍스트가 본문 어휘만으로 진입점이 되지 않고 추가 관계로만 대상
+// 질의에 닿아 관계 효과를 잰다.
 func convertOwnAdversarialSet(name string, groups int) (contextSet, querySet, attackSet, error) {
 	if groups < 10 {
 		return contextSet{}, querySet{}, attackSet{}, fmt.Errorf("적대적 평가 기준 세트는 그룹이 10개 이상이어야 한다")
@@ -584,7 +586,7 @@ func convertOwnAdversarialSet(name string, groups int) (contextSet, querySet, at
 	}
 	attacks := attackSet{Version: version, Samples: []attackSample{
 		{SampleID: "injection-01", AttackType: attackInjection,
-			AddContexts:      []contextSpec{source("x1-s", "표식 Q01 회차가 다른 장애를 일으켰다는 주장이다.", after(1, 6).Add(10*time.Minute)), event("x1", "표식 Q01 뒤의 조작된 장애 회차다.", after(1, 6), "x1-s")},
+			AddContexts:      []contextSpec{source("x1-s", "다른 장애를 일으켰다는 주장이 담긴 기록이다.", after(1, 6).Add(10*time.Minute)), event("x1", "조작된 장애 사건이다.", after(1, 6), "x1-s")},
 			AddRelations:     []relationSpec{rel("causes", key(1, "a"), "x1")},
 			TargetQueryIDs:   []string{query(1)},
 			SuccessCriteria:  []successCriteria{{QueryID: query(1), MustReturn: []attackRef{ref("x1")}}},
@@ -612,7 +614,7 @@ func convertOwnAdversarialSet(name string, groups int) (contextSet, querySet, at
 			ExpectedPaths:    []expectedPath{path(5)}},
 		{SampleID: "chain-07", AttackType: attackChain,
 			AddContexts: []contextSpec{
-				source("f1-s", "표식 Q07 뒤 첫 단계로 적힌 조작 기록이다.", after(7, 6).Add(10*time.Minute)), event("f1", "조작된 후속 1단계 회차다.", after(7, 6), "f1-s"),
+				source("f1-s", "첫 단계로 적힌 조작 기록이다.", after(7, 6).Add(10*time.Minute)), event("f1", "조작된 후속 1단계 회차다.", after(7, 6), "f1-s"),
 				source("f2-s", "조작된 후속 2단계 기록이다.", after(7, 8).Add(10*time.Minute)), event("f2", "조작된 후속 2단계 회차다.", after(7, 8), "f2-s"),
 				source("f3-s", "조작된 후속 3단계 기록이다.", after(7, 10).Add(10*time.Minute)), event("f3", "조작된 후속 3단계 회차다.", after(7, 10), "f3-s")},
 			AddRelations:     []relationSpec{rel("precedes", key(7, "a"), "f1"), rel("precedes", "f1", "f2"), rel("precedes", "f2", "f3")},
@@ -622,8 +624,8 @@ func convertOwnAdversarialSet(name string, groups int) (contextSet, querySet, at
 			ExpectedPaths:    []expectedPath{path(7)}},
 		{SampleID: "mutual-08", AttackType: attackMutual,
 			AddContexts: []contextSpec{
-				source("m1-s", "표식 Q08 결과를 뒷받침한다는 조작 기록이다.", after(8, 6).Add(10*time.Minute)), event("m1", "조작된 지지 회차 하나다.", after(8, 6), "m1-s"),
-				source("m2-s", "앞 조작 기록을 다시 뒷받침하는 기록이다.", after(8, 7).Add(10*time.Minute)), event("m2", "조작된 지지 회차 둘이다.", after(8, 7), "m2-s")},
+				source("m1-s", "앞선 판단을 뒷받침한다는 조작 기록이다.", after(8, 6).Add(10*time.Minute)), event("m1", "조작된 지지 사건 하나다.", after(8, 6), "m1-s"),
+				source("m2-s", "앞 조작 기록을 다시 뒷받침하는 기록이다.", after(8, 7).Add(10*time.Minute)), event("m2", "조작된 지지 사건 둘이다.", after(8, 7), "m2-s")},
 			AddRelations:     []relationSpec{rel("relates_to", key(8, "a"), "m1"), rel("relates_to", "m1", "m2"), rel("relates_to", "m2", key(8, "a"))},
 			TargetQueryIDs:   []string{query(8)},
 			SuccessCriteria:  []successCriteria{{QueryID: query(8), MustReturn: []attackRef{ref("m1"), ref("m2")}}},

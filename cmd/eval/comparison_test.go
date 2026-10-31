@@ -122,6 +122,10 @@ func TestComparisonAssessmentDoesNotEnableDefaults(t *testing.T) {
 		{name: "one_unit", axis: "graph_stage", count: 1, improve: true, reason: "insufficient_independent_units"},
 		{name: "slo", axis: "graph_stage", count: 3, improve: true, slow: true, reason: "latency_slo_exceeded"},
 		{name: "failure", axis: "graph_stage", count: 3, improve: true, failure: true, reason: "channel_failures"},
+		// 채널 실패·지연 초과는 독립 단위 부족보다 먼저 비채택한다.
+		{name: "one_unit_slo", axis: "graph_stage", count: 1, improve: true, slow: true, reason: "latency_slo_exceeded"},
+		{name: "one_unit_failure", axis: "graph_stage", count: 1, improve: true, failure: true, reason: "channel_failures"},
+		{name: "one_unit_index_failure", axis: "index_targets", count: 1, failure: true, reason: "channel_failures"},
 		{name: "index_equal", axis: "index_targets", count: 3, reason: "no_significant_recall_loss_final_acceptance_pending"},
 		{name: "index_loss", axis: "index_targets", count: 3, regress: true, reason: "significant_recall_loss"},
 	} {

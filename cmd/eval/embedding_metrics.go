@@ -263,12 +263,14 @@ func aggregateEmbedding(input embeddingInput, result *embeddingReport) error {
 		}
 		result.Comparisons = append(result.Comparisons, comparison{Metric: metric, Samples: len(left), DegreesFreedom: max(0, len(left)-1), Status: statisticalStatus(len(left)), Baseline: mean(left), Current: mean(right), Difference: diff, Interval: interval, Improved: improved, Significant: interval >= 0 && math.Abs(diff) > interval})
 	}
-	result.Status, result.Reason = assessEmbedding(input, *result)
+	result.Status, result.Reason = assessEmbedding(input, *result, retrieval[names[1]])
 	return nil
 }
 
-func assessEmbedding(input embeddingInput, r embeddingReport) (string, string) {
-	ready, latencyImproved, costImproved, regressed := true, false, false, false
+// assessEmbedding의 candidate는 후보 구성의 회차별 검색 측정이다. 지연 SLO는 그 사용 사례별
+// p95로 판정하며 표본 충분성·출처보다 먼저 비채택한다.
+func assessEmbedding(input embeddingInput, r embeddingReport, candidate []runMetrics) (string, string) {
+	ready, latencyImproved, costImproved, regressed, slow := true, false, false, false, false
 	required := []string{"relation_precision", "relation_recall", "global_false_pass", "global_false_reject"}
 	for _, name := range required {
 		i := slices.IndexFunc(r.Comparisons, func(c comparison) bool { return c.Metric == name })
@@ -297,20 +299,19 @@ func assessEmbedding(input embeddingInput, r embeddingReport) (string, string) {
 	for _, c := range r.Comparisons {
 		costImproved = costImproved || (slices.Contains(embeddingCostMetrics, c.Metric) && c.Samples >= 2 && c.Significant && c.Improved)
 	}
-	for _, run := range r.Runs {
-		if run.Metrics != nil {
-			for _, q := range run.Metrics.QuerySamples {
-				if q.LatencyMS > 500 {
-					ready = false
-				}
-			}
+	for _, run := range candidate {
+		for _, metrics := range run.UseCases {
+			slow = slow || metrics.LatencyP95MS > 500
 		}
+	}
+	if slow {
+		return "rejected", "latency_slo_exceeded"
 	}
 	if regressed {
 		return "rejected", "significant_quality_or_latency_regression"
 	}
 	if !ready {
-		return "deferred", "insufficient_independent_units_annotations_or_latency_slo"
+		return "deferred", "insufficient_independent_units_or_annotations"
 	}
 	if input.Provenance == "synthetic" {
 		return "deferred", "synthetic_provider"

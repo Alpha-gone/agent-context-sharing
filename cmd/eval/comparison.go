@@ -296,12 +296,14 @@ func assessComparisons(axis string, judgements []stageJudgement, runs map[string
 					failed = failed || count > 0
 				}
 			}
-			if ready {
+			// 채널 실패·지연 초과는 표본 충분성과 관계없이 먼저 비채택한다.
+			switch {
+			case failed:
+				value.Status, value.Reason = "rejected", "channel_failures"
+			case slow:
+				value.Status, value.Reason = "rejected", "latency_slo_exceeded"
+			case ready:
 				switch {
-				case failed:
-					value.Status, value.Reason = "rejected", "channel_failures"
-				case slow:
-					value.Status, value.Reason = "rejected", "latency_slo_exceeded"
 				case axis == "index_targets" && recallLoss:
 					value.Status, value.Reason = "rejected", "significant_recall_loss"
 				case axis == "index_targets":

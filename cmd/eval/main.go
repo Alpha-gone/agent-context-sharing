@@ -452,6 +452,13 @@ func runConvert(format, source, name string, limit int, useCase, contextsPath, q
 	if limit < 0 {
 		return fmt.Errorf("변환 질의 수는 0 이상이어야 한다")
 	}
+	outputs := []string{contextsPath, queriesPath}
+	if format == convertOwnAdversarial {
+		outputs = append(outputs, attacksPath)
+	}
+	if err := distinctOutputPaths(outputs); err != nil {
+		return err
+	}
 	var contexts contextSet
 	var queries querySet
 	var attacks attackSet
@@ -494,37 +501,55 @@ func runConvert(format, source, name string, limit int, useCase, contextsPath, q
 	if err != nil {
 		return err
 	}
+	// 기존 출력은 모든 검증을 통과한 뒤에만 바꾼다. 메모리 검증으로 중복 식별자 등을 먼저
+	// 거르고, 같은 디렉터리의 임시 파일에 써서 다시 읽은 결과까지 통과해야 교체한다.
+	if _, err := validateContextSet(contexts, contextsPath); err != nil {
+		return err
+	}
+	if _, err := validateQuerySet(queries, contexts, queriesPath); err != nil {
+		return err
+	}
+	values := []any{contexts, queries}
 	if format == convertOwnAdversarial {
 		if err := validateAttackSet(attacks, contexts, queries); err != nil {
 			return err
 		}
+		values = append(values, attacks)
 	}
-	if err := writeDataset(contextsPath, contexts); err != nil {
-		return err
-	}
-	if err := writeDataset(queriesPath, queries); err != nil {
-		return err
-	}
-	if format == convertOwnAdversarial {
-		if err := writeDataset(attacksPath, attacks); err != nil {
+	staged := make([]string, 0, len(outputs))
+	defer func() {
+		for _, path := range staged {
+			_ = os.Remove(path)
+		}
+	}()
+	for index, path := range outputs {
+		temporary, err := stageDataset(path, values[index])
+		if err != nil {
 			return err
 		}
+		staged = append(staged, temporary)
 	}
 	// 만든 파일을 바로 읽어 적재 전 검증을 통과하는지 확인한다. 변환이 형식을 어기면
 	// 측정 단계가 아니라 여기에서 드러나야 한다.
-	loaded, err := loadContextSet(contextsPath)
+	loaded, err := loadContextSet(staged[0])
 	if err != nil {
 		return err
 	}
-	loadedQueries, err := loadQuerySet(queriesPath, loaded)
+	loadedQueries, err := loadQuerySet(staged[1], loaded)
 	if err != nil {
 		return err
 	}
 	if format == convertOwnAdversarial {
-		if _, err := loadAttackSet(attacksPath, loaded, loadedQueries); err != nil {
+		if _, err := loadAttackSet(staged[2], loaded, loadedQueries); err != nil {
 			return err
 		}
 	}
+	for index, path := range outputs {
+		if err := os.Rename(staged[index], path); err != nil {
+			return fmt.Errorf("데이터셋 교체: %w", err)
+		}
+	}
+	staged = nil
 	slog.Info("변환 완료", "version", contexts.Version, "contexts", len(contexts.Contexts), "queries", len(queries.Queries))
 	return nil
 }

@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -549,7 +548,7 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 	if err != nil {
 		return nil, err
 	}
-	defer func() { err = errors.Join(err, dropGraph(ctx, database, graph), ctx.Err()) }()
+	defer releaseEvaluationGraph(ctx, database, graph, &err)
 	if err := auditClean(ctx, database, graph, expect, "공격 전"); err != nil {
 		return nil, err
 	}

@@ -412,3 +412,9 @@
 
 - 조회일 2026-10-31 KST. [PostgreSQL 18 표현식 인덱스](https://www.postgresql.org/docs/18/indexes-expressional.html)·[EXPLAIN](https://www.postgresql.org/docs/18/using-explain.html)에서 질의 표현식과 인덱스의 대응 및 실제 rows/loops·buffers의 해석을 확인했다. [CASE](https://www.postgresql.org/docs/18/functions-conditional.html#FUNCTIONS-CASE)·[SELECT CTE materialization](https://www.postgresql.org/docs/18/queries-with.html#QUERIES-WITH-CTE-MATERIALIZATION)의 수요 기반 실행은 작은 대상의 vectors 조회와 큰 대상 집합 조인을 한 스냅숏에서 구분하는 근거다. 상수 계획 평가 예외를 일반화하지 않고 실제 실행 계획의 loops·행으로 선택 경로를 대조했다.
 - [색인 전환·복귀 경계](sdd/indexing.md#전환복귀-경계)는 targets 속성을 UUID로 한 번 변환하고 기존 임베딩 UUID 열·인덱스를 사용한다. 64건은 이 서비스의 작은 조회 묶음 상한으로, PostgreSQL이 보장하는 최적 분기점은 아니다. pgx v5.10.0의 로컬 공식 `tracer.go` API 주석으로 QueryTracer의 SQL/Args 관찰 범위를 확인하고 실제 ReindexProgress 질의를 수집했다. pgx v5.10.0 `conn.go`의 QueryExecModeExec 주석과 ExecParams 실행을 확인하여 이 질의의 named prepared plan 재사용을 피하고 SQL의 UUID cast를 명시했다. 버전·스키마·마이그레이션·관측 주기는 변경하지 않았다.
+
+
+## 2026-10-31 #194 복구 요청 중복과 목록 상한
+
+- 조회일 2026-10-31 KST. [PostgreSQL 18 행 잠금](https://www.postgresql.org/docs/18/explicit-locking.html#LOCKING-ROWS)의 트랜잭션 종료까지 유지되는 잠금과 [LIMIT](https://www.postgresql.org/docs/18/queries-limit.html)의 최대 반환 건수·고유 정렬 기준을 확인했다. [판정의 직렬화](sdd/context-lifecycle.md#판정의-직렬화)에서 기존 그래프 잠금을 요청 중복 판정에도 사용하며, [웹 화면 계약](sdd/web.md#화면-배치)의 오래된 요청 우선 최대 100건 조회에 반영했다. [Read Committed](https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED)에서 잠금 뒤 별도 명령으로 앞선 커밋을 읽는다. 스키마·마이그레이션은 변경하지 않는다.
+- Modern Web Guidance의 `responsive-table` 가이드를 확인했다. 기존 표 제목·열 머리글·키보드 스크롤 영역을 유지하고 상한·처리 후 후속 요청 안내만 일반 문단에 추가했다. CSS·클라이언트 스크립트와 표 배치는 변경하지 않았다.

@@ -459,3 +459,9 @@
 
 - 조회일 2026-10-31 KST. [#109](https://github.com/Alpha-gone/agent-context-sharing/issues/109)의 출처 시도·bcrypt 자원 보호·계정 잠금 악용 검토 범위와 [#193](https://github.com/Alpha-gone/agent-context-sharing/issues/193)의 여섯 /64 전역 창 소진 문제를 확인했다. [공개 로그인·가입 자원 보호](sdd/authentication.md#공개-로그인가입-자원-보호)는 전체 60회/분을 제거하고 출처별 10회/60초·4096개 상태·기존 4개 비밀번호 작업 상한을 유지하도록 선택했다. 이는 외부 표준의 권고 수치가 아닌 이 서비스의 가용성·자원 보호 결정이다.
 - 여섯 출처가 각 10회 요청한 뒤 다른 출처의 로그인·가입·동의가 처리되는 웹 회귀로 결정을 대조했다. 동의 분리나 세션 예외만으로는 미인증 사용자의 로그인 전역 차단이 남는다. 작업 자리 점유·공유 /64·출처 상태 포화에 따른 잔여 거부와 미측정 운영 부하는 정본·[검토 기록](reviews/2026-10-31-issue-193.md)에 구분했으며 실제 외부 방어 정책을 확인하거나 변경하지 않았다.
+
+
+## 2026-10-31 #174 후속 조회 예산과 가상 시간
+
+- 조회일 2026-10-31 KST. Go 1.27.1 SDK `src/testing/synctest/synctest.go`와 [testing/synctest](https://pkg.go.dev/testing/synctest)의 Test·Wait·가상 시간·격리 규칙을 확인했다. 각 하위 사례를 별도 bubble에서 실행하고, T.Run·T.Parallel은 bubble 안에서 호출하지 않는다. 채널 대기·타이머와 달리 sync.Mutex 대기는 durably blocked가 아니라는 제약도 적용했다. #174 취소·상한 시험의 벽시계 대기를 없애고 연속 적재 취소 뒤 남은 예산을 결정적으로 대조한다.
+- SDK `src/context/context.go`의 [Context](https://pkg.go.dev/context#Context)·WithTimeout 계약으로 부모 마감 우선과 비동기 Done 통지를 확인했다. 재시도 전 마감 시각도 확인하여 타이머 콜백이 지연돼도 소진된 예산으로 새 적재를 시작하지 않는다. [토큰 검증](sdd/authentication.md#토큰-검증)은 각 캐시 미스의 대기·적재·재시도를 합산하는 5초 예산으로 변경했으며 캐시 적중에는 타이머를 추가하지 않는다. [후속 검토](reviews/2026-10-31-issue-174-budget.md)에 재현·반복 시험과 한계를 기록했다.

@@ -83,8 +83,13 @@ type adversarialMetrics struct {
 	Affected        metricSummary `json:"affected_query_ratio"`
 	Contamination   metricSummary `json:"contamination_ratio"`
 	Trace           metricSummary `json:"trace_completeness"`
-	FalsePositive   metricSummary `json:"false_positive_rate"`
-	Recovery        metricSummary `json:"recovery_completeness"`
+	// TraceEntry는 추적 대상 반복 중 첫 오염 항목이 응답 진입점인 비율이고, RelationTrace는
+	// 진입점이 아닌 첫 오염 항목만으로 계산한 추적 완전성이다. 앞의 경우는 관계 경로를
+	// 거치지 않으므로 추적 완전성에서 따로 본다.
+	TraceEntry    metricSummary `json:"trace_entry_ratio"`
+	RelationTrace metricSummary `json:"relation_trace_completeness"`
+	FalsePositive metricSummary `json:"false_positive_rate"`
+	Recovery      metricSummary `json:"recovery_completeness"`
 }
 
 type sampleResult struct {
@@ -204,8 +209,9 @@ func contaminationRatio(r response, contaminated []attackRef) float64 {
 }
 
 // traceable은 반환된 첫 오염 식별자까지 진입점에서 반환 간선만으로 경로를 복원할 수 있는지
-// 본다. 첫 항목은 순위가 앞선 컨텍스트, 없으면 응답 순서가 앞선 관계다.
-func traceable(r response, contaminated []attackRef) bool {
+// 본다. 첫 항목은 순위가 앞선 컨텍스트, 없으면 응답 순서가 앞선 관계다. entry는 첫 항목이
+// 응답 진입점인 컨텍스트라 관계 경로 없이 닿았다는 뜻이다.
+func traceable(r response, contaminated []attackRef) (traced, entry bool) {
 	var target attackRef
 	for _, key := range r.Contexts {
 		if slices.ContainsFunc(contaminated, func(ref attackRef) bool { return ref.Key == key }) {
@@ -222,7 +228,10 @@ func traceable(r response, contaminated []attackRef) bool {
 		}
 	}
 	if target.Key == "" && target.Relation == nil {
-		return false
+		return false, false
+	}
+	if slices.Contains(r.Entries, target.Key) {
+		return true, true
 	}
 	adjacent := map[string][]string{}
 	for _, edge := range r.Edges {
@@ -245,9 +254,9 @@ func traceable(r response, contaminated []attackRef) bool {
 		}
 	}
 	if target.Key != "" {
-		return reached[target.Key]
+		return reached[target.Key], false
 	}
-	return reached[target.Relation.From] || reached[target.Relation.To]
+	return reached[target.Relation.From] || reached[target.Relation.To], false
 }
 
 // diagnosePath는 정상 기대 경로를 앞에서부터 응답과 대조해 첫 불일치 하나를 돌려준다.
@@ -341,12 +350,13 @@ func answersRestored(after, before response, answers []string) bool {
 }
 
 // targetRun은 대상 질의 하나의 한 반복 관측값이다. Traced는 공격에 성공하지 않은 반복에서
-// 정의되지 않은 값이다.
+// 정의되지 않은 값이며, EntryTarget은 Traced가 정의된 반복에서만 의미가 있다.
 type targetRun struct {
 	PreSuccess, Success             float64
 	Affected                        float64
 	PreContamination, Contamination float64
 	Traced                          float64
+	EntryTarget                     bool
 	AttackRecovered, Recovered      float64
 }
 
@@ -391,7 +401,8 @@ func observeTarget(sample attackSample, query querySpec, paths []expectedPath, b
 		Recovered:        restored(recovered),
 	}
 	if run.Success == 1 {
-		run.Traced = indicator(traceable(attacked, sample.ContaminatedRefs))
+		traced, entry := traceable(attacked, sample.ContaminatedRefs)
+		run.Traced, run.EntryTarget = indicator(traced), entry
 	}
 	return run
 }
@@ -563,7 +574,7 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 		}
 	}
 
-	if err := createContexts(ctx, database, graph.GraphID, graph.AccountID, sample.AddContexts, graph.Keys); err != nil {
+	if err := addAttackContexts(ctx, database, graph, sample.AddContexts); err != nil {
 		return nil, fmt.Errorf("공격 컨텍스트 추가: %w", err)
 	}
 	if err := drainIndexQueue(ctx, database, worker, graph.GraphID, len(sample.AddContexts)*4+64); err != nil {
@@ -677,6 +688,14 @@ func runAttackRepeat(ctx context.Context, database *store.Store, worker *index.W
 		runs.controlsWarned = append(runs.controlsWarned, float64(warnedAfter)/float64(controls))
 	}
 	return warnings, nil
+}
+
+// addAttackContexts는 공격 컨텍스트를 기준 컨텍스트보다 먼저 기록된 것으로 만든다. 시간 필터는
+// 질의와 무관하게 최근 기록을 후보·진입점으로 고르므로, 적재 순서만으로 시간 채널 이점을
+// 얻으면 관계·경로 공격의 효과를 분리해 잴 수 없다.
+func addAttackContexts(ctx context.Context, database *store.Store, graph loadedGraph, specs []contextSpec) error {
+	recordedAt := graph.CreatedAt.Add(-time.Second)
+	return createContexts(ctx, database, graph.GraphID, graph.AccountID, specs, graph.Keys, func() time.Time { return recordedAt })
 }
 
 func loadAdversarialGraph(ctx context.Context, database *store.Store, worker *index.Worker, contexts contextSet) (loadedGraph, error) {

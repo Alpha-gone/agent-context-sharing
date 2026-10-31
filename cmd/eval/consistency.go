@@ -448,7 +448,7 @@ func (scenario *consistencyScenario) write(ctx context.Context, state *writerSta
 			return nil
 		}
 		created, err := createContext(ctx, scenario.database, scenario.graph.GraphID, scenario.graph.AccountID, contextSpec{Layer: "derived", Body: fmt.Sprintf("동시 쓰기 검증 임시 파생 %d이다.", step),
-			Derived: &derivedSpec{Kind: "proposition", EvidenceState: "observation"}}, []model.ID{scenario.hub})
+			Derived: &derivedSpec{Kind: "proposition", EvidenceState: "observation"}}, []model.ID{scenario.hub}, currentRecordedAt())
 		if err != nil {
 			return err
 		}

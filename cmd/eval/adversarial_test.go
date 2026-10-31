@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 func adversarialFixture(t *testing.T) (contextSet, querySet, attackSet) {
@@ -23,6 +24,12 @@ func TestConvertOwnAdversarialSet(t *testing.T) {
 	if err := validateAttackSet(attacks, contexts, queries); err != nil {
 		t.Fatalf("생성한 공격 표본 검증: %v", err)
 	}
+	queryWords := map[string]bool{}
+	for _, query := range queries.Queries {
+		for _, word := range simpleWords(query.WorkContext) {
+			queryWords[word] = true
+		}
+	}
 	var types []string
 	for _, sample := range attacks.Samples {
 		types = append(types, sample.AttackType)
@@ -37,6 +44,12 @@ func TestConvertOwnAdversarialSet(t *testing.T) {
 			if strings.Contains(spec.Body, "가중치") {
 				t.Errorf("표본 %q가 가중치 표현을 쓴다", sample.SampleID)
 			}
+			// PostgreSQL simple 구성처럼 소문자화한 단어 단위로 질의 어휘와 겹치는지 본다.
+			for _, word := range simpleWords(spec.Body) {
+				if queryWords[word] {
+					t.Errorf("표본 %q의 공격 컨텍스트 %q가 질의 어휘 %q를 쓴다", sample.SampleID, spec.Key, word)
+				}
+			}
 		}
 	}
 	slices.Sort(types)
@@ -44,6 +57,10 @@ func TestConvertOwnAdversarialSet(t *testing.T) {
 	if !slices.Equal(types, want) {
 		t.Fatalf("공격 유형 %v, 기대 %v", types, want)
 	}
+}
+
+func simpleWords(text string) []string {
+	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 }
 
 func sameRef(left, right attackRef) bool {

@@ -96,17 +96,30 @@ jq -e '(.services | all(.[]; (.ports // [] | length) == 0)) and
     (.services.server.environment.INDEX_WORKER_PLACEMENT == "external")' "$test_dir/config.json" >/dev/null
 cd "$repo_root"
 CGO_ENABLED=0 GOOS=linux GOARCH="$architecture" "$go_binary" test -c -o "$test_dir/transition.test" ./cmd/server
-# 같은 코드에서013만 제외한 합성 이전 형상이며 과거 출시 이미지가 아니다.
+# 같은 코드에서 전환 대상 013 이후의 번호를 모두 제외한 합성 이전 형상이며 과거 출시 이미지가 아니다.
+# 실행기는 적용된 최대 번호 이하의 미적용 파일을 거부하므로 뒤 번호만 남기면 013을 적용할 수 없다.
 mkdir "$test_dir/old" "$test_dir/fault"
 for part in go.mod go.sum Dockerfile.server cmd internal migrations; do
     cp -R "$repo_root/$part" "$test_dir/old/"
     cp -R "$repo_root/$part" "$test_dir/fault/"
 done
-rm "$test_dir/old/migrations/013_context_revision.sql"
-cat > "$test_dir/fault/migrations/014_ops08_success.sql" <<'SQL'
+migration_version() { basename "$1" | cut -c1-3 | sed 's/^0*//'; }
+latest=0
+for file in "$repo_root"/migrations/[0-9][0-9][0-9]_*.sql; do
+    version=$(migration_version "$file")
+    if [ "$version" -gt "$latest" ]; then latest=$version; fi
+done
+[ "$latest" -ge 13 ] || fail '전환 대상 013이 없다.'
+for file in "$test_dir"/old/migrations/[0-9][0-9][0-9]_*.sql; do
+    if [ "$(migration_version "$file")" -ge 13 ]; then rm "$file"; fi
+done
+# 실패 주입 파일은 현재 최신 번호 뒤에 둔다.
+committed=$((latest + 1))
+rolled_back=$((latest + 2))
+cat > "$test_dir/fault/migrations/$(printf '%03d' "$committed")_ops08_success.sql" <<'SQL'
 CREATE TABLE public.ops08_committed (id integer PRIMARY KEY);
 SQL
-cat > "$test_dir/fault/migrations/015_ops08_failure.sql" <<'SQL'
+cat > "$test_dir/fault/migrations/$(printf '%03d' "$rolled_back")_ops08_failure.sql" <<'SQL'
 CREATE TABLE public.ops08_rolled_back (id integer PRIMARY KEY);
 UPDATE public.context_graph SET name='이 변경은 롤백되어야 한다';
 SELECT 1/0;
@@ -151,6 +164,7 @@ compose exec -T --user postgres db pg_verifybackup /backup/base
 TRANSITION_APP_IMAGE="$test_project-new"
 compose run --rm --no-deps migrate migrate status
 compose run --rm --no-deps migrate migrate up
+[ "$(sql db 'SELECT max(version) FROM public.schema_migration')" = "$latest" ] || fail '목표 형상의 최신 번호가 적용되지 않았다.'
 compose run --rm --no-deps migrate migrate up > "$test_dir/repeat.log"
 grep -Fq '적용할 마이그레이션이 없다' "$test_dir/repeat.log" || fail '반복 적용이 무변경이 아니다.'
 run_fixture db verify
@@ -160,14 +174,14 @@ ready "$new_image"
 run_fixture db write
 audit
 compose stop server
-# 파일 단위 경계: 성공한014는 남고015의 DDL/업무 변경/이력만 모두 롤백된다.
+# 파일 단위 경계: 먼저 성공한 실패 주입 파일은 남고 다음 파일의 DDL/업무 변경/이력만 모두 롤백된다.
 TRANSITION_APP_IMAGE="$test_project-fault"
 code=0
 compose run --rm --no-deps migrate migrate up > "$test_dir/failure.log" 2>&1 || code=$?
 [ "$code" = 1 ] || fail "실패 적용의 종료 코드가 다르다: $code"
-[ "$(sql db "SELECT max(version)=14 AND count(*) FILTER (WHERE version=15)=0 FROM public.schema_migration")" = t ] || fail '파일별 적용 이력이 다르다.'
+[ "$(sql db "SELECT max(version)=$committed AND count(*) FILTER (WHERE version=$rolled_back)=0 FROM public.schema_migration")" = t ] || fail '파일별 적용 이력이 다르다.'
 [ "$(sql db "SELECT to_regclass('public.ops08_committed') IS NOT NULL AND to_regclass('public.ops08_rolled_back') IS NULL AND NOT EXISTS (SELECT FROM public.context_graph WHERE name='이 변경은 롤백되어야 한다')")" = t ] || fail '실패 파일의 변경이 남았다.'
-printf 'transition: old=012 new=013 used_revision=true repeat_noop=true failed_file_rolled_back=true earlier_file_preserved=true\n'
+printf 'transition: old=012 new=%03d used_revision=true repeat_noop=true failed_file_rolled_back=true earlier_file_preserved=true\n' "$latest"
 # 이미 사용한 스키마는 down 대신 별도 빈 볼륨의 물리 백업과 보관 이미지로 복귀한다.
 compose run --rm --no-deps --entrypoint sh recovered -eu -c '
     test ! -e "$PGDATA/PG_VERSION"
@@ -195,6 +209,6 @@ compose_original up -d --no-deps --force-recreate --wait --wait-timeout 120 serv
 ready "$old_image"
 compose_original stop server
 run_fixture recovered verify
-[ "$(sql db 'SELECT max(version) FROM public.schema_migration')" = 14 ] || fail '전환한 원본 DB가 변경됐다.'
+[ "$(sql db 'SELECT max(version) FROM public.schema_migration')" = "$committed" ] || fail '전환한 원본 DB가 변경됐다.'
 printf 'restore: old_image=true schema=012 history_preserved=true originals_permissions_keys_queue_session=true source_retained=true\n'
 verified=1

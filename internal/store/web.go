@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -921,16 +922,33 @@ const (
 // 결과 상한과 절단 경계를 이미 갖고 있고, 방문한 정점만으로 연결선을 걸러 삭제된
 // 컨텍스트를 가리키는 간선을 남기지 않는다. 전역 요약 파생이 없는 그래프에서는 활성
 // 컨텍스트를 시작점으로 삼아 같은 상한과 절단 규칙 아래에서 전체 보기를 만든다.
-func (s *Store) GraphVisualization(ctx context.Context, graphID model.ID, hops, limit int) (HopResult, error) {
+//
+// 시작점은 홉 확장과 같은 스냅숏에서 최신순으로 상한보다 한 개 더 읽는다. 초과분은 홉
+// 탐색이 시작점 절단으로 표시하므로, 시작점끼리 연결되지 않아도 잘린 결과를 알린다.
+func (s *Store) GraphVisualization(ctx context.Context, graphID model.ID, hops, limit int) (result HopResult, err error) {
 	if !graphID.IsV7() || hops < 0 || limit < 0 {
 		return HopResult{}, fmt.Errorf("시각화 조회 인자가 올바르지 않다")
 	}
-	starts, err := s.graphContexts(ctx, graphID, activeGlobalSummaries, limit)
+	ctx, release, err := s.enterHopReadScope(ctx)
+	if err != nil {
+		return HopResult{}, err
+	}
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			result, err = HopResult{}, errors.Join(err, releaseErr)
+		}
+	}()
+	fetch := limit
+	// 상한이 정수 최댓값이면 그보다 많은 시작점이 있을 수 없으므로 더 읽지 않는다.
+	if fetch > 0 && fetch < math.MaxInt {
+		fetch++
+	}
+	starts, err := s.graphContexts(ctx, graphID, activeGlobalSummaries, fetch)
 	if err != nil {
 		return HopResult{}, err
 	}
 	if len(starts) == 0 {
-		if starts, err = s.graphContexts(ctx, graphID, activeContexts, limit); err != nil {
+		if starts, err = s.graphContexts(ctx, graphID, activeContexts, fetch); err != nil {
 			return HopResult{}, err
 		}
 	}
@@ -968,7 +986,7 @@ func (s *Store) graphContextPage(ctx context.Context, graphID model.ID, predicat
 	if fetch > 0 {
 		fetch++
 	}
-	contexts, err := s.graphContextsOrdered(ctx, graphID, predicate, fetch, true)
+	contexts, err := s.graphContexts(ctx, graphID, predicate, fetch)
 	if err != nil {
 		return nil, false, err
 	}
@@ -978,21 +996,13 @@ func (s *Store) graphContextPage(ctx context.Context, graphID model.ID, predicat
 	return contexts, false, nil
 }
 
-// graphContexts는 한 그래프의 정점을 주어진 조건과 상한으로 읽는다. limit 0은 「계정 플랜」이
-// 선언한 대로 한도 없음이다.
+// graphContexts는 한 그래프의 정점을 주어진 조건과 상한으로 최신순으로 읽는다. limit 0은
+// 「계정 플랜」이 선언한 대로 한도 없음이다.
 func (s *Store) graphContexts(ctx context.Context, graphID model.ID, predicate string, limit int) ([]model.Context, error) {
-	return s.graphContextsOrdered(ctx, graphID, predicate, limit, false)
-}
-
-func (s *Store) graphContextsOrdered(ctx context.Context, graphID model.ID, predicate string, limit int, newestFirst bool) ([]model.Context, error) {
 	if !graphID.IsV7() || limit < 0 {
 		return nil, fmt.Errorf("그래프 정점 조회 인자가 올바르지 않다")
 	}
-	order := " RETURN node ORDER BY node.context_id"
-	if newestFirst {
-		order += " DESC"
-	}
-	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) + " AND " + predicate + order
+	query := "MATCH (node:Context) WHERE node.graph_id = " + cypherString(graphID.String()) + " AND " + predicate + " RETURN node ORDER BY node.context_id DESC"
 	if limit > 0 {
 		query += " LIMIT " + strconv.Itoa(limit)
 	}

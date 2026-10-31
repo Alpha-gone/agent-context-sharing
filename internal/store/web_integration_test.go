@@ -1,11 +1,13 @@
 package store
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
 
 	"agent_context_sharing/internal/model"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestGraphVisualizationKeepsEdgesInsideResult는 시각화 응답의 연결선이 응답에 있는
@@ -151,6 +153,125 @@ func TestGraphVisualizationAppliesHopNodeLimit(t *testing.T) {
 	}
 	if len(unlimited.Contexts) != 5 || unlimited.Truncated {
 		t.Fatalf("무제한 결과 = %d개, 절단 %v", len(unlimited.Contexts), unlimited.Truncated)
+	}
+}
+
+// TestGraphVisualizationTruncatesStartLimit는 상한보다 많은 시작점이 연결되지 않아도
+// 절단으로 표시되고 상한 안에는 최신 시작점이 남는지 확인한다.
+func TestGraphVisualizationTruncatesStartLimit(t *testing.T) {
+	store := newIntegrationStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, store, actorID)
+
+	assertStarts := func(t *testing.T, graphID model.ID, created []model.ID, limit int, truncated bool) {
+		t.Helper()
+		hops, err := store.GraphVisualization(t.Context(), graphID, math.MaxInt, limit)
+		if err != nil {
+			t.Fatalf("시각화 조회: %v", err)
+		}
+		want := min(limit, len(created))
+		if len(hops.Contexts) != want || hops.Truncated != truncated || hops.Boundary != 0 {
+			t.Fatalf("시작점 상한 결과 = %d개, 절단 %v, 경계 %d", len(hops.Contexts), hops.Truncated, hops.Boundary)
+		}
+		// UUIDv7 내림차순이 최신순이므로 가장 최근에 만든 시작점부터 남아야 한다.
+		for i, value := range hops.Contexts {
+			if value.ID != created[len(created)-1-i] {
+				t.Fatalf("시작점 %d = %s, 기대 %s", i, value.ID, created[len(created)-1-i])
+			}
+		}
+	}
+
+	t.Run("fallback", func(t *testing.T) {
+		graphID := createTestGraph(t, store, actorID)
+		created := make([]model.ID, 0, 3)
+		for range 3 {
+			value, err := store.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "api://viz-start-limit/"+newTestID(t).String()), nil)
+			if err != nil {
+				t.Fatalf("고립 원천 생성: %v", err)
+			}
+			created = append(created, value.ID)
+		}
+		assertStarts(t, graphID, created, 2, true)
+		// 시작점 수가 상한과 같으면 잘린 것이 아니다.
+		assertStarts(t, graphID, created, 3, false)
+	})
+
+	t.Run("global_summaries", func(t *testing.T) {
+		graphID := createTestGraph(t, store, actorID)
+		source, err := store.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "api://viz-summary-limit/"+newTestID(t).String()), nil)
+		if err != nil {
+			t.Fatalf("원천 생성: %v", err)
+		}
+		created := make([]model.ID, 0, 3)
+		for range 3 {
+			summary := testDerivedContext(t, graphID, actorID)
+			summary.Derived.Kind = model.DerivationKindSummary
+			summary.Derived.SummaryScope = model.SummaryScopeGlobal
+			value, err := store.CreateContext(t.Context(), graphID, summary, []model.ID{source.ID})
+			if err != nil {
+				t.Fatalf("전역 요약 생성: %v", err)
+			}
+			created = append(created, value.ID)
+		}
+		assertStarts(t, graphID, created, 2, true)
+	})
+}
+
+// TestGraphVisualizationReadsStartsInHopSnapshot은 시작점 조회 직후 그 시작점이 폐기돼도
+// 시작점과 홉 확장이 같은 스냅숏을 읽어 시각화가 실패하지 않는지 확인한다.
+func TestGraphVisualizationReadsStartsInHopSnapshot(t *testing.T) {
+	database := newIntegrationStore(t)
+	config := database.pool.Config()
+	database.pool.Close()
+	config.ConnConfig.Tracer = new(hopReadBarrierTracer)
+	pool, err := pgxpool.NewWithConfig(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database.pool = pool
+	actorID := newTestID(t)
+	createTestAccount(t, database, actorID)
+	graphID := createTestGraph(t, database, actorID)
+	start, err := database.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "api://viz-start-snapshot/"+newTestID(t).String()), nil)
+	if err != nil {
+		t.Fatalf("시작 원천 생성: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	// 시작점 목록을 읽은 뒤 그 시작점의 본문 묶음 조회 직전에 멈춘다.
+	barrier := &hopReadBarrier{query: start.ID.String(), stage: "context_id IN", ready: make(chan struct{}), resume: make(chan struct{})}
+	type outcome struct {
+		result HopResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := database.GraphVisualization(context.WithValue(ctx, hopReadBarrierKey{}, barrier), graphID, 1, 50)
+		done <- outcome{result, err}
+	}()
+	select {
+	case <-barrier.ready:
+	case <-ctx.Done():
+		t.Fatal("시작점 본문 조회 동기화 대기: ", ctx.Err())
+	}
+	if _, err := database.DiscardContext(ctx, graphID, start.ID, nil, WriteLimits{}); err != nil {
+		t.Fatal(err)
+	}
+	close(barrier.resume)
+	var got outcome
+	select {
+	case got = <-done:
+	case <-ctx.Done():
+		t.Fatal("시각화 완료 대기: ", ctx.Err())
+	}
+	if got.err != nil || len(got.result.Contexts) != 1 || got.result.Contexts[0].ID != start.ID || got.result.Truncated {
+		t.Fatalf("동시 폐기 중 시각화 = %+v, %v", got.result, got.err)
+	}
+	waitHopResources(t, database, nil, 0)
+	after, err := database.GraphVisualization(t.Context(), graphID, 1, 50)
+	if err != nil || len(after.Contexts) != 0 {
+		t.Fatalf("폐기 뒤 새 시각화 = %+v, %v", after, err)
 	}
 }
 

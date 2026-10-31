@@ -115,7 +115,8 @@ func toolDefinitions() []*sdk.Tool {
 	confirm := graph()
 	actorFields(confirm)
 	confirm["relation_type"] = enumSchema("확정할 사건 관계 유형. 정체성은 그래프·유형·양 끝의 조합이며 재확정은 기존 현재 상태를 반환한다.", "precedes", "causes", "part_of", "relates_to")
-	confirm["from_context_id"], confirm["to_context_id"] = idSchema("같은 그래프의 시작 사건 UUIDv7."), idSchema("같은 그래프의 대상 사건 UUIDv7.")
+	confirm["from_context_id"] = idSchema("같은 그래프의 활성 시작 사건(layer=event) UUIDv7. precedes·causes에서는 대상보다 늦게 시작할 수 없고 part_of에서는 부분 사건이다.")
+	confirm["to_context_id"] = idSchema("같은 그래프의 활성 대상 사건(layer=event) UUIDv7. part_of에서는 시작 사건의 기간을 포함하는 전체 사건이다.")
 	discardRelation := graph()
 	actorFields(discardRelation)
 	discardRelation["relation_id"] = idSchema("폐기할 사건 관계 UUIDv7. 이미 폐기된 관계의 재폐기는 입력 오류다.")
@@ -125,14 +126,14 @@ func toolDefinitions() []*sdk.Tool {
 		tool("graph_create", "새 그래프를 만들고 인증 계정이 소유자가 된다. request_id 없는 불확정 결과는 재조회하며 새 키는 새 그래프를 만들 수 있다.", createGraph, write(false, false)),
 		tool("graph_get", "선택한 graph_id의 현재 메타데이터·version을 조회한다. 현재 등급은 서버가 검사한다.", objectSchema(graph(), "graph_id"), read()),
 		tool("graph_update", "현재 expected_version으로 이름·설명을 갱신한다. 충돌하면 재조회한다. 같은 request_id·인자의 24시간 최초 결과 재생과 새 키의 판 검사를 구분한다.", objectSchema(updateGraph, "graph_id", "expected_version"), write(true, false)),
-		tool("node_create", "등록한 agent_id로 원천·파생·사건을 만든다. 계층별 필수 속성을 채운다. 원천은 source_ref로 중복 판정한다. 폐기·삭제된 기존 원천은 creation_status=existing_deleted와 warning을 반환하며 활성 근거로 사용할 수 없다. MCP 폐기는 node_restore로, 웹 삭제는 웹에서 복구한다. 파생 대체는 supersedes_context_id를 사용한다. request_id 재시도와 새 생성을 구분한다.", creation, write(true, false)),
+		tool("node_create", "등록한 agent_id로 원천·파생·사건을 만든다. 계층별 필수 속성을 채운다. 원천은 source_ref로 중복 판정한다. 폐기·삭제된 기존 원천은 creation_status=existing_deleted와 warning을 반환하며 활성 근거로 사용할 수 없다. MCP 폐기는 node_restore로, 웹 삭제는 웹에서 복구한다. 파생 대체는 supersedes_context_id를 사용한다. 기존 노드와의 연결은 생성 때 파생의 derived_from이나 사건의 member_refs로 지정하며, 사건 사이 관계만 생성 뒤 relation_confirm으로 확정한다. request_id 재시도와 새 생성을 구분한다.", creation, write(true, false)),
 		tool("node_get", "graph_id 안에서 시작 노드와 확정 간선의 부분 그래프를 조회한다. 0홉은 시작점만이며 정상 절단은 오류가 아니다.", objectSchema(getNode, "graph_id", "context_id"), read()),
 		tool("node_update", "등록한 agent_id·현재 expected_version으로 파생/사건의 가변 필드만 갱신한다. 원천은 불변이고 keep은 가변 필드 없이 유지 판단을 기록한다. 충돌·불확정 결과는 재조회한다.", updating, write(true, false)),
 		tool("node_discard", "등록한 agent_id로 노드를 소프트 폐기한다. 재폐기는 거부되며 연쇄 폐기는 하지 않는다. 같은 request_id의 결과 재생과 새 키의 상태 검사를 구분한다.", objectSchema(discard, "graph_id", "context_id", "agent_id"), write(true, false)),
 		tool("node_restore", "등록한 agent_id로 연산 채널에서 폐기한 노드를 복구한다. 웹 삭제는 웹에서 복구하며 활성 노드의 재복구는 거부한다. 불확정 결과는 같은 키 재시도 또는 조회로 확인한다.", objectSchema(restore, "graph_id", "context_id", "agent_id"), write(true, false)),
 		tool("context_flow_get", "현재 작업 텍스트로 공유 그래프의 평면 컨텍스트 흐름을 조회한다. UTC as_of·scope·문자 budget을 지정할 수 있다. 일부 채널 실패와 예산/홉 절단은 정상 부분 결과다.", objectSchema(flow, "graph_id", "work_context"), read()),
 		tool("relation_list", "선택한 사건에 붙은 사건 관계를 상태·유형으로 필터하고 relation_id 내림차순으로 조회한다. 받은 커서는 변경하지 않는다.", objectSchema(relations, "graph_id", "context_id"), read()),
-		tool("relation_confirm", "등록한 agent_id로 제안된 관계 또는 직접 판단한 사건 관계를 확정한다. 같은 정체성의 재확정은 현재 상태를 반환한다. 그래프·사건 유형·시간·순환 제약은 서버가 검사한다.", objectSchema(confirm, "graph_id", "relation_type", "from_context_id", "to_context_id", "agent_id"), write(true, true)),
+		tool("relation_confirm", "등록한 agent_id로 제안된 관계 또는 직접 판단한 사건 관계를 확정한다. 같은 정체성의 재확정은 현재 상태를 반환한다. 양 끝은 같은 그래프의 활성 사건(layer=event)이어야 하며 원천·파생은 node_create의 derived_from·member_refs로 연결한다. 거부되어도 앞선 노드 생성은 되돌리지 않는다. 그래프·사건 유형·시간·순환 제약은 서버가 검사한다.", objectSchema(confirm, "graph_id", "relation_type", "from_context_id", "to_context_id", "agent_id"), write(true, true)),
 		tool("relation_discard", "등록한 agent_id로 사건 관계를 폐기한다. 재폐기는 거부되며 관계 복구는 relation_confirm 재확정으로 처리한다. 선택 request_id로 같은 논리 요청을 재생한다.", objectSchema(discardRelation, "graph_id", "relation_id", "agent_id"), write(true, false)),
 	}
 }

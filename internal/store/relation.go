@@ -74,11 +74,11 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	observation.fields.Management.ExpectedLayer = "event"
 	if from.Layer != model.LayerEvent {
 		observation.fields.Management.ActualLayer = string(from.Layer)
-		return model.Relation{}, errors.Join(ErrInvalidRelation, model.FieldError{Field: "from_context_id", Message: "관계 양 끝은 사건이어야 한다"})
+		return model.Relation{}, errors.Join(ErrInvalidRelation, model.FieldError{Field: "from_context_id", Message: "관계 양 끝은 사건이어야 한다", Cause: model.ErrRelationEndpointNotEvent})
 	}
 	if to.Layer != model.LayerEvent {
 		observation.fields.Management.ActualLayer = string(to.Layer)
-		return model.Relation{}, errors.Join(ErrInvalidRelation, model.FieldError{Field: "to_context_id", Message: "관계 양 끝은 사건이어야 한다"})
+		return model.Relation{}, errors.Join(ErrInvalidRelation, model.FieldError{Field: "to_context_id", Message: "관계 양 끝은 사건이어야 한다", Cause: model.ErrRelationEndpointNotEvent})
 	}
 	observation.fields.Management.ActualLayer = "event"
 	observation.stage = "time_check"

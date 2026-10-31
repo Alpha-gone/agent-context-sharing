@@ -16,7 +16,7 @@ type FieldError struct {
 // Error는 필드 이름 없이 기존 검증 메시지를 그대로 돌려준다.
 func (e FieldError) Error() string { return e.Message }
 
-// Unwrap은 외부 형식 검증의 원래 오류를 보존한다.
+// Unwrap은 외부 형식 검증의 원래 오류나 관계 끝점 거부 원인을 보존한다.
 func (e FieldError) Unwrap() error { return e.Cause }
 
 // fieldErrorf는 검증 메시지를 바꾸지 않고 위반한 필드 이름만 덧붙인다.

@@ -463,3 +463,6 @@
 
 
 | 2026-10-31 | #171 | 사용자 | #171 처리하자 | business_tasks 외 모드의 비용 항목이 모두 unmeasured인지 manifest 검증에서 확인해, 불일치 선언을 측정 완료 뒤 cost_mismatch 대신 실행 전 manifest_invalid로 거부한다. 확장 업무 과업의 사후 대조는 유지했다. | manifest 검증·비용 선언 모드 시험·업무 과업 사후 대조 시험·평가/시험 정본·[검토](../reviews/2026-10-31-issue-171.md) | 수정 전 overlay로 비업무 모드 선언 허용을 재현했다. 전용 필수 DB의 eval 904건 통과, 별도 비교 DB 환경 미설정으로 임베딩 비교 2건 실패(무관). 추가 업무 과업 시험은 DB 없이 통과했다. check-go.sh 통과. 비용 산식·결과 형식·요구사항·추적표·DOX 소유권과 개인 IDE 파일은 유지했다. |
+
+
+| 2026-10-31 | #130 | 사용자 | #130 처리해 | relation_confirm의 from_context_id 거부 원인(사건 아님·폐기·시간 제약)을 모델 원인으로 구분하고, MCP가 코드·필드는 유지한 채 원인별 안내와 원천·파생 연결 경로(derived_from·member_refs)를 반환하게 했다. node_create·relation_confirm 도구 설명을 보완했다. | 관계 끝점 원인·MCP 거부 사상·도구 설명·두 도구 스냅샷·MCP/시험 정본·[검토](../reviews/2026-10-31-issue-130.md) | 원본 요청은 확보하지 못해 원천 끝 지정 경로를 추정으로 기록했다. 수정 전 handler overlay로 안내 시험 실패 확인. 전용 필수 DB의 model·store·mcp·server·web 4071건 통과, 환경 인수 21건 건너뜀. 스냅샷 재검증·check-go.sh 통과. 오류 코드 체계·요구사항·추적표·DOX 소유권과 개인 IDE 파일은 유지했다. |

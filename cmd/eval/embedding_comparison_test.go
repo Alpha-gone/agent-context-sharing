@@ -2,6 +2,7 @@ package main
 
 import (
 	json "encoding/json/v2"
+	"fmt"
 	"math"
 	"os"
 	"slices"
@@ -262,6 +263,91 @@ func TestEmbeddingAssessmentRequiresBothPurposes(t *testing.T) {
 			status, _ := assessEmbedding(embeddingInput{Provenance: test.provenance}, r)
 			if status != test.want || r.Activated {
 				t.Fatalf("%s != %s", status, test.want)
+			}
+		})
+	}
+	// 비용 개선은 HTTP 시도 수·벡터 열 바이트·실측 금액의 유의한 감소이며 사유에서 지연과 구분한다.
+	cost := func(metric string, samples int, significant, improved bool) func(*embeddingReport) {
+		return func(r *embeddingReport) {
+			r.Comparisons = append(r.Comparisons, comparison{Metric: metric, Samples: samples, Significant: significant, Improved: improved})
+		}
+	}
+	noLatency := func(r *embeddingReport) { r.Retrieval[1].Comparisons[useCaseFact][4].Significant = false }
+	for _, test := range []struct {
+		name, provenance, status, reason string
+		changes                          []func(*embeddingReport)
+	}{
+		{"latency_only", "observed", "candidate", "quality_preserved_latency_improved_final_acceptance_pending", nil},
+		{"storage_only", "observed", "candidate", "quality_preserved_cost_improved_final_acceptance_pending", []func(*embeddingReport){noLatency, cost("vector_column_bytes", 5, true, true)}},
+		{"document_calls_only", "observed", "candidate", "quality_preserved_cost_improved_final_acceptance_pending", []func(*embeddingReport){noLatency, cost("document_embedding_http_attempts", 5, true, true)}},
+		{"measurement_calls_only", "observed", "candidate", "quality_preserved_cost_improved_final_acceptance_pending", []func(*embeddingReport){noLatency, cost("measurement_embedding_http_attempts", 5, true, true)}},
+		{"measured_amount_only", "observed", "candidate", "quality_preserved_cost_improved_final_acceptance_pending", []func(*embeddingReport){noLatency, cost("embedding_cost", 5, true, true)}},
+		{"latency_and_cost", "observed", "candidate", "quality_preserved_latency_and_cost_improved_final_acceptance_pending", []func(*embeddingReport){cost("vector_column_bytes", 5, true, true)}},
+		{"unmeasured_amount", "observed", "deferred", "no_significant_measured_latency_or_cost_improvement", []func(*embeddingReport){noLatency, cost("embedding_cost", 0, false, false)}},
+		{"storage_increase", "observed", "deferred", "no_significant_measured_latency_or_cost_improvement", []func(*embeddingReport){noLatency, cost("vector_column_bytes", 5, true, false)}},
+		{"storage_not_significant", "observed", "deferred", "no_significant_measured_latency_or_cost_improvement", []func(*embeddingReport){noLatency, cost("vector_column_bytes", 5, false, true)}},
+		{"storage_one_unit", "observed", "deferred", "no_significant_measured_latency_or_cost_improvement", []func(*embeddingReport){noLatency, cost("vector_column_bytes", 1, true, true)}},
+		{"non_cost_metric", "observed", "deferred", "no_significant_measured_latency_or_cost_improvement", []func(*embeddingReport){noLatency, cost("preparation_ms", 5, true, true)}},
+		{"storage_synthetic", "synthetic", "deferred", "synthetic_provider", []func(*embeddingReport){noLatency, cost("vector_column_bytes", 5, true, true)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := fixture()
+			for _, change := range test.changes {
+				change(&r)
+			}
+			status, reason := assessEmbedding(embeddingInput{Provenance: test.provenance}, r)
+			if status != test.status || reason != test.reason {
+				t.Fatalf("판정 = %s/%s, 기대 %s/%s", status, reason, test.status, test.reason)
+			}
+		})
+	}
+}
+
+// TestEmbeddingStorageReductionCandidate는 지연 차이 없이 벡터 열 바이트만 유의하게 줄어든
+// 압축 비교가 집계를 거쳐 비용 개선 후보가 되는지 확인한다. 합성 출처는 계속 보류한다.
+func TestEmbeddingStorageReductionCandidate(t *testing.T) {
+	for _, test := range []struct{ provenance, status, reason string }{
+		{"observed", "candidate", "quality_preserved_cost_improved_final_acceptance_pending"},
+		{"synthetic", "deferred", "synthetic_provider"},
+	} {
+		t.Run(test.provenance, func(t *testing.T) {
+			in := embeddingFixture(t)
+			in.Provenance, in.Axis = test.provenance, "compression"
+			in.Variants[1].Dimension, in.Variants[1].VectorType = in.Variants[0].Dimension, "halfvec"
+			evaluation := in.Samples[1]
+			for i := 2; i <= 5; i++ {
+				extra := evaluation
+				extra.Code, extra.Unit = fmt.Sprintf("evaluation%d", i), fmt.Sprintf("evaluation-unit-%d", i)
+				in.Samples = append(in.Samples, extra)
+			}
+			runs := embeddingSyntheticRuns(in)
+			reductions := map[string]int64{"evaluation-unit": 2000, "evaluation-unit-2": 3000, "evaluation-unit-3": 2500, "evaluation-unit-4": 1800, "evaluation-unit-5": 2200}
+			for i := range runs {
+				if runs[i].Split != "evaluation" {
+					continue
+				}
+				runs[i].Preparation.VectorBytes = 5000
+				if runs[i].Variant == "candidate" {
+					runs[i].Preparation.VectorBytes -= reductions[runs[i].Unit]
+				}
+			}
+			report := embeddingReport{Conditions: []embeddingCondition{{Code: "base"}, {Code: "candidate"}}, Runs: runs}
+			for i, v := range in.Variants {
+				selected, err := tuneEmbeddingThresholds(in, v, runs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				report.Conditions[i].Selected = selected
+			}
+			if err := aggregateEmbedding(in, &report); err != nil {
+				t.Fatal(err)
+			}
+			i := slices.IndexFunc(report.Comparisons, func(c comparison) bool { return c.Metric == "vector_column_bytes" })
+			if i < 0 || report.Comparisons[i].Samples != 5 || report.Comparisons[i].Difference != -2300 || !report.Comparisons[i].Significant || !report.Comparisons[i].Improved {
+				t.Fatalf("벡터 열 바이트 비교 = %+v", report.Comparisons)
+			}
+			if report.Status != test.status || report.Reason != test.reason || report.Activated {
+				t.Fatalf("판정 = %s/%s, 기대 %s/%s", report.Status, report.Reason, test.status, test.reason)
 			}
 		})
 	}

@@ -337,7 +337,7 @@ func (t *manifestTrial) decisions(value any, cost trialCost) []trialDecision {
 	case *continualReport:
 		for _, entry := range r.Judgements {
 			status := entry.Status
-			if !entry.StatePassed || !entry.RecordsPassed {
+			if entry.Status == "failed" || !entry.StatePassed || !entry.RecordsPassed {
 				status = "rejected"
 			}
 			add(entry.Scenario, "continual", status, entry.Reason)

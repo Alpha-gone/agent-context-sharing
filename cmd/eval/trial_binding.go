@@ -370,12 +370,14 @@ func (t *manifestTrial) arguments(prepared bool) ([]string, error) {
 	for _, v := range []struct {
 		name  string
 		value int
-	}{{"repeat", m.Execution.Repeats}, {"budget", *s.Budget}, {"max-hops", *s.MaxHops}, {"max-hop-nodes", *s.MaxHopNodes}} {
+	}{{"repeat", m.Execution.Repeats}, {"max-hops", *s.MaxHops}, {"max-hop-nodes", *s.MaxHopNodes}} {
 		args = append(args, "-"+v.name+"="+strconv.Itoa(v.value))
 	}
+	// 지속 평가의 예산은 고정값이며 입력 연결에서 manifest 선언과 대조했다.
 	if m.Mode == "continual" {
 		return append(args, "-continual"), nil
 	}
+	args = append(args, "-budget="+strconv.Itoa(*s.Budget))
 	if prepared {
 		args = append(args, "-prepared-input="+t.Private)
 	} else {

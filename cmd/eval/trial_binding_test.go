@@ -141,6 +141,65 @@ func TestManifestTrialLegacyAggregateBinding(t *testing.T) {
 	}
 }
 
+func TestManifestTrialContinualFailureNotAccepted(t *testing.T) {
+	m, _, _ := trialFixture(t, "lookup")
+	m.Provenance = "observed"
+	trial := manifestTrial{Manifest: m, Preparation: trialPreparation{Independent: 3}}
+	cost := trialCost{Total: businessCostTotal{Status: "measured"}}
+	report := &continualReport{Judgements: []continualJudgement{
+		{Scenario: "regressed", Status: "failed", Reason: "quality_regression", StatePassed: true, RecordsPassed: true},
+		{Scenario: "violated", Status: "failed", Reason: "state_or_record_violation", RecordsPassed: true},
+		{Scenario: "pending", Status: "deferred", Reason: "insufficient_independent_units", StatePassed: true, RecordsPassed: true},
+		{Scenario: "passed", Status: "passed", StatePassed: true, RecordsPassed: true, Passed: true},
+	}}
+	got := trial.decisions(report, cost)
+	for i, want := range []string{"not_accepted", "not_accepted", "deferred", "deferred"} {
+		if got[i].Status != want || got[i].Reason != report.Judgements[i].Reason {
+			t.Fatalf("지속 평가 판정 매핑: %+v", got)
+		}
+	}
+}
+
+func TestManifestTrialContinualArgumentsPassPreflight(t *testing.T) {
+	inputs := trialContinualInputs()
+	var units []manifestUnit
+	for _, s := range inputs {
+		units = append(units, manifestUnit{Dataset: "embedded", Query: s.Code, Task: s.Code, Type: s.Query.UseCase, Independent: s.Code})
+	}
+	m, _ := trialEmbedded(t, "continual", "continual_scenarios", "continual-v1", inputs, units)
+	m.Search.Budget = new(continualBudget)
+	for key, value := range map[string]string{
+		"DATABASE_URL": "postgres://synthetic.invalid", "AGE_GRAPH_NAME": "agent_context", "EMBEDDING_PROVIDER": "gemini",
+		"EMBEDDING_BASE_URL": "https://generativelanguage.googleapis.com", "EMBEDDING_MODEL": "gemini-embedding-2",
+		"EMBEDDING_VECTOR_TYPE": "vector", "EMBEDDING_DIMENSION": "768", "GEMINI_API_KEY": "synthetic-key",
+		"SEARCH_CHANNEL_EXECUTION": "parallel", "SEARCH_CHANNEL_CANDIDATE_LIMIT": "25",
+		"SEARCH_SEMANTIC_SIMILARITY_THRESHOLD": "0.5", "SEARCH_FOLD_SIMILARITY_THRESHOLD": "0.9",
+	} {
+		t.Setenv(key, value)
+	}
+	trial, err := newManifestTrial(m, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := trial.finish(errors.New("arguments_test_complete")); err == nil {
+			t.Error("인자 검사만으로 정상 평가를 생성했다")
+		}
+	}()
+	args, err := trial.arguments(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(args, func(arg string) bool { return strings.HasPrefix(arg, "-budget=") }) {
+		t.Fatalf("지속 평가에 고정 예산 옵션을 전달했다: %v", args)
+	}
+	// 사전 검사를 통과하면 DB 구성 확인에서 멈춘다.
+	t.Setenv("DATABASE_URL", "")
+	if err := runEvaluation(args, nil); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Fatalf("manifest 지속 평가 인자가 사전 검사에서 거부됐다: %v", err)
+	}
+}
+
 func TestManifestTrialDecisionGuards(t *testing.T) {
 	m, _, _ := trialFixture(t, "lookup")
 	m.Provenance = "observed"

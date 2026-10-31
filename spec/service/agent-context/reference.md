@@ -418,3 +418,8 @@
 
 - 조회일 2026-10-31 KST. [PostgreSQL 18 행 잠금](https://www.postgresql.org/docs/18/explicit-locking.html#LOCKING-ROWS)의 트랜잭션 종료까지 유지되는 잠금과 [LIMIT](https://www.postgresql.org/docs/18/queries-limit.html)의 최대 반환 건수·고유 정렬 기준을 확인했다. [판정의 직렬화](sdd/context-lifecycle.md#판정의-직렬화)에서 기존 그래프 잠금을 요청 중복 판정에도 사용하며, [웹 화면 계약](sdd/web.md#화면-배치)의 오래된 요청 우선 최대 100건 조회에 반영했다. [Read Committed](https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED)에서 잠금 뒤 별도 명령으로 앞선 커밋을 읽는다. 스키마·마이그레이션은 변경하지 않는다.
 - Modern Web Guidance의 `responsive-table` 가이드를 확인했다. 기존 표 제목·열 머리글·키보드 스크롤 영역을 유지하고 상한·처리 후 후속 요청 안내만 일반 문단에 추가했다. CSS·클라이언트 스크립트와 표 배치는 변경하지 않았다.
+
+
+## 2026-10-31 #200 평가 실행기 모드 전용 옵션
+
+- Go 1.27.1 SDK의 `go doc flag.FlagSet.Visit`으로 [FlagSet.Visit](https://pkg.go.dev/flag@go1.27.1#FlagSet.Visit)이 명시적으로 설정된 플래그만 사전순으로 방문한다는 계약을 확인했다. 조회일 2026-10-31 KST. 기본값과 같은 값을 명시해도 설정된 플래그로 방문하므로 [평가 모드 배타성](sdd/evaluation.md#검증을-가능하게-하는-설계)의 모드별 허용 목록은 값이 아니라 지정 여부로 판정한다. 반복 회차 값은 기존 10회 검사가 따로 담당한다.

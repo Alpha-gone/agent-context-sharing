@@ -122,3 +122,36 @@ func TestEmptyLatencyIsUnmeasuredNotZero(t *testing.T) {
 		t.Fatalf("측정한 0이 바뀌었다: %+v", got)
 	}
 }
+
+func TestModeOnlyFlagsRejectedBeforeIO(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+	unused := [][]string{{"-contexts=missing.json"}, {"-queries=missing.json"}, {"-stages=baseline"}, {"-index-targets=without_source"}, {"-budget=10"}}
+	for _, test := range []struct {
+		mode   []string
+		extras [][]string
+		want   string
+	}{
+		{[]string{"-continual"}, unused, "지속 평가는"},
+		{[]string{"-business=missing.json"}, unused, "업무 효과 비교는"},
+		{[]string{"-adaptive", "-contexts=missing.json", "-queries=missing.json"}, [][]string{{"-stages=relations"}}, "전용 옵션"},
+		{[]string{"-consistency", "-contexts=missing.json", "-queries=missing.json"}, [][]string{{"-stages=references"}}, "전용 옵션"},
+		{[]string{"-adversarial", "-attacks=missing.json", "-contexts=missing.json", "-queries=missing.json"}, [][]string{{"-stages=relations"}}, "전용 옵션"},
+	} {
+		for _, extra := range test.extras {
+			args := append(slices.Clone(test.mode), extra...)
+			if err := runEvaluation(args, nil); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("%v: 적용되지 않는 옵션을 입력 전에 거부하지 않았다: %v", args, err)
+			}
+		}
+	}
+	for _, args := range [][]string{
+		{"-unit-comparison=missing.json", "-repeat=10"},
+		{"-original-reproduction=missing.json", "-repeat=10"},
+		{"-business=missing.json", "-out=unused.json"},
+		{"-continual", "-repeat=10", "-max-hops=2", "-max-hop-nodes=10", "-out=unused.json"},
+	} {
+		if err := runEvaluation(args, nil); err == nil || strings.Contains(err.Error(), "만 사용한다") {
+			t.Fatalf("%v: 모드가 쓰는 옵션을 거부했다: %v", args, err)
+		}
+	}
+}

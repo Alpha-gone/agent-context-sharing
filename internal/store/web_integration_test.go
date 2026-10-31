@@ -332,6 +332,39 @@ func TestContextDeletionAndRestoreRoundTrip(t *testing.T) {
 	}
 }
 
+// TestContextPagesAcceptMaximumLimit는 플랜이 허용하는 정수 최댓값 페이지 크기에서
+// 잘림 판정용 추가 조회가 넘치지 않고 전체 목록을 잘리지 않은 상태로 돌려주는지 확인한다.
+func TestContextPagesAcceptMaximumLimit(t *testing.T) {
+	store := newIntegrationStore(t)
+	actorID := newTestID(t)
+	createTestAccount(t, store, actorID)
+	graphID := createTestGraph(t, store, actorID)
+	grantAccount(t, store, graphID, actorID, model.GraphGradeOwner)
+	active, err := store.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "api://page-max-active/"+newTestID(t).String()), nil)
+	if err != nil {
+		t.Fatalf("활성 원천 생성: %v", err)
+	}
+	deleted, err := store.CreateContext(t.Context(), graphID, testSourceContext(t, graphID, actorID, "api://page-max-deleted/"+newTestID(t).String()), nil)
+	if err != nil {
+		t.Fatalf("삭제할 원천 생성: %v", err)
+	}
+	if _, err := store.SetContextDeleted(t.Context(), graphID, deleted.ID, actorID, true, 0); err != nil {
+		t.Fatalf("원천 소프트 삭제: %v", err)
+	}
+	for name, list := range map[string]struct {
+		read func(context.Context, model.ID, int) ([]model.Context, bool, error)
+		want model.ID
+	}{
+		"active":  {store.ListActiveContexts, active.ID},
+		"deleted": {store.ListDeletedContexts, deleted.ID},
+	} {
+		contexts, truncated, err := list.read(t.Context(), graphID, math.MaxInt)
+		if err != nil || truncated || len(contexts) != 1 || contexts[0].ID != list.want {
+			t.Fatalf("%s 최댓값 페이지 = %d개, 잘림 %v, 오류 %v", name, len(contexts), truncated, err)
+		}
+	}
+}
+
 // TestListOwnedDeletedGraphsSeparatesDeletePaths는 소유자가 직접 삭제한 그래프만
 // 소유자 복구 목록에 넣고 자동 삭제분은 운영자 경로에 남기는지 확인한다. 두 경로는
 // grace_started_at의 유무로 갈린다.

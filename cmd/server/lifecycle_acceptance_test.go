@@ -66,9 +66,10 @@ func TestOPS05DiagnosticFlushBudgetIntegration(t *testing.T) {
 		}
 	})
 	defer unlock()
-	// 잠금 획득은 회차당 1초로 제한된다. 여러 기록을 대기시켜 개별 파일
-	// 실패보다 공통 5초 flush 마감이 먼저 남은 대기열을 끝내게 한다.
-	for range 12 {
+	// 기록 루프는 회차마다 최대 128건을 묶고 공용 잠금을 최대 1초 기다린다.
+	// 5초 안에 끝낼 수 없는 7회차 이상을 대기열 상한 1024건 안에서 대기시켜
+	// 개별 묶음 실패보다 공통 5초 flush 마감이 먼저 남은 대기열을 끝내게 한다.
+	for range 900 {
 		a.system.RecordFields(a.jobContext, "INFO", "startup", "pending", "completed", false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup"}})
 	}
 	cause := errors.New("original startup failure")

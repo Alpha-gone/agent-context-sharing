@@ -2,6 +2,7 @@ package main
 
 import (
 	json "encoding/json/v2"
+	"errors"
 	"flag"
 	"io"
 	"math"
@@ -31,11 +32,21 @@ func validManifest() executionManifest {
 		Execution:  manifestExecution{Repeats: 10, Order: "round_robin", RequestLimit: 100, IndexRoundLimit: 100, TimeoutMS: 30000, Preparation: "warm-v1", Cache: "same-warm-v1", Seeds: []manifestSeed{{Component: "agent", Supported: new(true), Value: new(int64(0))}, {Component: "embedding", Supported: new(false)}}},
 		Exclusions: manifestExclusions{Policy: "v1", Total: 3, Items: []manifestExclusion{}},
 		Cost: manifestCost{PricingVersion: "synthetic-v1", AsOf: "2026-10-25", Currency: "USD", Allocation: "per-task-v1", Items: []manifestCostItem{
-			{Code: "agent", Status: "measured", Value: new(0.0)},
-			{Code: "embedding", Status: "unmeasured"}, {Code: "summary", Status: "not_applicable"},
+			{Code: "agent", Status: "unmeasured"}, {Code: "embedding", Status: "unmeasured"}, {Code: "summary", Status: "unmeasured"},
 			{Code: "search", Status: "unmeasured"}, {Code: "storage", Status: "unmeasured"},
 		}},
 	}
+}
+
+// businessTasksManifest는 실제 비용 항목을 산정하는 확장 업무 과업 명세다. 측정한 0과
+// 비해당 항목을 선언할 수 있다.
+func businessTasksManifest() executionManifest {
+	m := validManifest()
+	m.Mode = "business_tasks"
+	m.Inputs[0].Role = "business_tasks"
+	m.Cost.Items[0] = manifestCostItem{Code: "agent", Status: "measured", Value: new(0.0)}
+	m.Cost.Items[2] = manifestCostItem{Code: "summary", Status: "not_applicable"}
+	return m
 }
 
 func TestManifestModesAndMeasuredZero(t *testing.T) {
@@ -73,8 +84,46 @@ func TestManifestModesAndMeasuredZero(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if loaded.Cost.Items[0].Value == nil || *loaded.Cost.Items[0].Value != 0 || loaded.Cost.Items[1].Value != nil || loaded.Execution.Seeds[0].Value == nil || *loaded.Execution.Seeds[0].Value != 0 {
-				t.Fatal("측정한 0과 미측정을 구분하지 못했다")
+			if loaded.Execution.Seeds[0].Value == nil || *loaded.Execution.Seeds[0].Value != 0 {
+				t.Fatal("seed 0을 보존하지 못했다")
+			}
+		})
+	}
+	loaded, err := loadManifest(writeManifestFixture(t, businessTasksManifest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Cost.Items[0].Value == nil || *loaded.Cost.Items[0].Value != 0 || loaded.Cost.Items[1].Value != nil || loaded.Cost.Items[2].Status != "not_applicable" {
+		t.Fatal("측정한 0과 미측정·비해당을 구분하지 못했다")
+	}
+}
+
+// TestManifestCostStatusByMode는 실제 비용을 산정하지 않는 모드가 미측정 외 비용 상태를 선언하면
+// 측정 전에 거부되는지 확인한다.
+func TestManifestCostStatusByMode(t *testing.T) {
+	for name, item := range map[string]manifestCostItem{
+		"not_applicable": {Code: "agent", Status: "not_applicable"},
+		"measured":       {Code: "agent", Status: "measured", Value: new(1.5)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := validManifest()
+			m.Cost.Items[0] = item
+			if err := m.validate(); err == nil || !strings.Contains(err.Error(), "cost.items status for mode") {
+				t.Fatalf("비업무 모드 비용 선언 = %v", err)
+			}
+			_, err := loadManifest(writeManifestFixture(t, m))
+			var trialErr *trialError
+			if err == nil {
+				t.Fatal("manifest 읽기가 비업무 모드 비용 선언을 허용했다")
+			}
+			// 실행 경로는 입력 결합·DB 접속 전에 manifest_invalid로 멈추고 결과 묶음을 만들지 않는다.
+			root := t.TempDir()
+			err = runManifestTrialContext(t.Context(), writeManifestFixture(t, m), root, trialBindings{}, "")
+			if !errors.As(err, &trialErr) || trialErr.Code != "manifest_invalid" {
+				t.Fatalf("실행 거부 코드 = %v", err)
+			}
+			if entries, _ := os.ReadDir(root); len(entries) != 0 {
+				t.Fatalf("거부된 실행이 결과 경로에 파일을 만들었다: %d", len(entries))
 			}
 		})
 	}
@@ -125,9 +174,9 @@ func TestManifestInvalidContracts(t *testing.T) {
 			m.Exclusions.Items = []manifestExclusion{{Dataset: "synthetic", Query: "q1", Reason: "image"}}
 		},
 		"cost_missing":          func(m *executionManifest) { m.Cost.Items = m.Cost.Items[:1] },
-		"cost_null_zero":        func(m *executionManifest) { m.Cost.Items[0].Value = nil },
-		"cost_unknown_zero":     func(m *executionManifest) { m.Cost.Items[1].Value = new(0.0) },
-		"cost_negative":         func(m *executionManifest) { m.Cost.Items[0].Value = new(-1.0) },
+		"cost_null_zero":        func(m *executionManifest) { *m = businessTasksManifest(); m.Cost.Items[0].Value = nil },
+		"cost_unknown_zero":     func(m *executionManifest) { *m = businessTasksManifest(); m.Cost.Items[1].Value = new(0.0) },
+		"cost_negative":         func(m *executionManifest) { *m = businessTasksManifest(); m.Cost.Items[0].Value = new(-1.0) },
 		"cost_date":             func(m *executionManifest) { m.Cost.AsOf = "2026-02-30" },
 		"cost_currency":         func(m *executionManifest) { m.Cost.Currency = "usd" },
 		"conversion_other_mode": func(m *executionManifest) { m.Conversion = &manifestConversion{Format: "own"} },

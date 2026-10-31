@@ -486,3 +486,8 @@
 - 조회 시각: 2026-10-31 현재 세션. 적용 SDK Go 1.27.1의 `go doc errors.AsType`과 적용 pgx v5.10.0의 `go doc pgconn.PgError`를 확인했다. AsType의 error 타입 제약과 감싼 오류 탐색, PostgreSQL 오류의 SQLState 메서드로 원문을 사용하지 않고 오류 종류를 구분한다. 서버에 DB 드라이버 의존성을 추가하지 않는다.
 - MCP SDK v1.8.0 `mcp/protocol.go`의 공급자 API 주석에서 CallToolResult.StructuredContent가 임의 JSON 값임을 확인했다. struct·map·JSON 원시 값의 code를 JSON 객체로 검사하고 임의 code·message는 진단 값으로 복사하지 않는다. 공식 소스: [Go errors](https://pkg.go.dev/errors@go1.27.1#AsType), [pgx v5.10.0](https://pkg.go.dev/github.com/jackc/pgx/v5@v5.10.0/pgconn#PgError), [MCP SDK v1.8.0](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/protocol.go).
 - 반영: [실패 원인과 수준 대응](sdd/observability.md#실패-원인과-수준의-대응).
+
+## 감사 조회의 NULL 등급 표시 (#187)
+
+- 조회 시각: 2026-10-31 21:55 KST. 적용 PostgreSQL 18의 [조건식](https://www.postgresql.org/docs/18/functions-conditional.html)·[문자열 함수](https://www.postgresql.org/docs/18/functions-string.html)를 확인했다. COALESCE는 NULL의 표시 대체값을 고르고, concat_ws는 NULL 인자를 생략하므로 등급 전이와 구성원 정보가 있을 때만 구분자를 넣을 수 있다.
+- 반영: [감사 기록의 조회](sdd/observability.md#감사-기록의-조회)와 [웹 설계](sdd/web.md). 저장된 감사 값은 변경하지 않고 조회의 상세 표기만 보완한다.

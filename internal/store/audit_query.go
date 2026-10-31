@@ -156,7 +156,10 @@ const auditOperationSQL = `SELECT operation_id::text, graph_id::text, 'operation
 
 const auditWebSQL = `SELECT audit_id::text, graph_id::text, target_kind, action, actor_account_id::text,
 	occurred_at, COALESCE(target_context_id::text, subject_id::text, team_id::text, graph_id::text, ''),
-	COALESCE(before_grade || ' → ' || after_grade, '')
+	concat_ws(' / ',
+		CASE WHEN before_grade IS NOT NULL OR after_grade IS NOT NULL
+			THEN COALESCE(before_grade, '-') || ' → ' || COALESCE(after_grade, '-') END,
+		CASE WHEN member_account_id IS NOT NULL THEN '구성원: ' || member_account_id::text END)
 	FROM public.web_audit_log WHERE graph_id=$1
 	AND ($2::timestamptz IS NULL OR occurred_at >= $2) AND ($3::timestamptz IS NULL OR occurred_at < $3)
 	AND ($4::uuid IS NULL OR target_context_id=$4 OR subject_id=$4 OR team_id=$4 OR graph_id=$4 OR member_account_id=$4 OR requester_account_id=$4)

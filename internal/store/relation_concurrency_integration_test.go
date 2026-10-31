@@ -174,8 +174,44 @@ func TestRelationRejectsDiscardedEventIntegration(t *testing.T) {
 		_, err := database.ConfirmRelation(t.Context(), graphID, confirmable(t, graphID, model.RelationTypePrecedes, first.ID, second.ID), nil)
 		return err
 	}()
-	if !errors.Is(err, ErrInvalidRelation) {
-		t.Fatalf("폐기된 사건을 끝으로 하는 확정 = %v, want ErrInvalidRelation", err)
+	if !errors.Is(err, ErrInvalidRelation) || !errors.Is(err, model.ErrRelationEndpointDiscarded) {
+		t.Fatalf("폐기된 사건을 끝으로 하는 확정 = %v, want ErrInvalidRelation·폐기 원인", err)
+	}
+}
+
+// TestRelationEndpointCausesIntegration은 원천을 관계 끝으로 지정한 확정과 시간 순서가 뒤집힌
+// 확정이 같은 필드의 다른 원인으로 거부되고, 사건 사이의 유효한 확정은 성공하는지 확인한다.
+func TestRelationEndpointCausesIntegration(t *testing.T) {
+	database := newIntegrationStore(t)
+	graphID, first, second := relationTestEvents(t, database)
+	source := first.Event.MemberIDs[0]
+	// 구성원 원천의 발생 시각을 포함하도록 시작만 첫 사건보다 30초 늦춘다.
+	later := testEventContext(t, graphID, first.CreatedBy, source)
+	later.Event.Start = first.Event.Start.Add(30 * time.Second)
+	created, err := database.CreateContext(t.Context(), graphID, later, nil)
+	if err != nil {
+		t.Fatalf("늦은 사건 생성: %v", err)
+	}
+	for _, sample := range []struct {
+		name     string
+		relation model.Relation
+		field    string
+		cause    error
+	}{
+		{"source_from", confirmable(t, graphID, model.RelationTypeCauses, source, second.ID), "from_context_id", model.ErrRelationEndpointNotEvent},
+		{"source_to", confirmable(t, graphID, model.RelationTypeCauses, second.ID, source), "to_context_id", model.ErrRelationEndpointNotEvent},
+		{"time_order", confirmable(t, graphID, model.RelationTypePrecedes, created.ID, first.ID), "from_context_id", model.ErrRelationTimeOrder},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			_, err := database.ConfirmRelation(t.Context(), graphID, sample.relation, nil)
+			field, ok := errors.AsType[model.FieldError](err)
+			if !errors.Is(err, ErrInvalidRelation) || !errors.Is(err, sample.cause) || !ok || field.Field != sample.field {
+				t.Fatalf("끝점 거부 = %v", err)
+			}
+		})
+	}
+	if _, err := database.ConfirmRelation(t.Context(), graphID, confirmable(t, graphID, model.RelationTypePrecedes, first.ID, created.ID), nil); err != nil {
+		t.Fatalf("유효한 사건 관계 확정: %v", err)
 	}
 }
 

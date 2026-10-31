@@ -1,10 +1,24 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"time"
 )
+
+// 사건 관계 끝점의 거부 원인이다. FieldError.Cause로 담아 진입점이 같은 필드의 서로 다른
+// 원인을 구분해 안내하게 한다. 메시지는 검증 메시지와 별도로 바뀌지 않는다.
+var (
+	ErrRelationEndpointNotEvent  = errors.New("관계 양 끝은 사건 컨텍스트여야 한다")
+	ErrRelationEndpointDiscarded = errors.New("폐기된 사건은 관계의 끝이 될 수 없다")
+	ErrRelationTimeOrder         = errors.New("사건 관계의 시간 순서 또는 포함 제약을 위반했다")
+)
+
+// relationFieldErrorf는 검증 메시지를 유지한 채 관계 끝점 거부 원인을 함께 담는다.
+func relationFieldErrorf(field string, cause error, format string, args ...any) error {
+	return FieldError{Field: field, Message: fmt.Sprintf(format, args...), Cause: cause}
+}
 
 // RelationType는 사건 컨텍스트 사이의 확정 가능한 관계 유형이다.
 type RelationType string
@@ -128,16 +142,16 @@ func ValidateRelation(relation Relation, from, to Context) error {
 		return fmt.Errorf("관계 대상 사건: %w", err)
 	}
 	if from.Layer != LayerEvent || to.Layer != LayerEvent || from.Event == nil || to.Event == nil {
-		return fieldErrorf("from_context_id", "관계 양 끝은 사건 컨텍스트여야 한다")
+		return relationFieldErrorf("from_context_id", ErrRelationEndpointNotEvent, "관계 양 끝은 사건 컨텍스트여야 한다")
 	}
 	// 폐기된 사건을 끝으로 갖는 관계는 남지 않아야 한다. `FR-AGENT_CONTEXT-076`이 사건을
 	// 폐기하면 그 확정 관계도 함께 폐기하기로 했으므로, 이미 폐기된 사건으로 새 관계를
 	// 만들면 그 규칙이 곧바로 깨진 상태가 된다.
 	if from.DeletedAt != nil {
-		return fieldErrorf("from_context_id", "폐기된 사건은 관계의 끝이 될 수 없다")
+		return relationFieldErrorf("from_context_id", ErrRelationEndpointDiscarded, "폐기된 사건은 관계의 끝이 될 수 없다")
 	}
 	if to.DeletedAt != nil {
-		return fieldErrorf("to_context_id", "폐기된 사건은 관계의 끝이 될 수 없다")
+		return relationFieldErrorf("to_context_id", ErrRelationEndpointDiscarded, "폐기된 사건은 관계의 끝이 될 수 없다")
 	}
 	if from.ID != relation.FromContextID || to.ID != relation.ToContextID || from.GraphID != relation.GraphID || to.GraphID != relation.GraphID {
 		return fieldErrorf("from_context_id", "관계와 사건의 식별자 또는 그래프가 맞지 않는다")
@@ -175,14 +189,14 @@ func ValidateRelationTime(kind RelationType, from, to EventAttributes) error {
 	switch kind {
 	case RelationTypePrecedes, RelationTypeCauses:
 		if from.Start.After(to.Start) {
-			return fieldErrorf("from_context_id", "%s 관계의 시작 사건이 대상보다 늦다", kind)
+			return relationFieldErrorf("from_context_id", ErrRelationTimeOrder, "%s 관계의 시작 사건이 대상보다 늦다", kind)
 		}
 	case RelationTypePartOf:
 		if from.Start.Before(to.Start) {
-			return fieldErrorf("to_context_id", "part_of 관계의 전체 사건 시작 시각이 부분을 포함하지 않는다")
+			return relationFieldErrorf("to_context_id", ErrRelationTimeOrder, "part_of 관계의 전체 사건 시작 시각이 부분을 포함하지 않는다")
 		}
 		if to.End != nil && (from.End == nil || from.End.After(*to.End)) {
-			return fieldErrorf("to_context_id", "part_of 관계의 전체 사건 종료 시각이 부분을 포함하지 않는다")
+			return relationFieldErrorf("to_context_id", ErrRelationTimeOrder, "part_of 관계의 전체 사건 종료 시각이 부분을 포함하지 않는다")
 		}
 	case RelationTypeRelatesTo:
 	default:

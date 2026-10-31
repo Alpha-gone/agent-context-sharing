@@ -285,6 +285,15 @@ func writeFailureObject(err error) (map[string]any, bool) {
 			name = "source_ref.channel"
 		}
 		value["code"], value["message"], value["field"] = "invalid_argument", "도구 입력을 확인해 주십시오.", name
+		// 관계 끝점은 같은 필드에서 원인이 셋이므로 고칠 대상과 올바른 연결 경로를 구분해 안내한다.
+		switch {
+		case errors.Is(err, model.ErrRelationEndpointNotEvent):
+			value["message"] = "관계 양 끝은 활성 사건(layer=event)이어야 합니다. 원천·파생을 기존 노드에 연결하려면 node_create의 derived_from(파생 근거) 또는 사건의 member_refs(구성원)를 사용해 주십시오. 관계 확정이 거부되어도 앞서 만든 노드는 그대로 남습니다."
+		case errors.Is(err, model.ErrRelationEndpointDiscarded):
+			value["message"] = "폐기된 사건은 관계의 끝이 될 수 없습니다. 활성 사건을 지정해 주십시오."
+		case errors.Is(err, model.ErrRelationTimeOrder):
+			value["message"] = "사건 시간이 관계 유형과 맞지 않습니다. precedes·causes의 시작 사건은 대상보다 늦게 시작할 수 없고, part_of의 대상(전체) 사건은 시작(부분) 사건의 기간을 포함해야 합니다."
+		}
 		return value, true
 	}
 	if limit, ok := errors.AsType[plan.LimitError](err); ok {

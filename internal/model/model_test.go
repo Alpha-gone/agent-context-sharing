@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -194,6 +195,48 @@ func TestValidateRelation(t *testing.T) {
 	}
 	if err := ValidateRelationCycle(relation, true); err == nil {
 		t.Fatal("순환 관계가 허용됐다")
+	}
+}
+
+// TestValidateRelationEndpointCauses는 같은 끝점 필드의 세 거부 원인을 구분해 담는지 확인한다.
+func TestValidateRelationEndpointCauses(t *testing.T) {
+	now := time.Date(2026, time.September, 5, 14, 0, 0, 0, time.UTC)
+	from := eventContext(t, now, now)
+	to := eventContext(t, now.Add(time.Hour), now.Add(time.Hour))
+	to.GraphID = from.GraphID
+	source := sourceContext(t, now)
+	source.GraphID = from.GraphID
+	discarded := from
+	discarded.DeletedAt = new(now.Add(time.Minute))
+	relation := Relation{ID: newTestID(t, now), GraphID: from.GraphID, Type: RelationTypePrecedes, FromContextID: from.ID, ToContextID: to.ID,
+		State: RelationStateConfirmed, ProposedBy: ProposalSourceAgent, ProposedAt: now, ConfirmedBy: newTestID(t, now), ConfirmedByAgent: newTestID(t, now), ConfirmedAt: new(now)}
+	reversed := relation
+	reversed.FromContextID, reversed.ToContextID = to.ID, from.ID
+	withSource := relation
+	withSource.FromContextID = source.ID
+	for _, sample := range []struct {
+		name     string
+		relation Relation
+		from, to Context
+		field    string
+		cause    error
+	}{
+		{"source_endpoint", withSource, source, to, "from_context_id", ErrRelationEndpointNotEvent},
+		{"discarded_endpoint", relation, discarded, to, "from_context_id", ErrRelationEndpointDiscarded},
+		{"time_order", reversed, to, from, "from_context_id", ErrRelationTimeOrder},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			err := ValidateRelation(sample.relation, sample.from, sample.to)
+			field, ok := errors.AsType[FieldError](err)
+			if !ok || field.Field != sample.field || !errors.Is(err, sample.cause) || field.Message == "" {
+				t.Fatalf("끝점 거부 = %#v", err)
+			}
+			for _, other := range []error{ErrRelationEndpointNotEvent, ErrRelationEndpointDiscarded, ErrRelationTimeOrder} {
+				if other != sample.cause && errors.Is(err, other) {
+					t.Fatalf("다른 원인 %v와 섞였다", other)
+				}
+			}
+		})
 	}
 }
 

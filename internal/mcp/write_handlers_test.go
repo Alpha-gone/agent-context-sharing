@@ -60,6 +60,30 @@ func TestWriteFailureMapping(t *testing.T) {
 	}
 }
 
+// TestRelationEndpointFailureGuidance는 관계 끝점 거부가 기존 코드·필드를 유지하면서 원인별
+// 안내를 돌려주고, 다른 필드 거부는 기존 고정 문구를 유지하는지 확인한다.
+func TestRelationEndpointFailureGuidance(t *testing.T) {
+	for _, sample := range []struct {
+		name, field, want string
+		cause             error
+	}{
+		{"not_event", "from_context_id", "node_create의 derived_from", model.ErrRelationEndpointNotEvent},
+		{"not_event_to", "to_context_id", "앞서 만든 노드는 그대로 남습니다", model.ErrRelationEndpointNotEvent},
+		{"discarded", "to_context_id", "폐기된 사건", model.ErrRelationEndpointDiscarded},
+		{"time_order", "from_context_id", "precedes·causes", model.ErrRelationTimeOrder},
+		{"other", "body", "도구 입력을 확인해 주십시오.", nil},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			err := fmt.Errorf("관계 검증: %w", model.FieldError{Field: sample.field, Message: "private detail", Cause: sample.cause})
+			value, deterministic := writeFailureObject(err)
+			message, _ := value["message"].(string)
+			if !deterministic || value["code"] != "invalid_argument" || value["field"] != sample.field || !strings.Contains(message, sample.want) || strings.Contains(message, "private") {
+				t.Fatalf("끝점 안내 = %v", value)
+			}
+		})
+	}
+}
+
 func TestPatchNodeOptionalValuesAndLayers(t *testing.T) {
 	at := time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC)
 	previous := model.Context{Layer: model.LayerDerived, Body: "원문", Version: 3, Derived: &model.DerivedAttributes{Kind: model.DerivationKindProposition, EvidenceState: model.EvidenceStateOpinion, ConfidenceState: model.ConfidenceStateSupported, ValidFrom: &at, ValidTo: &at}}

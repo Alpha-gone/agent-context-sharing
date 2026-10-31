@@ -14,6 +14,10 @@ var embeddingMetricDirections = map[string]bool{
 	"vector_column_bytes": true, "vector_rows": true, "measurement_duration_ms": true, "embedding_cost": true,
 }
 
+// embeddingCostMetrics는 「임베딩 비교 실행 계약」의 비용 개선 근거다. 미계측 금액(-1)은
+// 대응 표본에서 빠지므로 독립 단위 수 조건을 넘지 못한다.
+var embeddingCostMetrics = []string{"document_embedding_http_attempts", "measurement_embedding_http_attempts", "vector_column_bytes", "embedding_cost"}
+
 func embeddingValues(run embeddingRun, t embeddingThresholds, limit int) map[string]float64 {
 	selected, hits, positives := 0, 0, 0
 	for _, pair := range run.Relations {
@@ -264,7 +268,7 @@ func aggregateEmbedding(input embeddingInput, result *embeddingReport) error {
 }
 
 func assessEmbedding(input embeddingInput, r embeddingReport) (string, string) {
-	ready, improved, regressed := true, false, false
+	ready, latencyImproved, costImproved, regressed := true, false, false, false
 	required := []string{"relation_precision", "relation_recall", "global_false_pass", "global_false_reject"}
 	for _, name := range required {
 		i := slices.IndexFunc(r.Comparisons, func(c comparison) bool { return c.Metric == name })
@@ -287,8 +291,11 @@ func assessEmbedding(input embeddingInput, r embeddingReport) (string, string) {
 			}
 			c := metrics[i]
 			regressed = regressed || (c.Significant && !c.Improved)
-			improved = improved || (name == "latency_ms" && c.Significant && c.Improved)
+			latencyImproved = latencyImproved || (name == "latency_ms" && c.Significant && c.Improved)
 		}
+	}
+	for _, c := range r.Comparisons {
+		costImproved = costImproved || (slices.Contains(embeddingCostMetrics, c.Metric) && c.Samples >= 2 && c.Significant && c.Improved)
 	}
 	for _, run := range r.Runs {
 		if run.Metrics != nil {
@@ -308,8 +315,13 @@ func assessEmbedding(input embeddingInput, r embeddingReport) (string, string) {
 	if input.Provenance == "synthetic" {
 		return "deferred", "synthetic_provider"
 	}
-	if !improved {
-		return "deferred", "no_significant_measured_latency_or_cost_improvement"
+	switch {
+	case latencyImproved && costImproved:
+		return "candidate", "quality_preserved_latency_and_cost_improved_final_acceptance_pending"
+	case latencyImproved:
+		return "candidate", "quality_preserved_latency_improved_final_acceptance_pending"
+	case costImproved:
+		return "candidate", "quality_preserved_cost_improved_final_acceptance_pending"
 	}
-	return "candidate", "quality_preserved_latency_improved_final_acceptance_pending"
+	return "deferred", "no_significant_measured_latency_or_cost_improvement"
 }

@@ -265,7 +265,8 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	}))
 	defer provider.Close()
 	baseURL, _ := url.Parse(provider.URL)
-	worker, err := index.New(database, index.Config{Provider: "gemini", APIKey: "synthetic-key", BaseURL: baseURL, Model: "gemini-embedding-2", VectorType: "vector", Dimension: 768}, provider.Client(), nil)
+	workerConfig := index.Config{Provider: "gemini", APIKey: "synthetic-key", BaseURL: baseURL, Model: "gemini-embedding-2", VectorType: "vector", Dimension: 768}
+	worker, err := index.New(database, workerConfig, provider.Client(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +302,13 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		readyTasks()
-		if processed, err := worker.RunOnceInGraph(t.Context(), graphID); err != nil || !processed {
+		// 429는 그 Worker의 작업 확보를 차단하고 차단 상태는 Worker 메모리에 둔다.
+		// 앞 표본의 차단이 다음 표본의 확보를 막지 않도록 표본마다 새 Worker를 쓴다.
+		sampleWorker, err := index.New(database, workerConfig, provider.Client(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if processed, err := sampleWorker.RunOnceInGraph(t.Context(), graphID); err != nil || !processed {
 			t.Fatalf("장애의 작업 처리: %v", err)
 		}
 		var attempts int

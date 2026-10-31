@@ -214,7 +214,7 @@ func TestOBS08RealLockFlushLossAndRestart(t *testing.T) {
 		finished <- other.withStorageLock(context.Background(), func() error { close(entered); <-release; return nil })
 	}()
 	<-entered
-	for range 12 {
+	for range maxQueuedEvents {
 		if !recorder.Emit(t.Context(), obs03Event(t, source, Request)) {
 			t.Fatal("유한 대기열 수락 실패")
 		}
@@ -229,7 +229,7 @@ func TestOBS08RealLockFlushLossAndRestart(t *testing.T) {
 	obs07Wait(t, recorder.done)
 	obs07Wait(t, output.done)
 	stats := recorder.Stats()
-	if stats.Accepted != 12 || stats.Written != 0 || stats.Dropped != 12 || stats.QueuedEvents != 0 || stats.QueuedBytes != 0 || stats.Writing {
+	if stats.Accepted != maxQueuedEvents || stats.Written != 0 || stats.Dropped != maxQueuedEvents || stats.QueuedEvents != 0 || stats.QueuedBytes != 0 || stats.Writing {
 		t.Fatal(stats)
 	}
 	if !bytes.Contains(stderr.Bytes(), []byte("storage_lock_timeout")) || !bytes.Contains(stderr.Bytes(), []byte("shutdown_timeout")) {
@@ -242,7 +242,7 @@ func TestOBS08RealLockFlushLossAndRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		if notice.Reason == "shutdown" {
-			terminal = notice.Dropped == 12
+			terminal = notice.Dropped == maxQueuedEvents
 		}
 	}
 	if !terminal {

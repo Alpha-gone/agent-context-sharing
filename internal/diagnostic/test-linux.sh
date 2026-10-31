@@ -20,7 +20,7 @@ volume_created=false
 cleanup() {
     status=$?
     trap - EXIT
-    for phase in init module readonly first restart replacement; do
+    for phase in init module throughput readonly first restart replacement; do
         docker container rm -f "$volume-$phase" >/dev/null 2>&1 || true
     done
     if "$volume_created"; then docker volume rm "$volume" >/dev/null || status=1; fi
@@ -59,7 +59,15 @@ run_phase module docker run --rm --name "$volume-module" --label agent-context.t
     --tmpfs "/volatile:rw,nosuid,nodev,noexec,size=1m,uid=$test_uid,gid=$test_gid,mode=0700" \
     -e ACS_OBS02_TEST_ROOT=/evidence/owned -e ACS_OBS02_VOLATILE_ROOT=/volatile \
     --entrypoint /tests/diagnostic.test "$image" -test.v=test2json -test.timeout=180s \
-    '-test.skip=^(TestOBS02ReadOnlyMount|TestOBS08ContainerPersistence)$'
+    '-test.skip=^(TestOBS02ReadOnlyMount|TestOBS08ContainerPersistence|TestDiagnostic(Saturated)?ThroughputLinux)$'
+
+run_phase throughput docker run --rm --name "$volume-throughput" --label agent-context.test=obs08 --pull never --network none --read-only \
+    --user "$test_uid:$test_gid" --cap-drop ALL --security-opt no-new-privileges \
+    --mount "type=volume,src=$volume,dst=/evidence" \
+    --mount "type=bind,src=$owned/diagnostic.test,dst=/tests/diagnostic.test,readonly" \
+    -e ACS_OBS02_TEST_ROOT=/evidence/owned --entrypoint /tests/diagnostic.test "$image" \
+    -test.v=test2json -test.timeout=30s '-test.run=^TestDiagnostic(Saturated)?ThroughputLinux$'
+cat "$results/throughput.txt"
 
 run_phase readonly docker run --rm --name "$volume-readonly" --label agent-context.test=obs08 --pull never --network none --read-only --user 0:0 \
     --cap-drop ALL --security-opt no-new-privileges \

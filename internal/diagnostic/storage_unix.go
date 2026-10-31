@@ -108,6 +108,7 @@ func storageNames(directory *os.File) ([]string, error) {
 }
 
 func (files *Files) inventory() ([]storedLog, error) {
+	files.inventoryScans++
 	names, err := storageNames(files.root)
 	if err != nil {
 		return nil, err
@@ -220,6 +221,8 @@ func (policy *storagePolicy) violations(logs []storedLog, instance string, kind 
 }
 
 func (files *Files) removeLog(item storedLog) error {
+	files.usageCache = nil
+	defer func() { files.usageCache = nil }()
 	if item.active {
 		return fileFailure("active_file_protected", nil)
 	}
@@ -248,13 +251,18 @@ func (files *Files) removeLog(item storedLog) error {
 }
 
 func (files *Files) makeRoom(instance string, kind Kind, bytes int64, count int) error {
-	logs, err := files.inventory()
-	if err != nil {
-		return err
+	logs := files.usageCache
+	if logs == nil {
+		var err error
+		logs, err = files.inventory()
+		if err != nil {
+			return err
+		}
 	}
 	for {
 		badKinds, badInstances, badTotal := files.policy.violations(logs, instance, kind, bytes, count)
 		if len(badKinds) == 0 && len(badInstances) == 0 && !badTotal {
+			files.usageCache = logs
 			return nil
 		}
 		index := slices.IndexFunc(logs, func(item storedLog) bool {
@@ -284,6 +292,8 @@ func createStorageFile(directory *os.File, name string) (*os.File, error) {
 }
 
 func (files *Files) rotate(item storedLog, now time.Time) error {
+	files.usageCache = nil
+	defer func() { files.usageCache = nil }()
 	if err := files.makeRoom(item.instance, item.kind, 0, 1); err != nil {
 		return err
 	}
@@ -544,6 +554,8 @@ func (files *Files) pruneRetentionCache(logs []storedLog) {
 }
 
 func (files *Files) compact(item storedLog, summary retentionSummary, cutoff time.Time) (compactErr error) {
+	files.usageCache = nil
+	defer func() { files.usageCache = nil }()
 	logs, err := files.inventory()
 	if err != nil {
 		return err
@@ -614,6 +626,8 @@ func (files *Files) compact(item storedLog, summary retentionSummary, cutoff tim
 }
 
 func (files *Files) maintainLocked(now time.Time) error {
+	files.usageCache = nil
+	defer func() { files.usageCache = nil }()
 	logs, err := files.inventory()
 	if err != nil {
 		return err
@@ -782,6 +796,8 @@ func (files *Files) recoverActive(kind Kind) error {
 	if files.active[kind] != nil {
 		return nil
 	}
+	files.usageCache = nil
+	defer func() { files.usageCache = nil }()
 	name, err := kind.Filename()
 	if err != nil {
 		return fileFailure("file_unavailable", nil)
@@ -808,4 +824,16 @@ func (files *Files) recoverActive(kind Kind) error {
 	}
 	files.active[kind] = file
 	return nil
+}
+
+// 같은 공유 잠금 안에서 append한 실제 바이트를 다음 예약에 반영한다.
+func (files *Files) addUsage(kind Kind, size int64) {
+	for i := range files.usageCache {
+		item := &files.usageCache[i]
+		if item.instance == files.source.instance && item.kind == kind && item.active {
+			item.size += size
+			return
+		}
+	}
+	files.usageCache = nil
 }

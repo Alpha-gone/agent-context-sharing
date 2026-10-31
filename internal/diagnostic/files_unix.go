@@ -38,6 +38,8 @@ var fileKinds = [...]Kind{Request, Auth, Search, Index, Management, System}
 // 공개하지 않는다. 정책 판단·예약·변경은 공유 잠금 안에서 실행하며
 // 불변 회전 파일 읽기는 재검증을 전제로 잠금을 양보한다. 대기열·인코딩은 Recorder가 담당한다.
 type Files struct {
+	usageCache     []storedLog
+	inventoryScans uint64
 	// 로컬 gate 아래 연속 잠금 점유와 JSON 해석 대상 바이트를 계측한다.
 	storageHeldSince      time.Time
 	maxStorageHold        time.Duration
@@ -402,6 +404,7 @@ func (files *Files) lockStorage(ctx context.Context) error {
 }
 
 func (files *Files) unlockStorage() error {
+	files.usageCache = nil
 	if !files.storageHeld {
 		return nil
 	}

@@ -54,6 +54,14 @@ func aggregateUnits(input unitInput, all []unitRun) ([]unitCohort, error) {
 			if sample.Cohort != cohort {
 				continue
 			}
+			// 근거 주석 완전성은 입력 주석으로만 판단한다. 기대 경로는 두 컨텍스트 이상이므로
+			// 근거 완전성과 경로 연속성의 분모가 모두 정의된다. 반환 결과로 미정의가 된
+			// 질의 지표는 판정에서 해당 지표의 표본만 빠진다.
+			for _, variant := range sample.Variants {
+				for _, answer := range variant.Answers {
+					entry.Annotated = entry.Annotated && len(answer.Paths) > 0
+				}
+			}
 			runs := map[string][]runMetrics{"current": {}, "semantic": {}}
 			metrics := map[string]map[string][]float64{"current": {}, "semantic": {}}
 			for _, run := range groups[sample.Code] {
@@ -62,9 +70,6 @@ func aggregateUnits(input unitInput, all []unitRun) ([]unitCohort, error) {
 					return nil, fmt.Errorf("검색 단위 집계 조건 오류")
 				}
 				runs[policy] = append(runs[policy], run.Metrics)
-				for _, query := range run.Metrics.QuerySamples {
-					entry.Annotated = entry.Annotated && validMetric(query.EvidenceCompleteness) && validMetric(query.PathContinuity)
-				}
 				for name, value := range unitValues(run) {
 					metrics[policy][name] = append(metrics[policy][name], value)
 				}

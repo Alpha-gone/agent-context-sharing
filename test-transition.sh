@@ -152,7 +152,7 @@ TRANSITION_APP_IMAGE="$test_project-new"
 compose run --rm --no-deps migrate migrate status
 compose run --rm --no-deps migrate migrate up
 compose run --rm --no-deps migrate migrate up > "$test_dir/repeat.log"
-rg -q '적용할 마이그레이션이 없다' "$test_dir/repeat.log" || fail '반복 적용이 무변경이 아니다.'
+grep -Fq '적용할 마이그레이션이 없다' "$test_dir/repeat.log" || fail '반복 적용이 무변경이 아니다.'
 run_fixture db verify
 audit
 compose up -d --no-deps --force-recreate --wait --wait-timeout 120 server

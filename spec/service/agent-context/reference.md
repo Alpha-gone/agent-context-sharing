@@ -435,3 +435,9 @@
 
 - 조회일 2026-10-31 KST. Go 1.27.1 SDK의 `go doc net/http.Server`에서 `WriteTimeout`이 요청 헤더를 읽을 때마다 다시 정해지는 응답 쓰기의 최대 시간이라는 계약을 확인했다. [HTTP 진입점](sdd/architecture.md#http-진입점)은 30초 처리 예산 뒤 전송 30초를 남기는 60초 쓰기 마감을 둔다. MCP 전송은 `Stateless`·`JSONResponse` 구성이라 장기 SSE 응답이 없음을 `internal/mcp/sdk_transport.go`에서 확인했다.
 - 같은 SDK의 `signal.NotifyContext`·`tls.LoadX509KeyPair`와 `Server.ListenAndServeTLS`(인증서 경로가 비면 `TLSConfig.Certificates`를 사용)로 [기동과 종료](sdd/operations.md#기동과-종료)의 조립 중 신호 취소와 직접 TLS 사전 검증을 구성했다. pgx v5.10.0의 `go doc github.com/jackc/pgx/v5/pgxpool.Pool.Close`에서 풀 종료가 모든 연결의 반환까지 막힌다는 계약을 확인하여 풀 종료에 5초 기한을 둔다. `pgxpool.NewWithConfig`는 전달한 context를 초기 유휴 연결 생성에만 사용하므로 조립 뒤 신호 context를 해제해도 풀 수명에 영향이 없음을 로컬 공식 소스로 확인했다.
+
+
+## 2026-10-31 #164 색인·검색·진단 정리
+
+- 조회일 2026-10-31 KST. Go 1.27.1 SDK의 `go doc net/http.Response`에서 기본 Transport가 본문을 끝까지 읽고 닫지 않으면 HTTP/1.x keep-alive 연결을 재사용하지 못할 수 있고, 닫기만 해도 보수적 상한까지 비동기로 읽는다는 계약을 확인했다. 비동기 소진은 바로 다음 호출의 재사용을 보장하지 않으므로 [제공자 전송](sdd/indexing.md#임베딩-제공자-전환)은 2xx가 아닌 응답을 최대 64 KiB까지 동기적으로 비운다.
+- macOS `flock(2)` 매뉴얼에서 `LOCK_NB`가 잠금을 기다리지 않고 `EWOULDBLOCK`을 돌려준다는 동작을 확인했다. [진단 기록자 잠금](sdd/observability.md)은 다른 instance의 비활성 슬롯 정리가 저장소 잠금 안에서만 기록자 잠금을 쥔다는 순서를 이용해, 저장소 잠금을 얻은 뒤 한 번 더 비차단으로 시도한다. Linux 동작은 기존 [OBS-08 분야 인수](reviews/2026-10-23-obs-08.md)의 같은 잠금 경로에 기대며 이번 변경에서 Linux 컨테이너 인수를 다시 실행하지 않았다.

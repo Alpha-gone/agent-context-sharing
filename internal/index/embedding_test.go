@@ -5,6 +5,7 @@ import (
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -225,5 +226,56 @@ func TestProviderMetadataDoesNotRequireCredentials(t *testing.T) {
 	}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("API 키 없는 외부 호출 구성이 허용됐다")
+	}
+}
+
+// TestErrorResponseBodyIsDrainedForReuse는 2xx가 아닌 응답의 본문을 상한 안에서 비워
+// HTTP/1.1 연결을 다음 호출에 재사용하는지 확인한다.
+func TestErrorResponseBodyIsDrainedForReuse(t *testing.T) {
+	var connections atomic.Int64
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(strings.Repeat("x", 4096)))
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	worker := testWorker(t, server)
+	for range 3 {
+		if _, status, err := worker.embedResponse(t.Context(), "본문", true); err == nil || status != http.StatusServiceUnavailable {
+			t.Fatalf("오류 응답 = %d, %v", status, err)
+		}
+	}
+	if got := connections.Load(); got != 1 {
+		t.Fatalf("오류 응답 뒤 새 연결 수 = %d, want 1", got)
+	}
+}
+
+// TestProviderOutcomeSeparatesCancellation은 작업 context가 끝나 끊긴 호출을 제공자 장애가
+// 아니라 취소·마감으로 분류하는지 확인한다.
+func TestProviderOutcomeSeparatesCancellation(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, stop := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer stop()
+	failure := errors.New("synthetic provider failure")
+	for _, test := range []struct {
+		name                  string
+		ctx                   context.Context
+		err                   error
+		result, reason, level string
+	}{
+		{"completed", t.Context(), nil, "completed", "completed", "INFO"},
+		{"provider", t.Context(), failure, "failed", "provider_unavailable", "WARN"},
+		{"canceled", canceled, context.Canceled, "failed", "canceled", "INFO"},
+		{"deadline", expired, failure, "failed", "deadline_exceeded", "INFO"},
+	} {
+		if result, reason, level := providerOutcome(test.ctx, test.err); result != test.result || reason != test.reason || level != test.level {
+			t.Fatalf("%s: %s/%s/%s", test.name, result, reason, level)
+		}
 	}
 }

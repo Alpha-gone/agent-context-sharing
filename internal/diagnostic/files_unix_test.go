@@ -524,3 +524,63 @@ func TestOBS02ProcessLocksAndExitRecovery(t *testing.T) {
 		}
 	}
 }
+
+// TestPrepareWaitsForIdleSlotMaintenance는 다른 instance가 저장소 잠금 안에서 비활성 슬롯의
+// 기록자 잠금을 잠시 쥔 동안 그 슬롯의 instance가 기동하면, instance_busy로 실패하지 않고
+// 정리가 끝난 뒤 기록자 잠금을 얻는지 확인한다. 실행 중인 기록자의 거부는
+// TestOBS02ProcessLocksAndExitRecovery가 확인한다.
+func TestPrepareWaitsForIdleSlotMaintenance(t *testing.T) {
+	directory := obs02Directory(t)
+	obs02Prepare(t, directory, "idle_slot").Close()
+	storage, err := os.OpenFile(filepath.Join(directory, storageLockName), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	writer, err := os.OpenFile(filepath.Join(directory, "idle_slot", writerLockName), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if err := unix.Flock(int(storage.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Flock(int(writer.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewSource("idle_slot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type prepared struct {
+		files *Files
+		err   error
+	}
+	done := make(chan prepared, 1)
+	go func() {
+		files, err := PrepareFiles(t.Context(), directory, source)
+		done <- prepared{files, err}
+	}()
+	select {
+	case result := <-done:
+		if result.files != nil {
+			result.files.Close()
+		}
+		t.Fatalf("슬롯 정리 중 기동이 기다리지 않았다: %v", result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	// 정리 경로와 같이 기록자 잠금을 먼저 놓고 저장소 잠금을 놓는다.
+	if err := unix.Flock(int(writer.Fd()), unix.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Flock(int(storage.Fd()), unix.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	result := <-done
+	if result.err != nil {
+		t.Fatalf("슬롯 정리 뒤 기동 = %v", result.err)
+	}
+	if err := result.files.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

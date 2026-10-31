@@ -665,8 +665,14 @@ func combine(results []channelResult) []combinedCandidate {
 // 근거가 다르면 같은 문장이라도 접지 않는다. 서로 다른 근거를 가리키는 파생은 예산을 차지할
 // 값이 있다는 것이 「예산 적용과 절단」의 근거다. 후보는 이미 순위 순이므로 먼저 만난 쪽이
 // 대표가 된다.
+//
+// 대표 후보의 삼중자 집합은 대표가 될 때 한 번만 만들고 이후 비교에 재사용한다.
 func foldSimilarDerived(candidates []combinedCandidate, threshold float64) []combinedCandidate {
-	groups := make(map[string][]int)
+	type foldRepresentative struct {
+		index int
+		grams map[string]struct{}
+	}
+	groups := make(map[string][]foldRepresentative)
 	result := make([]combinedCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		key, ok := derivedFoldKey(candidate.value)
@@ -674,10 +680,15 @@ func foldSimilarDerived(candidates []combinedCandidate, threshold float64) []com
 			result = append(result, candidate)
 			continue
 		}
+		grams := trigrams(candidate.value.Body)
 		folded := false
 		for _, representative := range groups[key] {
-			if bodySimilarity(result[representative].value.Body, candidate.value.Body) >= threshold {
-				result[representative].folded++
+			similarity := trigramSimilarity(representative.grams, grams)
+			if result[representative.index].value.Body == candidate.value.Body {
+				similarity = 1
+			}
+			if similarity >= threshold {
+				result[representative.index].folded++
 				folded = true
 				break
 			}
@@ -685,7 +696,7 @@ func foldSimilarDerived(candidates []combinedCandidate, threshold float64) []com
 		if folded {
 			continue
 		}
-		groups[key] = append(groups[key], len(result))
+		groups[key] = append(groups[key], foldRepresentative{index: len(result), grams: grams})
 		result = append(result, candidate)
 	}
 	return result
@@ -705,16 +716,12 @@ func derivedFoldKey(value model.Context) (string, bool) {
 	return string(value.Derived.Kind) + "|" + string(value.Derived.EvidenceState) + "|" + strings.Join(parts, ","), true
 }
 
-// bodySimilarity는 본문의 문자 삼중자 자카드 유사도를 돌려준다.
+// trigramSimilarity는 본문 두 개의 문자 삼중자 집합으로 자카드 유사도를 돌려준다.
 //
 // 임베딩을 다시 부르지 않는 이유는 접기가 응답 구성 시점의 정리이기 때문이다. 채널이 고른
 // 후보만 비교하면 되고, 같은 입력에 같은 결과를 주어야 「검색 품질 평가」의 반복 측정이
 // 성립한다. 문자 단위라 공백 규칙이 다른 언어에서도 같은 방식으로 동작한다.
-func bodySimilarity(left, right string) float64 {
-	if left == right {
-		return 1
-	}
-	leftGrams, rightGrams := trigrams(left), trigrams(right)
+func trigramSimilarity(leftGrams, rightGrams map[string]struct{}) float64 {
 	if len(leftGrams) == 0 || len(rightGrams) == 0 {
 		return 0
 	}

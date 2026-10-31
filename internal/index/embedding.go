@@ -123,6 +123,8 @@ func (worker *Worker) embedResponse(ctx context.Context, input string, document 
 	defer response.Body.Close()
 	status = uint16(response.StatusCode)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		// 상한 안에서 본문을 비워야 HTTP/1.1 연결을 재사용한다. 오류 본문은 해석하지 않는다.
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxDiscardedResponseBytes))
 		return nil, status, ProviderError{Reason: fmt.Sprintf("임베딩 제공자 상태: %d", response.StatusCode), RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), worker.providerTime()), Retryable: response.StatusCode == 408 || response.StatusCode == 429 || (response.StatusCode >= 500 && response.StatusCode < 600)}
 	}
 	// 전송 실패와 완전히 수신한 JSON의 계약 위반을 분리한다.

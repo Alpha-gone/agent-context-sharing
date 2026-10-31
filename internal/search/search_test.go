@@ -264,6 +264,18 @@ func TestFoldSimilarDerivedGroupsByEvidenceAndSimilarity(t *testing.T) {
 		}
 	})
 
+	t.Run("같은 묶음의 여러 대표 중 비슷한 대표에 접는다", func(t *testing.T) {
+		folded := foldSimilarDerived([]combinedCandidate{
+			derived("배포 파이프라인이 실패한 원인은 캐시 키 충돌이다", evidence),
+			derived("스테이징 데이터베이스 마이그레이션이 지연되고 있다", evidence),
+			derived("스테이징 데이터베이스 마이그레이션이 지연되고 있다.", evidence),
+			derived("배포 파이프라인이 실패한 원인은 캐시 키 충돌이다", evidence),
+		}, 0.9)
+		if len(folded) != 2 || folded[0].folded != 1 || folded[1].folded != 1 {
+			t.Fatalf("대표별 접기 결과 = %d개, %d/%d", len(folded), folded[0].folded, folded[len(folded)-1].folded)
+		}
+	})
+
 	t.Run("원천과 사건은 접기 대상이 아니다", func(t *testing.T) {
 		source := combinedCandidate{value: model.Context{ID: newFoldID(t), Layer: model.LayerSource, Body: "같은 본문"}}
 		event := combinedCandidate{value: model.Context{ID: newFoldID(t), Layer: model.LayerEvent, Body: "같은 본문"}}

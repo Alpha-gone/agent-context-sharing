@@ -29,7 +29,7 @@ services:
       - -c
       - archive_mode=on
       - -c
-      - archive_command=test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f
+      - archive_command=/usr/local/bin/agent-context-wal-archive %p %f
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_context} -d ${POSTGRES_DB:-agent_context}"]
       interval: 5s

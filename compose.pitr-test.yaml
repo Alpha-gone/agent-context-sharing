@@ -27,7 +27,7 @@ services:
       - -c
       - archive_mode=on
       - -c
-      - archive_command=test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f
+      - archive_command=/usr/local/bin/agent-context-wal-archive %p %f
 
   recovered:
     <<: *db

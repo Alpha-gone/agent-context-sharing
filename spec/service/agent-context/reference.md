@@ -406,3 +406,9 @@
 ## 2026-10-31 #201 사건 구성원 참조 정렬
 
 - Go 1.27.1 SDK의 `src/slices/iter.go`에 있는 [slices.SortedFunc](https://pkg.go.dev/slices@go1.27.1#SortedFunc)의 새 slice 수집·정렬 계약과 `src/uuid/uuid.go`의 바이트 순서 Compare 구현을 확인했다. 조회일 2026-10-31 KST. 프로젝트 `model.ID.Compare`를 사용하면 canonical UUID 문자열 오름차순과 같은 순서로 구성원을 정렬할 수 있다. [관계 후보 방아쇠](sdd/context-lifecycle.md#관계-후보-제안과-확정)는 입력을 바꾸지 않는 정렬 결과를 비교하고, 공통 사건 응답 조립은 같은 정렬을 사용한다. 중복은 제거하지 않아 기존 검증을 보존한다.
+
+
+## 2026-10-31 #198 재색인 진행률의 UUID 집계
+
+- 조회일 2026-10-31 KST. [PostgreSQL 18 표현식 인덱스](https://www.postgresql.org/docs/18/indexes-expressional.html)·[EXPLAIN](https://www.postgresql.org/docs/18/using-explain.html)에서 질의 표현식과 인덱스의 대응 및 실제 rows/loops·buffers의 해석을 확인했다. [CASE](https://www.postgresql.org/docs/18/functions-conditional.html#FUNCTIONS-CASE)·[SELECT CTE materialization](https://www.postgresql.org/docs/18/queries-with.html#QUERIES-WITH-CTE-MATERIALIZATION)의 수요 기반 실행은 작은 대상의 vectors 조회와 큰 대상 집합 조인을 한 스냅숏에서 구분하는 근거다. 상수 계획 평가 예외를 일반화하지 않고 실제 실행 계획의 loops·행으로 선택 경로를 대조했다.
+- [색인 전환·복귀 경계](sdd/indexing.md#전환복귀-경계)는 targets 속성을 UUID로 한 번 변환하고 기존 임베딩 UUID 열·인덱스를 사용한다. 64건은 이 서비스의 작은 조회 묶음 상한으로, PostgreSQL이 보장하는 최적 분기점은 아니다. pgx v5.10.0의 로컬 공식 `tracer.go` API 주석으로 QueryTracer의 SQL/Args 관찰 범위를 확인하고 실제 ReindexProgress 질의를 수집했다. pgx v5.10.0 `conn.go`의 QueryExecModeExec 주석과 ExecParams 실행을 확인하여 이 질의의 named prepared plan 재사용을 피하고 SQL의 UUID cast를 명시했다. 버전·스키마·마이그레이션·관측 주기는 변경하지 않았다.

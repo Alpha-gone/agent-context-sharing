@@ -55,7 +55,7 @@ func toolDefinitions() []*sdk.Tool {
 		"channel": enumSchema("원본을 얻은 수집 경로. 내용의 생성 주체인 origin_kind와 구분한다.", "conversation", "file", "web", "api", "other"),
 		"locator": {Type: "string", Description: "scheme을 가진 원본 URI. 1~1024자이며 서버는 원본에 접근하지 않는다.", MinLength: new(1), MaxLength: new(1024), Pattern: "^[A-Za-z][A-Za-z0-9+.-]*:", Format: "uri"},
 	}, "channel", "locator")
-	createNode["source_ref"].Description = "원천의 자연 키인 출처 참조. 같은 그래프에서 같은 참조는 기존 원천을 반환한다."
+	createNode["source_ref"].Description = "원천의 자연 키인 출처 참조. 같은 그래프에서 같은 참조는 폐기·삭제 상태도 포함해 기존 원천을 반환한다. 삭제 시각과 creation_status=existing_deleted를 확인하며 자동 복구하지 않는다."
 	createNode["occurred_at"] = utcSchema("원본 내용이 발생한 UTC 시각. 시스템 기록 시각과 구분한다.", false)
 	createNode["origin_kind"] = enumSchema("원천 내용의 생성 주체. 생성 후 불변이다.", "user_utterance", "agent_output", "external_content")
 	createNode["derived_from"] = refsSchema("파생의 원천·파생 근거 UUIDv7. 1~100개이며 생성 후 불변이다.", 100)
@@ -125,7 +125,7 @@ func toolDefinitions() []*sdk.Tool {
 		tool("graph_create", "새 그래프를 만들고 인증 계정이 소유자가 된다. request_id 없는 불확정 결과는 재조회하며 새 키는 새 그래프를 만들 수 있다.", createGraph, write(false, false)),
 		tool("graph_get", "선택한 graph_id의 현재 메타데이터·version을 조회한다. 현재 등급은 서버가 검사한다.", objectSchema(graph(), "graph_id"), read()),
 		tool("graph_update", "현재 expected_version으로 이름·설명을 갱신한다. 충돌하면 재조회한다. 같은 request_id·인자의 24시간 최초 결과 재생과 새 키의 판 검사를 구분한다.", objectSchema(updateGraph, "graph_id", "expected_version"), write(true, false)),
-		tool("node_create", "등록한 agent_id로 원천·파생·사건을 만든다. 계층별 필수 속성을 채운다. 원천은 source_ref로 중복 판정하고 파생 대체는 supersedes_context_id를 사용한다. request_id 재시도와 새 생성을 구분한다.", creation, write(true, false)),
+		tool("node_create", "등록한 agent_id로 원천·파생·사건을 만든다. 계층별 필수 속성을 채운다. 원천은 source_ref로 중복 판정한다. 폐기·삭제된 기존 원천은 creation_status=existing_deleted와 warning을 반환하며 활성 근거로 사용할 수 없다. MCP 폐기는 node_restore로, 웹 삭제는 웹에서 복구한다. 파생 대체는 supersedes_context_id를 사용한다. request_id 재시도와 새 생성을 구분한다.", creation, write(true, false)),
 		tool("node_get", "graph_id 안에서 시작 노드와 확정 간선의 부분 그래프를 조회한다. 0홉은 시작점만이며 정상 절단은 오류가 아니다.", objectSchema(getNode, "graph_id", "context_id"), read()),
 		tool("node_update", "등록한 agent_id·현재 expected_version으로 파생/사건의 가변 필드만 갱신한다. 원천은 불변이고 keep은 가변 필드 없이 유지 판단을 기록한다. 충돌·불확정 결과는 재조회한다.", updating, write(true, false)),
 		tool("node_discard", "등록한 agent_id로 노드를 소프트 폐기한다. 재폐기는 거부되며 연쇄 폐기는 하지 않는다. 같은 request_id의 결과 재생과 새 키의 상태 검사를 구분한다.", objectSchema(discard, "graph_id", "context_id", "agent_id"), write(true, false)),

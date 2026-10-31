@@ -27,7 +27,7 @@ import (
 const (
 	// SessionAudience는 웹 세션만 받아들이는 JWT audience다.
 	SessionAudience = "web"
-	sessionCookie   = "agent_context_session"
+	sessionCookie   = "__Host-agent_context_session"
 )
 
 // Session은 현재 요청 안에서만 쓰는 검증된 웹 세션의 최소 정보다.
@@ -131,6 +131,8 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	// 공개 자산 외의 화면·거부 응답은 세션/계정 맥락으로 재사용하지 않는다.
 	if _, asset := server.assets[request.URL.Path]; !asset {
 		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("X-Frame-Options", "DENY")
+		writer.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 	}
 	if request.Context().Err() != nil {
 		return
@@ -1145,7 +1147,7 @@ func (server *Server) verifiedSession(request *http.Request) (accountID model.ID
 	if err := request.Context().Err(); err != nil {
 		return model.ID{}, Session{}, err
 	}
-	cookie, err := request.Cookie(sessionCookie)
+	cookie, err := request.Cookie(server.sessionCookieName(request))
 	if err != nil || cookie.Value == "" {
 		return model.ID{}, Session{}, http.ErrNoCookie
 	}
@@ -1180,16 +1182,24 @@ func (server *Server) sessionUnavailable(writer http.ResponseWriter) {
 	server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "인증 장애", Error: "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요."})
 }
 
+// sessionCookieName은 TLS와 허용된 로컬 HTTP 시험의 쿠키를 분리한다.
+func (server *Server) sessionCookieName(request *http.Request) string {
+	if server.config.SecureCookie(request) {
+		return sessionCookie
+	}
+	return "agent_context_session"
+}
+
 func (server *Server) setSessionCookie(writer http.ResponseWriter, request *http.Request, session Session) {
 	http.SetCookie(writer, &http.Cookie{
-		Name: sessionCookie, Value: session.Raw, Path: "/", Expires: session.ExpiresAt,
+		Name: server.sessionCookieName(request), Value: session.Raw, Path: "/", Expires: session.ExpiresAt,
 		HttpOnly: true, Secure: server.config.SecureCookie(request), SameSite: http.SameSiteLaxMode,
 	})
 }
 
 func (server *Server) clearSessionCookie(writer http.ResponseWriter, request *http.Request) {
 	http.SetCookie(writer, &http.Cookie{
-		Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, Expires: time.Unix(1, 0),
+		Name: server.sessionCookieName(request), Value: "", Path: "/", MaxAge: -1, Expires: time.Unix(1, 0),
 		HttpOnly: true, Secure: server.config.SecureCookie(request), SameSite: http.SameSiteLaxMode,
 	})
 }

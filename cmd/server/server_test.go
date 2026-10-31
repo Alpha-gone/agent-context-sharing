@@ -181,7 +181,7 @@ func TestRequestLogExcludesSensitiveValues(t *testing.T) {
 	app := newApplication(&fakeReadiness{}, slog.New(slog.NewTextHandler(&output, nil)), proxyTransport())
 	request := httptest.NewRequest(http.MethodGet, "/healthz?access_token=secret-token", strings.NewReader("secret-body"))
 	request.Header.Set("Authorization", "Bearer secret-access-token")
-	request.Header.Set("Cookie", "agent_context_session=secret-cookie")
+	request.Header.Set("Cookie", "__Host-agent_context_session=secret-cookie")
 	response := httptest.NewRecorder()
 	app.handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {

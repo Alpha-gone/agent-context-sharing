@@ -125,7 +125,7 @@ func TestWEB03GraphListIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request.AddCookie(&http.Cookie{Name: "agent_context_session", Value: token.Raw})
+		request.AddCookie(&http.Cookie{Name: "__Host-agent_context_session", Value: token.Raw})
 		if form != nil {
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			request.Header.Set("Origin", server.URL)

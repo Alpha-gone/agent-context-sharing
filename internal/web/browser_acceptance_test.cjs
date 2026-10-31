@@ -147,7 +147,7 @@ async function pageChecks(name) {
   for (const secret of [config.password, config.sessionMarker].filter(Boolean)) {
     assert.ok(!page.html.includes(secret), name + ' 화면에 민감정보가 있다');
   }
-  assert.ok(!page.cookie.includes('agent_context_session'), name + ' 세션 쿠키가 스크립트에 보인다');
+  assert.ok(!page.cookie.includes('__Host-agent_context_session'), name + ' 세션 쿠키가 스크립트에 보인다');
 }
 async function rows(selector) {
   return evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].map((element) => element.textContent.trim())`);
@@ -360,7 +360,7 @@ async function login() {
   await press('Enter', true);
   assert.equal(await currentPath(), '/graphs');
   const { cookies } = await cdp.send('Network.getCookies', { urls: [config.base] });
-  const session = cookies.find((cookie) => cookie.name === 'agent_context_session');
+  const session = cookies.find((cookie) => cookie.name === '__Host-agent_context_session');
   assert.ok(session && session.httpOnly && session.secure && session.sameSite === 'Lax', '세션 쿠키 속성');
   config.sessionMarker = session.value;
   await pageChecks('그래프 목록');

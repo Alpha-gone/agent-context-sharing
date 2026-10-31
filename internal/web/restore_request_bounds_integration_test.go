@@ -36,7 +36,7 @@ func TestWEB05RestoreRequestBoundsIntegration(t *testing.T) {
 			method, body = http.MethodPost, form.Encode()
 		}
 		request := httptest.NewRequestWithContext(t.Context(), method, "https://permission.test"+path, strings.NewReader(body))
-		request.AddCookie(&http.Cookie{Name: "agent_context_session", Value: token.Raw})
+		request.AddCookie(&http.Cookie{Name: "__Host-agent_context_session", Value: token.Raw})
 		if form != nil {
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			request.Header.Set("Origin", "https://permission.test")

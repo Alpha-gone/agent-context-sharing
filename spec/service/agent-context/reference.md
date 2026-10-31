@@ -473,3 +473,10 @@
 - 근거: 적용 SDK Go 1.27.1의 `go doc crypto/sha256.Sum256`과 `src/fmt/doc.go`의 `%q` 문자열 형식 설명을 확인했다. 공식 API: [crypto/sha256.Sum256](https://pkg.go.dev/crypto/sha256@go1.27.1#Sum256), [fmt](https://pkg.go.dev/fmt@go1.27.1).
 - 확인: `Sum256`은 입력 바이트의 SHA-256을 반환하고 문자열 `%q`는 Go 구문에 맞게 이스케이프한 큰따옴표 문자열을 만든다. 데이터셋명과 원 질문 ID를 각각 인용해 경계가 구분되는 입력을 만든다.
 - 반영: [반복·통계](sdd/evaluation.md#반복통계와-실행-순서)의 원 질문·하위 홉 공통 비식별 코드와 [검토](reviews/2026-10-31-issue-196.md). 해시는 익명성 보장이나 공개 데이터의 효과 실증을 뜻하지 않는다.
+
+## 인증·웹 방어 깊이 (#163)
+
+- 조회 시각: 2026-10-31 21:00 KST.
+- 근거: [MDN Set-Cookie](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie), [MDN frame-ancestors](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/frame-ancestors). `__Host-`의 Secure·Path=/·Domain 생략 조건과 문서 삽입 차단 지시를 확인했다.
+- bcrypt는 적용 모듈 `golang.org/x/crypto@v0.41.0/bcrypt/bcrypt.go`의 공급자 API 주석과 `Cost` 구현을 로컬 모듈 캐시에서 확인했다. [공식 소스](https://github.com/golang/crypto/blob/v0.41.0/bcrypt/bcrypt.go)의 웹 조회는 실패했으므로 적용 판 로컬 소스를 근거로 사용했다.
+- 반영: [인증](sdd/authentication.md)의 성공 시 비용 상향과 잔여 경계, [웹](sdd/web.md)의 공통 프레임·쿠키 경계.

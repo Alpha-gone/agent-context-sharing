@@ -57,7 +57,7 @@ func TestWebSessionClosedStoreHTTPIntegration(t *testing.T) {
 				method = http.MethodPost
 			}
 			request := httptest.NewRequest(method, "https://service.test"+path, nil)
-			request.AddCookie(&http.Cookie{Name: "agent_context_session", Value: token.Raw})
+			request.AddCookie(&http.Cookie{Name: "__Host-agent_context_session", Value: token.Raw})
 			response := httptest.NewRecorder()
 			app.handler().ServeHTTP(response, request)
 			if response.Code != 500 || response.Header().Get("Location") != "" || len(response.Result().Cookies()) != 0 || !strings.Contains(response.Body.String(), "인증 상태를 확인할 수 없습니다.") {

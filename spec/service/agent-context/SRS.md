@@ -185,7 +185,7 @@ AI 에이전트 제텔카스텐은 단순한 대화 기록 저장소가 아니�
 | `context_id`       | UUIDv7          | 예     | 컨텍스트의 전역 고유 식별자       | 생성 후 변경하지 않는다                                          | `FR-AGENT_CONTEXT-035`                          |
 | `graph_id`         | UUIDv7          | 예     | 소속 컨텍스트 그래프의 식별자     | 생성 후 변경하지 않는다                                          | `FR-AGENT_CONTEXT-019`~`FR-AGENT_CONTEXT-022`   |
 | `layer`            | 열거형          | 예     | 컨텍스트 계층                     | `source`, `derived`, `event` 중 하나이며 생성 후 변경하지 않는다 | `FR-AGENT_CONTEXT-034`                          |
-| `body`             | 텍스트          | 예     | 컨텍스트 본문                     | 빈 문자열을 허용하지 않으며 길이는 「입력 검증 세부」가 정한다   | `FR-AGENT_CONTEXT-001`                          |
+| `body`             | 텍스트          | 예     | 컨텍스트 본문                     | 빈 문자열은 거부하되 공백만인 본문은 허용하고 원문을 보존한다. 길이는 「입력 검증 세부」가 정한다   | `FR-AGENT_CONTEXT-001`                          |
 | `recorded_at`      | 타임스탬프(UTC) | 예     | 시스템에 기록된 시점              | 생성 후 변경하지 않는다                                          | `FR-AGENT_CONTEXT-006`, `NFR-AGENT_CONTEXT-002` |
 | `created_by`       | UUIDv7          | 예     | 컨텍스트를 기여한 작업자 계정     | 생성 후 변경하지 않는다                                          | `FR-AGENT_CONTEXT-037`, `NFR-AGENT_CONTEXT-010` |
 | `created_by_agent` | UUIDv7          | 예     | 컨텍스트를 실제로 기록한 에이전트 | 생성 후 변경하지 않는다                                          | `FR-AGENT_CONTEXT-037`, `NFR-AGENT_CONTEXT-010` |

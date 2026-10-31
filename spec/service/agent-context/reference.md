@@ -491,3 +491,8 @@
 
 - 조회 시각: 2026-10-31 21:55 KST. 적용 PostgreSQL 18의 [조건식](https://www.postgresql.org/docs/18/functions-conditional.html)·[문자열 함수](https://www.postgresql.org/docs/18/functions-string.html)를 확인했다. COALESCE는 NULL의 표시 대체값을 고르고, concat_ws는 NULL 인자를 생략하므로 등급 전이와 구성원 정보가 있을 때만 구분자를 넣을 수 있다.
 - 반영: [감사 기록의 조회](sdd/observability.md#감사-기록의-조회)와 [웹 설계](sdd/web.md). 저장된 감사 값은 변경하지 않고 조회의 상세 표기만 보완한다.
+
+## 문서와 질의의 공백 입력 구분 (#175)
+
+- 조회 시각: 2026-10-31 현재 세션. 적용 SDK Go 1.27.1의 `go doc strings.TrimSpace`에서 Unicode 기준 앞뒤 공백 제거 의미를 확인했다. [공식 API](https://pkg.go.dev/strings@go1.27.1#TrimSpace).
+- 반영: 문서에는 기존 저장·MCP 계약의 비어 있지 않은 공백 본문을 허용하고, 질의의 TrimSpace 공백 판정은 유지한다. 문서는 trim한 값을 전송하지 않고 원문을 기존 문서 접두사에 결합한다. 실제 제공자의 공백 내용 수용·품질은 합성 TLS 시험의 보장 범위가 아니며 실제 HTTP/응답 오류는 기존 계약으로 처리한다.

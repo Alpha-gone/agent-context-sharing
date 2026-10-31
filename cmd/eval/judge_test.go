@@ -104,17 +104,25 @@ func findComparison(t *testing.T, judgement stageJudgement, metric string) compa
 }
 
 // 비교 단계로 꺼둔 채널은 실패로 세지 않는다. 기준선은 그래프 채널을 끈 구성이므로
-// 세면 매 질의 실패한 것으로 집계되어 실제 조회 실패와 구분할 수 없다.
+// 세면 매 질의 실패한 것으로 집계되어 실제 조회 실패와 구분할 수 없다. 진입점이 없어
+// 그래프 확장을 생략한 정상 빈 결과도 세지 않지만 진입 채널의 실제 실패는 센다.
 func TestCountsAsFailure(t *testing.T) {
-	cases := map[string]bool{
-		"":                      false,
-		channelDisabled:         false,
-		"embedding_unavailable": true,
-		"no_entry_point":        true,
-	}
-	for failure, want := range cases {
-		if got := countsAsFailure(failure); got != want {
-			t.Fatalf("countsAsFailure(%q) = %v; %v여야 한다", failure, got, want)
+	for _, test := range []struct {
+		channel, failure string
+		want             bool
+	}{
+		{"graph", "", false},
+		{"graph", channelDisabled, false},
+		{"semantic", channelDisabled, false},
+		{"graph", channelNoEntryPoints, false},
+		{"semantic", "embedding_unavailable", true},
+		{"keyword", "store_unavailable", true},
+		{"graph", "store_unavailable", true},
+		{"semantic", channelNoEntryPoints, true},
+		{"graph", "no_entry_point", true},
+	} {
+		if got := countsAsFailure(test.channel, test.failure); got != test.want {
+			t.Fatalf("countsAsFailure(%q, %q) = %v; %v여야 한다", test.channel, test.failure, got, test.want)
 		}
 	}
 }

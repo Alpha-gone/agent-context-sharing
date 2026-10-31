@@ -202,8 +202,8 @@ func runConsistency(ctx context.Context, database *store.Store, worker *index.Wo
 				return consistencyReport{}, fmt.Errorf("구성 %s 질의 %s: %w", variant.Name, query.ID, err)
 			}
 			entry.Queries++
-			for _, channel := range flow.Channels {
-				if countsAsFailure(channel.Failure) {
+			for name, channel := range flow.Channels {
+				if countsAsFailure(name, channel.Failure) {
 					return consistencyReport{}, fmt.Errorf("일관성 동등성 측정 중 채널 실패: %s", channel.Failure)
 				}
 			}
@@ -516,8 +516,8 @@ func (scenario *consistencyScenario) measure(ctx context.Context, service *consi
 			slog.Warn("동시 쓰기 중 검색 실패", "variant", variant.Name, "error", err.Error())
 			continue
 		}
-		for _, channel := range flow.Channels {
-			if countsAsFailure(channel.Failure) {
+		for name, channel := range flow.Channels {
+			if countsAsFailure(name, channel.Failure) {
 				result.ChannelFailures++
 			}
 		}

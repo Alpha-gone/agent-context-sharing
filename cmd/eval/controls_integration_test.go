@@ -246,3 +246,30 @@ func TestEVAL06CommandsIntegration(t *testing.T) {
 		})
 	}
 }
+
+// TestAdaptiveNoRelevantLocalIntegration은 관련 국소 후보가 없어 강제 local 경로의 그래프
+// 채널이 진입점 없이 생략된 질의가 채널 실패로 세어져 적응형 실행을 중단하지 않는지 확인한다.
+func TestAdaptiveNoRelevantLocalIntegration(t *testing.T) {
+	database, worker, connection := newEvalDatabase(t, nil, true)
+	set := lifecycleInput(t)
+	queries := querySet{Version: "eval195-no-local", Queries: []querySpec{
+		{ID: "q1", IndependentUnit: "t1", UseCase: useCaseFact, WorkContext: "무관한합성질의어", Answers: []string{"source"}},
+		{ID: "q2", IndependentUnit: "t2", UseCase: useCaseFact, WorkContext: "독립 파생", Answers: []string{"derived"}},
+	}}
+	loaded := settings{execution: search.ExecutionSequential, candidateLimit: 50, semanticThreshold: 0.7, foldThreshold: 0.95}
+	result, err := runAdaptive(t.Context(), database, worker, set, queries, loaded, adaptiveConditions{Repeats: 10, Budget: 4000, MaxHops: 2, MaxHopNodes: 100, GraphStage: "relations"}, []float64{0.7}, []float64{0.1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Grid) != 1 || len(result.Judgements) == 0 || len(result.Runs) < 40 {
+		t.Fatalf("격자·판정 누락: grid=%d judgements=%d runs=%d", len(result.Grid), len(result.Judgements), len(result.Runs))
+	}
+	for _, run := range result.Runs {
+		for _, metrics := range run.UseCases {
+			if metrics.Failures["graph"] != 0 {
+				t.Fatalf("%s 회차 %d가 진입점 없는 그래프 생략을 실패로 셌다", run.Stage, run.Repeat)
+			}
+		}
+	}
+	requireEvaluationDeleted(t, connection, set.Version)
+}

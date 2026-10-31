@@ -48,6 +48,9 @@ type useCaseMetrics struct {
 // 싣는 값과 같아야 하며, 그 패키지도 이 상태를 모든 채널 실패 판정에서 제외한다.
 const channelDisabled = "disabled"
 
+// channelNoEntryPoints는 진입점이 없어 그래프 확장을 생략한 정상 빈 결과다.
+const channelNoEntryPoints = "no_entry_points"
+
 // runMetrics는 한 회차 전체의 측정값이다. 소요 시간을 밀리초 정수로 두는 이유는
 // time.Duration에 JSON 표현이 정해져 있지 않기 때문이다.
 type runMetrics struct {
@@ -180,7 +183,7 @@ func measure(ctx context.Context, service *search.Service, graph loadedGraph, qu
 		for _, name := range slices.Sorted(maps.Keys(flow.Channels)) {
 			channel := flow.Channels[name]
 			total.channels[name] += channel.Contribution
-			if countsAsFailure(channel.Failure) {
+			if countsAsFailure(name, channel.Failure) {
 				total.failures[name]++
 			}
 		}
@@ -294,9 +297,10 @@ func recoveredKeys(flow search.Flow, query querySpec, keys map[string]model.ID) 
 
 // countsAsFailure는 채널 상태를 실패로 셀지 정한다. 비교 단계가 끈 채널은 실패가
 // 아니다. 조회가 실패한 것과 같게 세면 기준선의 그래프 채널이 매 질의 실패한 것처럼
-// 보여 단계별 실패율을 읽을 수 없다.
-func countsAsFailure(failure string) bool {
-	return failure != "" && failure != channelDisabled
+// 보여 단계별 실패율을 읽을 수 없다. 진입점이 없어 그래프 확장을 생략한 정상 빈 결과도
+// 실패가 아니다. 진입 채널의 실제 조회 실패는 그 채널의 실패로 따로 센다.
+func countsAsFailure(channel, failure string) bool {
+	return failure != "" && failure != channelDisabled && !(channel == "graph" && failure == channelNoEntryPoints)
 }
 
 // answerIDs는 데이터셋의 정답 key를 적재된 식별자로 바꾼다.

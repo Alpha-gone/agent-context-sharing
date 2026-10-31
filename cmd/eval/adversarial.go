@@ -739,7 +739,7 @@ func runQueries(ctx context.Context, service *search.Service, graph loadedGraph,
 		}
 		for _, name := range slices.Sorted(maps.Keys(flow.Channels)) {
 			failure := flow.Channels[name].Failure
-			if countsAsFailure(failure) && !(name == "graph" && failure == "no_entry_points") {
+			if countsAsFailure(name, failure) {
 				return nil, fmt.Errorf("질의 %q 검색 채널 %q 실패: %s", query.ID, name, failure)
 			}
 		}

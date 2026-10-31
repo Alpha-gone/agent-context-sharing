@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	json "encoding/json/v2"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -36,6 +38,13 @@ func trustEvalEmbeddingServer(t *testing.T, server *httptest.Server) {
 // 각 테스트는 새 평가 그래프를 만들고 다른 그래프의 색인 작업을 소비하지 않는다.
 func evalDatabase(t *testing.T, onEmbed func()) (*store.Store, *index.Worker, *pgx.Conn) {
 	t.Helper()
+	return newEvalDatabase(t, onEmbed, false)
+}
+
+// newEvalDatabase의 orthogonalQueries는 질의 임베딩만 문서와 직교하게 돌려준다.
+// 의미 후보가 하한에 닿지 않는 국소 질의를 만들 때 쓴다.
+func newEvalDatabase(t *testing.T, onEmbed func(), orthogonalQueries bool) (*store.Store, *index.Worker, *pgx.Conn) {
+	t.Helper()
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
 		if os.Getenv("TEST_DATABASE_REQUIRED") != "" {
@@ -63,18 +72,33 @@ func evalDatabase(t *testing.T, onEmbed func()) (*store.Store, *index.Worker, *p
 		FROM pg_attribute WHERE attrelid = 'public.context_embedding'::regclass AND attname = 'embedding'`).Scan(&dimension); err != nil || dimension <= 0 {
 		t.Fatalf("시험 DB 임베딩 차원 = %d, %v", dimension, err)
 	}
-	vector := make([]float64, dimension)
-	vector[0] = 1
+	vector, query := make([]float64, dimension), make([]float64, dimension)
+	vector[0], query[1] = 1, 1
 	raw, err := json.Marshal(map[string]any{"embedding": map[string]any{"values": vector}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	queryRaw, err := json.Marshal(map[string]any{"embedding": map[string]any{"values": query}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if onEmbed != nil {
 			onEmbed()
 		}
+		body := raw
+		if orthogonalQueries {
+			payload, err := io.ReadAll(request.Body)
+			if err != nil {
+				http.Error(writer, "request body", http.StatusBadRequest)
+				return
+			}
+			if bytes.Contains(payload, []byte("task: search result | query: ")) {
+				body = queryRaw
+			}
+		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write(raw)
+		_, _ = writer.Write(body)
 	}))
 	t.Cleanup(server.Close)
 	baseURL, err := url.Parse(server.URL)

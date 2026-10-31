@@ -174,7 +174,7 @@ func measureContinualQuery(ctx context.Context, service *search.Service, graph l
 	}
 	for _, name := range slices.Sorted(maps.Keys(flow.Channels)) {
 		failure := flow.Channels[name].Failure
-		if countsAsFailure(failure) && !(name == "graph" && failure == "no_entry_points") {
+		if countsAsFailure(name, failure) {
 			return queryMetrics{}, search.Flow{}, fmt.Errorf("지속 평가 검색 채널 %q 실패: %s", name, failure)
 		}
 	}

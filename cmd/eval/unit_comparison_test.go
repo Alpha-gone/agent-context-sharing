@@ -332,3 +332,43 @@ func TestUnitComparisonStrictJSONAndPrivacy(t *testing.T) {
 		t.Fatalf("엄격한 JSON: %v", err)
 	}
 }
+
+// TestUnitTaskSuccessRejectsOnlySignificantLoss는 과업 성공률 하락을 확장 업무 판정과 같이
+// 유의한 악화일 때만 거부하고, 독립 단위 부족은 보류로 남기는지 확인한다.
+func TestUnitTaskSuccessRejectsOnlySignificantLoss(t *testing.T) {
+	input := unitFixture(t, 2)
+	input.Provenance = "agent_trace"
+	cohorts, err := aggregateUnits(input, unitFixtureRuns(input))
+	if err != nil || cohorts[0].Status != "candidate" {
+		t.Fatalf("기준 후보 = %+v, %v", cohorts, err)
+	}
+	for _, test := range []struct {
+		name, status, reason string
+		change               func(*unitCohort, *comparison)
+	}{
+		{"not_significant", "candidate", cohorts[0].Reason, func(_ *unitCohort, c *comparison) {
+			c.Difference, c.Interval, c.Significant, c.Improved = -0.01, 0.05, false, false
+		}},
+		{"one_unit", "deferred", "unmeasured_or_insufficient_independent_units", func(entry *unitCohort, c *comparison) {
+			entry.Samples = 1
+			c.Samples, c.Difference, c.Interval, c.Significant, c.Improved = 1, -0.1, -1, false, false
+		}},
+		{"significant_loss", "rejected", "quality_or_task_regression", func(_ *unitCohort, c *comparison) {
+			c.Difference, c.Interval, c.Significant, c.Improved = -0.5, 0.1, true, false
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			entry := cohorts[0]
+			entry.Comparisons = slices.Clone(entry.Comparisons)
+			i := slices.IndexFunc(entry.Comparisons, func(c comparison) bool { return c.Metric == "task_success" })
+			if i < 0 {
+				t.Fatal("과업 성공률 비교 없음")
+			}
+			test.change(&entry, &entry.Comparisons[i])
+			status, reason := assessUnits(input.Provenance, entry)
+			if status != test.status || reason != test.reason {
+				t.Fatalf("판정 = %s/%s, 기대 %s/%s", status, reason, test.status, test.reason)
+			}
+		})
+	}
+}

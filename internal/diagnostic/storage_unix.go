@@ -9,6 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -228,11 +229,17 @@ func (files *Files) removeLog(item storedLog) error {
 	}
 	defer dir.Close()
 	if err := checkEntry(dir, item.name, false); err != nil {
-		return err
+		classified := files.retainedLogError(item, dir, err)
+		if errors.Is(classified, errRetainedLogRemoved) {
+			delete(files.retentionCache, logKey{item.instance, item.name})
+			return nil
+		}
+		return classified
 	}
 	if err := unix.Unlinkat(int(dir.Fd()), item.name, 0); err != nil {
 		return fileFailure("cleanup_failed", err)
 	}
+	delete(files.retentionCache, logKey{item.instance, item.name})
 	files.removed++
 	if err := dir.Sync(); err != nil {
 		return fileFailure("sync_failed", err)
@@ -351,6 +358,8 @@ func (files *Files) withIdleSlot(instance string, operation func() error) error 
 }
 
 type retentionSummary struct {
+	sourceSize     int64
+	firstValid     time.Time
 	expired, valid int
 	validBytes     int64
 }
@@ -366,7 +375,7 @@ type storedEventEnvelope struct {
 
 // 한 행의 버퍼는 16 KiB로 제한하며 혼합 파일의 유효 행은 원래 바이트를 보존한다.
 func visitLog(file *os.File, item storedLog, cutoff time.Time, valid func([]byte) error) (retentionSummary, error) {
-	var summary retentionSummary
+	summary := retentionSummary{sourceSize: item.size}
 	reader := bufio.NewReaderSize(io.NewSectionReader(file, 0, item.size), maxEventBytes)
 	for {
 		line, err := reader.ReadSlice('\n')
@@ -387,6 +396,9 @@ func visitLog(file *os.File, item storedLog, cutoff time.Time, valid func([]byte
 			summary.expired++
 		} else {
 			summary.valid++
+			if summary.firstValid.IsZero() || event.Time.Before(summary.firstValid) {
+				summary.firstValid = event.Time
+			}
 			summary.validBytes += int64(len(line))
 			if valid != nil {
 				if err := valid(line); err != nil {
@@ -397,7 +409,36 @@ func visitLog(file *os.File, item storedLog, cutoff time.Time, valid func([]byte
 	}
 }
 
+var errRetainedLogRemoved = errors.New("진단 회전 파일이 이미 제거됐다")
+var errRetainedLogChanged = errors.New("진단 회전 파일이 읽는 중 변경됐다")
+
+type logKey struct{ instance, name string }
+type retentionIdentity struct {
+	device, inode     uint64
+	size              int64
+	modified, changed unix.Timespec
+}
+type retainedLog struct {
+	identity retentionIdentity
+	summary  retentionSummary
+}
+
+func logIdentity(stat unix.Stat_t) retentionIdentity {
+	return retentionIdentity{uint64(stat.Dev), uint64(stat.Ino), stat.Size, stat.Mtim, stat.Ctim}
+}
+
 func (files *Files) inspectLog(item storedLog, cutoff time.Time) (retentionSummary, error) {
+	for range 3 {
+		summary, err := files.inspectLogOnce(item, cutoff)
+		if !errors.Is(err, errRetainedLogChanged) {
+			return summary, err
+		}
+	}
+	return retentionSummary{}, fileFailure("path_changed", errRetainedLogChanged)
+}
+
+func (files *Files) inspectLogOnce(item storedLog, cutoff time.Time) (retentionSummary, error) {
+	key := logKey{item.instance, item.name}
 	dir, err := files.logDirectory(item.instance)
 	if err != nil {
 		return retentionSummary{}, err
@@ -405,10 +446,101 @@ func (files *Files) inspectLog(item storedLog, cutoff time.Time) (retentionSumma
 	defer dir.Close()
 	file, err := openRegular(dir, item.name, false)
 	if err != nil {
-		return retentionSummary{}, err
+		delete(files.retentionCache, key)
+		return retentionSummary{}, files.retainedLogError(item, dir, err)
 	}
 	defer file.Close()
-	return visitLog(file, item, cutoff, nil)
+	var before unix.Stat_t
+	if err := unix.Fstat(int(file.Fd()), &before); err != nil {
+		return retentionSummary{}, fileFailure("file_unavailable", err)
+	}
+	if item.active && before.Size != item.size {
+		return retentionSummary{}, fileFailure("path_changed", nil)
+	}
+	// 이전 목록 이후 다른 기록자가 압축했으면 현재 열린 파일의 크기를 사용한다.
+	item.size = before.Size
+	identity := logIdentity(before)
+	if cached, ok := files.retentionCache[key]; !item.active && ok && cached.identity == identity && cutoff.Before(cached.summary.firstValid) {
+		return cached.summary, nil
+	}
+	delete(files.retentionCache, key)
+	var summary retentionSummary
+	read := func() error {
+		files.retentionScannedBytes += uint64(item.size)
+		var err error
+		summary, err = visitLog(file, item, cutoff, nil)
+		return err
+	}
+	if item.active {
+		err = read()
+	} else {
+		err = files.withoutStorageLock(read)
+	}
+	if err != nil {
+		return summary, err
+	}
+	var after unix.Stat_t
+	if err := unix.Fstat(int(file.Fd()), &after); err != nil {
+		return summary, fileFailure("file_unavailable", err)
+	}
+	if identity != logIdentity(after) {
+		return summary, fileFailure("path_changed", errRetainedLogChanged)
+	}
+	if err := sameEntry(files.root, item.instance, dir, true); err != nil {
+		return summary, err
+	}
+	if err := sameEntry(dir, item.name, file, false); err != nil {
+		classified := files.retainedLogError(item, dir, err)
+		if errors.Is(classified, errRetainedLogRemoved) || errors.Is(classified, unix.ENOENT) {
+			return summary, classified
+		}
+		if failureCode(classified) == "path_changed" {
+			if checked := checkEntry(dir, item.name, false); checked != nil {
+				return summary, checked
+			}
+			return summary, fileFailure("path_changed", errRetainedLogChanged)
+		}
+		return summary, classified
+	}
+	if !item.active && summary.expired == 0 && summary.valid != 0 && identity.changed.Nsec != 0 {
+		if files.retentionCache == nil {
+			files.retentionCache = make(map[logKey]retainedLog)
+		}
+		if len(files.retentionCache) >= maxStorageEntries {
+			clear(files.retentionCache)
+		}
+		files.retentionCache[key] = retainedLog{identity, summary}
+	}
+	return summary, nil
+}
+
+// 회전 파일의 퇴거만 구분한다. 잠금·활성 파일·인스턴스 경로의 ENOENT는 숨기지 않는다.
+func (files *Files) retainedLogError(item storedLog, dir *os.File, err error) error {
+	if item.active || !files.storageHeld || !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	if bindingErr := files.checkBindings(); bindingErr != nil {
+		return errors.Join(err, bindingErr)
+	}
+	if bindingErr := sameEntry(files.root, item.instance, dir, true); bindingErr != nil {
+		return errors.Join(err, bindingErr)
+	}
+	var stat unix.Stat_t
+	if missingErr := unix.Fstatat(int(dir.Fd()), item.name, &stat, unix.AT_SYMLINK_NOFOLLOW); errors.Is(missingErr, unix.ENOENT) {
+		return errRetainedLogRemoved
+	}
+	return err
+}
+
+func (files *Files) pruneRetentionCache(logs []storedLog) {
+	if len(files.retentionCache) == 0 {
+		return
+	}
+	present := make(map[logKey]bool, len(logs))
+	for _, item := range logs {
+		present[logKey{item.instance, item.name}] = true
+	}
+	maps.DeleteFunc(files.retentionCache, func(key logKey, _ retainedLog) bool { return !present[key] })
 }
 
 func (files *Files) compact(item storedLog, summary retentionSummary, cutoff time.Time) (compactErr error) {
@@ -447,6 +579,7 @@ func (files *Files) compact(item storedLog, summary retentionSummary, cutoff tim
 			}
 		}
 	}()
+	files.retentionScannedBytes += uint64(item.size)
 	_, err = visitLog(source, item, cutoff, func(line []byte) error {
 		n, err := target.Write(line)
 		if err != nil || n != len(line) {
@@ -485,6 +618,7 @@ func (files *Files) maintainLocked(now time.Time) error {
 	if err != nil {
 		return err
 	}
+	files.pruneRetentionCache(logs)
 	for _, item := range logs {
 		if item.temporary {
 			if err := files.removeLog(item); err != nil {
@@ -572,8 +706,14 @@ func (files *Files) maintainLocked(now time.Time) error {
 		}
 		summary, err := files.inspectLog(item, cutoff)
 		if err != nil {
+			// 양보 중 다른 기록자의 정상 퇴거로 이미 사라진 회전 파일은 정리할 필요가 없다.
+			if errors.Is(err, errRetainedLogRemoved) {
+				delete(files.retentionCache, logKey{item.instance, item.name})
+				continue
+			}
 			return err
 		}
+		item.size = summary.sourceSize
 		if summary.valid == 0 {
 			if err := files.removeLog(item); err != nil {
 				return err

@@ -14,11 +14,13 @@ import (
 )
 
 // loadedGraph는 적재 결과다. Keys는 데이터셋의 key를 실제 컨텍스트 식별자로 옮긴
-// 표이며 정답 판정이 이 표를 쓴다.
+// 표이며 정답 판정이 이 표를 쓴다. CreatedAt은 기준 컨텍스트를 기록하기 전의 그래프
+// 생성 시각이다.
 type loadedGraph struct {
 	GraphID   model.ID
 	AccountID model.ID
 	Keys      map[string]model.ID
+	CreatedAt time.Time
 }
 
 // prepareEvaluationGraph는 준비 실패 시에도 자신이 만든 그래프를 정리한다.
@@ -119,7 +121,7 @@ func loadGraph(ctx context.Context, database *store.Store, set contextSet) (load
 	}
 	trialGraphCreated(ctx, graph.ID)
 	keys := make(map[string]model.ID, len(set.Contexts))
-	if err := createContexts(ctx, database, graph.ID, accountID, set.Contexts, keys); err != nil {
+	if err := createContexts(ctx, database, graph.ID, accountID, set.Contexts, keys, currentRecordedAt); err != nil {
 		// 절반만 찬 그래프를 남기지 않는다. 적재가 실패하면 호출자가 그래프 식별자를
 		// 받지 못하므로 여기에서 지우지 않으면 정리할 방법이 남지 않는다.
 		if deleteErr := dropGraph(ctx, database, loadedGraph{GraphID: graph.ID, AccountID: accountID}); deleteErr != nil {
@@ -133,7 +135,7 @@ func loadGraph(ctx context.Context, database *store.Store, set contextSet) (load
 		}
 		return loadedGraph{}, err
 	}
-	return loadedGraph{GraphID: graph.ID, AccountID: accountID, Keys: keys}, nil
+	return loadedGraph{GraphID: graph.ID, AccountID: accountID, Keys: keys, CreatedAt: now}, nil
 }
 
 // confirmRelations는 데이터셋의 사건 관계를 확정 상태로 올린다.
@@ -164,7 +166,11 @@ func confirmRelations(ctx context.Context, database *store.Store, graphID, accou
 //
 // keys에는 이미 만든 컨텍스트의 key를 담아 넘기고 새로 만든 항목도 같은 맵에 채운다. 공격
 // 표본의 추가 컨텍스트는 기준 집합의 key를 참조하므로 두 집합이 한 맵을 공유해야 한다.
-func createContexts(ctx context.Context, database *store.Store, graphID, accountID model.ID, specs []contextSpec, keys map[string]model.ID) error {
+// currentRecordedAt은 적재 순서대로 기록 시각이 늘어나는 기본 기록 시각이다.
+func currentRecordedAt() time.Time { return time.Now().UTC() }
+
+// createContexts는 참조가 준비된 순서로 컨텍스트를 만들고 recordedAt으로 각 기록 시각을 정한다.
+func createContexts(ctx context.Context, database *store.Store, graphID, accountID model.ID, specs []contextSpec, keys map[string]model.ID, recordedAt func() time.Time) error {
 	pending := specs
 	for len(pending) > 0 {
 		remaining := make([]contextSpec, 0, len(pending))
@@ -175,7 +181,7 @@ func createContexts(ctx context.Context, database *store.Store, graphID, account
 				remaining = append(remaining, spec)
 				continue
 			}
-			created, err := createContext(ctx, database, graphID, accountID, spec, references)
+			created, err := createContext(ctx, database, graphID, accountID, spec, references, recordedAt())
 			if err != nil {
 				return fmt.Errorf("컨텍스트 %q 적재: %w", spec.Key, err)
 			}
@@ -215,7 +221,7 @@ func resolveReferences(spec contextSpec, keys map[string]model.ID) (bool, []mode
 	return true, resolved
 }
 
-func createContext(ctx context.Context, database *store.Store, graphID, accountID model.ID, spec contextSpec, references []model.ID) (model.ID, error) {
+func createContext(ctx context.Context, database *store.Store, graphID, accountID model.ID, spec contextSpec, references []model.ID, recordedAt time.Time) (model.ID, error) {
 	contextID, err := model.NewID()
 	if err != nil {
 		return model.ID{}, fmt.Errorf("컨텍스트 식별자 생성: %w", err)
@@ -225,7 +231,7 @@ func createContext(ctx context.Context, database *store.Store, graphID, accountI
 		GraphID:        graphID,
 		Layer:          model.Layer(spec.Layer),
 		Body:           spec.Body,
-		RecordedAt:     time.Now().UTC(),
+		RecordedAt:     recordedAt,
 		CreatedBy:      accountID,
 		CreatedByAgent: accountID,
 		Version:        1,

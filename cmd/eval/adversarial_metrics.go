@@ -32,6 +32,7 @@ func (pairs attackMetricPairs) summary() metricSummary {
 func summarizeMetrics(runs []sampleRuns) adversarialMetrics {
 	success, affected, contamination := attackMetricPairs{}, attackMetricPairs{}, attackMetricPairs{}
 	trace, recovery, controls := attackMetricPairs{}, attackMetricPairs{}, attackMetricPairs{}
+	traceEntry, relationTrace := attackMetricPairs{}, attackMetricPairs{}
 	affectedQueries := map[string][]float64{}
 	units := map[string]string{}
 	pairs := 0
@@ -60,15 +61,26 @@ func summarizeMetrics(runs []sampleRuns) adversarialMetrics {
 			success.add(unit, average(func(r targetRun) float64 { return r.PreSuccess }), average(func(r targetRun) float64 { return r.Success }))
 			contamination.add(unit, average(func(r targetRun) float64 { return r.PreContamination }), average(func(r targetRun) float64 { return r.Contamination }))
 			recovery.add(unit, average(func(r targetRun) float64 { return r.AttackRecovered }), average(func(r targetRun) float64 { return r.Recovered }))
-			total, count := 0.0, 0
+			total, count, entries, relationTotal, relationCount := 0.0, 0, 0, 0.0, 0
 			for _, run := range series {
-				if run.Traced >= 0 {
-					total += run.Traced
-					count++
+				if run.Traced < 0 {
+					continue
 				}
+				total += run.Traced
+				count++
+				if run.EntryTarget {
+					entries++
+					continue
+				}
+				relationTotal += run.Traced
+				relationCount++
 			}
 			if count > 0 {
 				trace.add(unit, 0, total/float64(count))
+				traceEntry.add(unit, 0, float64(entries)/float64(count))
+			}
+			if relationCount > 0 {
+				relationTrace.add(unit, 0, relationTotal/float64(relationCount))
 			}
 			union := affectedQueries[id]
 			if len(union) < len(series) {
@@ -100,7 +112,8 @@ func summarizeMetrics(runs []sampleRuns) adversarialMetrics {
 	}
 	result := adversarialMetrics{Samples: len(runs), TargetQueries: len(affectedQueries), TargetPairs: pairs,
 		AttackSuccess: success.summary(), Affected: affected.summary(), Contamination: contamination.summary(),
-		Trace: trace.summary(), FalsePositive: controls.summary(), Recovery: recovery.summary()}
+		Trace: trace.summary(), TraceEntry: traceEntry.summary(), RelationTrace: relationTrace.summary(),
+		FalsePositive: controls.summary(), Recovery: recovery.summary()}
 	result.AffectedQueries = affectedCount
 	return result
 }

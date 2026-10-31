@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/search"
@@ -115,6 +116,44 @@ func TestAdversarialScenariosIntegration(t *testing.T) {
 	}
 	if relationDiscards != 10 || nodeDiscards != 12 || confirms != 2 {
 		t.Fatalf("명시 복구 기록: relations=%d nodes=%d confirms=%d", relationDiscards, nodeDiscards, confirms)
+	}
+}
+
+// 공격 컨텍스트는 기준 컨텍스트보다 먼저 기록되어 시간 필터 후보가 기준 컨텍스트로 채워지면
+// 적재 순서만으로 시간 채널 후보가 되지 않아야 한다.
+func TestAdversarialAttackContextsDoNotLeadTimeChannelIntegration(t *testing.T) {
+	database, worker, _ := evalDatabase(t, nil)
+	contexts, _, attacks := adversarialFixture(t)
+	id, err := model.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contexts.Version += "-time-" + id.String()
+	sample := attacks.Samples[slices.IndexFunc(attacks.Samples, func(sample attackSample) bool { return len(sample.AddContexts) > 0 })]
+	err = withEvaluationGraph(t.Context(), database, worker, contexts, len(contexts.Contexts)*4+64, func(graph loadedGraph) error {
+		if err := addAttackContexts(t.Context(), database, graph, sample.AddContexts); err != nil {
+			return err
+		}
+		names := map[model.ID]string{}
+		for key, id := range graph.Keys {
+			names[id] = key
+		}
+		candidates, err := database.TimeCandidates(t.Context(), graph.GraphID, time.Now().UTC(), len(contexts.Contexts))
+		if err != nil {
+			return err
+		}
+		if len(candidates) != len(contexts.Contexts) {
+			t.Fatalf("시간 후보 %d, 기준 컨텍스트 %d", len(candidates), len(contexts.Contexts))
+		}
+		for _, candidate := range candidates {
+			if slices.ContainsFunc(sample.AddContexts, func(spec contextSpec) bool { return names[candidate.Context.ID] == spec.Key }) {
+				t.Fatalf("공격 컨텍스트 %q가 기준 컨텍스트보다 앞선 시간 후보다", names[candidate.Context.ID])
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

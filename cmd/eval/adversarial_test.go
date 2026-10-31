@@ -193,12 +193,17 @@ func TestContaminationAndTrace(t *testing.T) {
 	if got := contaminationRatio(reached, contaminated); math.Abs(got-0.4) > 1e-9 {
 		t.Fatalf("오염 근거 비율 %v, 기대 0.4", got)
 	}
-	if !traceable(reached, contaminated) {
-		t.Fatal("진입점에서 오염 사건까지 경로를 복원하지 못했다")
+	if traced, entry := traceable(reached, contaminated); !traced || entry {
+		t.Fatalf("진입점에서 오염 사건까지 관계 경로 복원 traced=%v entry=%v", traced, entry)
 	}
 	detached := testResponse([]string{"a01-a", "x1"})
-	if traceable(detached, contaminated) {
+	if traced, entry := traceable(detached, contaminated); traced || entry {
 		t.Fatal("간선 없이 반환된 오염 사건을 추적했다고 판정했다")
+	}
+	// 오염 사건 자신이 진입점이면 관계 경로 없이 닿은 것이므로 진입점 사례로 따로 표시한다.
+	entered := testResponse([]string{"x1", "a01-a"})
+	if traced, entry := traceable(entered, contaminated); !traced || !entry {
+		t.Fatalf("진입점 오염 traced=%v entry=%v", traced, entry)
 	}
 	if got := contaminationRatio(response{Ranks: map[string]int{}}, contaminated); got != 0 {
 		t.Fatalf("빈 응답의 오염 근거 비율 %v, 기대 0", got)
@@ -210,18 +215,21 @@ func TestContaminationAndTrace(t *testing.T) {
 func TestSummarizeMetrics(t *testing.T) {
 	runs := sampleRuns{
 		targets: map[string][]targetRun{
-			"q1": {{Success: 1, Traced: 1, Affected: 1, Recovered: 1}, {Success: 1, Traced: 0, Affected: 1, Recovered: 1}, {Success: 0, Traced: undefinedMetric, Affected: 1, Recovered: 1}},
+			"q1": {{Success: 1, Traced: 1, Affected: 1, Recovered: 1}, {Success: 1, Traced: 0, Affected: 1, Recovered: 1}, {Success: 0, Traced: undefinedMetric, Affected: 1, Recovered: 1}, {Success: 1, Traced: 1, EntryTarget: true, Affected: 1, Recovered: 1}},
 			"q2": {{Traced: undefinedMetric}, {Traced: undefinedMetric}, {Traced: undefinedMetric}},
 		},
 		controlRuns: map[string][]controlRun{"control": {{before: 0, after: 0.5}}},
 		controls:    2,
 	}
 	metrics := summarizeMetrics([]sampleRuns{runs})
-	if metrics.TargetQueries != 2 || math.Abs(metrics.AttackSuccess.Value-1.0/3) > 1e-9 {
+	if metrics.TargetQueries != 2 || math.Abs(metrics.AttackSuccess.Value-0.375) > 1e-9 {
 		t.Fatalf("공격 성공률 %+v", metrics.AttackSuccess)
 	}
-	if metrics.Trace.Units != 1 || metrics.Trace.Value != 0.5 {
+	if metrics.Trace.Units != 1 || math.Abs(metrics.Trace.Value-2.0/3) > 1e-9 {
 		t.Fatalf("추적 완전성 %+v", metrics.Trace)
+	}
+	if math.Abs(metrics.TraceEntry.Value-1.0/3) > 1e-9 || metrics.RelationTrace.Units != 1 || metrics.RelationTrace.Value != 0.5 {
+		t.Fatalf("진입점 분리 %+v %+v", metrics.TraceEntry, metrics.RelationTrace)
 	}
 	if metrics.AffectedQueries != 1 || metrics.Recovery.Value != 0.5 {
 		t.Fatalf("영향 질의 %v, 복구 %+v", metrics.AffectedQueries, metrics.Recovery)

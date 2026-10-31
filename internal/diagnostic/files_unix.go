@@ -35,23 +35,30 @@ func fileFailure(code string, cause error) error { return &FileError{Code: code,
 var fileKinds = [...]Kind{Request, Auth, Search, Index, Management, System}
 
 // Files는 준비된 파일과 잠금의 수명을 소유한다. 파일 fd·경로를 업무 패키지에
-// 공개하지 않는다. 저장 정책은 공유 잠금 안에서 실행하고 대기열·인코딩은 Recorder가 담당한다.
+// 공개하지 않는다. 정책 판단·예약·변경은 공유 잠금 안에서 실행하며
+// 불변 회전 파일 읽기는 재검증을 전제로 잠금을 양보한다. 대기열·인코딩은 Recorder가 담당한다.
 type Files struct {
-	removed     uint64
-	parent      *os.File
-	root        *os.File
-	slot        *os.File
-	writerLock  *os.File
-	storageLock *os.File
-	active      map[Kind]*os.File
-	rootName    string
-	source      Source
-	gate        chan struct{}
-	closed      bool
-	policy      *storagePolicy
-	notice      func(Kind, string)
-	ioContext   context.Context
-	cancelIO    context.CancelFunc
+	// 로컬 gate 아래 연속 잠금 점유와 JSON 해석 대상 바이트를 계측한다.
+	storageHeldSince      time.Time
+	maxStorageHold        time.Duration
+	storageHeld           bool
+	retentionCache        map[logKey]retainedLog
+	retentionScannedBytes uint64
+	removed               uint64
+	parent                *os.File
+	root                  *os.File
+	slot                  *os.File
+	writerLock            *os.File
+	storageLock           *os.File
+	active                map[Kind]*os.File
+	rootName              string
+	source                Source
+	gate                  chan struct{}
+	closed                bool
+	policy                *storagePolicy
+	notice                func(Kind, string)
+	ioContext             context.Context
+	cancelIO              context.CancelFunc
 }
 
 // PrepareFiles는 요청 수신 전에 호출한다. 실패 시 열린 fd와 잠금을 반환하며
@@ -309,7 +316,8 @@ func (files *Files) checkBindings() error {
 	return nil
 }
 
-// withStorageLock의 callback 안에서 검사·정리·쓰기 예약을 함께 수행한다.
+// withStorageLock의 callback 안에서 정책·쓰기 예약·변경을 함께 수행한다.
+// 불변 회전 파일의 해석만 withoutStorageLock으로 양보하고 재검증한다.
 // 1초 예산은 로컬 gate와 프로세스 간 잠금 획득에만 적용하며 fs I/O를 강제 중단하지 않는다.
 func (files *Files) withStorageLock(ctx context.Context, operation func() error) (operationErr error) {
 	lockCtx, cancel := context.WithTimeout(ctx, storageLockBudget)
@@ -323,27 +331,11 @@ func (files *Files) withStorageLock(ctx context.Context, operation func() error)
 	if files.closed {
 		return fileFailure("closed", os.ErrClosed)
 	}
-	for {
-		if err := lockCtx.Err(); err != nil {
-			return fileFailure("storage_lock_timeout", err)
-		}
-		err := unix.Flock(int(files.storageLock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EINTR) {
-			return fileFailure("storage_lock_failed", err)
-		}
-		timer := time.NewTimer(5 * time.Millisecond)
-		select {
-		case <-lockCtx.Done():
-			timer.Stop()
-			return fileFailure("storage_lock_timeout", lockCtx.Err())
-		case <-timer.C:
-		}
+	if err := files.lockStorage(lockCtx); err != nil {
+		return err
 	}
 	defer func() {
-		if err := unix.Flock(int(files.storageLock.Fd()), unix.LOCK_UN); err != nil {
+		if err := files.unlockStorage(); err != nil {
 			operationErr = errors.Join(operationErr, fileFailure("storage_unlock_failed", err))
 		}
 	}()
@@ -381,4 +373,60 @@ func (files *Files) Close() error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func (files *Files) lockStorage(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return fileFailure("storage_lock_timeout", err)
+		}
+		err := unix.Flock(int(files.storageLock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EINTR) {
+			return fileFailure("storage_lock_failed", err)
+		}
+		timer := time.NewTimer(5 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fileFailure("storage_lock_timeout", ctx.Err())
+		case <-timer.C:
+		}
+	}
+
+	files.storageHeld = true
+	files.storageHeldSince = time.Now()
+	return nil
+}
+
+func (files *Files) unlockStorage() error {
+	if !files.storageHeld {
+		return nil
+	}
+	if err := unix.Flock(int(files.storageLock.Fd()), unix.LOCK_UN); err != nil {
+		return err
+	}
+	files.maxStorageHold = max(files.maxStorageHold, time.Since(files.storageHeldSince))
+	files.storageHeld = false
+	return nil
+}
+
+// 로컬 gate는 유지한다. 실패 시에도 재획득을 시도하고, 미획득 상태에서는 변경하지 않는다.
+func (files *Files) withoutStorageLock(read func() error) error {
+	if err := files.unlockStorage(); err != nil {
+		return fileFailure("storage_unlock_failed", err)
+	}
+	readErr := read()
+	ctx := files.ioContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lockCtx, cancel := context.WithTimeout(ctx, storageLockBudget)
+	defer cancel()
+	if err := files.lockStorage(lockCtx); err != nil {
+		return errors.Join(readErr, err)
+	}
+	return errors.Join(readErr, files.checkBindings())
 }

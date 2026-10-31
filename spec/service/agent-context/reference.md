@@ -379,3 +379,9 @@
 
 - [RFC 9110 §10.2.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3)은 Retry-After를 HTTP-date 또는 음수가 아닌 초 단위 정수로 정의한다. 조회일 2026-10-30 KST. [색인 설계](sdd/indexing.md#제공자-장애-중-작업-확보-차단)는 이 지연을 탐침 백오프의 하한으로 사용하되 로컬 보호 상한 24시간을 둔다. 지터 범위·상한·차단 조건은 RFC 요구가 아니라 이 서비스의 운영 정책이다.
 - Go 1.27.1 SDK의 `net/http.ParseTime`, `math/rand/v2.Int64N`, `sync.Mutex.TryLock` 공식 API 문서와 구현을 확인했다. 기존 HTTPS·취소/30초 호출 상한·응답 크기/벡터 검증을 유지하고, 탐침과 실제 확보 회차를 Worker별로 직렬화한다.
+
+
+## 2026-10-31 #159 진단 회전 파일의 검사 재사용
+
+- [Linux inode(7)](https://man7.org/linux/man-pages/man7/inode.7.html)의 device/inode·크기·mtime·ctime 정의와 [flock(2)](https://man7.org/linux/man-pages/man2/flock.2.html)의 open-file-description 단위 잠금·LOCK_NB·잠금 양보 후 재획득 경계를 확인했다. 최초 조회 2026-10-30 KST, 작업 재개/정리 2026-10-31 KST. 쓰기와 inode 상태 변경은 ctime을 바꾸므로 mtime만 복원한 같은 길이의 덮어쓰기에도 캐시를 재사용하지 않는다. 시각 정밀도는 파일 시스템마다 다르므로 ctime의 나노초 성분이 0이면 캐시를 저장하지 않는 보수적 정책을 둔다.
+- `golang.org/x/sys/unix` 적용 판의 Linux/Darwin Stat_t와 Go 1.27.1의 파일/시각 API를 확인하고 macOS·Linux 실제 파일 시험에서 검증했다. [관측성 설계](sdd/observability.md#회전보존과-총상한)는 메타데이터 일관성과 기존 소유권·잠금 계약을 전제로 한다. 성능 수치는 고정 로컬 Linux 이미지의 격리 볼륨에서 측정한 표본이며 임의 마운트·하드웨어의 절대 지연 보장이 아니다.

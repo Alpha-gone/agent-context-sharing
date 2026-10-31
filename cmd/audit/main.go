@@ -92,21 +92,37 @@ func run(ctx context.Context, args []string, output io.Writer) (bool, error) {
 	}
 	started := time.Now()
 	found := 0
+	write := func(violations []store.InvariantViolation) error {
+		for _, violation := range violations {
+			line, err := json.Marshal(violation)
+			if err != nil {
+				return fmt.Errorf("위반 직렬화: %w", err)
+			}
+			if _, err := fmt.Fprintln(output, string(line)); err != nil {
+				return fmt.Errorf("위반 출력: %w", err)
+			}
+		}
+		found += len(violations)
+		return nil
+	}
 	for _, graphID := range graphIDs {
 		violations, err := database.AuditGraph(ctx, graphID, expect)
 		if err != nil {
 			return false, fmt.Errorf("그래프 %s 감사: %w", graphID, err)
 		}
-		for _, violation := range violations {
-			line, err := json.Marshal(violation)
-			if err != nil {
-				return false, fmt.Errorf("위반 직렬화: %w", err)
-			}
-			if _, err := fmt.Fprintln(output, string(line)); err != nil {
-				return false, fmt.Errorf("위반 출력: %w", err)
-			}
+		if err := write(violations); err != nil {
+			return false, err
 		}
-		found += len(violations)
+	}
+	// 전체 감사는 등록된 그래프 밖의 고아 행도 본다. 그래프를 지정한 감사는 그 범위만 본다.
+	if selected.IsZero() {
+		violations, err := database.AuditUnregisteredGraphs(ctx)
+		if err != nil {
+			return false, fmt.Errorf("미등록 그래프 감사: %w", err)
+		}
+		if err := write(violations); err != nil {
+			return false, err
+		}
 	}
 	slog.Info("감사 완료", "graphs", len(graphIDs), "violations", found, "duration", time.Since(started).String())
 	return found > 0, nil

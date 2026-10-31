@@ -58,40 +58,9 @@ func Prepare(ctx context.Context, db database, fsys fs.FS, dir string, cfg Confi
 	if err != nil {
 		return nil, nil, err
 	}
-	missing := make([]int, 0)
-	for _, m := range current {
-		if a, exists := applied[m.Version]; exists && a.Config == nil {
-			missing = append(missing, m.Version)
-		}
-	}
-	if len(missing) > 0 {
-		original := cfg
-		var actual, tablespace string
-		if err := db.QueryRow(ctx, `SELECT format_type(atttypid, atttypmod)
-			FROM pg_attribute WHERE attrelid = 'public.context_embedding'::regclass
-			AND attname = 'embedding' AND NOT attisdropped`).Scan(&actual); err != nil {
-			return nil, nil, fmt.Errorf("기존 이력의 벡터 열 조회: %w", err)
-		}
-		match := embeddingTypePattern.FindStringSubmatch(actual)
-		if match == nil {
-			return nil, nil, fmt.Errorf("이력의 벡터 타입·차원을 복원할 수 없다")
-		}
-		original.VectorType = match[1]
-		original.VectorDim, err = strconv.Atoi(match[2])
-		if err != nil {
-			return nil, nil, fmt.Errorf("이력 차원 복원 실패")
-		}
-		if err := db.QueryRow(ctx, `SELECT COALESCE(t.spcname, '') FROM pg_class c
-			LEFT JOIN pg_tablespace t ON t.oid = c.reltablespace
-			WHERE c.oid = 'public.context_embedding_cold'::regclass`).Scan(&tablespace); err != nil {
-			return nil, nil, fmt.Errorf("이력 tablespace 조회: %w", err)
-		}
-		original.ColdTablespace = tablespace
-		for _, version := range missing {
-			a := applied[version]
-			a.Config = new(original)
-			applied[version] = a
-		}
+	missing, err := restoreConfigurations(ctx, db, current, cfg, applied)
+	if err != nil {
+		return nil, nil, err
 	}
 	loaded, err := LoadRecorded(fsys, dir, cfg, applied)
 	if err != nil {
@@ -102,6 +71,81 @@ func Prepare(ctx context.Context, db database, fsys fs.FS, dir string, cfg Confi
 		return nil, nil, err
 	}
 	return loaded, applied, nil
+}
+
+// Inspect는 이력 테이블을 만들거나 구형 이력의 구성을 기록하지 않고 적용 목록을 계산한다.
+// status 명령이 자문 잠금 없이 읽기 전용 트랜잭션에서 사용하므로 진행 중인 up을 기다리지
+// 않고 읽기 전용 역할로도 실행할 수 있다. 구형 이력은 Prepare와 같은 방식으로 메모리에서만
+// 복원해 검증한다.
+func Inspect(ctx context.Context, db database, fsys fs.FS, dir string, cfg Config) ([]Migration, map[int]Applied, error) {
+	current, err := Load(fsys, dir, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	var exists, configured bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('public.schema_migration') IS NOT NULL,
+		EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('public.schema_migration')
+			AND attname = 'render_config' AND NOT attisdropped)`).Scan(&exists, &configured); err != nil {
+		return nil, nil, fmt.Errorf("이력 테이블 확인: %w", err)
+	}
+	if !exists {
+		return current, map[int]Applied{}, nil
+	}
+	applied, err := appliedVersions(ctx, db, configured)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := restoreConfigurations(ctx, db, current, cfg, applied); err != nil {
+		return nil, nil, err
+	}
+	loaded, err := LoadRecorded(fsys, dir, cfg, applied)
+	if err != nil {
+		return nil, nil, err
+	}
+	return loaded, applied, nil
+}
+
+// restoreConfigurations는 치환 구성이 없는 구형 이력을 DB 열·tablespace로 복원해 applied에
+// 채우고 복원한 버전을 돌려준다. 이력에는 쓰지 않는다.
+func restoreConfigurations(ctx context.Context, db database, current []Migration, cfg Config, applied map[int]Applied) ([]int, error) {
+	missing := make([]int, 0)
+	for _, m := range current {
+		if a, exists := applied[m.Version]; exists && a.Config == nil {
+			missing = append(missing, m.Version)
+		}
+	}
+	if len(missing) == 0 {
+		return missing, nil
+	}
+	original := cfg
+	var actual, tablespace string
+	if err := db.QueryRow(ctx, `SELECT format_type(atttypid, atttypmod)
+		FROM pg_attribute WHERE attrelid = 'public.context_embedding'::regclass
+		AND attname = 'embedding' AND NOT attisdropped`).Scan(&actual); err != nil {
+		return nil, fmt.Errorf("기존 이력의 벡터 열 조회: %w", err)
+	}
+	match := embeddingTypePattern.FindStringSubmatch(actual)
+	if match == nil {
+		return nil, fmt.Errorf("이력의 벡터 타입·차원을 복원할 수 없다")
+	}
+	original.VectorType = match[1]
+	dimension, err := strconv.Atoi(match[2])
+	if err != nil {
+		return nil, fmt.Errorf("이력 차원 복원 실패")
+	}
+	original.VectorDim = dimension
+	if err := db.QueryRow(ctx, `SELECT COALESCE(t.spcname, '') FROM pg_class c
+		LEFT JOIN pg_tablespace t ON t.oid = c.reltablespace
+		WHERE c.oid = 'public.context_embedding_cold'::regclass`).Scan(&tablespace); err != nil {
+		return nil, fmt.Errorf("이력 tablespace 조회: %w", err)
+	}
+	original.ColdTablespace = tablespace
+	for _, version := range missing {
+		a := applied[version]
+		a.Config = new(original)
+		applied[version] = a
+	}
+	return missing, nil
 }
 
 // 여러 구형 이력 중 하나라도 기록에 실패하면 보충한 구성 전체를 되돌린다.

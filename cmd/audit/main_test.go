@@ -78,8 +78,8 @@ func TestAuditCommandScopeAndFailureIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	clean, broken, actor, node := model.ID{}, model.ID{}, model.ID{}, model.ID{}
-	for _, id := range []*model.ID{&clean, &broken, &actor, &node} {
+	clean, broken, actor, node, orphan, orphanNode := model.ID{}, model.ID{}, model.ID{}, model.ID{}, model.ID{}, model.ID{}
+	for _, id := range []*model.ID{&clean, &broken, &actor, &node, &orphan, &orphanNode} {
 		*id, err = model.NewID()
 		if err != nil {
 			t.Fatal(err)
@@ -89,7 +89,7 @@ func TestAuditCommandScopeAndFailureIntegration(t *testing.T) {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 		defer cancel()
-		if _, err := pool.Exec(ctx, "DELETE FROM "+table+" WHERE properties ->> 'graph_id'::text=$1", broken.String()); err != nil {
+		if _, err := pool.Exec(ctx, "DELETE FROM "+table+" WHERE properties ->> 'graph_id'::text=ANY($1::text[])", []string{broken.String(), orphan.String()}); err != nil {
 			t.Error(err)
 		}
 		if _, err := pool.Exec(ctx, `DELETE FROM public.context_graph WHERE graph_id=ANY($1::uuid[])`, []string{clean.String(), broken.String()}); err != nil {
@@ -112,6 +112,14 @@ func TestAuditCommandScopeAndFailureIntegration(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), "INSERT INTO "+table+" (properties) VALUES ($1::ag_catalog.agtype)", string(properties)); err != nil {
 		t.Fatal(err)
 	}
+	// 등록되지 않은 graph_id의 정점은 그래프 단위 감사 범위 밖이므로 전체 감사만 보고한다.
+	orphanProperties, err := json.Marshal(map[string]string{"context_id": orphanNode.String(), "graph_id": orphan.String(), "layer": "source", "body": "synthetic-body-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), "INSERT INTO "+table+" (properties) VALUES ($1::ag_catalog.agtype)", string(orphanProperties)); err != nil {
+		t.Fatal(err)
+	}
 	var output bytes.Buffer
 	if found, err := run(t.Context(), []string{"-graph-id", clean.String()}, &output); found || err != nil || output.Len() != 0 {
 		t.Fatalf("정상 그래프 감사=%t/%v/%q", found, err, output.String())
@@ -122,19 +130,25 @@ func TestAuditCommandScopeAndFailureIntegration(t *testing.T) {
 		if !found || err != nil || strings.Contains(output.String(), "synthetic-body-secret") {
 			t.Fatalf("삭제 그래프/전체 감사=%t/%v", found, err)
 		}
-		seen := false
+		seen, unregistered := false, false
 		for line := range strings.SplitSeq(strings.TrimSpace(output.String()), "\n") {
 			var violation struct {
-				Rule    string `json:"rule"`
-				GraphID string `json:"graph_id"`
+				Rule    string   `json:"rule"`
+				GraphID string   `json:"graph_id"`
+				Target  string   `json:"target"`
+				IDs     []string `json:"ids"`
 			}
 			if err := json.Unmarshal([]byte(line), &violation); err != nil {
 				t.Fatalf("JSON Lines: %v", err)
 			}
 			seen = seen || violation.Rule == "reference_cardinality" && violation.GraphID == broken.String()
+			unregistered = unregistered || violation.Rule == "graph_registration" && violation.GraphID == orphan.String() && violation.Target == "context" && len(violation.IDs) == 1 && violation.IDs[0] == orphanNode.String()
 		}
 		if !seen {
 			t.Fatal("기본 범위에서 삭제 그래프의 위반을 놓쳤다")
+		}
+		if unregistered != (args == nil) {
+			t.Fatalf("미등록 그래프 정점 보고=%t, 전체 감사=%t", unregistered, args == nil)
 		}
 	}
 	cause := errors.New("위반 출력 실패")

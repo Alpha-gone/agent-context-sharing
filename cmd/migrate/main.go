@@ -2,7 +2,7 @@
 //
 // 사용법:
 //
-//	migrate status   아직 적용되지 않은 마이그레이션을 보여준다
+//	migrate status   아직 적용되지 않은 마이그레이션을 읽기 전용으로 보여준다
 //	migrate up       적용되지 않은 마이그레이션을 버전 순으로 적용한다
 //
 // 접속 정보와 배포 구성 값은 환경 변수로 받는다. 목록은 .env.example에 있다.
@@ -10,11 +10,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"agent_context_sharing/internal/migrate"
@@ -51,15 +54,51 @@ func run(ctx context.Context, command string) error {
 	}
 	defer pool.Close()
 
+	if command == "status" {
+		return status(ctx, pool, cfg)
+	}
 	// 이력 확인부터 적용까지를 자문 잠금 안에서 한다. 여러 인스턴스가 동시에 기동하면
 	// 이력을 함께 읽고 같은 파일을 함께 적용하려 들기 때문이다. 기다린 쪽은 잠금을 얻은
 	// 뒤에 이력을 읽으므로 앞선 실행기가 적용한 결과를 본다.
 	return migrate.WithLock(ctx, pool, func(ctx context.Context, conn *pgxpool.Conn) error {
-		return runLocked(ctx, conn, command, cfg)
+		return runLocked(ctx, conn, cfg)
 	})
 }
 
-func runLocked(ctx context.Context, conn *pgxpool.Conn, command string, cfg migrate.Config) error {
+// status는 이력 테이블 생성·구형 이력 보충 없이 읽기 전용 트랜잭션에서 미적용 목록을 보여준다.
+// 자문 잠금을 기다리지 않으므로 진행 중인 up이 있으면 그 시점의 커밋된 이력을 보여준다.
+func status(ctx context.Context, pool *pgxpool.Pool, cfg migrate.Config) (err error) {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fmt.Errorf("이력 조회 트랜잭션 시작: %w", err)
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if rollbackErr := tx.Rollback(cleanup); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			err = errors.Join(err, fmt.Errorf("이력 조회 트랜잭션 종료: %w", rollbackErr))
+		}
+	}()
+	loaded, applied, err := migrate.Inspect(ctx, tx, migrations.FS, ".", cfg)
+	if err != nil {
+		return err
+	}
+	pending, err := migrate.Pending(loaded, applied)
+	if err != nil {
+		return err
+	}
+	if len(pending) == 0 {
+		fmt.Printf("적용할 마이그레이션이 없다. 적용된 판 %d개\n", len(applied))
+		return nil
+	}
+	fmt.Printf("적용되지 않은 마이그레이션 %d개\n", len(pending))
+	for _, m := range pending {
+		fmt.Printf("  %03d_%s\n", m.Version, m.Name)
+	}
+	return nil
+}
+
+func runLocked(ctx context.Context, conn *pgxpool.Conn, cfg migrate.Config) error {
 	loaded, applied, err := migrate.Prepare(ctx, conn, migrations.FS, ".", cfg)
 	if err != nil {
 		return err
@@ -71,14 +110,6 @@ func runLocked(ctx context.Context, conn *pgxpool.Conn, command string, cfg migr
 
 	if len(pending) == 0 {
 		fmt.Printf("적용할 마이그레이션이 없다. 적용된 판 %d개\n", len(applied))
-		return nil
-	}
-
-	if command == "status" {
-		fmt.Printf("적용되지 않은 마이그레이션 %d개\n", len(pending))
-		for _, m := range pending {
-			fmt.Printf("  %03d_%s\n", m.Version, m.Name)
-		}
 		return nil
 	}
 

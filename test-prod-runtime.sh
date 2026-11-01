@@ -63,7 +63,11 @@ jq -e '(.services.db.ports // [] | length == 0) and (.services.server.ports // [
     (.services.server.environment.INDEX_WORKER_PLACEMENT == "external") and
     (.volumes | all(.[]; (.external // false) == false))' "$test_dir/config.json" >/dev/null
 compose build db server
+# 기본 up은 스키마를 적용하지 않는다. 운영 절차와 같이 DB 준비 → 명시적 적용 → 서버 기동 순서로 실행한다.
+compose up -d --wait --wait-timeout 180 db
+compose run --rm --no-deps migrate migrate up
 compose up -d --wait --wait-timeout 180
+[ -z "$(compose ps -a -q migrate)" ] || fail '기본 up이 migrate를 실행했다.'
 server_id=$(compose ps -q server)
 [ "$(docker exec "$server_id" id -u)" = 10001 ] || fail '서버 UID가 다르다.'
 [ "$(docker exec "$server_id" stat -c '%u:%a' /var/log/agent-context)" = '10001:700' ] || fail '진단 루트 소유·권한이 다르다.'

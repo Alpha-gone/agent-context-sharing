@@ -1,7 +1,8 @@
 # 운영 배포 구성. 개발 구성은 compose.dev.yaml이 다룬다.
 #
-# 실행: cp .env.prod.example .env 로 값을 채운 뒤
-#   docker compose -f compose.prod.yaml up -d --build
+# 실행: cp .env.prod.example .env 로 값을 채운 뒤 OPERATIONS.md의 최초 배포·변경 절차를 따른다.
+# 기본 up은 스키마를 적용하지 않는다. 서버·작업자 정지와 백업 뒤 migrate up → audit을 명시적으로
+# 실행하고 감사가 성공한 다음에 server를 기동한다.
 #
 # 호스트의 cloudflared가 암호화된 Cloudflare Tunnel 요청을 http://localhost:80으로 전달한다.
 # 커넥터는 Compose 밖에서 관리한다. 로컬 HTTP 원본은 암호화되지 않는 시험 운영 예외다.
@@ -44,8 +45,10 @@ services:
       timeout: 5s
       retries: 20
 
-  # 스키마 적용. 자문 잠금 안에서 미적용 파일만 적용하고 끝나므로 기동마다 실행해도 된다.
+  # 스키마 적용. 실행 중인 이전 서버 옆에서 새 판의 SQL이 적용되지 않도록 기본 up에서 빼고
+  # `run --rm --no-deps migrate migrate up`으로만 실행한다. 이름을 지정한 실행은 profile을 켜지 않아도 된다.
   migrate:
+    profiles: ["migrate"]
     build: &app-build
       context: .
       dockerfile: Dockerfile.server
@@ -86,9 +89,10 @@ services:
       - diagnostic_logs:/var/log/agent-context
     ports:
       - "127.0.0.1:${HTTP_PORT:-80}:8080"
+    # 스키마 적용 여부는 기동 순서로 보장하지 않는다. 운영 절차가 적용·감사 성공 뒤에 기동한다.
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      db:
+        condition: service_healthy
     healthcheck:
       # 상태 확인 경로만 전달 헤더 없이 내부 HTTP 프로브를 허용한다.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]

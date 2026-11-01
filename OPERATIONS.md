@@ -100,7 +100,7 @@ docker compose -f compose.prod.yaml run --rm --no-deps server audit
 ```sh
 docker compose -f compose.prod.yaml up -d --wait server
 docker compose -f compose.prod.yaml ps -a
-docker compose -f compose.prod.yaml logs --tail=100 server migrate db
+docker compose -f compose.prod.yaml logs --tail=100 server db
 ```
 
 호스트에서 자격 증명 없는 원본 상태 확인 경로를 HTTP로 점검합니다. `HTTP_PORT`를 재정의했다면 아래 포트도 맞춥니다.
@@ -110,7 +110,7 @@ curl --fail --show-error http://127.0.0.1:80/healthz
 curl --fail --show-error http://127.0.0.1:80/readyz
 ```
 
-`server`의 의존 서비스인 `migrate`는 미적용 파일을 확인하고 종료합니다. 성공한 마이그레이션 컨테이너의 `Exited (0)`은 정상입니다. 이미 완료된 적용을 다시 수행하지 않습니다.
+`migrate`는 `migrate` profile로 분리되어 기본 `up`에서 실행되지 않으며 `server`의 의존 서비스도 아닙니다. 스키마 적용은 위 「이미지, DB와 스키마」의 명시적 `run --rm --no-deps migrate migrate up`으로만 수행하므로 `ps -a`에 마이그레이션 컨테이너가 남지 않습니다. `up`만으로 새 판의 SQL이 적용되지 않으므로, 판올림은 「변경 및 복귀」의 정지·백업·적용·감사 순서를 따릅니다.
 
 `/healthz`는 프로세스 생존, `/readyz`는 종료 중이 아니며 DB 연결이 가능한 상태를 확인합니다. 둘 다 정상 시 HTTP `200`을 반환합니다. Compose의 서버 healthcheck는 `/healthz`만 검사하므로 `healthy`만으로 업무 준비 완료를 판정하지 않습니다. 두 경로는 임베딩 API의 정상 동작이나 색인 완료를 보장하지 않습니다.
 
@@ -316,7 +316,7 @@ curl --fail --show-error http://127.0.0.1:80/readyz
 
 이미 적용·사용한 스키마와 데이터를 이전 상태로 돌릴 때는 이미지 교체나 이력 삭제로 되돌리지 않습니다. 이전 백업을 별도 빈 DB 볼륨에 복원하고 보관한 동일 DB·애플리케이션 이미지와 이전 설정으로 전체 감사를 실행합니다. 감사·원본/권한/키/기존 세션·적용 이력·준비 확인 후 손실 범위를 승인받아 새 DB로 전환합니다. 제거한 전용 클라이언트 경로를 복귀 경로로 다시 만들지 않습니다.
 
-복귀 실행은 복원 DB를 가리키는 별도 Compose override에 `server.image`를 보관 이미지 ID/태그로, `server.environment.DATABASE_URL`을 복원 DB로 지정합니다. 감사는 `run --rm --no-deps server audit`, 기동은 `up -d --no-deps --force-recreate --wait server`로 수행하여 `migrate` 의존 서비스가 새 스키마를 자동 적용하지 않게 합니다. 전체 구성 출력에 비밀을 남기지 말고 대상 DB·이미지 ID만 대조합니다. 원본 볼륨은 조사·재시도용으로 보존합니다.
+복귀 실행은 복원 DB를 가리키는 별도 Compose override에 `server.image`를 보관 이미지 ID/태그로, `server.environment.DATABASE_URL`을 복원 DB로 지정합니다. 감사는 `run --rm --no-deps server audit`, 기동은 `up -d --no-deps --force-recreate --wait server`로 수행하여 DB 서비스를 재생성하지 않습니다. `migrate`는 기본 `up`에 포함되지 않으므로 새 스키마를 자동 적용하지 않습니다. 전체 구성 출력에 비밀을 남기지 말고 대상 DB·이미지 ID만 대조합니다. 원본 볼륨은 조사·재시도용으로 보존합니다.
 
 ### 격리 전환·복귀 리허설
 

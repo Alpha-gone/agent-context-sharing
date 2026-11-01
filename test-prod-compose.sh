@@ -21,6 +21,9 @@ fi
 check_config() {
     if ! jq -e --arg http_port "$2" '
         (.services | keys == ["db", "migrate", "server"]) and
+        (.services.migrate.profiles == ["migrate"]) and
+        (.services.db.profiles // [] | length == 0) and
+        (.services.server.profiles // [] | length == 0) and
         (.services.db.ports // [] | length == 0) and
         (.services.migrate.ports // [] | length == 0) and
         (.services.server.ports | length == 1) and
@@ -44,7 +47,8 @@ check_config() {
         (.networks.default.ipam.config[0] | .subnet == "10.203.0.0/24" and .gateway == "10.203.0.1") and
         (.services.migrate.command == ["migrate", "up"]) and
         (.services.migrate.depends_on.db.condition == "service_healthy") and
-        (.services.server.depends_on.migrate.condition == "service_completed_successfully") and
+        (.services.server.depends_on | keys == ["db"]) and
+        (.services.server.depends_on.db.condition == "service_healthy") and
         (.services.server.stop_grace_period == "50s")
     ' "$1" > /dev/null; then
         echo "운영 구성 검사 실패: loopback 포트, 호스트 터널 신뢰 경로 또는 WAL 보관을 확인하십시오." >&2
@@ -58,14 +62,20 @@ if compose config --no-env-resolution --format json > /dev/null 2>&1; then
     exit 1
 fi
 export DIAGNOSTIC_INSTANCE_ID=ops02-static
+# 기본 up 대상에는 스키마 적용 서비스가 없어야 한다. 실행 중인 이전 서버 옆에서 새 판의 SQL이
+# 자동 적용되지 않게 하기 위해서다.
+if [ "$(compose config --no-env-resolution --services | sort | tr '\n' ' ')" != 'db server ' ]; then
+    echo "운영 구성 검사 실패: 기본 up 대상에 migrate가 포함됩니다." >&2
+    exit 1
+fi
 # 원본 인증서·키가 없어도 프록시 종단 구성은 유효해야 한다.
-compose config --no-env-resolution --format json > "$test_dir/default.json"
+compose --profile migrate config --no-env-resolution --format json > "$test_dir/default.json"
 check_config "$test_dir/default.json" 80
 export HTTP_PORT=18080
 export TLS_TERMINATION=direct TRUSTED_PROXY_CIDRS='0.0.0.0/0,::/0'
 export TLS_CERT_FILE="$test_dir/unused-cert.pem" TLS_KEY_FILE="$test_dir/unused-key.pem"
 export DIAGNOSTIC_LOG_DIR=/tmp/unsafe-override
-compose config --no-env-resolution --format json > "$test_dir/port.json"
+compose --profile migrate config --no-env-resolution --format json > "$test_dir/port.json"
 check_config "$test_dir/port.json" 18080
 
 # 개발·운영·PITR 시험 구성은 같은 WAL 보관 명령을 사용해야 한다.
@@ -78,4 +88,4 @@ grep -Eq '^COPY --chmod=0755 docker-wal-archive[.]sh /usr/local/bin/agent-contex
 
 grep -Eq '^FROM golang:1[.]27[.]3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS build$' "$repo_root/Dockerfile.server"
 grep -Eq '^FROM alpine:3[.]23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0$' "$repo_root/Dockerfile.server"
-echo "운영 구성 검사 통과: loopback·고정 신뢰·기동 순서·진단 볼륨/슬롯·WAL·버전"
+echo "운영 구성 검사 통과: loopback·고정 신뢰·기동 순서·명시적 스키마 적용·진단 볼륨/슬롯·WAL·버전"

@@ -302,3 +302,45 @@ func TestContinualRecordsUnmeasuredMetricsAsUndefinedIntegration(t *testing.T) {
 		}
 	}
 }
+
+// unavailableEmbedder는 질의 임베딩만 실패시켜 응답은 반환하되 의미 채널이 실패한 상태를 만든다.
+type unavailableEmbedder struct{ model string }
+
+func (embedder unavailableEmbedder) Embed(context.Context, string) ([]float64, error) {
+	return nil, errors.New("synthetic embedding outage")
+}
+
+func (embedder unavailableEmbedder) ModelID() string { return embedder.model }
+
+func TestConsistencyLoadCountsChannelFailuresIntegration(t *testing.T) {
+	database, worker, _ := evalDatabase(t, nil)
+	set := lifecycleInput(t)
+	queries := querySet{Version: "issue-276", Queries: []querySpec{
+		{ID: "q1", IndependentUnit: "t1", UseCase: useCaseFact, WorkContext: "독립 원천", Answers: []string{"source"}},
+		{ID: "q2", IndependentUnit: "t2", UseCase: useCaseFact, WorkContext: "독립 파생", Answers: []string{"derived"}},
+	}}
+	loaded := settings{execution: search.ExecutionParallel, candidateLimit: 50, semanticThreshold: 0.7, foldThreshold: 0.95}
+	conditions := consistencyConditions{LoadRequests: 6, Budget: 4000, MaxHops: 2, MaxHopNodes: 100}
+	variant := consistencyVariants()[0]
+	err := withEvaluationGraph(t.Context(), database, worker, set, 32, func(graph loadedGraph) error {
+		healthy, err := consistencyService(database, worker, loaded, search.GraphStageReferences, variant)
+		if err != nil {
+			return err
+		}
+		if got := measureLoad(t.Context(), database, healthy, graph.GraphID, queries, variant.Name, 2, conditions); got.Errors != 0 || got.ChannelFailures != 0 || got.LatencyMS.Mean == undefinedMetric {
+			t.Errorf("정상 부하 결과 = %+v", got)
+		}
+		failing, err := consistencyService(database, unavailableEmbedder{model: worker.ModelID()}, loaded, search.GraphStageReferences, variant)
+		if err != nil {
+			return err
+		}
+		got := measureLoad(t.Context(), database, failing, graph.GraphID, queries, variant.Name, 2, conditions)
+		if got.Errors != 0 || got.ChannelFailures < conditions.LoadRequests || got.LatencyMS.Mean != undefinedMetric {
+			t.Errorf("부분 채널 실패를 성공 요청으로 집계했다: %+v", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

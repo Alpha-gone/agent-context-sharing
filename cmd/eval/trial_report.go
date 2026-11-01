@@ -378,6 +378,11 @@ func (t *manifestTrial) decisions(value any, cost trialCost) []trialDecision {
 			if entry.Mismatches > 0 {
 				status, reason = "rejected", "equivalence_mismatch"
 			}
+			for _, run := range r.Load {
+				if run.Variant == entry.Variant && (run.Errors > 0 || run.ChannelFailures > 0) {
+					status, reason = "rejected", "concurrent_load_failures"
+				}
+			}
 			for _, run := range r.Concurrent {
 				if run.Variant == entry.Variant && (run.Inconsistent > 0 || run.ChannelFailures > 0 || run.Errors > 0) {
 					status, reason = "rejected", "inconsistent_or_failed_requests"

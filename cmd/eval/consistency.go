@@ -92,17 +92,19 @@ type consistencyConditions struct {
 }
 
 // loadResult는 동시 요청 부하에서 한 구성의 처리량과 연결 풀 대기다. 대기 획득과 대기
-// 시간은 측정 구간의 증가분이다.
+// 시간은 측정 구간의 증가분이다. 처리량은 보낸 요청 전체로, 지연은 요청 오류와 채널
+// 실패가 없는 응답만으로 계산해 포화로 실패한 요청의 지연이 분포에 섞이지 않게 한다.
 type loadResult struct {
-	Variant       string         `json:"variant"`
-	Concurrency   int            `json:"concurrency"`
-	Requests      int            `json:"requests"`
-	Errors        int            `json:"errors"`
-	Throughput    float64        `json:"requests_per_second"`
-	LatencyMS     latencySummary `json:"latency_ms"`
-	MaxConns      int32          `json:"pool_max_conns"`
-	EmptyAcquires int64          `json:"pool_empty_acquires"`
-	AcquireWaitMS float64        `json:"pool_acquire_wait_ms"`
+	Variant         string         `json:"variant"`
+	Concurrency     int            `json:"concurrency"`
+	Requests        int            `json:"requests"`
+	Errors          int            `json:"errors"`
+	ChannelFailures int            `json:"channel_failures"`
+	Throughput      float64        `json:"requests_per_second"`
+	LatencyMS       latencySummary `json:"latency_ms"`
+	MaxConns        int32          `json:"pool_max_conns"`
+	EmptyAcquires   int64          `json:"pool_empty_acquires"`
+	AcquireWaitMS   float64        `json:"pool_acquire_wait_ms"`
 }
 
 // equivalenceResult는 동시 쓰기가 없을 때 한 구성이 기준 구성과 다른 응답을 낸 질의 수다.
@@ -289,12 +291,24 @@ func measureLoad(ctx context.Context, database *store.Store, service *consistenc
 			for index := range jobs {
 				query := queries.Queries[index%len(queries.Queries)]
 				requestStarted := time.Now()
-				_, err := service.Flow(ctx, consistencyInput(graphID, query.WorkContext, query.Scope, conditions))
+				flow, err := service.Flow(ctx, consistencyInput(graphID, query.WorkContext, query.Scope, conditions))
 				elapsed := float64(time.Since(requestStarted).Microseconds()) / 1000
+				failures := 0
+				if err == nil {
+					for name, channel := range flow.Channels {
+						if countsAsFailure(name, channel.Failure) {
+							failures++
+						}
+					}
+				}
 				mu.Lock()
-				latencies = append(latencies, elapsed)
-				if err != nil {
+				switch {
+				case err != nil:
 					result.Errors++
+				case failures > 0:
+					result.ChannelFailures += failures
+				default:
+					latencies = append(latencies, elapsed)
 				}
 				mu.Unlock()
 			}

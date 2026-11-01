@@ -36,6 +36,11 @@ func TestTEST08CodexCLIOAuthIntegration(t *testing.T) {
 	}
 }
 
+// #129의 짧은 간격 재인가 패턴을 단일 CLI 프로세스의 실제 도구 호출로 대조한다.
+func TestIssue129ContinuousOAuthSessionIntegration(t *testing.T) {
+	test08CodexOAuth(t, "continuous_session", nil)
+}
+
 func TestTEST08CodexCLIWriteSafetyIntegration(t *testing.T) {
 	for _, scenario := range []string{"cancel_write", "permission_replay", "fingerprint_conflict", "version_conflict", "parallel_write"} {
 		t.Run(scenario, func(t *testing.T) { test08CodexOAuth(t, scenario, nil) })
@@ -57,6 +62,7 @@ type test08OAuthSession struct {
 	calls, exchanges, tokenSucceeded *atomic.Int64
 	refreshCounts                    func() (int, int)
 	forcedStatus, forcedRequests     *atomic.Int64
+	authorizations                   *atomic.Int64
 }
 
 func test08CodexOAuth(t *testing.T, scenario string, afterLogin func(*testing.T, test08OAuthSession)) {
@@ -120,7 +126,7 @@ func test08CodexOAuth(t *testing.T, scenario string, afterLogin func(*testing.T,
 	})
 	var calls atomic.Int64
 	var primaryCalls, secondaryCalls atomic.Int64
-	var exchanges atomic.Int64
+	var exchanges, authorizations atomic.Int64
 	var authorizationRejected, forcedStatus, forcedRequests atomic.Int64
 	var initialToken atomic.Pointer[authz.OAuthTokens]
 	var unauthorized, unavailable, tokenRejected, tokenSucceeded atomic.Int64
@@ -156,6 +162,9 @@ func test08CodexOAuth(t *testing.T, scenario string, afterLogin func(*testing.T,
 	}
 	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next := active.Load().handler
+		if r.URL.Path == "/authorize" {
+			authorizations.Add(1)
+		}
 		secondary := false
 		if other := alternate.Load(); other != nil {
 			sequence := routed.Add(1)
@@ -475,6 +484,12 @@ callback_port = 49152
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatal("CLI 자격 파일의 존재·0600 보호를 확인하지 못했습니다")
 	}
+	// 최초 인가 뒤 서버에 도착한 인가 요청은 토큰 교환 전 실패도 포함해 센다.
+	authorizationCount, unauthorizedCount := authorizations.Load(), unauthorized.Load()
+	credentialSnapshot, err := os.ReadFile(credentials)
+	if err != nil {
+		t.Fatal("연속 사용 전 자격 스냅숏 실패")
+	}
 	before := calls.Load()
 	_ = command("exec", "--skip-git-repo-check", "--ephemeral", "--json", "Return TEST08.").Run()
 	if calls.Load() < before+2 || exchanges.Load() != 1 {
@@ -487,7 +502,7 @@ callback_port = 49152
 		afterLogin(t, test08OAuthSession{
 			ctx: ctx, credentials: credentials, server: server, initialToken: *initialToken.Load(),
 			command: command, calls: &calls, exchanges: &exchanges, tokenSucceeded: &tokenSucceeded,
-			forcedStatus: &forcedStatus, forcedRequests: &forcedRequests,
+			forcedStatus: &forcedStatus, forcedRequests: &forcedRequests, authorizations: &authorizations,
 			refreshCounts: func() (int, int) {
 				var count, consumed int
 				if err := pool.QueryRow(ctx, "SELECT count(*),count(consumed_at) FROM public.oauth_refresh_token").Scan(&count, &consumed); err != nil {
@@ -655,6 +670,13 @@ callback_port = 49152
 	if !valid {
 		t.Fatal("실제 CLI 등록·읽기·행위자 쓰기·현재 판 재조회 불일치")
 	}
+	currentCredentials, err := os.ReadFile(credentials)
+	if err != nil || !bytes.Equal(credentialSnapshot, currentCredentials) || authorizations.Load() != authorizationCount || unauthorized.Load() != unauthorizedCount || exchanges.Load() != 1 || tokenSucceeded.Load() != 1 {
+		t.Fatal("유효 자격의 연속 도구 호출이 인가 요청·토큰 교환·401 또는 자격 변경을 유발했습니다")
+	}
+	if scenario == "continuous_session" {
+		t.Logf("ISSUE-129 stage=continuous_tools tool_calls=%d extra_authorization=0 extra_token_exchange=0 extra_401=0 credential_preserved=true", toolCalls)
+	}
 	if err := test08ExpireCredential(credentials); err != nil {
 		t.Fatal(err)
 	}
@@ -662,6 +684,9 @@ callback_port = 49152
 	_ = command("exec", "--skip-git-repo-check", "--ephemeral", "--json", "Return TEST08.").Run()
 	if calls.Load() < before+2 || exchanges.Load() != 2 {
 		t.Fatal("클라이언트 만료 표본의 실제 갱신·자격 재사용 실패")
+	}
+	if authorizations.Load() != authorizationCount {
+		t.Fatal("정상 갱신이 추가 인가 HTTP 요청을 유발했습니다")
 	}
 	var refresh, consumed int
 	if err := pool.QueryRow(ctx, "SELECT count(*), count(consumed_at) FROM oauth_refresh_token").Scan(&refresh, &consumed); err != nil || refresh != 2 || consumed != 1 {

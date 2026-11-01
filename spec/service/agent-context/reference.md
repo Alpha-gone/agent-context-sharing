@@ -503,3 +503,9 @@
 - 조회일: 2026-11-01 KST. [Go 공식 릴리스 이력](https://go.dev/doc/devel/release#go1.27.3)에서 Go 1.27.2의 HTTP·TLS·템플릿 보안 수정과 1.27.3의 crypto/x509 보안 수정을 확인했다. 사용자의 승인에 따라 현재 개발·CI·이미지 기준을 1.27.3으로 맞추며 과거 인수 결과는 당시 판을 보존한다.
 - [govulncheck v1.9.0 공식 문서](https://pkg.go.dev/golang.org/x/vuln@v1.9.0/cmd/govulncheck)의 기본 symbol 분석·PATH의 Go 도구 체인 선택·종료 코드를 확인했다. 기본 텍스트 출력에서 취약점 발견 시 실패하며 JSON·SARIF·OpenVEX 출력은 발견 여부와 무관하게 성공할 수 있으므로 CI 실패 판정에 사용하지 않는다. 도구 판은 고정하고 취약점 DB는 실행 시 조회한다.
 - [go-jose v4.1.7 릴리스](https://github.com/go-jose/go-jose/releases/tag/v4.1.7)와 [x/crypto v0.58.0](https://pkg.go.dev/golang.org/x/crypto@v0.58.0)을 확인하여 검출된 모듈의 보안 수정 판을 적용했다. 이후 사용자의 전체 의존성 최신화 요청에 따라 [pgx v5.12.0 공식 릴리스](https://github.com/jackc/pgx/releases/tag/v5.12.0)와 [oauth2 v0.37.0](https://pkg.go.dev/golang.org/x/oauth2@v0.37.0)을 확인하고 최신 안정 판을 함께 적용했다. `go get -u -t ./...`·`go mod tidy` 후 `go list -m -u all`과 실제 빌드·시험 패키지의 모듈을 대조하여 사용 모듈 16개에 추가 판올림이 없음을 확인했다. 상위 모듈 메타데이터에만 등장하는 미사용 항목은 직접 의존성으로 추가하지 않았다.
+
+
+## #129 반복 인가 조사에서 확인한 외부 경계
+
+- 조회일: 2026-11-01 KST. [OpenAI 인증 문서](https://developers.openai.com/plugins/build/auth)의 MCP OAuth 2.1·보호 리소스/인가 서버 분리·issuer 검증 경계를 확인했다. [문제 해결 문서](https://developers.openai.com/plugins/deploy/troubleshooting)는 인가 반복을 서버·클라이언트 등 원인 계층으로 분리해 조사하도록 안내한다. 이 자료만으로 특정 Codex 데스크톱 판의 인증 반복 원인이나 현재 적합성을 확인할 수는 없다.
+- 당시 제거 전 `4217d92^`의 `client/internal/client/authorize/authorize.go`에서 자격과 ES256 키가 Manager/프로세스 메모리에 있고 New에서 새 키를 만드는 것을 확인했다. 같은 판의 `remote/http.go`는 자격 없는 최초 호출을 보호 요청의 401 도전으로 연결한다. 프로세스 재생성은 재인가를 설명할 수 있는 조건이지만, #129 로그에는 PID·Authorization 존재·401 사유가 없어 실제 원인으로 확정하지 않는다. 현재 구현이나 과거 정본을 수정하는 근거로 사용하지 않았다.

@@ -316,7 +316,7 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 		}
 		var global channelResult
 		if route == RouteGlobal {
-			global = service.globalSummaries(ctx, input)
+			global = service.globalSummaries(ctx, input, current)
 			channels[global.name] = global.metric
 			// 요약이 없거나 조회가 실패하면 직접 경로로 되돌린다. 조회 실패는 채널 실패로 남는다.
 			if len(global.candidates) == 0 {
@@ -344,7 +344,7 @@ func (service *Service) flow(ctx context.Context, input Input, embed func() ([]f
 		globalFallbackTriggered = input.Scope == "auto" && !relevantLocal
 		var global channelResult
 		if input.Scope == "global" || globalFallbackTriggered {
-			global = service.globalSummaries(ctx, input)
+			global = service.globalSummaries(ctx, input, current)
 			channels[global.name] = global.metric
 			// 전역 범위의 진입 채널은 전역 요약 하나뿐이므로 그 채널의 실패가 곧 모든 채널
 			// 실패다. 비교 단계에서 끈 상태는 조회 실패가 아니라 구성이므로 제외한다.
@@ -457,7 +457,7 @@ type channelResult struct {
 	boundary   *int
 }
 
-func (service *Service) globalSummaries(ctx context.Context, input Input) channelResult {
+func (service *Service) globalSummaries(ctx context.Context, input Input, current time.Time) channelResult {
 	result := channelResult{name: "global_summary"}
 	defer func() { service.observeChannel(ctx, "global_summary", result.metric) }()
 	// 명시한 전역 범위는 클라이언트가 고른 진입점 계약이므로 배포 구성으로 끄지 않는다.
@@ -469,7 +469,7 @@ func (service *Service) globalSummaries(ctx context.Context, input Input) channe
 		return result
 	}
 	started := time.Now()
-	candidates, err := service.store.GlobalSummaryCandidates(ctx, input.GraphID, input.AsOf, service.config.CandidateLimit)
+	candidates, err := service.store.GlobalSummaryCandidates(ctx, input.GraphID, current, service.config.CandidateLimit)
 	result.metric.Latency = time.Since(started)
 	if err != nil {
 		result.metric.Failure = failureReason(err)

@@ -740,8 +740,9 @@ func (s *Store) TimeCandidates(ctx context.Context, graphID model.ID, asOf time.
 }
 
 // GlobalSummaryCandidates는 전역 범위 흐름의 시작점이 될 활성 전역 요약 파생을 최근 순으로 읽는다.
-func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, asOf time.Time, limit int) (result []SearchCandidate, err error) {
-	if !graphID.IsV7() || asOf.IsZero() || asOf.Location() != time.UTC || limit < 1 {
+// current는 검색 흐름의 현재 UTC 시각이며 요청의 as_of는 시간 필터 채널만 받는다.
+func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, current time.Time, limit int) (result []SearchCandidate, err error) {
+	if !graphID.IsV7() || current.IsZero() || current.Location() != time.UTC || limit < 1 {
 		return nil, fmt.Errorf("전역 요약 검색 인자가 올바르지 않다")
 	}
 	ctx, release, err := s.enterReadScope(ctx)
@@ -763,7 +764,7 @@ func (s *Store) GlobalSummaryCandidates(ctx context.Context, graphID model.ID, a
 			AND (NULLIF(properties ->> 'valid_from'::text, '') IS NULL OR (properties ->> 'valid_from'::text)::timestamptz <= $2)
 			AND (NULLIF(properties ->> 'valid_to'::text, '') IS NULL OR (properties ->> 'valid_to'::text)::timestamptz >= $2)
 		ORDER BY (properties ->> 'recorded_at'::text)::timestamptz DESC, properties ->> 'context_id'::text ASC
-		LIMIT $3`, graphID.String(), asOf, limit)
+		LIMIT $3`, graphID.String(), current, limit)
 	if err != nil {
 		return nil, fmt.Errorf("전역 요약 검색: %w", err)
 	}

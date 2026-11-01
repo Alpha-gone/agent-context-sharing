@@ -175,10 +175,10 @@ func assessUnits(provenance string, entry unitCohort) (string, string) {
 	}
 	for _, comparisons := range entry.Retrieval[1].Comparisons {
 		for _, metric := range comparisons {
+			// 거부는 완전성·검색 품질과 과업 성공률의 유의한 악화로 한정한다. 지연·구조·예산
+			// 지표는 보고하되 경계 정책을 거부하는 근거로 쓰지 않는다.
 			if slices.Contains([]string{"recall", "reciprocal_rank", "evidence_completeness", "path_continuity"}, metric.Metric) {
 				ready = ready && metric.Status == "measured"
-			}
-			if !slices.Contains([]string{"budget_used", "budget_per_hit", "misroute_rate"}, metric.Metric) {
 				regressed = regressed || metric.Significant && !metric.Improved
 			}
 			if metric.Metric == "budget_used" {

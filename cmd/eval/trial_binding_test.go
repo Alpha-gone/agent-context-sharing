@@ -241,3 +241,31 @@ func TestManifestTrialConsistencyLoadFailureNotAccepted(t *testing.T) {
 		}
 	}
 }
+
+func TestManifestTrialAdaptiveRegressionMatchesStageComparison(t *testing.T) {
+	m, _, _ := trialFixture(t, "lookup")
+	m.Provenance = "observed"
+	trial := manifestTrial{Manifest: m, Preparation: trialPreparation{Independent: 3}}
+	cost := trialCost{Total: businessCostTotal{Status: "measured"}}
+	significant := func(metric string, improved bool) comparison {
+		return comparison{Metric: metric, Samples: 3, Status: "measured", Significant: true, Improved: improved}
+	}
+	report := &adaptiveReport{
+		Runs: []runMetrics{{Stage: variantAdaptive, UseCases: map[string]useCaseMetrics{
+			useCaseFact: {LatencyP95MS: 10}, useCaseAssociative: {LatencyP95MS: 10},
+		}}},
+		Judgements: []stageJudgement{{Stage: variantAdaptive, ComparedTo: variantAuto, Comparisons: map[string][]comparison{
+			useCaseFact:        {significant("recall", true), significant("budget_used", false)},
+			useCaseAssociative: {significant("recall", false), significant("budget_used", true)},
+		}}},
+	}
+	got := trial.decisions(report, cost)
+	for i, want := range []struct{ status, reason string }{
+		{"deferred", "routing_effect_and_cost_acceptance_pending"},
+		{"not_accepted", "significant_regression"},
+	} {
+		if got[i].Status != want.status || got[i].Reason != want.reason {
+			t.Fatalf("적응형 요약 악화 판정: %+v", got)
+		}
+	}
+}

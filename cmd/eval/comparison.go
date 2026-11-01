@@ -249,6 +249,13 @@ type comparisonAssessment struct {
 	DefaultActivation bool   `json:"default_activation"`
 }
 
+// stageMetricRegressed는 그래프 단계 비교와 같은 측정을 쓰는 판정의 악화 기준이다.
+// 문자 사용량은 근거를 더 반환해 늘 수 있으므로 단독으로 악화로 보지 않고 적중당
+// 문자(budget_per_hit)로 효율을 판단한다.
+func stageMetricRegressed(metric comparison) bool {
+	return metric.Status == "measured" && metric.Significant && !metric.Improved && metric.Metric != "budget_used"
+}
+
 // 관찰 결과는 운영 기본값을 승인하지 않는다. 최종 비용·효과는 EVAL-12/13이 소유한다.
 func assessComparisons(axis string, judgements []stageJudgement, runs map[string][]runMetrics) []comparisonAssessment {
 	var results []comparisonAssessment
@@ -269,7 +276,7 @@ func assessComparisons(axis string, judgements []stageJudgement, runs map[string
 					required[metric.Metric] = metric.Status == "measured" && metric.Samples >= 2
 				}
 				if metric.Status == "measured" && metric.Significant {
-					regressed = regressed || (!metric.Improved && metric.Metric != "budget_used")
+					regressed = regressed || stageMetricRegressed(metric)
 					recallLoss = recallLoss || (metric.Metric == "recall" && !metric.Improved)
 					improved = improved || (metric.Improved && slices.Contains([]string{"recall", "reciprocal_rank", "evidence_completeness", "path_continuity", "budget_per_hit"}, metric.Metric))
 				}

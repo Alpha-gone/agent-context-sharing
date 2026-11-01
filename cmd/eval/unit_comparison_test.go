@@ -417,3 +417,45 @@ func TestUnitTaskSuccessRejectsOnlySignificantLoss(t *testing.T) {
 		})
 	}
 }
+
+func TestUnitRejectsOnlyQualityRegressions(t *testing.T) {
+	input := unitFixture(t, 2)
+	input.Provenance = "agent_trace"
+	cohorts, err := aggregateUnits(input, unitFixtureRuns(input))
+	if err != nil || cohorts[0].Status != "candidate" {
+		t.Fatalf("기준 후보 = %+v, %v", cohorts, err)
+	}
+	for _, test := range []struct{ metric, status, reason string }{
+		{"latency_ms", "candidate", cohorts[0].Reason},
+		{"disconnected_ratio", "candidate", cohorts[0].Reason},
+		{"hub_concentration", "candidate", cohorts[0].Reason},
+		{"duplicate_ratio", "candidate", cohorts[0].Reason},
+		{"recall", "rejected", "quality_or_task_regression"},
+		{"path_continuity", "rejected", "quality_or_task_regression"},
+	} {
+		t.Run(test.metric, func(t *testing.T) {
+			entry := cohorts[0]
+			entry.Retrieval = slices.Clone(entry.Retrieval)
+			comparisons := map[string][]comparison{}
+			found := false
+			for useCase, metrics := range entry.Retrieval[1].Comparisons {
+				metrics = slices.Clone(metrics)
+				for i := range metrics {
+					if metrics[i].Metric == test.metric {
+						metrics[i].Status, metrics[i].Significant, metrics[i].Improved = "measured", true, false
+						found = true
+					}
+				}
+				comparisons[useCase] = metrics
+			}
+			if !found {
+				t.Fatalf("%s 비교 없음", test.metric)
+			}
+			entry.Retrieval[1].Comparisons = comparisons
+			status, reason := assessUnits(input.Provenance, entry)
+			if status != test.status || reason != test.reason {
+				t.Fatalf("판정 = %s/%s, 기대 %s/%s", status, reason, test.status, test.reason)
+			}
+		})
+	}
+}

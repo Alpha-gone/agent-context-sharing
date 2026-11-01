@@ -603,13 +603,18 @@ func (s *Store) DeletionImpact(ctx context.Context, graphID, contextID model.ID)
 }
 
 func (s *Store) confirmedRelationCount(ctx context.Context, graphID, contextID model.ID) (int, error) {
-	query := "MATCH (from:Context)-[edge]->(to:Context) WHERE edge.graph_id = " + cypherString(graphID.String()) + " AND edge.relation_type IS NOT NULL AND edge.state = 'confirmed'"
-	if contextID.IsV7() {
-		query += " AND (from.context_id = " + cypherString(contextID.String()) + " OR to.context_id = " + cypherString(contextID.String()) + ")"
+	// 네 label의 개수를 한 문장에서 합쳐 같은 스냅숏과 한 번의 왕복을 유지한다.
+	var queries []string
+	for _, label := range []string{"PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"} {
+		query := "MATCH (from:Context)-[edge:" + label + "]->(to:Context) WHERE edge.graph_id = " + cypherString(graphID.String()) + " AND edge.relation_type IS NOT NULL AND edge.state = 'confirmed'"
+		if contextID.IsV7() {
+			query += " AND (from.context_id = " + cypherString(contextID.String()) + " OR to.context_id = " + cypherString(contextID.String()) + ")"
+		}
+		queries = append(queries, s.cypherSQL(query+" RETURN count(edge)", "count agtype"))
 	}
-	query += " RETURN count(edge)"
-	count, err := s.agtypeCount(ctx, query)
-	if err != nil {
+	var count int
+	query := "SELECT sum(count::text::bigint)::bigint FROM (" + strings.Join(queries, " UNION ALL ") + ") AS counts"
+	if err := s.pool.QueryRow(ctx, query, pgx.QueryExecModeExec).Scan(&count); err != nil {
 		return 0, fmt.Errorf("확정 관계 수 조회: %w", err)
 	}
 	return count, nil

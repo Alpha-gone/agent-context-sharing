@@ -1050,9 +1050,9 @@ func (s *Store) ProposeSimilarEventRelations(ctx context.Context, graphID, event
 			AND node.properties ->> 'layer'::text = 'event' AND node.properties ->> 'deleted_at'::text IS NULL
 			AND NOT EXISTS (
 				SELECT 1 FROM "`+s.graphName+`"."RELATES_TO" AS relation
-				WHERE relation.properties ->> 'graph_id'::text = $2::text
-					AND relation.properties ->> 'from_context_id'::text = LEAST($1::text, candidate.context_id::text)
-					AND relation.properties ->> 'to_context_id'::text = GREATEST($1::text, candidate.context_id::text)
+				WHERE ag_catalog.agtype_access_operator(VARIADIC ARRAY[relation.properties, '"graph_id"'::agtype]) = to_jsonb($2::text)::text::agtype
+					AND ag_catalog.agtype_access_operator(VARIADIC ARRAY[relation.properties, '"from_context_id"'::agtype]) = to_jsonb(LEAST($1::text, candidate.context_id::text))::text::agtype
+					AND ag_catalog.agtype_access_operator(VARIADIC ARRAY[relation.properties, '"to_context_id"'::agtype]) = to_jsonb(GREATEST($1::text, candidate.context_id::text))::text::agtype
 			)
 		ORDER BY candidate.embedding <=> $4, candidate.context_id
 		LIMIT $6`,

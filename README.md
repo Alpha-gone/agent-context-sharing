@@ -2,76 +2,80 @@
 
 AI 에이전트가 작업 중 얻은 지식과 맥락을 저장하고, 관계를 연결하여 이후 작업에서 다시 활용하는 AI 에이전트 제텔카스텐입니다. 여러 작업자가 컨텍스트 그래프를 공유하며 계정별 권한 범위 안에서 조회하고 기여할 수 있습니다.
 
-서버 시험 운영은 [운영 매뉴얼](OPERATIONS.md)을 따릅니다. 서비스 동작의 기준은 [서버 요구사항](spec/service/agent-context/SRS.md)과 [서버 설계](spec/service/agent-context/SDD.md)이며, 이 문서는 프로젝트 개요와 시작 방법을 안내합니다.
+이 문서는 프로젝트 개요, 개발 시작과 클라이언트 연결 방법을 안내합니다. 서비스 동작의 기준은 [서버 요구사항](spec/service/agent-context/SRS.md)과 [서버 설계](spec/service/agent-context/SDD.md)이며, 서버 시험 운영은 [운영 매뉴얼](OPERATIONS.md)을 따릅니다.
+
+> [!WARNING]
+> 현재는 검증 단계입니다. 인증된 모든 계정에 운영자 복구 자격이 있으므로 신뢰할 수 있는 시험 참여자로 접근 범위를 제한하십시오. 비밀번호 재설정, 계정 잠금, 2FA와 외부 인가 서버 연동은 제공하지 않습니다. 공개 서비스 전환 여부는 [서비스 현황](spec/service/README.md)과 보안 요구사항을 함께 검토하십시오.
+
+## 목차
+
+- [주요 기능](#주요-기능)
+- [구성](#구성)
+- [로컬 시작](#로컬-시작)
+- [호스트 터널에 연결하는 컨테이너 서버](#호스트-터널에-연결하는-컨테이너-서버)
+- [클라이언트 연결](#클라이언트-연결)
+- [개발 환경 재생성](#개발-환경-재생성)
+- [검증](#검증)
+- [문서와 저장소 구조](#문서와-저장소-구조)
+- [검증 현황](#검증-현황)
 
 ## 주요 기능
 
 - 원천·파생·사건 컨텍스트의 저장, 조회, 갱신, 폐기와 복구
 - 의미 유사도·키워드·시간 필터 검색과 컨텍스트 관계 탐색
 - 그래프별 소유자·편집자·열람자 권한과 팀 관리
-- 웹 관리 화면의 컨텍스트 조회, 국소 그래프 보기와 운영자 복구
-- 표준 OAuth·Bearer·회전형 갱신과 MCP 14종 서버 연결 (선정 CLI 구성 인수 완료, 다른 표면은 별도 검증)
+- 웹 관리 화면의 컨텍스트 조회, 국소 그래프 보기, 연결 관리와 운영자 복구
+- 표준 OAuth(PKCE S256·회전형 갱신)로 보호하는 MCP 서버와 14종 도구
 - 비동기 임베딩 색인, 그래프 불변식 감사와 검색 품질 평가 도구
-
-현재는 검증 단계입니다. 인증된 모든 계정에 운영자 복구 자격이 있으므로 신뢰할 수 있는 시험 참여자로 접근 범위를 제한해야 합니다. 비밀번호 재설정, 계정 잠금, 2FA와 외부 인가 서버 연동은 현재 제공하지 않습니다. 공개 서비스 전환 여부는 [서비스 현황](spec/service/README.md)과 보안 요구사항을 함께 검토하십시오.
 
 ## 구성
 
-현재 서버는 웹 관리·계정 세션·OAuth·보호 MCP·그래프 저장·검색·색인을 제공합니다. 감사·평가는 별도 실행기로 실행합니다. 서버는 PostgreSQL의 Apache AGE로 그래프를, pgvector로 임베딩을 저장하며 임베딩 제공자는 Gemini를 명시적으로 구성합니다. 선정 CLI 지원 범위와 다른 표면의 미인수는 아래 검증 현황에서 구분합니다.
+서버는 웹 관리·계정 세션·OAuth·보호 MCP·그래프 저장·검색·색인을 제공하며, 감사·평가는 별도 실행기로 실행합니다. PostgreSQL의 Apache AGE에 그래프를, pgvector에 임베딩을 저장하고 임베딩 제공자는 Gemini를 명시적으로 구성합니다.
 
-- 서버: 루트 Go 모듈의 `cmd/server`와 `internal/`
-- 개발 환경: 호스트에서 Go 프로그램을 실행하고 `compose.dev.yaml`로 DB를 기동하거나, `server` 프로필로 애플리케이션까지 컨테이너에서 실행
-- 시험 운영 터널 구성 예시: 호스트의 `cloudflared`가 `http://localhost:80`으로 전달. 개발용 실행은 아래 「호스트 터널에 연결하는 컨테이너 서버」 절차를 사용
-- 운영 환경: 별도 `compose.prod.yaml`로 DB·마이그레이션·서버를 실행하고 같은 호스트 터널에 연결. 설정·적용·백업 절차는 [운영 매뉴얼](OPERATIONS.md)을 사용
+| 실행기 | 역할 | 운영 이미지 포함 |
+|---|---|---|
+| `cmd/server` | 웹·OAuth·MCP 서버, 기본 내장 색인 작업자 | 예 |
+| `cmd/migrate` | 스키마 조회(`status`)·적용(`up`) | 예 |
+| `cmd/audit` | 그래프 불변식 전체 감사 | 예 |
+| `cmd/indexer` | 분리 실행용 색인 작업자 | 아니요 |
+| `cmd/eval` | 검색 품질 평가 | 아니요 |
 
-## 호스트 터널에 연결하는 컨테이너 서버
-
-`cloudflared`와 Docker는 같은 호스트에서 실행합니다. `compose.dev.yaml`의 `server` 프로필은 DB 준비와 마이그레이션 완료 뒤 서버를 기동하고 `127.0.0.1:80`을 컨테이너의 HTTP 8080에 연결합니다. 터널의 원본 주소는 `http://localhost:80`으로 지정합니다. Docker Compose 2.33.1 이상을 사용하고 호스트의 80번 포트와 `10.204.0.0/24` 네트워크가 사용 가능한지 확인합니다.
-
-개발용 `.env`에 Gemini API 키 등 기존 구성을 채우고 웹 세션 issuer를 실제 터널 도메인으로 설정합니다.
-
-```dotenv
-AUTHORIZATION_SERVER_URL=https://agent-context.example.com
-```
-
-```sh
-docker compose -f compose.dev.yaml --profile server up -d --build --wait
-curl --fail --show-error http://localhost:80/healthz
-curl --fail --show-error http://localhost:80/readyz
-curl --fail --show-error --output /dev/null https://agent-context.example.com/login
-```
-
-로컬 상태 확인은 `200`, 터널을 통과한 HTTPS 로그인 화면도 `200`이 기대 결과입니다. 로컬 HTTP `/login`은 HTTPS 전달 헤더가 없으므로 `400 https_required`가 정상입니다. 서버는 호스트 접속 경로인 `10.204.0.1/32`에서 온 단일 HTTPS 전달 헤더만 신뢰합니다. 터널을 통해 전달되는 원본 HTTP는 호스트 내부에 한정되며 호스트 접근 권한도 신뢰 경계에 포함됩니다. `cloudflared`는 이 Compose 파일이 관리하지 않습니다.
-
-이 구성은 개발용 DB 자격 증명과 WAL 자동 정리를 사용합니다. 운영 데이터에는 별도 `compose.prod.yaml`과 [운영 매뉴얼](OPERATIONS.md)의 백업·적용 절차를 사용합니다.
+| 환경 | 구성 |
+|---|---|
+| 로컬 개발 | 호스트에서 Go 프로그램을 실행하고 `compose.dev.yaml`로 DB를 기동합니다. |
+| 개발 컨테이너 | `compose.dev.yaml`의 `server` 프로필로 애플리케이션까지 컨테이너에서 실행하고 호스트의 `cloudflared`에 연결합니다. |
+| 시험 운영 | `compose.prod.yaml`로 DB·마이그레이션·서버를 실행하고 같은 방식의 호스트 터널에 연결합니다. 절차는 [운영 매뉴얼](OPERATIONS.md)을 따릅니다. |
 
 ## 로컬 시작
 
-다음 명령은 저장소 루트에서 실행합니다. 기존 `.env`가 운영용이라면 별도 개발 체크아웃에서 진행하십시오.
+명령은 저장소 루트에서 실행합니다. 기존 `.env`가 운영용이라면 별도 개발 체크아웃에서 진행하십시오.
 
 ### 준비 사항
 
-- Go **1.27.3**
+- Go **1.27.3**. 기본 셸에 없다면 IntelliJ IDEA에 등록된 Go 1.27.3 SDK의 통합 터미널이나 실행 구성을 사용합니다.
 - Docker와 Docker Compose: 설치된 판이 제공된 Compose 파일의 `config --quiet` 검사를 통과해야 합니다.
-- Gemini API 키: 아래 기본 구성에 필요합니다. 본문과 검색 질의가 외부 API로 전송되므로 이용 정책과 비용을 확인하십시오.
-- 브라우저가 신뢰하는 `localhost` TLS 인증서 및 개인 키
+- Gemini API 키: 본문과 검색 질의가 외부 API로 전송되므로 이용 정책과 비용을 확인하십시오.
+- 브라우저가 신뢰하는 `localhost` TLS 인증서와 개인 키
 - `curl`, 구성 검사에 사용하는 `jq`
-
-기본 셸에 Go가 없다면 IntelliJ IDEA에 등록된 Go 1.27.3 SDK의 통합 터미널이나 실행 구성을 사용합니다.
 
 ### Go 도구 체인과 빌드 검사
 
-로컬과 CI는 `go.mod`의 Go 판을 선택하고 같은 검사 스크립트를 실행합니다. 기본 PATH에서 SDK를 찾을 수 없으면 `GO_BINARY`에 등록된 SDK의 `bin/go` 절대 경로를 지정할 수 있습니다.
+로컬과 CI는 `go.mod`의 Go 판을 선택하고 같은 검사 스크립트를 실행합니다. 기본 PATH에서 SDK를 찾을 수 없으면 `GO_BINARY`에 SDK의 `bin/go` 절대 경로를 지정합니다.
 
 ```sh
 sh ./check-go.sh
-# 현재 macOS 개발 환경의 SDK를 직접 지정하는 예시
+# SDK를 직접 지정하는 예시
 GO_BINARY="$HOME/sdk/go1.27.3/bin/go" sh ./check-go.sh
 ```
 
-스크립트는 선택된 SDK의 정확한 판과 모듈 체크섬을 확인하고, pgx/pgxpool·go-jose·MCP SDK를 포함한 최소 실행 파일을 임시 디렉터리에 빌드한 뒤 `go build ./...`·`go vet ./...`·`gofmt -l .`을 검사합니다. 이어서 `govulncheck` `v1.9.0`을 선택한 SDK로 실행하여 `./...`의 호출 경로상 알려진 취약점이 있으면 실패합니다. 검사 도구 판은 고정하지만 취약점 정보는 실행 시 Go 공식 취약점 DB에서 조회하므로 네트워크 연결이 필요합니다. 임시 산출물은 종료 시 정리합니다. `.github/workflows/go.yml`이 PR과 `dev`·`main` push에서 같은 검사를 실행하며 모듈·통합 시험은 [개발 계획의 시험 시점](spec/service/agent-context/DEVELOPMENT_PLAN.md#테스트-작성과-실행-시점)에 수행합니다.
+스크립트는 다음을 차례로 검사하고 임시 산출물을 정리합니다.
 
-MCP SDK `v1.8.0`은 신규 구현용 의존성으로 먼저 고정했습니다. SDK의 실제 전송 적합성과 호스트 지원은 [MCP-01](spec/service/agent-context/development-plan/mcp.md#mcp-01)과 실제 호스트 인수에서 판정합니다.
+1. 선택된 SDK의 정확한 판과 모듈 체크섬
+2. pgx/pgxpool·go-jose·MCP SDK를 포함한 최소 실행 파일 빌드
+3. `go build ./...`·`go vet ./...`·`gofmt -l .`
+4. `govulncheck` `v1.9.0`으로 `./...` 호출 경로의 알려진 취약점. 취약점 정보는 실행 시 Go 공식 취약점 DB에서 조회하므로 네트워크가 필요합니다.
+
+`.github/workflows/go.yml`이 PR과 `dev`·`main` push에서 같은 검사를 실행합니다. 모듈·통합 시험은 [개발 계획의 시험 시점](spec/service/agent-context/DEVELOPMENT_PLAN.md#테스트-작성과-실행-시점)에 수행합니다.
 
 ### 1. 환경 설정
 
@@ -82,7 +86,7 @@ test -e .env || cp .env.example .env
 chmod 600 .env
 ```
 
-`.env`를 편집하여 다음 값을 지정합니다. 인증서 경로는 실제 절대 경로로 바꾸고 개인 키를 저장소에 추가하지 않습니다.
+`.env`에서 다음 값을 지정합니다. 인증서 경로는 실제 절대 경로로 바꾸고 개인 키를 저장소에 추가하지 않습니다.
 
 ```dotenv
 GEMINI_API_KEY=실제_API_키
@@ -93,9 +97,16 @@ TLS_CERT_FILE=/absolute/path/localhost.pem
 TLS_KEY_FILE=/absolute/path/localhost-key.pem
 ```
 
-나머지는 `.env.example`의 개발 기본값으로 시작합니다. `AUTHORIZATION_SERVER_URL=https://localhost:8080`을 웹 세션의 고정 issuer로 사용합니다.
+나머지는 `.env.example`의 개발 기본값으로 시작합니다. 서버는 DB 연결 전에 MCP·OAuth·진단 구성까지 검사하므로 다음 필수 값이 있어야 합니다. 기존 `.env`에 없다면 예시에서 옮겨 옵니다.
 
-서버는 DB 연결 전에 MCP·OAuth·진단 구성까지 검사합니다. 기존 `.env`에는 두 환경 예시의 `MCP_RESOURCE_URL`, `MCP_ALLOWED_ORIGINS`, `OAUTH_CLIENT_REGISTRATIONS`, `DIAGNOSTIC_INSTANCE_ID`를 추가하고 실제 공개 주소·호스트의 client ID로 맞추십시오. issuer와 resource는 서로 다른 HTTPS origin을 사용할 수 있습니다. 등록 형식과 loopback 포트 정책은 [구성 계약](spec/service/agent-context/sdd/operations.md#목표-추가-구성)을 따릅니다. `DIAGNOSTIC_LOG_DIR`·`DIAGNOSTIC_LOG_LEVEL`은 비우면 각각 `/var/log/agent-context`·`INFO`입니다. OAuth 최초 인가·코드 교환·Bearer 보호 인증·갱신 회전은 구현했으며 MCP 전송 조립과 영속 진단 파일·볼륨은 후속 구현·인수 대상입니다.
+| 항목 | 개발 기본값과 설명 |
+|---|---|
+| `AUTHORIZATION_SERVER_URL` | `https://localhost:8080`. 웹 세션과 OAuth의 고정 issuer입니다. |
+| `MCP_RESOURCE_URL`·`MCP_ALLOWED_ORIGINS` | `https://localhost:8080/mcp`·`https://localhost:8080`. issuer와 다른 HTTPS origin을 사용할 수 있습니다. |
+| `OAUTH_CLIENT_REGISTRATIONS` | 사전 등록 client 목록입니다. 작성 방법은 [클라이언트 연결](#클라이언트-연결)을 따릅니다. |
+| `DIAGNOSTIC_INSTANCE_ID` | 재시작에도 유지할 진단 슬롯 ID입니다. `DIAGNOSTIC_LOG_DIR`·`DIAGNOSTIC_LOG_LEVEL`은 비우면 각각 `/var/log/agent-context`·`INFO`입니다. |
+
+전체 항목과 검증 규칙은 [배포 구성](spec/service/agent-context/sdd/operations.md#배포-구성)과 [목표 추가 구성](spec/service/agent-context/sdd/operations.md#목표-추가-구성)을 따릅니다.
 
 Go 프로그램은 `.env`를 자동으로 읽지 않습니다. 직접 작성한 신뢰할 수 있는 `.env`만 현재 셸에 내보내십시오. 이 방식은 파일을 셸 코드로 실행합니다.
 
@@ -115,20 +126,20 @@ go run ./cmd/migrate up
 go run ./cmd/server
 ```
 
-다른 터미널에서 확인합니다. 개발 기본 포트인 `8080`을 바꿨다면 URL도 바꾸십시오.
+다른 터미널에서 상태를 확인합니다. 개발 기본 포트 `8080`을 바꿨다면 URL도 바꾸십시오.
 
 ```sh
 curl --fail --show-error https://localhost:8080/healthz
 curl --fail --show-error https://localhost:8080/readyz
 ```
 
-브라우저에서 `https://localhost:8080/register`로 계정을 생성하고 `/graphs`로 이동합니다. 직접 연결 구현 전에는 웹에서 기존 그래프를 조회·관리할 수 있지만 MCP를 통한 신규 그래프 생성과 컨텍스트 기여는 사용할 수 없습니다. 웹 화면은 조회·시각화와 권한 관리에 사용합니다.
+브라우저에서 `https://localhost:8080/register`로 계정을 만들고 `/graphs`로 이동합니다. 웹 화면은 그래프·권한/팀·삭제/복구·감사·연결 관리와 계층/상태·근거 시각화를 제공합니다. 그래프 생성과 컨텍스트 기여는 MCP 클라이언트로 수행합니다.
 
 기존 DB의 벡터 타입·차원은 환경 변수만 바꿔 전환할 수 없습니다. [임베딩 전환·복귀 설계](spec/service/agent-context/sdd/indexing.md#전환복귀-경계)를 따르십시오.
 
 ### 색인 작업자 분리 실행
 
-기본 `INDEX_WORKER_PLACEMENT=embedded`에서는 서버 안의 작업자가 큐를 소비합니다. 호스트에서 분리하려면 같은 DB·제공자·대상 계층 구성과 환경 변수를 준비한 두 터미널에서 각각 실행합니다.
+기본값 `INDEX_WORKER_PLACEMENT=embedded`에서는 서버 안의 작업자가 큐를 소비합니다. 분리하려면 같은 DB·제공자·대상 계층 구성의 환경 변수를 준비한 두 터미널에서 각각 실행합니다.
 
 ```sh
 # 서버 터미널
@@ -138,34 +149,126 @@ INDEX_WORKER_PLACEMENT=external go run ./cmd/server
 INDEX_WORKER_PLACEMENT=external go run ./cmd/indexer
 ```
 
-`cmd/indexer`는 서버와 같은 배포 구성을 검증하고 HTTP 수신기와 주기 작업 없이 색인만 실행합니다. 별도 바이너리는 `go build -o indexer ./cmd/indexer`로 만듭니다. 서버 컨테이너 이미지의 기본 실행은 `server`이며 위 분리 실행 절차는 호스트 실행 기준입니다.
+- `cmd/indexer`는 서버와 같은 배포 구성을 검증하고 HTTP 수신기와 주기 작업 없이 색인만 실행합니다. 별도 바이너리는 `go build -o indexer ./cmd/indexer`로 만듭니다.
+- 처리 후 1초를 기다리고, 빈 회차가 이어지면 2·4·8·16·30초로 간격을 늘립니다.
+- SIGINT·SIGTERM은 제공자 호출과 소비 루프를 취소하고 최대 10초의 작업자 정리 뒤 연결 풀을 닫습니다. 중단한 작업은 DB에 리스로 남아 만료 뒤 다시 확보됩니다.
+- 서버 컨테이너 이미지의 기본 실행은 `server`이며 이 절차는 호스트 실행 기준입니다.
 
-처리 후에는 1초를 기다리고 빈 회차는 2·4·8·16·30초로 늘려 조회합니다. SIGINT·SIGTERM은 제공자 호출과 소비 루프를 취소하며 최대 10초의 작업자 정리 뒤 연결 풀을 닫습니다. 중단한 작업은 DB에 리스로 남아 만료 뒤 다시 확보됩니다.
+## 호스트 터널에 연결하는 컨테이너 서버
 
-### 3. 현재 제공 범위
+`cloudflared`와 Docker는 같은 호스트에서 실행합니다. `compose.dev.yaml`의 `server` 프로필은 DB 준비와 마이그레이션 완료 뒤 서버를 기동하고 `127.0.0.1:80`을 컨테이너의 HTTP 8080에 연결합니다.
 
-OAuth 발견 메타데이터, `/authorize`의 로그인·동의·PKCE S256, `/token`의 최초 교환·갱신 회전, Bearer 보호 `/mcp`와 등록·읽기·쓰기 14종을 서버 기동 경로에 연결했습니다. 전체 도구·오류·부분 응답은 [MCP-09](spec/service/agent-context/reviews/2026-10-24-mcp-09.md), 선정 CLI의 직접 연결은 [TEST-08](spec/service/agent-context/reviews/2026-10-27-test-08-completion.md), 최신 전체 회귀는 [TEST-09](spec/service/agent-context/reviews/2026-10-28-test-09.md)를 따릅니다.
+- 터널의 원본 주소는 `http://localhost:80`으로 지정합니다.
+- Docker Compose 2.33.1 이상을 사용하고 호스트의 80번 포트와 `10.204.0.0/24` 네트워크가 비어 있는지 확인합니다.
+- 개발용 `.env`에 Gemini API 키 등 기존 구성을 채우고, issuer·MCP 주소를 실제 터널 도메인의 HTTPS 주소로 바꿉니다.
 
-로그인 후 `/connections`에서 본인 OAuth 계열·활성 등록 목록과 폐기를 처리합니다. 계열 폐기는 접근·갱신을 차단하고 웹 세션을 유지하며 등록 폐기는 기존 기여·감사를 보존합니다. [현재 도구 스냅숏](internal/mcp/testdata/tools.json)은 protocol revision·instructions·14종 설명/입력 스키마/annotations를 담으며 `go test ./internal/mcp -run '^TestOPS08ToolSnapshot$'`로 대조합니다. 계약 변경을 검토한 경우에만 `UPDATE_TOOL_SNAPSHOT=1`을 함께 지정하여 갱신하고 diff를 검토합니다.
+```dotenv
+AUTHORIZATION_SERVER_URL=https://agent-context.example.com
+MCP_RESOURCE_URL=https://agent-context.example.com/mcp
+MCP_ALLOWED_ORIGINS=https://agent-context.example.com
+```
 
-그래프·권한/팀·삭제/복구·감사·연결 화면과 계층/상태·근거 시각화를 제공합니다. 실제 Chrome·자동 키보드·접근성 트리와 사용자의 화면 확인은 [TEST-06](spec/service/agent-context/reviews/2026-10-28-test-06-completion.md) 범위로 인수했습니다. 추가 수동 키보드·실제 VoiceOver는 사용자 요청으로 제외한 미실행이며, 다른 Safari 조합의 통과를 추정하지 않습니다.
+```sh
+docker compose -f compose.dev.yaml --profile server up -d --build --wait
+curl --fail --show-error http://localhost:80/healthz
+curl --fail --show-error http://localhost:80/readyz
+curl --fail --show-error --output /dev/null https://agent-context.example.com/login
+```
 
-여섯 진단 파일의 상관·보존·상한·누락과 실제 macOS/Linux 파일·볼륨 보존은 [OBS-08](spec/service/agent-context/reviews/2026-10-23-obs-08.md)·[TEST-09](spec/service/agent-context/reviews/2026-10-28-test-09.md)를 따릅니다. 평가 실행기는 공개 입력 준비·통제 비교·비용/실패/보류 보고를 제공하며 실제 공개 품질·외부 업무 효과·유료 총비용은 별도 실증 대기입니다.
+세 요청 모두 `200`이 기대 결과입니다. 로컬 HTTP로 `/login`에 직접 접속하면 HTTPS 전달 헤더가 없으므로 `400 https_required`가 정상입니다.
 
-전환과 복귀는 [운영 절차](OPERATIONS.md#7-변경-및-복귀)를 따릅니다. `GO_BINARY=/path/to/go1.27.3/bin/go sh test-transition.sh`는 합성 이전 스키마의 정지·백업·새 번호 적용·전체 감사·준비 확인과 실패 파일 롤백·별도 볼륨/보관 이미지 복귀를 검증합니다. 실제 운영 배포와 공개 HTTPS/Tunnel의 인수 범위는 별도로 확인합니다.
+서버는 호스트 접속 경로 `10.204.0.1/32`에서 온 단일 HTTPS 전달 헤더만 신뢰합니다. 터널이 전달하는 원본 HTTP는 호스트 내부에 한정되며, 호스트 접근 권한도 신뢰 경계에 포함됩니다. `cloudflared`는 이 Compose 파일이 관리하지 않습니다.
+
+이 구성은 개발용 DB 자격 증명과 WAL 자동 정리를 사용합니다. 운영 데이터에는 `compose.prod.yaml`과 [운영 매뉴얼](OPERATIONS.md)의 백업·적용 절차를 사용합니다.
+
+## 클라이언트 연결
+
+MCP 클라이언트는 `<공개 주소>/mcp`에 Streamable HTTP로 연결하고 OAuth로 인가받습니다. 서버는 **공개 클라이언트 사전 등록만** 지원하며 동적 등록(DCR)과 Client ID Metadata Documents는 지원하지 않습니다. 따라서 client ID는 서버가 발급하거나 클라이언트에서 조회하는 값이 아닙니다. 운영자가 정한 문자열을 서버와 클라이언트 양쪽에 같은 값으로 지정합니다.
+
+| 클라이언트 | callback | 상태 |
+|---|---|---|
+| Codex CLI | `http://127.0.0.1:49152/callback` | macOS 0.160.1 exec·파일 자격 저장 구성을 인수했습니다. |
+| Claude 앱(웹·Desktop) | `https://claude.ai/api/mcp/auth_callback` | 등록할 수 있으나 상호운용 인수는 하지 않았습니다. |
+| Claude Code | `http://localhost:PORT/callback` | 현재 연결할 수 없습니다. [#300](https://github.com/Alpha-gone/agent-context-sharing/issues/300)에서 다룹니다. |
+
+### 1. 서버에 client 등록
+
+`OAUTH_CLIENT_REGISTRATIONS`는 client ID를 키로 하는 한 줄 JSON입니다. 다음은 Codex CLI와 Claude 앱을 함께 등록하는 예시입니다.
+
+```dotenv
+OAUTH_CLIENT_REGISTRATIONS='{"codex-cli":{"redirect_uris":["http://127.0.0.1:49152/callback"],"resources":["https://agent-context.example.com/mcp"],"loopback_port_policy":"exact"},"claude-web":{"redirect_uris":["https://claude.ai/api/mcp/auth_callback"],"resources":["https://agent-context.example.com/mcp"]}}'
+```
+
+- `resources`의 값은 `MCP_RESOURCE_URL`과 정확히 같아야 합니다.
+- HTTPS callback은 완전 일치로 대조합니다.
+- HTTP callback은 포트를 명시한 literal loopback IP(`127.0.0.1` 등)만 허용합니다. `localhost`나 다른 호스트의 HTTP 주소가 있으면 서버가 기동하지 않습니다.
+- `loopback_port_policy`는 생략하면 `same_ip`(같은 IP·경로에서 포트만 다를 수 있음)이고, `exact`는 포트까지 일치시킵니다. Codex 고정 callback에는 `exact`를 사용합니다.
+
+등록을 바꾼 뒤에는 서버를 다시 기동합니다. 운영 Compose에서는 다음 명령을 사용합니다.
+
+```sh
+docker compose -f compose.prod.yaml up -d --no-deps --force-recreate --wait server
+```
+
+### 2. Codex CLI
+
+`~/.codex/config.toml`에 다음을 추가합니다. 최상위 두 키는 다른 테이블보다 앞에 둡니다. `client_id`는 서버에 등록한 값과 같아야 합니다.
+
+```toml
+features.mcp_2026_07_28 = true
+mcp_oauth_credentials_store = "file"
+
+[mcp_servers.agent-context]
+url = "https://agent-context.example.com/mcp"
+scopes = ["agent-context"]
+
+[mcp_servers.agent-context.oauth]
+client_id = "codex-cli"
+callback_url = "http://127.0.0.1:49152/callback"
+callback_port = 49152
+```
+
+```sh
+codex mcp login agent-context
+```
+
+브라우저에서 서버에 로그인하거나 가입한 뒤 동의하면 자격이 저장됩니다. 브라우저를 열 수 없는 환경에서는 `--no-browser`를 붙여 출력된 주소로 진행합니다. 로컬 개발 서버처럼 사설 CA 인증서를 쓰는 경우, 인수 시험에서는 `CODEX_CA_CERTIFICATE`로 CA를 지정했습니다.
+
+위 설정은 인수한 구성의 MCP 관련 항목입니다. keyring 저장, TUI, 앱·IDE와 다른 판은 인수하지 않았습니다.
+
+### 3. Claude 앱(웹·Desktop)
+
+1. 서버에 `https://claude.ai/api/mcp/auth_callback`을 callback으로 하는 client를 등록하고 서버를 다시 기동합니다.
+2. Claude 설정 → 커넥터 → **사용자 지정 커넥터 추가**를 엽니다.
+3. URL에 `https://<공개 주소>/mcp`를 입력합니다.
+4. OAuth 클라이언트 선택(Advanced settings 또는 두 번째 단계)에서 직접 지정한 client ID를 고르고 등록한 ID를 입력합니다. Client Secret은 비워 둡니다.
+5. 연결하면 브라우저에서 서버 로그인·동의를 진행합니다.
+
+이 방식은 Anthropic 서버가 공개 주소로 요청을 보내므로 `localhost` 개발 서버에는 연결할 수 없습니다. Cloudflare의 봇 방어나 WAF가 이 요청을 막을 수 있으니 첫 연결 때 서버 로그를 함께 확인하십시오. 대화 상자 구성은 [Claude 공식 안내](https://claude.com/docs/connectors/custom/add-unlisted)를 기준으로 확인합니다.
+
+### 4. 연결 뒤 사용과 관리
+
+- 에이전트는 노드·관계를 쓰기 전에 `agent_register`로 `agent_id`를 받아 후속 쓰기에 전달합니다. 서버의 instructions가 이 순서를 안내하며, 14종 도구의 설명과 입력 스키마는 [도구 스냅숏](internal/mcp/testdata/tools.json)에 있습니다.
+- 웹 `/connections`에서 본인의 OAuth 연결과 활성 등록을 확인하고 폐기합니다. 연결을 폐기하면 접근·갱신 토큰이 차단되고 웹 세션은 유지됩니다. 등록을 폐기해도 기존 기여와 감사 기록은 보존됩니다.
+- 클라이언트에서 로컬 연결만 삭제하면 서버 자격은 폐기되지 않습니다.
 
 ## 개발 환경 재생성
 
-개발 환경을 처음부터 만들 때는 기존 개발 볼륨을 제거한 뒤 기동합니다. 이 절차는 개발 DB와 WAL 데이터를 삭제하므로 보존할 데이터가 없는 개발 환경에 적용합니다. 마이그레이션을 승인된 개발 통합 예외로 `001_init.sql`에 합쳐 checksum이 달라진 경우에도 이전 개발·시험 DB를 재생성합니다. 적용 조건은 [마이그레이션 계약](migrations/AGENTS.md)을 따릅니다.
+개발 환경을 처음부터 만들 때는 기존 개발 볼륨을 제거한 뒤 기동합니다.
+
+> [!CAUTION]
+> 이 절차는 개발 DB와 WAL 데이터를 삭제합니다. 보존할 데이터가 없는 개발 환경에만 적용하고, 운영 환경에서는 `down -v`를 실행하지 마십시오.
 
 ```sh
 docker compose -f compose.dev.yaml down -v
 docker compose -f compose.dev.yaml up -d --wait
 ```
 
-재생성 뒤에는 위 기동 절차의 마이그레이션을 적용합니다.
+재생성 뒤에는 [DB와 서버 기동](#2-db와-서버-기동)의 마이그레이션을 적용합니다. 마이그레이션을 승인된 개발 통합 예외로 `001_init.sql`에 합쳐 checksum이 달라진 경우에도 이전 개발·시험 DB를 재생성합니다. 적용 조건은 [마이그레이션 계약](migrations/AGENTS.md)을 따릅니다.
 
 ## 검증
+
+### 기본 검증
 
 DB 통합 검증은 운영 데이터가 없는 전용 개발·시험 DB에서 실행합니다. `.env.example`의 `TEST_DATABASE_URL`과 `TEST_DATABASE_REQUIRED=1`을 내보낸 상태에서 진행하십시오. 서명 키 통합 시험은 임시 DB를 만들므로 시험 계정에 DB 생성 권한이 필요합니다.
 
@@ -178,43 +281,75 @@ sh ./test-dev-compose.sh
 sh ./test-prod-compose.sh
 ```
 
-`TEST_DATABASE_URL`이 없고 필수 설정도 없으면 DB 통합 시험은 건너뜁니다. 이를 통합 검증 성공으로 간주하지 않습니다. `gofmt -l .`의 정상 결과는 출력이 없는 상태입니다.
+- `gofmt -l .`은 출력이 없어야 정상입니다.
+- `TEST_DATABASE_URL`도 필수 설정도 없으면 DB 통합 시험은 건너뜁니다. 이를 통합 검증 성공으로 간주하지 않습니다.
 
-별도 격리 환경을 만드는 검증은 다음과 같습니다. 이미지 빌드·컨테이너 기동과 실행 시간이 필요하므로 선택하여 실행합니다. 개발 Compose 실행 검사는 DB·WAL 정리만 기동하며 외부 API를 호출하지 않습니다. 기존 `.env`·DB·볼륨을 사용하지 않고 별도 프로젝트의 합성 자격·임시 loopback 포트·새 볼륨을 사용합니다. 두 DB 서비스 이미지를 캐시 없이 빌드한 뒤 PostgreSQL 주 판·AGE/pgvector 설치 판·벡터/그래프 SQL·WAL 경로 권한을 확인하고, 시험 컨테이너·볼륨·네트워크를 정리합니다. 서버 이미지·실제 Tunnel 연결과 WAL 보관/시점 복구는 각각 별도 인수 범위입니다.
+### 격리 환경 검증
 
-```sh
-sh ./test-dev-compose.sh --runtime
-sh ./test-wal-archive.sh
-```
+이미지 빌드·컨테이너 기동과 실행 시간이 필요하므로 필요할 때 선택해 실행합니다. 모두 기존 `.env`·DB·볼륨을 사용하지 않고, 자신이 만든 시험 자원만 정리합니다.
 
-실제 CLI의 1시간 접근 만료 시험은 `codex_expiry_live` 태그와 `-timeout=75m`으로 별도 실행합니다. `TEST_DATABASE_URL`·`TEST_DATABASE_REQUIRED=1`·정확한 CLI 0.160.1의 `TEST_CODEX_BINARY`·`TEST_CODEX_REQUIRED=1`이 필요합니다. 자격과 시계를 수정하지 않으며 상세 명령은 [TEST-08 인수](spec/service/agent-context/reviews/2026-10-27-test-08-completion.md)를 따릅니다. 제공자 503·검색/진단 장애·DB 중단과 작업자 취소를 조합하는 `operations_runtime` 시험은 약 3분의 자연 백오프·리스 만료를 포함하므로 `-timeout=420s`로 실행합니다. 시험은 전용 합성 컨테이너의 ID·소유 라벨·고정 loopback 포트를 검증하며 [OPS-09 실행 범위](spec/service/agent-context/reviews/2026-10-27-ops-09.md)를 따릅니다.
+| 명령 | 검증 내용 |
+|---|---|
+| `sh ./test-dev-compose.sh --runtime` | 개발 DB 이미지를 캐시 없이 빌드하고 PostgreSQL 주 판·AGE/pgvector 판·벡터/그래프 SQL·WAL 경로 권한을 확인합니다. 외부 API는 호출하지 않습니다. |
+| `sh ./test-wal-archive.sh` | 개발 WAL 보관 회귀 |
+| `sh ./test-prod-runtime.sh` | 운영 예시 구성의 격리 기동·진단 볼륨 보존 |
+| `GO_BINARY=… sh ./test-pitr.sh` | 물리 백업·tablespace·시점 복구 |
+| `GO_BINARY=… sh ./test-transition.sh` | 합성 이전 스키마의 정지·백업·적용·감사와 실패 롤백·별도 볼륨/보관 이미지 복귀. 절차는 [운영 매뉴얼](OPERATIONS.md#7-변경-및-복귀)을 따릅니다. |
+| `sh internal/diagnostic/test-linux.sh` | Linux 격리 환경의 진단 기록기 파일·볼륨 인수. `ACS_OBS08_IMAGE`로 설치된 이미지를 지정할 수 있습니다. |
 
-별도 수동 재검증이 필요할 때 사용할 서버는 새 합성 DB에서 `TEST_DATABASE_REQUIRED=1 WEB_MANUAL_WAIT=15m go test -tags browser_manual -race -count=1 -v -run '^TestTEST06ManualBrowserFixture$' -timeout=20m ./internal/web`로 준비합니다. `TEST_DATABASE_URL`을 함께 지정합니다. 로그의 URL·비공개 connection.json 경로로 접속하며, 최대 15분 또는 같은 디렉터리의 STOP 파일로 종료합니다. 이 시험의 통과는 TLS 서버·표본 준비만 의미합니다. 현재 인수에서 사용자가 제외한 추가 수동 키보드·실제 VoiceOver를 재실행하는 필수 단계는 아닙니다. 실제 브라우저 권한·시험 인증서 처리·음성 관찰은 [수동 인수 절차](spec/service/agent-context/reviews/2026-10-28-test-06-manual.md)를 따릅니다.
+macOS의 진단 기록기 인수는 `go test -race -count=1 -skip '^TestOBS08ContainerPersistence$' ./internal/diagnostic`로 실행합니다. 상세 범위와 제한은 [OBS-08 검토](spec/service/agent-context/reviews/2026-10-23-obs-08.md)를 따릅니다.
 
-기록기 분야 인수는 macOS에서 `go test -race -count=1 -skip '^TestOBS08ContainerPersistence$' ./internal/diagnostic`, Linux 격리 환경에서는 `sh internal/diagnostic/test-linux.sh`로 실행합니다. Linux 스크립트는 기존 로컬 이미지 ID를 고정하며 `ACS_OBS08_IMAGE`로 이미 설치된 Linux arm64/amd64 이미지를 지정할 수 있습니다. Go 1.27.3과 Docker가 필요하고 이미지 다운로드·DB·네트워크는 사용하지 않습니다. 전용 볼륨에서 전체 파일·커널 쓰기 오류·컨테이너 재생성·슬롯 교체를 검증하고 자신이 만든 자원만 정리합니다. 결과 JSON·stderr는 출력한 임시 결과 경로에 남습니다. 상세 범위와 디스크 부족 주입의 제한은 [OBS-08 검토](spec/service/agent-context/reviews/2026-10-23-obs-08.md)를 따릅니다.
+### 별도 조건 시험
 
-그래프 불변식 감사는 `go run ./cmd/audit`, 검색 품질 평가는 `cmd/eval`이 담당합니다. 평가 표본과 실행 방법은 [테스트 설계](spec/service/agent-context/sdd/testing.md)와 [평가 검증 설계](spec/service/agent-context/sdd/evaluation.md#검증을-가능하게-하는-설계)를 확인하십시오.
+| 시험 | 조건과 기준 문서 |
+|---|---|
+| 실제 Codex CLI 1시간 접근 만료 | `codex_expiry_live` 태그, `-timeout=75m`, `TEST_CODEX_BINARY`(정확한 CLI 0.160.1)·`TEST_CODEX_REQUIRED=1`. [TEST-08 인수](spec/service/agent-context/reviews/2026-10-27-test-08-completion.md) |
+| 조합 장애 회복(`operations_runtime`) | 약 3분의 자연 백오프·리스 만료를 포함하므로 `-timeout=420s`. [OPS-09 실행 범위](spec/service/agent-context/reviews/2026-10-27-ops-09.md) |
+| 실제 Gemini 전송 | `embedding_live` 태그. 외부 전송·비용 허용과 키 주입이 필요합니다. 기본 회귀는 로컬 TLS 합성 제공자를 사용합니다. [임베딩 실연결 시험 경계](spec/service/agent-context/sdd/testing.md#임베딩-제공자-실연결-테스트) |
+| 수동 브라우저 재검증 | `TEST_DATABASE_REQUIRED=1 WEB_MANUAL_WAIT=15m go test -tags browser_manual -race -count=1 -v -run '^TestTEST06ManualBrowserFixture$' -timeout=20m ./internal/web`. [수동 인수 절차](spec/service/agent-context/reviews/2026-10-28-test-06-manual.md) |
 
-색인 시험은 기본 회귀에서 로컬 TLS 합성 제공자를 사용합니다. 실제 Gemini 전송은 `embedding_live` 태그의 별도 시험이며, 외부 전송·비용 허용과 키 주입이 필요합니다. 두 경로의 호출 상한·격리 DB·실행 조건은 [임베딩 실연결 시험 경계](spec/service/agent-context/sdd/testing.md#임베딩-제공자-실연결-테스트)를 따릅니다.
+위 시험은 모두 `TEST_DATABASE_URL`·`TEST_DATABASE_REQUIRED=1`을 함께 지정합니다. 수동 브라우저 서버는 로그에 출력된 URL과 비공개 `connection.json` 경로로 접속하며, 최대 15분이 지나거나 같은 디렉터리에 STOP 파일을 만들면 종료합니다. 이 시험의 통과는 TLS 서버·표본 준비만 의미합니다.
+
+### 도구 스냅숏, 감사와 평가
+
+- MCP 도구 계약은 `go test ./internal/mcp -run '^TestOPS08ToolSnapshot$'`로 [도구 스냅숏](internal/mcp/testdata/tools.json)과 대조합니다. 계약 변경을 검토한 경우에만 `UPDATE_TOOL_SNAPSHOT=1`로 갱신하고 diff를 검토합니다.
+- 그래프 불변식 감사는 `go run ./cmd/audit`로 실행합니다.
+- 검색 품질 평가는 `cmd/eval`이 담당합니다. 표본과 실행 방법은 [테스트 설계](spec/service/agent-context/sdd/testing.md)와 [평가 검증 설계](spec/service/agent-context/sdd/evaluation.md#검증을-가능하게-하는-설계)를 확인하십시오.
 
 ## 문서와 저장소 구조
 
+| 경로 | 내용 |
+|---|---|
+| `cmd/` | 서버·마이그레이션·감사·색인·평가 실행기 |
+| `internal/` | 서버 구현 |
+| `migrations/` | 스키마 SQL과 [마이그레이션 계약](migrations/AGENTS.md) |
+| `spec/` | 요구사항·설계와 프로젝트 용어 |
+
 - [운영 매뉴얼](OPERATIONS.md): 시험 운영 배포, 점검, 백업·복구, 변경과 종료
 - [서비스 목록 및 현황](spec/service/README.md): 서비스별 요구사항·설계 진입점
-- [용어 정리집](spec/DICTIONARY.md): 프로젝트 용어의 기준
 - [서버 요구사항](spec/service/agent-context/SRS.md) / [설계](spec/service/agent-context/SDD.md)
+- [용어 정리집](spec/DICTIONARY.md): 프로젝트 용어의 기준
 - [개발 설정 예시](.env.example) / [운영 설정 예시](.env.prod.example)
-- [마이그레이션 계약](migrations/AGENTS.md): 적용 이력과 임베딩 스키마 전환
 - [작업 계약](AGENTS.md): 변경 시 따라야 할 DOX 계층과 검증 기준
-
-`cmd/`에는 서버·마이그레이션·감사·평가 실행기가, `internal/`에는 서버 구현이, `migrations/`에는 스키마가 있습니다. `spec/`은 요구사항·설계와 프로젝트 용어를 소유합니다.
 
 ## 검증 현황
 
-[TRACE-05 최종 문서 점검](spec/service/agent-context/reviews/2026-10-29-trace-05.md)까지 완료해 신규 개발 계획의 124개 작업을 마쳤습니다. 미착수 계획 작업은 없으며 실제 외부 효과·지원 확대·운영 공개는 아래의 별도 인수 범위로 유지합니다.
+신규 개발 계획의 124개 작업을 [TRACE-05 최종 문서 점검](spec/service/agent-context/reviews/2026-10-29-trace-05.md)까지 마쳤습니다. 현재 작업 상태는 [개발 계획](spec/service/agent-context/DEVELOPMENT_PLAN.md)에서 확인합니다.
 
-[TEST-09 최종 종합 인수](spec/service/agent-context/reviews/2026-10-28-test-09.md)는 같은 접속 정보의 필수 DB·race 전체 두 회차를 각각 6,422건(최상위 1,146건) 통과하고 기준 계정·서명 키·스키마 이력을 보존했습니다. 일반 단계에서 건너뛴 전용 복구·이행 2건은 소유 스크립트에서 실제 통과했습니다. 격리 WAL·물리 복구·이행/복귀·Linux 파일·조합 장애 회복도 범위를 나눠 인수했습니다.
+| 범위 | 결과 |
+|---|---|
+| 종합 회귀 | [TEST-09](spec/service/agent-context/reviews/2026-10-28-test-09.md): 필수 DB·race 전체 두 회차를 각각 6,422건(최상위 1,146건) 통과했습니다. 격리 WAL·물리 복구·이행/복귀·Linux 파일·조합 장애 회복도 범위를 나눠 인수했습니다. |
+| MCP 도구 | [MCP-09](spec/service/agent-context/reviews/2026-10-24-mcp-09.md): 14종 도구·오류·부분 응답 |
+| 실제 호스트 | [TEST-08](spec/service/agent-context/reviews/2026-10-27-test-08-completion.md): macOS Codex CLI 0.160.1 exec·`features.mcp_2026_07_28=true`·파일 자격 저장 구성 |
+| 웹 화면 | [TEST-06](spec/service/agent-context/reviews/2026-10-28-test-06-completion.md): 실제 Chrome·자동 키보드·접근성 트리와 사용자 화면 확인 |
+| 진단 기록 | [OBS-08](spec/service/agent-context/reviews/2026-10-23-obs-08.md): 여섯 진단 파일과 macOS/Linux 파일·볼륨 보존 |
+| 추적 | [TRACE-04](spec/service/agent-context/reviews/2026-10-29-trace-04.md): 요구사항 184건·작업 124개의 근거 연결 |
 
-[TRACE-04 실행 근거](spec/service/agent-context/reviews/2026-10-29-trace-04.md)는 요구사항 184건·작업 124개의 개별 근거와 코드/서버 계약·선정 호스트·실제 파일·정량 효과·운영 판정을 연결합니다. 현재 작업 상태는 [개발 계획](spec/service/agent-context/DEVELOPMENT_PLAN.md)에서 확인합니다. 단계별 명령·표본·실패/수정·당시 완료 수는 [검토 기록](spec/service/agent-context/reviews/)과 [요청 기록](spec/service/agent-context/logs/prompt.md)에 보존합니다.
+다음은 아직 인수하지 않았으며 완료 수로 대체하지 않습니다.
 
-실제 호스트 지원은 macOS Codex CLI 0.160.1 exec·`features.mcp_2026_07_28=true`·파일 자격 저장 구성에 한정합니다. keyring·TUI·앱/IDE·다른 호스트/판은 미인수입니다. 실제 Gemini·공개 데이터 전체 효과·외부 과업/청구·운영 공개·Tunnel 인수와 사용자 제외 수동 관찰은 완료 수로 대체하지 않습니다.
+- Codex keyring·TUI·앱/IDE, Claude 앱 등 다른 호스트와 판
+- 실제 Gemini 품질·청구, 공개 데이터 전체 효과와 외부 과업 효과
+- 운영 공개와 실제 Tunnel 인수
+- 사용자가 제외한 추가 수동 키보드·실제 VoiceOver 관찰
+
+단계별 명령·표본·실패/수정 내역은 [검토 기록](spec/service/agent-context/reviews/)과 [요청 기록](spec/service/agent-context/logs/prompt.md)에 보존합니다.

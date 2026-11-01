@@ -298,7 +298,7 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 
 등록 JSON은 `client_id`를 키로 하는 비어 있지 않은 객체다. 각 값은 `redirect_uris`와 `resources`의 비어 있지 않은 문자열 배열, 선택 `loopback_port_policy`만 받는다. ID는 비어 있거나 공백·제어 문자를 포함할 수 없고 원문을 보존한다. 중복 JSON 이름·알 수 없는 필드·`null`·중복 배열 원소를 거부한다. callback은 fragment·userinfo 없는 절대 HTTPS URI 또는 명시적 유효 포트를 가진 literal loopback IP의 HTTP URI다. `localhost`·비루프백 HTTP·zone 주소는 허용하지 않는다. `resources`의 모든 URI는 이 서버의 `MCP_RESOURCE_URL`과 정확히 같아야 한다.
 
-`loopback_port_policy`는 생략 시 `same_ip`이며 명시 값은 `same_ip`·`exact`만 허용한다. `same_ip`는 등록한 HTTP loopback callback의 IP·경로·query를 유지하고 포트만 달라질 수 있다는 조립 입력이다. HTTPS callback은 항상 완전 일치다. 첫 Codex 시험 등록에는 `exact`를 명시한다. 이 정책은 등록 데이터로 전달하며 호스트 이름에 따른 코드 분기를 만들지 않는다. 예시는 합성 client ID이며 실제 호스트에서 확인한 ID로 교체한다.
+`loopback_port_policy`는 생략 시 `same_ip`이며 명시 값은 `same_ip`·`exact`만 허용한다. `same_ip`는 등록한 HTTP loopback callback의 IP·경로·query를 유지하고 포트만 달라질 수 있다는 조립 입력이다. HTTPS callback은 항상 완전 일치다. 첫 Codex 시험 등록에는 `exact`를 명시한다. 이 정책은 등록 데이터로 전달하며 호스트 이름에 따른 코드 분기를 만들지 않는다. 사전 등록만 지원하므로 서버가 client ID를 발급하거나 호스트에서 조회하지 않는다. 예시는 합성 client ID이며 운영자가 정한 ID로 교체하고 대상 호스트의 클라이언트 설정에 같은 값을 지정한다.
 
 ```json
 {"codex-cli-first-test":{"redirect_uris":["http://127.0.0.1:49152/callback"],"resources":["https://agent-context.example.com/mcp"],"loopback_port_policy":"exact"}}

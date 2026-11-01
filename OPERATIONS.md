@@ -50,7 +50,7 @@ chmod 600 .env
 - `GEMINI_API_KEY`: 실제 키를 지정합니다. `EMBEDDING_PROVIDER=gemini`, 모델·타입·차원은 우선 운영 예시를 유지합니다.
 - `AUTHORIZATION_SERVER_URL=https://agent-context.example.com`
 - `MCP_RESOURCE_URL=https://agent-context.example.com/mcp`, `MCP_ALLOWED_ORIGINS=https://agent-context.example.com`: 실제 공개 주소를 사용합니다. 리소스와 issuer는 독립된 HTTPS 식별자입니다.
-- `OAUTH_CLIENT_REGISTRATIONS`: 예시의 합성 client ID를 실제 호스트에서 확인한 공개 ID로 바꾸고 callback·resource를 [등록 계약](spec/service/agent-context/sdd/operations.md#목표-추가-구성)에 맞춥니다. 첫 Codex 시험은 고정 `49152` callback과 `loopback_port_policy=exact`를 사용합니다.
+- `OAUTH_CLIENT_REGISTRATIONS`: 서버는 사전 등록만 지원하므로 공개 client ID는 서버가 발급하거나 호스트에서 조회하는 값이 아니라 운영자가 정하는 문자열입니다. 예시의 합성 ID 대신 운영용 ID를 정하고 참여자 호스트의 클라이언트 설정에 같은 값을 지정합니다. Codex는 서버별 `oauth.client_id`를 사용합니다. callback·resource는 [등록 계약](spec/service/agent-context/sdd/operations.md#목표-추가-구성)에 맞춥니다. 첫 Codex 시험은 고정 `49152` callback과 `loopback_port_policy=exact`를 사용합니다.
 - `DIAGNOSTIC_INSTANCE_ID`: 운영 Compose에 필수인 안정적인 슬롯별 고유 ID입니다. `server-1`처럼 재시작에도 같은 값을 유지하고 동시 서버가 같은 슬롯을 공유하지 않게 합니다. Compose는 `DIAGNOSTIC_LOG_DIR=/var/log/agent-context`를 고정하고 `diagnostic_logs` 볼륨을 연결합니다. 수준 기본값은 `INFO`입니다.
 - `HTTP_PORT=80`: 커넥터의 원본 URL `http://localhost:80`과 맞춥니다. 기존 설정의 `8080` 또는 `443`을 그대로 두지 않습니다. 포트를 재정의하면 커넥터의 원본 URL도 함께 바꿉니다.
 
@@ -129,7 +129,7 @@ curl --fail --show-error --output /dev/null https://agent-context.example.com/lo
 
 ## 4. 참여자 연결과 개방 확인
 
-웹 로그인·관리 화면과 본인 연결 목록·폐기, OAuth 발견·인가·코드 교환·갱신, Bearer로 보호하는 `/mcp`와 14종 처리가 구현되어 있습니다. HTTPS `/login`과 시험 계정의 권한 범위를 점검합니다. 실제 호스트 호환성·브라우저 전체·운영 장애 인수는 아직 완료되지 않았으므로 서버 구현만으로 특정 호스트의 연결 지원을 선언하지 않습니다.
+웹 로그인·관리 화면과 본인 연결 목록·폐기, OAuth 발견·인가·코드 교환·갱신, Bearer로 보호하는 `/mcp`와 14종 처리가 구현되어 있습니다. HTTPS `/login`과 시험 계정의 권한 범위를 점검합니다. 참여자 클라이언트의 등록·설정 방법은 [README의 클라이언트 연결](README.md#클라이언트-연결)을 따릅니다. 실제 호스트 호환성·브라우저 전체·운영 장애 인수는 아직 완료되지 않았으므로 서버 구현만으로 특정 호스트의 연결 지원을 선언하지 않습니다.
 
 [도구 목록 스냅샷](internal/mcp/testdata/tools.json)은 protocol revision·공통 instructions·14종의 설명·입력 스키마·annotations를 담습니다. 등록은 `agent_register`, 읽기는 `graph_list`·`graph_get`·`node_get`·`context_flow_get`·`relation_list`, 쓰기는 `graph_create`·`graph_update`·`node_create`·`node_update`·`node_discard`·`node_restore`·`relation_confirm`·`relation_discard`입니다. 본인 연결 폐기는 웹 `/connections`에서 처리하며 전용 클라이언트·독자 연결 엔드포인트를 추가하지 않습니다. 도구 성공·도메인 실패·부분 결과와 실제 호스트 전체 계약은 MCP-09·TEST-07/08의 인수 범위입니다.
 

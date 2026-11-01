@@ -216,3 +216,28 @@ func TestManifestTrialDecisionGuards(t *testing.T) {
 		t.Fatal("독립 표본 부족 채택")
 	}
 }
+
+func TestManifestTrialConsistencyLoadFailureNotAccepted(t *testing.T) {
+	m, _, _ := trialFixture(t, "lookup")
+	m.Provenance = "observed"
+	trial := manifestTrial{Manifest: m, Preparation: trialPreparation{Independent: 3}}
+	cost := trialCost{Total: businessCostTotal{Status: "measured"}}
+	report := &consistencyReport{
+		Equivalence: []equivalenceResult{{Variant: "read_committed/parallel"}, {Variant: "snapshot/parallel"}, {Variant: "revision/parallel"}},
+		Load: []loadResult{
+			{Variant: "read_committed/parallel", ChannelFailures: 2},
+			{Variant: "snapshot/parallel", Errors: 1},
+			{Variant: "revision/parallel"},
+		},
+	}
+	got := trial.decisions(report, cost)
+	for i, want := range []struct{ status, reason string }{
+		{"not_accepted", "concurrent_load_failures"},
+		{"not_accepted", "concurrent_load_failures"},
+		{"deferred", "resource_and_quality_acceptance_pending"},
+	} {
+		if got[i].Status != want.status || got[i].Reason != want.reason {
+			t.Fatalf("부하 단계 실패 판정 매핑: %+v", got)
+		}
+	}
+}

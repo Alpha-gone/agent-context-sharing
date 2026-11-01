@@ -242,7 +242,15 @@ func TestRelationQueryScopeIntegration(t *testing.T) {
 							}
 						case "cycle":
 							var found bool
-							found, err = database.hasConfirmedRelationPath(t.Context(), tx, graph, relation.Type, relation.FromContextID, relation.ToContextID)
+							if relation.Type == model.RelationTypeRelatesTo {
+								continue
+							}
+							var edges []auditEdge
+							edges, err = database.loadAcyclicEdges(t.Context(), tx, graph)
+							if err == nil {
+								label, _ := relationLabel(relation.Type)
+								found, err = memoryPaths(edges)(label, relation.FromContextID.String(), relation.ToContextID.String())
+							}
 							if !found {
 								t.Fatal("확정 경로 누락")
 							}

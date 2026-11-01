@@ -534,3 +534,10 @@
 
 - 조회일: 2026-11-01 KST. [Apache AGE 그래프 저장 구조](https://age.apache.org/age-manual/master/intro/graphs.html#how-graphs-are-stored-in-postgres)에서 그래프별 namespace·label별 정점/간선 테이블을 확인했다. 적용 구성인 AGE release_PG18_1.8.0·PostgreSQL 18의 실제 시험 DB에서 HAS_MEMBER.id와 시작/끝 정점을 직접 조회해 기존 구성원별 간선 ID의 유지를 대조했다. 시험 조회는 정식 쓰기 경로의 결과만 읽는다.
 - 구성원은 순서와 무관한 집합이라는 기존 수명주기 계약을 재사용했다. 활성 검증·쓰기 불변식 검사는 생략하지 않고 집합이 같은 경우의 간선 DELETE/CREATE만 생략한다. 전체 지연·dead tuple 감소량은 측정하지 않았다.
+
+
+## #262 관계 순환 조회의 ID 적재와 재사용
+
+- 조회일: 2026-11-01 KST. 적용 판 [pgx v5.12.0 Rows API](https://github.com/jackc/pgx/blob/v5.12.0/rows.go)의 Next·RawValues 계약을 로컬 모듈 캐시에서 확인했다. 계측 대역은 Next 성공 직후 현재 행의 RawValues 길이를 합산한다. 수치는 순환 관련 조회가 반환한 필드 바이트 합이며 PostgreSQL 메시지 헤더·TLS·확정 연산 전체의 네트워크 전송량은 포함하지 않는다.
+- [PostgreSQL 18 행 잠금](https://www.postgresql.org/docs/18/explicit-locking.html#LOCKING-ROWS)과 저장소의 그래프 행 잠금 계약을 기준으로 동일 확정 호출 안에서만 ID 집합을 재사용한다. 실제 저장 결과 간선을 추가하고 속성·격리·시간 검사는 쓰기 뒤 다시 읽는다. 다른 트랜잭션·그래프·요청의 캐시로 사용하지 않는다.
+- 기존 페이지 조회가 주변부 밖 같은 유형의 본문·속성까지 해석하던 동작은 순환 판정의 소유 범위가 아니다. 순환은 전체 ID 경로로, 속성·시간·격리는 [영향 주변부 쓰기 검사](sdd/data.md#그래프-불변식-규칙과-감사)로, 전체 그래프 점검은 기존 전체 감사로 판정한다. 같은 ID의 다른 정체성까지 수정하던 갱신은 실제 끝점 조건으로 제한해 지역 경로에 반영한 변경과 실제 쓰기가 일치하도록 했다.

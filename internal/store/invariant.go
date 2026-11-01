@@ -640,7 +640,11 @@ func (s *Store) AuditGraphIDs(ctx context.Context) ([]model.ID, error) {
 // checkWriteInvariants는 쓰기 트랜잭션이 커밋하기 전에 영향 주변부에 규칙 목록을 실행한다.
 // contextIDs는 쓰기가 만들거나 바꾼 컨텍스트와 바뀐 간선의 양 끝이다.
 func (s *Store) checkWriteInvariants(ctx context.Context, tx pgx.Tx, graphID model.ID, contextIDs []model.ID, expect EmbeddingExpectation) error {
-	violations, err := s.writeInvariantViolations(ctx, tx, graphID, contextIDs, expect)
+	return s.checkWriteInvariantsWithPaths(ctx, tx, graphID, contextIDs, expect, nil)
+}
+
+func (s *Store) checkWriteInvariantsWithPaths(ctx context.Context, tx pgx.Tx, graphID model.ID, contextIDs []model.ID, expect EmbeddingExpectation, paths func(label, from, to string) (bool, error)) error {
+	violations, err := s.writeInvariantViolationsWithPaths(ctx, tx, graphID, contextIDs, expect, paths)
 	if err != nil {
 		return err
 	}
@@ -653,23 +657,32 @@ func (s *Store) checkWriteInvariants(ctx context.Context, tx pgx.Tx, graphID mod
 
 // writeInvariantViolations는 영향 주변부의 위반을 모두 돌려준다.
 func (s *Store) writeInvariantViolations(ctx context.Context, tx pgx.Tx, graphID model.ID, contextIDs []model.ID, expect EmbeddingExpectation) ([]InvariantViolation, error) {
+	return s.writeInvariantViolationsWithPaths(ctx, tx, graphID, contextIDs, expect, nil)
+}
+
+// paths가 있으면 같은 그래프 잠금 아래 확정 쓰기를 반영한 지역 ID 집합이다.
+// 속성·격리·시간 등 나머지 규칙의 스냅숏은 실제 쓰기 뒤 다시 읽는다.
+func (s *Store) writeInvariantViolationsWithPaths(ctx context.Context, tx pgx.Tx, graphID model.ID, contextIDs []model.ID, expect EmbeddingExpectation, paths func(label, from, to string) (bool, error)) ([]InvariantViolation, error) {
 	snapshot, err := s.loadAuditSnapshot(ctx, tx, graphID, contextIDs, expect)
 	if err != nil {
 		return nil, err
 	}
 	// 순환은 영향 주변부 밖의 경로로도 닫히므로 그래프의 확정 순환 대상 간선을 처음 필요할
 	// 때 한 번 읽어 전체 감사와 같은 방식으로 답한다.
-	var paths func(label, from, to string) (bool, error)
-	snapshot.pathExists = func(label, from, to string) (bool, error) {
-		if paths == nil {
-			edges, err := s.loadAcyclicEdges(ctx, tx, graphID)
-			if err != nil {
-				return false, err
+	if paths == nil {
+		var loadedPaths func(label, from, to string) (bool, error)
+		paths = func(label, from, to string) (bool, error) {
+			if loadedPaths == nil {
+				edges, err := s.loadAcyclicEdges(ctx, tx, graphID)
+				if err != nil {
+					return false, err
+				}
+				loadedPaths = memoryPaths(edges)
 			}
-			paths = memoryPaths(edges)
+			return loadedPaths(label, from, to)
 		}
-		return paths(label, from, to)
 	}
+	snapshot.pathExists = paths
 	return runInvariantRules(snapshot)
 }
 

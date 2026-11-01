@@ -1,4 +1,4 @@
-name: Go static checks
+name: Go static and vulnerability checks
 
 on:
   pull_request:
@@ -20,5 +20,5 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: false
-      - name: Verify toolchain and build
+      - name: Verify toolchain, build and vulnerabilities
         run: sh ./check-go.sh

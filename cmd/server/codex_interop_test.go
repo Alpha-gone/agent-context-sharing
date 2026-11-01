@@ -247,8 +247,8 @@ func test08CLI(t *testing.T) string {
 		}
 		t.Skip("TEST_CODEX_BINARY가 없어 실제 Codex CLI 인수를 건너뜁니다")
 	}
-	if runtime.GOOS != "darwin" || runtime.Version() != "go1.27.1" {
-		t.Fatal("TEST-08 대상은 macOS·Go 1.27.1입니다")
+	if runtime.GOOS != "darwin" || runtime.Version() != "go1.27.3" {
+		t.Fatal("TEST-08 대상은 macOS·Go 1.27.3입니다")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()

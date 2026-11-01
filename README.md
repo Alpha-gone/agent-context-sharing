@@ -51,13 +51,13 @@ curl --fail --show-error --output /dev/null https://agent-context.example.com/lo
 
 ### 준비 사항
 
-- Go **1.27.1**
+- Go **1.27.3**
 - Docker와 Docker Compose: 설치된 판이 제공된 Compose 파일의 `config --quiet` 검사를 통과해야 합니다.
 - Gemini API 키: 아래 기본 구성에 필요합니다. 본문과 검색 질의가 외부 API로 전송되므로 이용 정책과 비용을 확인하십시오.
 - 브라우저가 신뢰하는 `localhost` TLS 인증서 및 개인 키
 - `curl`, 구성 검사에 사용하는 `jq`
 
-기본 셸에 Go가 없다면 IntelliJ IDEA에 등록된 Go 1.27.1 SDK의 통합 터미널이나 실행 구성을 사용합니다.
+기본 셸에 Go가 없다면 IntelliJ IDEA에 등록된 Go 1.27.3 SDK의 통합 터미널이나 실행 구성을 사용합니다.
 
 ### Go 도구 체인과 빌드 검사
 
@@ -66,10 +66,10 @@ curl --fail --show-error --output /dev/null https://agent-context.example.com/lo
 ```sh
 sh ./check-go.sh
 # 현재 macOS 개발 환경의 SDK를 직접 지정하는 예시
-GO_BINARY="$HOME/sdk/go1.27.1/bin/go" sh ./check-go.sh
+GO_BINARY="$HOME/sdk/go1.27.3/bin/go" sh ./check-go.sh
 ```
 
-스크립트는 선택된 SDK의 정확한 판과 모듈 체크섬을 확인하고, pgx/pgxpool·go-jose·MCP SDK를 포함한 최소 실행 파일을 임시 디렉터리에 빌드한 뒤 `go build ./...`·`go vet ./...`·`gofmt -l .`을 검사합니다. 임시 산출물은 종료 시 정리합니다. `.github/workflows/go.yml`이 PR과 `dev`·`main` push에서 같은 검사를 실행하며 모듈·통합 시험은 [개발 계획의 시험 시점](spec/service/agent-context/DEVELOPMENT_PLAN.md#테스트-작성과-실행-시점)에 수행합니다.
+스크립트는 선택된 SDK의 정확한 판과 모듈 체크섬을 확인하고, pgx/pgxpool·go-jose·MCP SDK를 포함한 최소 실행 파일을 임시 디렉터리에 빌드한 뒤 `go build ./...`·`go vet ./...`·`gofmt -l .`을 검사합니다. 이어서 `govulncheck` `v1.9.0`을 선택한 SDK로 실행하여 `./...`의 호출 경로상 알려진 취약점이 있으면 실패합니다. 검사 도구 판은 고정하지만 취약점 정보는 실행 시 Go 공식 취약점 DB에서 조회하므로 네트워크 연결이 필요합니다. 임시 산출물은 종료 시 정리합니다. `.github/workflows/go.yml`이 PR과 `dev`·`main` push에서 같은 검사를 실행하며 모듈·통합 시험은 [개발 계획의 시험 시점](spec/service/agent-context/DEVELOPMENT_PLAN.md#테스트-작성과-실행-시점)에 수행합니다.
 
 MCP SDK `v1.8.0`은 신규 구현용 의존성으로 먼저 고정했습니다. SDK의 실제 전송 적합성과 호스트 지원은 [MCP-01](spec/service/agent-context/development-plan/mcp.md#mcp-01)과 실제 호스트 인수에서 판정합니다.
 
@@ -152,7 +152,7 @@ OAuth 발견 메타데이터, `/authorize`의 로그인·동의·PKCE S256, `/to
 
 여섯 진단 파일의 상관·보존·상한·누락과 실제 macOS/Linux 파일·볼륨 보존은 [OBS-08](spec/service/agent-context/reviews/2026-10-23-obs-08.md)·[TEST-09](spec/service/agent-context/reviews/2026-10-28-test-09.md)를 따릅니다. 평가 실행기는 공개 입력 준비·통제 비교·비용/실패/보류 보고를 제공하며 실제 공개 품질·외부 업무 효과·유료 총비용은 별도 실증 대기입니다.
 
-전환과 복귀는 [운영 절차](OPERATIONS.md#7-변경-및-복귀)를 따릅니다. `GO_BINARY=/path/to/go1.27.1/bin/go sh test-transition.sh`는 합성 이전 스키마의 정지·백업·새 번호 적용·전체 감사·준비 확인과 실패 파일 롤백·별도 볼륨/보관 이미지 복귀를 검증합니다. 실제 운영 배포와 공개 HTTPS/Tunnel의 인수 범위는 별도로 확인합니다.
+전환과 복귀는 [운영 절차](OPERATIONS.md#7-변경-및-복귀)를 따릅니다. `GO_BINARY=/path/to/go1.27.3/bin/go sh test-transition.sh`는 합성 이전 스키마의 정지·백업·새 번호 적용·전체 감사·준비 확인과 실패 파일 롤백·별도 볼륨/보관 이미지 복귀를 검증합니다. 실제 운영 배포와 공개 HTTPS/Tunnel의 인수 범위는 별도로 확인합니다.
 
 ## 개발 환경 재생성
 
@@ -191,7 +191,7 @@ sh ./test-wal-archive.sh
 
 별도 수동 재검증이 필요할 때 사용할 서버는 새 합성 DB에서 `TEST_DATABASE_REQUIRED=1 WEB_MANUAL_WAIT=15m go test -tags browser_manual -race -count=1 -v -run '^TestTEST06ManualBrowserFixture$' -timeout=20m ./internal/web`로 준비합니다. `TEST_DATABASE_URL`을 함께 지정합니다. 로그의 URL·비공개 connection.json 경로로 접속하며, 최대 15분 또는 같은 디렉터리의 STOP 파일로 종료합니다. 이 시험의 통과는 TLS 서버·표본 준비만 의미합니다. 현재 인수에서 사용자가 제외한 추가 수동 키보드·실제 VoiceOver를 재실행하는 필수 단계는 아닙니다. 실제 브라우저 권한·시험 인증서 처리·음성 관찰은 [수동 인수 절차](spec/service/agent-context/reviews/2026-10-28-test-06-manual.md)를 따릅니다.
 
-기록기 분야 인수는 macOS에서 `go test -race -count=1 -skip '^TestOBS08ContainerPersistence$' ./internal/diagnostic`, Linux 격리 환경에서는 `sh internal/diagnostic/test-linux.sh`로 실행합니다. Linux 스크립트는 기존 로컬 이미지 ID를 고정하며 `ACS_OBS08_IMAGE`로 이미 설치된 Linux arm64/amd64 이미지를 지정할 수 있습니다. Go 1.27.1과 Docker가 필요하고 이미지 다운로드·DB·네트워크는 사용하지 않습니다. 전용 볼륨에서 전체 파일·커널 쓰기 오류·컨테이너 재생성·슬롯 교체를 검증하고 자신이 만든 자원만 정리합니다. 결과 JSON·stderr는 출력한 임시 결과 경로에 남습니다. 상세 범위와 디스크 부족 주입의 제한은 [OBS-08 검토](spec/service/agent-context/reviews/2026-10-23-obs-08.md)를 따릅니다.
+기록기 분야 인수는 macOS에서 `go test -race -count=1 -skip '^TestOBS08ContainerPersistence$' ./internal/diagnostic`, Linux 격리 환경에서는 `sh internal/diagnostic/test-linux.sh`로 실행합니다. Linux 스크립트는 기존 로컬 이미지 ID를 고정하며 `ACS_OBS08_IMAGE`로 이미 설치된 Linux arm64/amd64 이미지를 지정할 수 있습니다. Go 1.27.3과 Docker가 필요하고 이미지 다운로드·DB·네트워크는 사용하지 않습니다. 전용 볼륨에서 전체 파일·커널 쓰기 오류·컨테이너 재생성·슬롯 교체를 검증하고 자신이 만든 자원만 정리합니다. 결과 JSON·stderr는 출력한 임시 결과 경로에 남습니다. 상세 범위와 디스크 부족 주입의 제한은 [OBS-08 검토](spec/service/agent-context/reviews/2026-10-23-obs-08.md)를 따릅니다.
 
 그래프 불변식 감사는 `go run ./cmd/audit`, 검색 품질 평가는 `cmd/eval`이 담당합니다. 평가 표본과 실행 방법은 [테스트 설계](spec/service/agent-context/sdd/testing.md)와 [평가 검증 설계](spec/service/agent-context/sdd/evaluation.md#검증을-가능하게-하는-설계)를 확인하십시오.
 

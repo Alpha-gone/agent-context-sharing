@@ -329,7 +329,7 @@ macOS/Linux에서 정상 네 파일·완전한 JSON·권한·같은 ID의 동시
 
 ## 첫 Codex CLI 상호운용 시험
 
-`TBD-AGENT_CONTEXT-064`의 선택 기준은 확정되었고 실제 적합성 검증은 대기다. 대상은 macOS의 Codex CLI `0.160.1`, 서버는 Go `1.27.1`, 공식 MCP Go SDK `v1.8.0`, 초기 revision은 `2026-07-28`다. Codex 앱·IDE 표면으로 지원 완료를 확대하지 않는다.
+`TBD-AGENT_CONTEXT-064`의 선택 기준은 확정되었고 실제 적합성 검증은 대기다. 현재 재검증 대상은 macOS의 Codex CLI `0.160.1`, 서버는 Go `1.27.3`, 공식 MCP Go SDK `v1.8.0`, 초기 revision은 `2026-07-28`다. Codex 앱·IDE 표면으로 지원 완료를 확대하지 않는다. 기존 TEST-08 인수 기록은 Go 1.27.1에서의 결과로 보존하며, Go 1.27.3으로 그 호스트 인수 결과를 자동 승계하지 않는다.
 
 첫 공개 client는 사전 등록 ID를 Codex의 서버별 `oauth.client_id`에 지정한다. callback은 `http://127.0.0.1:49152/callback`, `oauth.callback_url`·`oauth.callback_port`는 같은 URI·포트다. 실제 브라우저 요청 URI와 수신 주소·포트·사전 등록이 정확히 같은지 확인한다. issuer 지원 메타데이터와 성공·오류 응답의 `iss`도 일치해야 한다. 외부 MCP·authorize·token은 HTTPS이고 HTTP 예외는 loopback callback에 한정한다. 이 문서 작업은 실제 호스트 설정·자격 증명을 바꾸지 않는다.
 

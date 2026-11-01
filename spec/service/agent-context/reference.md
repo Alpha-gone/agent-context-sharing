@@ -548,3 +548,10 @@
 - 조회일: 2026-11-01 KST. [PostgreSQL 18 기본 키](https://www.postgresql.org/docs/18/ddl-constraints.html#DDL-CONSTRAINTS-PRIMARY-KEYS)는 고유 B-tree 인덱스를 생성한다. 기존 revoked_token의 token_id 기본 키와 IsTokenRevoked의 동등 조건을 재사용하며 스키마·인덱스를 추가하지 않는다. [EXPLAIN ANALYZE](https://www.postgresql.org/docs/18/using-explain.html)로 100만 행 표본에서 revoked_token_pkey의 단건 Index Scan과 실제 반환 1행을 확인했다. 전체 Verify 지연은 별도 벽시계로 측정했다.
 - 단건 조회의 성공/부재만 jti별 10초 캐시하고 완료 판정은 최대 4,096개 FIFO로 보관한다. 진행 중인 적재는 활성 조회의 jti별로만 존재하며 완료/실패 때 제거한다. 메모리는 DB의 전체 폐기 행을 적재하지 않고 완료 캐시 상한과 동시 적재 수에 따라 사용한다. 기존 5초 누적 context 예산·취소·저장소 오류 분류는 유지한다.
 - 동일 jti의 진행 중 적재에 로컬 폐기를 표시하여 FIFO 축출 뒤에도 오래된 DB 결과가 인증을 허용하지 못하게 한다. 다른 jti의 적재·실패는 공유하지 않는다. 기존 전체 목록 함수는 소규모 보존/만료 시험에서 유지하되 인증 검증의 주입 인터페이스에서는 제외했다.
+
+
+## #270 그래프별 전체 감사 범위와 인덱스
+
+- 조회일: 2026-11-01 KST. [PostgreSQL 18 표현식 인덱스](https://www.postgresql.org/docs/18/indexes-expressional.html)의 질의와 같은 표현식 조건을 적용하여 Context의 기존 text graph_id 인덱스와 새 일곱 edge label의 text graph_id 인덱스를 사용한다. 기존 agtype 인덱스·적용 SQL·checksum은 보존한다. 정점 속성과 간선 속성의 판독은 agtype JSON으로 유지하여 자료형 손상이 문자열로 바뀌지 않게 한다.
+- [UNION의 중복 제거](https://www.postgresql.org/docs/18/queries-union.html)를 이용해 간선 소속·시작점·끝점으로 고른 행을 합친다. 물리 id가 포함되므로 같은 속성의 서로 다른 간선은 보존한다. [EXPLAIN ANALYZE와 BUFFERS](https://www.postgresql.org/docs/18/using-explain.html)로 범위 선택과 끝점 조인의 실제 스캔량·반복 수·버퍼를 측정한다. 끝점은 범위를 고른 뒤 LATERAL 조회로 읽어 전체 Context 해시 조인을 피한다.
+- 계약 label의 범위 비용을 검증하는 표본과 예상 밖 label의 손상 검출을 구분한다. 예상 밖 label에는 계약 인덱스를 새로 쓰지 않으므로 그 비정상 테이블의 조회 비용까지 정상 label의 측정값으로 보장하지 않는다. 범위·다중 그래프 벤치마크 조건과 손상 동등성 결과는 [검토 기록](reviews/2026-11-01-issue-270.md)에 둔다.

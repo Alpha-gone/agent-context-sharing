@@ -73,7 +73,7 @@ func TestTargetSchemaFreshAndRepeatIntegration(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 			defer cancel()
-			for _, want := range []int{7, 0} {
+			for _, want := range []int{8, 0} {
 				if got, err := applyTarget(ctx, pool, migrations.FS, cfg); err != nil || got != want {
 					t.Fatalf("적용=%d want=%d: %v", got, want, err)
 				}
@@ -101,6 +101,9 @@ func TestTargetSchemaFreshAndRepeatIntegration(t *testing.T) {
 			if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_am a ON a.oid=c.relam WHERE a.amname='hnsw' AND c.relnamespace='public'::regnamespace AND c.relkind='i'`).Scan(&count); err != nil || count != 2 {
 				t.Fatalf("HNSW=%d: %v", count, err)
 			}
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes WHERE schemaname=$1 AND indexname IN ('derived_from_graph_id_text_idx','supersedes_graph_id_text_idx','has_member_graph_id_text_idx','precedes_graph_id_text_idx','causes_graph_id_text_idx','part_of_graph_id_text_idx','relates_to_graph_id_text_idx')`, cfg.GraphName).Scan(&count); err != nil || count != 7 {
+				t.Fatalf("감사 인덱스=%d: %v", count, err)
+			}
 			loaded, err := migrate.Load(migrations.FS, ".", cfg)
 			if err != nil {
 				t.Fatal(err)
@@ -114,7 +117,7 @@ func TestTargetSchemaFreshAndRepeatIntegration(t *testing.T) {
 				t.Fatalf("010 SQL 재실행: %v", err)
 			}
 			if _, err := tx.Exec(ctx, loaded[len(loaded)-1].Rendered); err != nil {
-				t.Fatalf("014 인덱스 SQL 재실행: %v", err)
+				t.Fatalf("015 인덱스 SQL 재실행: %v", err)
 			}
 		})
 	}
@@ -205,7 +208,7 @@ func TestTargetSchemaUpgradePreservesHistoryIntegration(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), history).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || got != 5 {
+	if got, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || got != 6 {
 		t.Fatalf("upgrade=%d: %v", got, err)
 	}
 	if err := pool.QueryRow(t.Context(), history).Scan(&after); err != nil || before != after {
@@ -243,7 +246,7 @@ func TestMigrationRollbackAndInvalidPreparationIntegration(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM public.schema_migration`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("실패 이력 잔류: %v", err)
 	}
-	if got, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || got != 7 {
+	if got, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || got != 8 {
 		t.Fatalf("실패 후 재실행=%d: %v", got, err)
 	}
 	// 원본 checksum 불일치가 후속 DDL을 실행하지 못하게 한다.
@@ -278,7 +281,7 @@ func TestConcurrentMigrationSingleConnectionIntegration(t *testing.T) {
 		}
 		total += r.count
 	}
-	if total != 7 {
+	if total != 8 {
 		t.Fatalf("동시 적용 총수=%d", total)
 	}
 	for _, pool := range pools {

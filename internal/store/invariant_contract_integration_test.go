@@ -203,7 +203,7 @@ type cancelAuditQueryTracer struct {
 }
 
 func (tracer cancelAuditQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "RETURN id(e)") {
+	if strings.Contains(data.SQL, "FROM (SELECT * FROM ONLY") {
 		tracer.cancel(tracer.cause)
 	}
 	return ctx

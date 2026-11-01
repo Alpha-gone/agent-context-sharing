@@ -373,7 +373,6 @@ func memoryPaths(edges []auditEdge) func(label, from, to string) (bool, error) {
 // loadAuditSnapshot은 범위의 간선, 간선 끝과 범위의 컨텍스트, 임베딩을 읽는다. contextIDs가
 // nil이면 그래프 전체다.
 func (s *Store) loadAuditSnapshot(ctx context.Context, queryer cypherQueryer, graphID model.ID, contextIDs []model.ID, expect EmbeddingExpectation) (auditSnapshot, error) {
-	graph := cypherString(graphID.String())
 	snapshot := auditSnapshot{graphID: graphID.String(), contexts: map[string]auditContext{}, expect: expect}
 	var scopeList string
 	if contextIDs != nil {
@@ -385,34 +384,33 @@ func (s *Store) loadAuditSnapshot(ctx context.Context, queryer cypherQueryer, gr
 		}
 		scopeList = "[" + strings.Join(quoted, ", ") + "]"
 	}
-	// 쓰기 검사는 나가는 간선과 들어오는 간선을 나눠 읽는다. 두 끝의 조건을 OR로 묶으면 조인
-	// 뒤에야 판정되어 context_id 인덱스를 쓰지 못하고 모든 그래프의 간선을 훑는다. 양 끝이 모두
-	// 범위인 간선은 두 질의에 함께 나오므로 간선 식별자로 한 번만 담는다.
-	edgeFilters := []string{"a.graph_id = " + graph + " OR b.graph_id = " + graph + " OR e.graph_id = " + graph}
-	if contextIDs != nil {
-		edgeFilters = []string{"a.context_id IN " + scopeList, "b.context_id IN " + scopeList}
-	}
 	endpoints := map[string]struct{}{}
-	seen := map[string]struct{}{}
-	for _, filter := range edgeFilters {
-		if err := s.loadAuditEdges(ctx, queryer, filter, &snapshot, endpoints, seen); err != nil {
+	if contextIDs == nil {
+		vertexIDs, err := s.loadGraphAuditContexts(ctx, queryer, graphID, snapshot.contexts)
+		if err != nil {
 			return auditSnapshot{}, err
 		}
-	}
-
-	nodeFilter := "n.graph_id = " + graph
-	if contextIDs != nil {
-		quoted := make([]string, 0, len(endpoints)+len(contextIDs))
+		if err := s.loadGraphAuditEdges(ctx, queryer, &snapshot, vertexIDs, endpoints); err != nil {
+			return auditSnapshot{}, err
+		}
+	} else {
+		// 두 끝의 OR 대신 방향별 조회로 영향 주변부를 좁히고 물리 간선 ID로 합친다.
+		seen := map[string]struct{}{}
+		for _, filter := range []string{"a.context_id IN " + scopeList, "b.context_id IN " + scopeList} {
+			if err := s.loadAuditEdges(ctx, queryer, filter, &snapshot, endpoints, seen); err != nil {
+				return auditSnapshot{}, err
+			}
+		}
 		for id := range snapshot.scope {
 			endpoints[id] = struct{}{}
 		}
+		quoted := make([]string, 0, len(endpoints))
 		for id := range endpoints {
 			quoted = append(quoted, cypherString(id))
 		}
-		nodeFilter = "n.context_id IN [" + strings.Join(quoted, ", ") + "]"
-	}
-	if err := s.loadAuditContexts(ctx, queryer, nodeFilter, snapshot.contexts); err != nil {
-		return auditSnapshot{}, err
+		if err := s.loadAuditContexts(ctx, queryer, "n.context_id IN ["+strings.Join(quoted, ", ")+"]", snapshot.contexts); err != nil {
+			return auditSnapshot{}, err
+		}
 	}
 	// 전체 감사는 그래프의 정점만 읽었으므로 다른 그래프에 속한 간선 끝을 따로 읽는다. 쓰기
 	// 검사처럼 끝의 계층을 알아야 graph_membership 위반이 endpoint_layer로 번지지 않는다.
@@ -458,8 +456,10 @@ func (s *Store) loadAuditSnapshot(ctx context.Context, queryer cypherQueryer, gr
 		return auditSnapshot{}, fmt.Errorf("불변식 임베딩 행 읽기: %w", err)
 	}
 	embeddingRows.Close()
-	if err := s.loadDanglingAuditEdges(ctx, queryer, &snapshot); err != nil {
-		return auditSnapshot{}, err
+	if contextIDs != nil {
+		if err := s.loadDanglingAuditEdges(ctx, queryer, &snapshot); err != nil {
+			return auditSnapshot{}, err
+		}
 	}
 	return snapshot, nil
 }
@@ -724,49 +724,56 @@ func (s *Store) loadAuditEdges(ctx context.Context, queryer cypherQueryer, filte
 // loadAuditContexts는 filter에 맞는 정점의 판정 속성만 읽어 contexts에 더한다. 본문은 규칙에
 // 쓰지 않으므로 읽지 않는다.
 func (s *Store) loadAuditContexts(ctx context.Context, queryer cypherQueryer, filter string, contexts map[string]auditContext) error {
-	rows, err := queryer.Query(ctx, s.cypherSQL("MATCH (n:Context) WHERE "+filter+
+	_, err := s.readAuditContexts(ctx, queryer, s.cypherSQL("MATCH (n:Context) WHERE "+filter+
 		" RETURN n.context_id, coalesce(n.graph_id, ''), coalesce(n.layer, ''), coalesce(n.deleted_at, ''), coalesce(n.event_start, ''), coalesce(n.event_end, ''), id(n)",
-		"id agtype, graph agtype, layer agtype, deleted agtype, start agtype, finish agtype, vertex agtype"), pgx.QueryExecModeExec)
+		"id agtype, graph agtype, layer agtype, deleted agtype, start agtype, finish agtype, vertex agtype"), contexts, pgx.QueryExecModeExec)
+	return err
+}
+
+func (s *Store) readAuditContexts(ctx context.Context, queryer cypherQueryer, query string, contexts map[string]auditContext, args ...any) ([]int64, error) {
+	rows, err := queryer.Query(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("불변식 정점 조회: %w", err)
+		return nil, fmt.Errorf("불변식 정점 조회: %w", err)
 	}
 	defer rows.Close()
+	var vertexIDs []int64
 	for rows.Next() {
 		var raw [6]string
 		var vertex string
 		if err := rows.Scan(&raw[0], &raw[1], &raw[2], &raw[3], &raw[4], &raw[5], &vertex); err != nil {
-			return fmt.Errorf("불변식 정점 행 해석: %w", err)
+			return nil, fmt.Errorf("불변식 정점 행 해석: %w", err)
 		}
 		var values [6]string
 		for index := range raw {
 			if err := json.Unmarshal([]byte(raw[index]), &values[index]); err != nil {
-				return fmt.Errorf("불변식 정점 값 해석: %w", err)
+				return nil, fmt.Errorf("불변식 정점 값 해석: %w", err)
 			}
 		}
 		value := auditContext{id: values[0], graphID: values[1], layer: values[2], deleted: values[3] != ""}
 		if err := json.Unmarshal([]byte(vertex), &value.vertexID); err != nil {
-			return fmt.Errorf("불변식 정점 물리 식별자 해석: %w", err)
+			return nil, fmt.Errorf("불변식 정점 물리 식별자 해석: %w", err)
 		}
 		if values[4] != "" {
 			start, err := time.Parse(time.RFC3339Nano, values[4])
 			if err != nil {
-				return fmt.Errorf("사건 시작 시각 해석: %w", err)
+				return nil, fmt.Errorf("사건 시작 시각 해석: %w", err)
 			}
 			value.start, value.hasTime = start, true
 			if values[5] != "" {
 				end, err := time.Parse(time.RFC3339Nano, values[5])
 				if err != nil {
-					return fmt.Errorf("사건 종료 시각 해석: %w", err)
+					return nil, fmt.Errorf("사건 종료 시각 해석: %w", err)
 				}
 				value.end = &end
 			}
 		}
 		contexts[value.id] = value
+		vertexIDs = append(vertexIDs, value.vertexID)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("불변식 정점 행 읽기: %w", err)
+		return nil, fmt.Errorf("불변식 정점 행 읽기: %w", err)
 	}
-	return nil
+	return vertexIDs, nil
 }
 
 // loadAcyclicEdges는 그래프의 확정 precedes·causes·part_of 간선을 label과 상태로만 읽는다.

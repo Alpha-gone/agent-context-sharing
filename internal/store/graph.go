@@ -143,6 +143,10 @@ func (s *Store) Graph(ctx context.Context, graphID model.ID) (model.Graph, error
 // 나지 않으며 옮겨간 그래프는 새 조회의 첫 페이지에 다시 보인다. 「페이지 처리」가
 // 최근 활동순을 유지하기 위해 감수하기로 확정한 귀결이다.
 func (s *Store) ListGraphs(ctx context.Context, accountID model.ID, filter model.GraphListFilter, cursor string, limit int) ([]model.GraphListItem, string, error) {
+	if err := model.ValidateText("name", filter.Name); err != nil {
+		return nil, "", err
+	}
+
 	if !accountID.IsV7() {
 		return nil, "", fmt.Errorf("요청 계정 식별자가 UUIDv7이 아니다")
 	}

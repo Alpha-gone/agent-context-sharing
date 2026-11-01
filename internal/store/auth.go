@@ -50,8 +50,8 @@ func (s *Store) CreateAccount(ctx context.Context, account Account) error {
 
 // AccountByLoginID는 자격 증명 대조를 위해 계정을 읽는다.
 func (s *Store) AccountByLoginID(ctx context.Context, loginID string) (Account, error) {
-	if loginID == "" {
-		return Account{}, fmt.Errorf("계정 조회 인자가 올바르지 않다")
+	if err := model.ValidateLoginID(loginID); err != nil {
+		return Account{}, err
 	}
 	var account Account
 	var id string

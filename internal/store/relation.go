@@ -87,13 +87,15 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	}
 
 	observation.stage = "endpoint_load"
+	var cyclePaths func(label, from, to string) (bool, error)
 	existing, err := s.relationByIdentity(ctx, tx, graphID, relation.Type, relation.FromContextID, relation.ToContextID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return model.Relation{}, err
 	}
 	if errors.Is(err, ErrNotFound) {
 		observation.stage = "cycle_check"
-		if err := s.validateRelationCycle(ctx, tx, graphID, relation); err != nil {
+		cycleEdges, err := s.validateRelationCycle(ctx, tx, graphID, relation)
+		if err != nil {
 			return model.Relation{}, err
 		}
 		// 기존 후보의 출처는 보존하되, 후보 없이 직접 확정한 관계는 에이전트 제안이다.
@@ -103,6 +105,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		if err != nil {
 			return model.Relation{}, err
 		}
+		cyclePaths = confirmedRelationPaths(cycleEdges, stored)
 		if err := bumpContentRevision(ctx, tx, graphID); err != nil {
 			return model.Relation{}, err
 		}
@@ -110,7 +113,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		if err := s.recordAppliedRelationOperation(ctx, tx, operation, stored.ID); err != nil {
 			return model.Relation{}, err
 		}
-		if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}); err != nil {
+		if err := s.checkWriteInvariantsWithPaths(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}, cyclePaths); err != nil {
 			return model.Relation{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -124,7 +127,8 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		// 것과 같다. A→B를 폐기하고 B→A를 확정한 뒤 A→B를 재확정하면 순환이 확정되므로
 		// 새 관계와 같은 검사를 지나야 한다.
 		observation.stage = "cycle_check"
-		if err := s.validateRelationCycle(ctx, tx, graphID, relation); err != nil {
+		cycleEdges, err := s.validateRelationCycle(ctx, tx, graphID, relation)
+		if err != nil {
 			return model.Relation{}, err
 		}
 		existing.State = model.RelationStateConfirmed
@@ -137,6 +141,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		if err != nil {
 			return model.Relation{}, err
 		}
+		cyclePaths = confirmedRelationPaths(cycleEdges, stored)
 		if err := bumpContentRevision(ctx, tx, graphID); err != nil {
 			return model.Relation{}, err
 		}
@@ -146,7 +151,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 	if err := s.recordAppliedRelationOperation(ctx, tx, operation, existing.ID); err != nil {
 		return model.Relation{}, err
 	}
-	if err := s.checkWriteInvariants(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}); err != nil {
+	if err := s.checkWriteInvariantsWithPaths(ctx, tx, graphID, []model.ID{relation.FromContextID, relation.ToContextID}, EmbeddingExpectation{}, cyclePaths); err != nil {
 		return model.Relation{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -493,15 +498,38 @@ func (s *Store) proposeRankedRelations(ctx context.Context, graphID model.ID, ca
 
 // validateRelationCycle은 확정으로 가는 모든 경로가 쓰는 순환 검사다. 새 관계의 확정과
 // 기존 관계의 재확정이 같은 규칙을 지나야 한 쪽으로만 순환이 들어오지 않는다.
-func (s *Store) validateRelationCycle(ctx context.Context, tx pgx.Tx, graphID model.ID, relation model.Relation) error {
-	pathExists, err := s.hasConfirmedRelationPath(ctx, tx, graphID, relation.Type, relation.ToContextID, relation.FromContextID)
-	if err != nil {
-		return fmt.Errorf("관계 순환 경로 조회: %w", err)
+func (s *Store) validateRelationCycle(ctx context.Context, tx pgx.Tx, graphID model.ID, relation model.Relation) ([]auditEdge, error) {
+	var edges []auditEdge
+	pathExists := false
+	if relation.Type != model.RelationTypeRelatesTo {
+		var err error
+		edges, err = s.loadAcyclicEdges(ctx, tx, graphID)
+		if err != nil {
+			return nil, fmt.Errorf("관계 순환 경로 조회: %w", err)
+		}
+		label, err := relationLabel(relation.Type)
+		if err != nil {
+			return nil, err
+		}
+		pathExists, err = memoryPaths(edges)(label, relation.ToContextID.String(), relation.FromContextID.String())
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := model.ValidateRelationCycle(relation, pathExists); err != nil {
-		return fmt.Errorf("관계 순환 검증: %w", errors.Join(ErrInvalidRelation, err))
+		return nil, fmt.Errorf("관계 순환 검증: %w", errors.Join(ErrInvalidRelation, err))
 	}
-	return nil
+	return edges, nil
+}
+
+// 사전 검사와 같은 잠금·트랜잭션에서 실제 확정 결과를 더해 불변식 경로를 갱신한다.
+func confirmedRelationPaths(edges []auditEdge, relation model.Relation) func(label, from, to string) (bool, error) {
+	if relation.Type == model.RelationTypeRelatesTo {
+		return nil
+	}
+	label, _ := relationLabel(relation.Type) // 저장 결과의 유형은 이미 검증됐다.
+	edges = append(edges, auditEdge{label: label, state: string(relation.State), from: relation.FromContextID.String(), to: relation.ToContextID.String()})
+	return memoryPaths(edges)
 }
 
 func (s *Store) createProposedRelation(ctx context.Context, graphID model.ID, relation model.Relation, modelID string) (created bool, err error) {
@@ -709,8 +737,14 @@ func (s *Store) updateRelation(ctx context.Context, tx pgx.Tx, graphID model.ID,
 	if err != nil {
 		return model.Relation{}, err
 	}
-	query := "MATCH ()-[edge:" + label + "]->() WHERE edge.relation_id = " + cypherString(relation.ID.String()) +
-		" AND edge.graph_id = " + cypherString(graphID.String()) + " SET edge = " + properties + " RETURN edge, startNode(edge), endNode(edge)"
+	// 같은 relation_id가 다른 정체성에 있어도 경로 집합에 반영한 실제 끝점만 갱신한다.
+	query := "MATCH (from:Context)-[edge:" + label + "]->(to:Context) WHERE edge.relation_id = " + cypherString(relation.ID.String()) +
+		" AND edge.graph_id = " + cypherString(graphID.String()) +
+		" AND from.graph_id = " + cypherString(graphID.String()) +
+		" AND to.graph_id = " + cypherString(graphID.String()) +
+		" AND from.context_id = " + cypherString(relation.FromContextID.String()) +
+		" AND to.context_id = " + cypherString(relation.ToContextID.String()) +
+		" SET edge = " + properties + " RETURN edge, startNode(edge), endNode(edge)"
 	stored, err := s.relationFromCypher(ctx, tx, graphID, query)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("사건 관계 갱신: %w", err)
@@ -769,35 +803,6 @@ func (s *Store) allRelations(ctx context.Context, queryer cypherQueryer, graphID
 		}
 		cursor = next
 	}
-}
-
-func (s *Store) hasConfirmedRelationPath(ctx context.Context, queryer cypherQueryer, graphID model.ID, relationType model.RelationType, fromID, toID model.ID) (bool, error) {
-	relations, err := s.allRelations(ctx, queryer, graphID, model.ID{}, []model.RelationState{model.RelationStateConfirmed}, []model.RelationType{relationType})
-	if err != nil {
-		return false, err
-	}
-	adjacent := make(map[model.ID][]model.ID)
-	for _, relation := range relations {
-		adjacent[relation.FromContextID] = append(adjacent[relation.FromContextID], relation.ToContextID)
-	}
-	visited := map[model.ID]struct{}{fromID: {}}
-	frontier := []model.ID{fromID}
-	for len(frontier) > 0 {
-		var next []model.ID
-		for _, current := range frontier {
-			for _, target := range adjacent[current] {
-				if target == toID {
-					return true, nil
-				}
-				if _, found := visited[target]; !found {
-					visited[target] = struct{}{}
-					next = append(next, target)
-				}
-			}
-		}
-		frontier = next
-	}
-	return false, nil
 }
 
 // discardConfirmedRelationsForContext는 폐기한 사건이 가리키거나 가리켜지는 확정 관계를

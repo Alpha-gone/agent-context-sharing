@@ -18,15 +18,16 @@ func TestTEST08CodexCLIHTTPFailuresIntegration(t *testing.T) {
 					t.Fatal("시험 자격 스냅숏 실패")
 				}
 				before := session.calls.Load()
+				authorizations := session.authorizations.Load()
 				session.forcedStatus.Store(int64(status))
 				_ = session.command("exec", "--skip-git-repo-check", "--ephemeral", "--json", "Return TEST08.").Run()
 				after, err := os.ReadFile(session.credentials)
-				if err != nil || !bytes.Equal(original, after) || session.forcedRequests.Load() == 0 || session.forcedRequests.Load() > 8 || session.calls.Load() != before || session.exchanges.Load() != 1 {
-					t.Fatal("403/500 뒤 유한 오류 종료·자격 보존·재인가 없음의 경계 불일치")
+				if err != nil || !bytes.Equal(original, after) || session.forcedRequests.Load() == 0 || session.forcedRequests.Load() > 8 || session.calls.Load() != before || session.exchanges.Load() != 1 || session.authorizations.Load() != authorizations {
+					t.Fatal("403/500 뒤 유한 오류 종료·자격 보존·추가 인가 HTTP 요청 없음의 경계 불일치")
 				}
 				session.forcedStatus.Store(0)
 				_ = session.command("exec", "--skip-git-repo-check", "--ephemeral", "--json", "Return TEST08.").Run()
-				if session.calls.Load() < before+2 || session.exchanges.Load() != 1 {
+				if session.calls.Load() < before+2 || session.exchanges.Load() != 1 || session.authorizations.Load() != authorizations {
 					t.Fatal("HTTP 오류 해제 뒤 기존 자격 재사용 실패")
 				}
 				t.Logf("TEST-08 stage=http_failure_recovered status=%d token_attempts=1 credential_preserved=true requests=%d", status, session.forcedRequests.Load())

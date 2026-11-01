@@ -24,7 +24,11 @@ func TestCacheLookupBudgetIncludesRepeatedLoadCancellation(t *testing.T) {
 					if kind == "keys" {
 						cache.keyLoad = load
 					} else {
-						cache.revocationLoad = load
+						if load == nil {
+							delete(cache.revocationLoads, "token")
+						} else {
+							cache.revocationLoads["token"] = &revocationLoad{cacheLoad: load}
+						}
 					}
 				}
 				load := &cacheLoad{done: make(chan struct{}), err: context.Canceled, retry: true}

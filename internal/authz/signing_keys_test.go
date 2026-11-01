@@ -188,7 +188,9 @@ func TestExpiredRevocationCacheFailureAndRecovery(t *testing.T) {
 	if _, _, err := service.Verify(t.Context(), token.Raw, "web"); err != nil {
 		t.Fatal("캐시 준비에 실패했습니다")
 	}
-	service.cache.loadedAt = time.Now().Add(-revocationTTL)
+	entry := service.cache.revoked[token.ID]
+	entry.checkedAt = time.Now().Add(-revocationTTL)
+	service.cache.revoked[token.ID] = entry
 	backend.revocationFails = true
 	if _, _, err := service.Verify(t.Context(), token.Raw, "web"); !errors.Is(err, ErrUnavailable) || !errors.Is(err, errStoreUnavailable) {
 		t.Fatal("오래된 폐기 목록으로 장애 중 인증을 허용했습니다")

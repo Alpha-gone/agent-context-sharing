@@ -541,3 +541,10 @@
 - 조회일: 2026-11-01 KST. 적용 판 [pgx v5.12.0 Rows API](https://github.com/jackc/pgx/blob/v5.12.0/rows.go)의 Next·RawValues 계약을 로컬 모듈 캐시에서 확인했다. 계측 대역은 Next 성공 직후 현재 행의 RawValues 길이를 합산한다. 수치는 순환 관련 조회가 반환한 필드 바이트 합이며 PostgreSQL 메시지 헤더·TLS·확정 연산 전체의 네트워크 전송량은 포함하지 않는다.
 - [PostgreSQL 18 행 잠금](https://www.postgresql.org/docs/18/explicit-locking.html#LOCKING-ROWS)과 저장소의 그래프 행 잠금 계약을 기준으로 동일 확정 호출 안에서만 ID 집합을 재사용한다. 실제 저장 결과 간선을 추가하고 속성·격리·시간 검사는 쓰기 뒤 다시 읽는다. 다른 트랜잭션·그래프·요청의 캐시로 사용하지 않는다.
 - 기존 페이지 조회가 주변부 밖 같은 유형의 본문·속성까지 해석하던 동작은 순환 판정의 소유 범위가 아니다. 순환은 전체 ID 경로로, 속성·시간·격리는 [영향 주변부 쓰기 검사](sdd/data.md#그래프-불변식-규칙과-감사)로, 전체 그래프 점검은 기존 전체 감사로 판정한다. 같은 ID의 다른 정체성까지 수정하던 갱신은 실제 끝점 조건으로 제한해 지역 경로에 반영한 변경과 실제 쓰기가 일치하도록 했다.
+
+
+## #267 웹 토큰별 폐기 조회와 제한 캐시
+
+- 조회일: 2026-11-01 KST. [PostgreSQL 18 기본 키](https://www.postgresql.org/docs/18/ddl-constraints.html#DDL-CONSTRAINTS-PRIMARY-KEYS)는 고유 B-tree 인덱스를 생성한다. 기존 revoked_token의 token_id 기본 키와 IsTokenRevoked의 동등 조건을 재사용하며 스키마·인덱스를 추가하지 않는다. [EXPLAIN ANALYZE](https://www.postgresql.org/docs/18/using-explain.html)로 100만 행 표본에서 revoked_token_pkey의 단건 Index Scan과 실제 반환 1행을 확인했다. 전체 Verify 지연은 별도 벽시계로 측정했다.
+- 단건 조회의 성공/부재만 jti별 10초 캐시하고 완료 판정은 최대 4,096개 FIFO로 보관한다. 진행 중인 적재는 활성 조회의 jti별로만 존재하며 완료/실패 때 제거한다. 메모리는 DB의 전체 폐기 행을 적재하지 않고 완료 캐시 상한과 동시 적재 수에 따라 사용한다. 기존 5초 누적 context 예산·취소·저장소 오류 분류는 유지한다.
+- 동일 jti의 진행 중 적재에 로컬 폐기를 표시하여 FIFO 축출 뒤에도 오래된 DB 결과가 인증을 허용하지 못하게 한다. 다른 jti의 적재·실패는 공유하지 않는다. 기존 전체 목록 함수는 소규모 보존/만료 시험에서 유지하되 인증 검증의 주입 인터페이스에서는 제외했다.

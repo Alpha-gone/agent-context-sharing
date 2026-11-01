@@ -95,7 +95,7 @@ func (s *Store) RevokeToken(ctx context.Context, tokenID string, expiresAt time.
 	return nil
 }
 
-// RevokedTokenIDs는 웹 세션 검증 캐시에 적재할 유효 폐기 식별자를 읽는다.
+// RevokedTokenIDs는 만료되지 않은 개별 폐기 식별자를 읽는다.
 // Bearer는 OAuthAccessAllowed에서 개별·계열 폐기를 매 요청 함께 확인한다.
 func (s *Store) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, error) {
 	if now.IsZero() {

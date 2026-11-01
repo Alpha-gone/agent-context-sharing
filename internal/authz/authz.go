@@ -76,7 +76,7 @@ type authStore interface {
 	AccountByLoginID(context.Context, string) (store.Account, error)
 	UpdatePasswordHashIfMatches(context.Context, model.ID, string, string) (bool, error)
 	RevokeToken(context.Context, string, time.Time) error
-	RevokedTokenIDs(context.Context, time.Time) ([]string, error)
+	IsTokenRevoked(context.Context, string, time.Time) (bool, error)
 	ActiveSigningKey(context.Context) (store.SigningKey, error)
 	SigningKey(context.Context, string) (store.SigningKey, error)
 	SigningKeys(context.Context) ([]store.SigningKey, error)
@@ -361,7 +361,7 @@ func (s *Service) Revoke(ctx context.Context, token Token) (resultErr error) {
 		return &credentialFailure{ErrUnavailable, err}
 	}
 	// 이 인스턴스가 방금 폐기한 토큰은 다음 적재를 기다리지 않고 곧바로 막는다.
-	s.cache.invalidateRevocations(token.ID)
+	s.cache.invalidateRevocations(token.ID, s.now().UTC())
 	return ctx.Err()
 }
 

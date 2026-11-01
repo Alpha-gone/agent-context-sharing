@@ -28,13 +28,13 @@ func (s *cacheCancellationStore) SigningKeys(ctx context.Context) ([]store.Signi
 	}
 	return s.memoryStore.SigningKeys(ctx)
 }
-func (s *cacheCancellationStore) RevokedTokenIDs(ctx context.Context, at time.Time) ([]string, error) {
+func (s *cacheCancellationStore) IsTokenRevoked(ctx context.Context, tokenID string, at time.Time) (bool, error) {
 	if s.kind == "revocations" && s.reads.Add(1) == 1 {
 		if err := s.first(ctx); err != nil {
-			return nil, err
+			return false, err
 		}
 	}
-	return s.memoryStore.RevokedTokenIDs(ctx, at)
+	return s.memoryStore.IsTokenRevoked(ctx, tokenID, at)
 }
 
 func cancellationService(t *testing.T, kind string, first func(context.Context) error) (*cacheCancellationStore, *Service, string) {

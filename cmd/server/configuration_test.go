@@ -66,3 +66,19 @@ func TestConfigurationPassesValidatedInputsOnce(t *testing.T) {
 		t.Fatalf("조립 호출·원인 보존 = %d·%v", starts, err)
 	}
 }
+
+func TestDatabaseURLRejectsBeforeResourceStartup(t *testing.T) {
+	for _, raw := range []string{
+		"postgres://user:synthetic-secret@localhost/db?application_name=%00",
+		"postgres://user:synthetic-secret@localhost/db?pool_max_conns=4&pool_max_conns=synthetic-secret",
+	} {
+		values := serverConfiguration(t)
+		values["DATABASE_URL"] = raw
+		starts := 0
+		err := configureAndRun(func(key string) string { return values[key] }, func(config.Config) error { starts++; return nil })
+		field, ok := errors.AsType[*config.Error](err)
+		if starts != 0 || !ok || field.Key != "DATABASE_URL" || strings.Contains(err.Error(), "synthetic-secret") {
+			t.Fatal("접속 구성 오류의 조립 차단/비밀 비노출 위반")
+		}
+	}
+}

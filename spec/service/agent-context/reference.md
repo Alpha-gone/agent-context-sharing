@@ -521,3 +521,10 @@
 
 - 조회일: 2026-11-01 KST. Go 1.27.3 공급자 소스의 [testing.B.Loop](https://github.com/golang/go/blob/go1.27.3/src/testing/benchmark.go)와 [testing.AllocsPerRun](https://github.com/golang/go/blob/go1.27.3/src/testing/allocs.go)을 설치된 SDK에서 대조했다. B.Loop 전 준비 비용은 측정에서 제외되며, AllocsPerRun은 준비 호출 뒤 평균 할당 횟수를 측정하고 측정 중 GOMAXPROCS를 1로 둔다. 벤치마크는 같은 도구 체인·표본·옵션에서 전후 B/op·allocs/op를 비교하며 실제 서버 응답 지연으로 확대하지 않는다.
 - 접기 키·문자 삼중자 자카드·순위 우선 대표 선택은 기존 [검색 설계](sdd/search.md#작업-컨텍스트-흐름-조회)를 유지한다. 본문 완전 일치의 유사도 1 판정을 먼저 하고, 본문이 다른 같은 키의 후보를 비교할 때만 집합을 생성한다. 외부 라이브러리·구성·저장 형식 변경은 없다.
+
+
+## #281 DATABASE_URL과 pgx 해석 정합화
+
+- 조회일: 2026-11-01 KST. [pgx v5.12.0 CHANGELOG의 5.11.0 변경](https://github.com/jackc/pgx/blob/v5.12.0/CHANGELOG.md)과 공급자 [URI 해석기](https://github.com/jackc/pgx/blob/v5.12.0/pgconn/parse_url.go)를 로컬 모듈 캐시와 대조했다. pgx는 libpq 호환 해석기로 userinfo의 첫 @·반복 query의 마지막 값·+ 문자 보존·%00 거부를 처리하며 net/url의 HTTP/RFC URL 규칙과 다르다. DATABASE_URL은 PostgreSQL URI만 허용하고 해석·기본값은 실제 드라이버에 맡긴다.
+- [pgconn.ParseConfig](https://github.com/jackc/pgx/blob/v5.12.0/pgconn/config.go)는 PG 환경 기본값과 서비스/비밀번호/TLS 파일을 읽을 수 있다. 연결·풀 생성은 하지 않지만 파일을 전혀 읽지 않는 검사로 표현해서는 안 된다. 파서 오류의 비밀번호 가림은 최선 노력이고 원문을 보존할 수 있으므로 구성 오류에 원인을 연결하지 않는다.
+- [pgxpool.ParseConfig](https://github.com/jackc/pgx/blob/v5.12.0/pgxpool/pool.go)는 pgx 해석 뒤 pool_max_conns를 RuntimeParams에서 제거한다. 저장소가 명시 키의 유무를 확인할 때는 삭제 전 pgx 해석 결과를 사용한다. 접속 준비 단계에서 파서를 두 번 호출하는 비용은 있으나 URL 해석 규칙을 복제하거나 비밀번호/값의 부분 문자열로 설정을 판정하지 않는다. config는 store의 검증 함수만 호출하여 DB 드라이버와 핸들을 저장소 안에 유지한다.

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net/url"
 	"os"
 	"reflect"
 	"slices"
@@ -109,7 +108,7 @@ func TestConfigRejectsMissingRequiredKeys(t *testing.T) {
 func TestConfigRejectsInvalidBoundariesWithoutInputEcho(t *testing.T) {
 	for key, invalid := range map[string][]string{
 		"HTTP_ADDR":                      {"synthetic-secret", ":synthetic-secret", ":65536", "synthetic-secret%:8080", ":80\n"},
-		"DATABASE_URL":                   {"https://synthetic-secret", "postgres://synthetic-secret%", "postgres://host:65536/db", "postgres:///db", "postgres://host/db?x=%synthetic-secret", "postgres://host/db#synthetic-secret"},
+		"DATABASE_URL":                   {"https://synthetic-secret", "postgres://synthetic-secret%", "postgres://host:65536/db", "postgres://host/db?x=%synthetic-secret"},
 		"AGE_GRAPH_NAME":                 {"synthetic-secret"},
 		"EMBEDDING_COLD_TABLESPACE":      {"synthetic-secret;drop table"},
 		"EMBEDDING_PROVIDER":             {"synthetic-secret"},
@@ -187,8 +186,8 @@ func TestConfigPreservesSafeParserCauses(t *testing.T) {
 	values := validValues()
 	values["DATABASE_URL"] = "postgres://synthetic-secret%"
 	err := rejectValues(t, values)
-	if _, ok := errors.AsType[*url.Error](err); !ok {
-		t.Fatal("URL 해석 원인이 소실됐다")
+	if field, ok := errors.AsType[*Error](err); !ok || field.Key != "DATABASE_URL" || errors.Unwrap(field) != nil {
+		t.Fatal("접속 원문을 보존할 수 있는 드라이버 원인이 노출됐다")
 	}
 	values = validValues()
 	values["OAUTH_CLIENT_REGISTRATIONS"] = `{"synthetic-secret":{},"synthetic-secret":{}}`

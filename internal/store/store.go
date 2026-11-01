@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"agent_context_sharing/internal/diagnostic"
@@ -183,16 +182,9 @@ func New(ctx context.Context, databaseURL, graphName string, relationProposals *
 		proposal := *relationProposals
 		proposalConfig = &proposal
 	}
-	cfg, err := pgxpool.ParseConfig(databaseURL)
+	cfg, err := parsePoolConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("접속 문자열 해석: %w", err)
-	}
-	// 연결 수의 하한을 코드에서 정한다. pgxpool의 기본값은 CPU 수와 4 중 큰 값이라 코어가
-	// 적은 배포에서 네 개가 되는데, 웹·MCP·색인 작업자·주기 작업자가 이 풀 하나를 나눠 쓰고
-	// 홉 확장이나 후보 조립처럼 한 요청이 연결을 겹쳐 잡는 경로가 있어 그만큼이면 서로를
-	// 기다린다. 접속 문자열에 pool_max_conns가 있으면 배포가 정한 값을 그대로 둔다.
-	if !strings.Contains(databaseURL, "pool_max_conns") {
-		cfg.MaxConns = max(cfg.MaxConns, minPoolConns)
 	}
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		for _, statement := range []string{"LOAD 'age'", `SET search_path = ag_catalog, "$user", public`, "SET TIME ZONE 'UTC'"} {

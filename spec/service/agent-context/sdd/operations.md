@@ -173,13 +173,13 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 | 항목         | 운영 구성                                                                                                                       |
 |--------------|---------------------------------------------------------------------------------------------------------------------------------|
 | 프로젝트     | 이름을 `agent_context_prod`로 고정해 같은 호스트의 개발 컨테이너·볼륨과 섞이지 않는다                                            |
-| 서비스       | `db`, 1회 실행 `migrate`, `server`. WAL 자동 정리는 두지 않는다                                                        |
+| 서비스       | `db`, `server`와 `migrate` profile의 1회 실행 `migrate`. WAL 자동 정리는 두지 않는다                                    |
 | 공개 범위    | `server`만 IPv4 `127.0.0.1`의 `HTTP_PORT`(기본 80)에 HTTP로 연결하고 DB는 호스트에 공개하지 않는다. 커넥터의 원본 URL은 같은 포트로 맞춘다 |
 | TLS 경계     | `TLS_TERMINATION=proxy`. 실제 접속자가 `TRUSTED_PROXY_CIDRS`에 속하고 단일 `X-Forwarded-Proto` 값이 `https`일 때만 업무 요청을 처리한다 |
 | 신뢰 대역    | 호스트의 루프백 공개 포트 접속 경로인 Docker 게이트웨이 `10.203.0.1/32`만 고정한다. 전체 Docker 대역이나 Cloudflare 공인 접속 대역을 신뢰하지 않는다 |
 | 구성 값      | `.env`(예시 `.env.prod.example`)에서 읽고 `DATABASE_URL`·`HTTP_ADDR`·TLS 배치와 신뢰 대역은 Compose가 덮어쓴다. 서버의 `TLS_CERT_FILE`·`TLS_KEY_FILE`은 빈 값이며 인증서·키를 마운트하지 않는다 |
 | 상태 확인    | 컨테이너 내부 HTTP `/healthz`를 검사한다. 자격 증명 없는 `/healthz`·`/readyz`만 프록시 헤더 없이 허용하며 외부 점검은 공개 HTTPS URL을 사용한다 |
-| 기동 순서    | `db` 준비 확인 → `migrate up` 성공 종료 → `server` 기동                                                                         |
+| 기동 순서    | `db` 준비 확인 → `server` 기동. 기본 `up`은 `migrate`를 실행하지 않으며 [스키마 적용](data.md#스키마-적용)은 서버·작업자 정지와 백업 뒤 `run --rm --no-deps migrate migrate up`과 전체 감사로 명시적으로 수행한다 |
 | 종료         | 요청 대기 30초와 작업자 종료 10초 뒤에도 멈추지 않으면 50초에 강제 종료한다                                                       |
 | 이미지       | `Dockerfile.server`가 서버·마이그레이션 실행기·감사 도구를 정적 바이너리로 담고 베이스 이미지의 태그·digest를 고정한다              |
 | 진단 저장    | `diagnostic_logs` 명명 볼륨을 서버의 `/var/log/agent-context`에 연결하고 서버 환경에서도 해당 경로를 고정한다. 이미지는 UID 10001 소유·0700으로 빈 볼륨의 초기 디렉터리를 준비한다 |

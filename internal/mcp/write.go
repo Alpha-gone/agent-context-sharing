@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 
 	"agent_context_sharing/internal/model"
 	"github.com/google/jsonschema-go/jsonschema"
@@ -46,9 +47,18 @@ func (runner *WriteRunner) Execute(ctx context.Context, principal Principal, too
 	if err != nil {
 		return nil, err
 	}
-	key, _ := values["request_id"].(string)
-	delete(values, "request_id")
+	return runner.executeValidated(ctx, principal, tool, values, check, apply)
+}
+
+// 호출자는 공개 스키마·주체·도구를 확인한 경계이며 현재 권한/행위자 검사는 매번 실행한다.
+func (runner *WriteRunner) executeValidated(ctx context.Context, principal Principal, tool string, values map[string]any, check func(context.Context) error, apply func(context.Context) ([]byte, error)) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	runner.normalizeIDs(tool, values)
+	key, _ := values["request_id"].(string)
+	values = maps.Clone(values)
+	delete(values, "request_id")
 	normalized, err := json.Marshal(map[string]any{"tool": tool, "arguments": values}, json.Deterministic(true))
 	if err != nil {
 		return nil, fmt.Errorf("쓰기 인자 정규화: %w", err)

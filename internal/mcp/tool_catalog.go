@@ -21,6 +21,7 @@ import (
 )
 
 type toolDefinition struct {
+	validate   func([]byte) (map[string]any, error)
 	tool       *sdk.Tool
 	resolved   *jsonschema.Resolved
 	properties map[string]*jsonschema.Resolved
@@ -48,6 +49,7 @@ func newToolCatalog() (*toolCatalog, error) {
 			}
 			definition.properties[name] = propertySchema
 		}
+		definition.validate = definition.validateValues
 		catalog.definitions = append(catalog.definitions, definition)
 	}
 	return catalog, nil
@@ -60,6 +62,23 @@ func (catalog *toolCatalog) validate(name string, arguments []byte) (map[string]
 		}
 	}
 	return nil, inputFieldError("name")
+}
+
+type validatedToolCallKey struct{}
+
+type validatedToolCall struct {
+	request *sdk.CallToolRequest
+	tool    string
+	raw     string
+	values  map[string]any
+}
+
+// 등록 경계의 결과는 같은 요청·도구·원문에만 적용한다. 직접 호출은 검증을 생략하지 않는다.
+func (catalog *toolCatalog) arguments(ctx context.Context, request *sdk.CallToolRequest) (map[string]any, error) {
+	if validated, ok := ctx.Value(validatedToolCallKey{}).(validatedToolCall); ok && validated.request == request && validated.tool == request.Params.Name && validated.raw == string(request.Params.Arguments) {
+		return validated.values, nil
+	}
+	return catalog.validate(request.Params.Name, request.Params.Arguments)
 }
 
 // register는 모든 업무 처리기가 준비됐는지 먼저 검사한다. 임시 성공 처리기로
@@ -88,7 +107,8 @@ func (catalog *toolCatalog) register(server *sdk.Server, handlers map[string]sdk
 						diagnostic.Fields{Request: diagnostic.RequestFields{Route: "mcp", Tool: tool.Name}})
 				}
 			}()
-			if _, err := definition.validate(request.Params.Arguments); err != nil {
+			values, err := definition.validate(request.Params.Arguments)
+			if err != nil {
 				field := "arguments"
 				if failure, ok := errors.AsType[model.FieldError](err); ok {
 					field = failure.Field
@@ -101,13 +121,14 @@ func (catalog *toolCatalog) register(server *sdk.Server, handlers map[string]sdk
 				}
 				return &sdk.CallToolResult{IsError: true, StructuredContent: value, Content: []sdk.Content{&sdk.TextContent{Text: string(text)}}}, nil
 			}
+			ctx = context.WithValue(ctx, validatedToolCallKey{}, validatedToolCall{request: request, tool: tool.Name, raw: string(request.Params.Arguments), values: values})
 			return handler(ctx, request)
 		})
 	}
 	return nil
 }
 
-func (definition toolDefinition) validate(arguments []byte) (map[string]any, error) {
+func (definition toolDefinition) validateValues(arguments []byte) (map[string]any, error) {
 	var raw map[string]jsontext.Value
 	if len(arguments) == 0 {
 		arguments = []byte("{}")

@@ -17,6 +17,10 @@ func NewAgentHandler(registry AgentRegistry) (ToolHandler, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newAgentHandler(registry, catalog), nil
+}
+
+func newAgentHandler(registry AgentRegistry, catalog *toolCatalog) ToolHandler {
 	return func(ctx context.Context, principal Principal, request *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -27,7 +31,7 @@ func NewAgentHandler(registry AgentRegistry) (ToolHandler, error) {
 		if request == nil || request.Params == nil || request.Params.Name != "agent_register" {
 			return writeErrorResult(inputFieldError("name"))
 		}
-		args, err := catalog.validate("agent_register", request.Params.Arguments)
+		args, err := catalog.arguments(ctx, request)
 		if err != nil {
 			return writeErrorResult(err)
 		}
@@ -43,5 +47,5 @@ func NewAgentHandler(registry AgentRegistry) (ToolHandler, error) {
 			return writeErrorResult(&DependencyFailure{Cause: err})
 		}
 		return writeResult(data)
-	}, nil
+	}
 }

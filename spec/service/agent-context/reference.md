@@ -509,3 +509,9 @@
 
 - 조회일: 2026-11-01 KST. [PostgreSQL 18 표현식 인덱스](https://www.postgresql.org/docs/18/indexes-expressional.html)와 [JSON 생성 함수](https://www.postgresql.org/docs/18/functions-json.html#FUNCTIONS-JSON-CREATION-TABLE)를 확인했다. 인덱스 왼쪽 식은 기존 014의 `agtype_access_operator`와 같게 유지하고 비교할 UUID 문자열은 `to_jsonb(text)::text::agtype`로 변환한다. 끝점의 LEAST/GREATEST 정규화와 정체성의 상태 전체 제외는 유지한다.
 - [Apache AGE Cypher 호출 형식](https://age.apache.org/age-manual/master/intro/cypher.html)의 FROM/하위 질의 반환을 확인했다. 적용 구성은 저장소의 AGE `release_PG18_1.8.0`·PostgreSQL 18·pgvector 0.8.6이며, 표현식 호환성과 선택 계획은 이 구성의 실제 DB로 검증했다. 네 관계 label의 count를 SQL UNION ALL과 sum으로 한 문장에서 합쳐 왕복·문장 스냅숏을 유지한다. 새 인덱스나 스키마 변경은 없다.
+
+
+## #265 MCP 요청별 입력 검증
+
+- 조회일: 2026-11-01 KST. [MCP Go SDK v1.8.0 Server.AddTool](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/server.go)의 공급자 소스를 로컬 모듈 캐시와 대조했다. 비제네릭 등록 API는 입력 JSON 해석·스키마 검증을 호출자의 책임으로 두므로 서비스 등록 경계의 검증을 유지한다. [Go context.WithValue](https://pkg.go.dev/context@go1.27.3#WithValue)의 요청별 값·비공개 키 지침에 따라 동일 요청·도구·원문에 한정해 검증 값을 전달한다.
+- 검증 알고리즘의 속성별·전체 스키마 검사 순서는 오류 필드 계약을 위해 유지하고 계층 간 반복만 제거한다. 직접 호출의 검증과 재생 지문의 결정적 JSON·UUID 정규화는 기존 계약을 유지한다. 전체 지연 개선률은 측정하지 않았다.

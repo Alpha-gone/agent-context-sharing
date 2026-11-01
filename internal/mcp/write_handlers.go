@@ -37,6 +37,10 @@ func NewWriteHandlers(d Dependencies) (map[string]ToolHandler, error) {
 		return nil, err
 	}
 	runner.diagnostics = d.Diagnostics
+	return newWriteHandlers(d, runner), nil
+}
+
+func newWriteHandlers(d Dependencies, runner *WriteRunner) map[string]ToolHandler {
 	handlers := map[string]ToolHandler{}
 	for _, tool := range []string{"graph_create", "graph_update", "node_create", "node_update", "node_discard", "node_restore", "relation_confirm", "relation_discard"} {
 		handlers[tool] = func(ctx context.Context, principal Principal, request *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
@@ -49,12 +53,11 @@ func NewWriteHandlers(d Dependencies) (map[string]ToolHandler, error) {
 			if request == nil || request.Params == nil || request.Params.Name != tool {
 				return writeErrorResult(inputFieldError("name"))
 			}
-			args, err := runner.catalog.validate(tool, request.Params.Arguments)
+			args, err := runner.catalog.arguments(ctx, request)
 			observeTool(d.Diagnostics, ctx, "argument_validation", tool, err)
 			if err != nil {
 				return writeErrorResult(err)
 			}
-			runner.normalizeIDs(tool, args)
 			graphID := argumentID(args, "graph_id")
 			var limits plan.Limits
 			check := func(ctx context.Context) error {
@@ -78,7 +81,7 @@ func NewWriteHandlers(d Dependencies) (map[string]ToolHandler, error) {
 				limits = d.Plans.For(principal.AccountID)
 				return ctx.Err()
 			}
-			result, err := runner.Execute(ctx, principal, tool, request.Params.Arguments, check, func(ctx context.Context) ([]byte, error) {
+			result, err := runner.executeValidated(ctx, principal, tool, args, check, func(ctx context.Context) ([]byte, error) {
 				return applyWrite(ctx, d, principal, tool, args, limits)
 			})
 			if err != nil {
@@ -90,7 +93,7 @@ func NewWriteHandlers(d Dependencies) (map[string]ToolHandler, error) {
 			return writeResult(result)
 		}
 	}
-	return handlers, nil
+	return handlers
 }
 
 func applyWrite(ctx context.Context, d Dependencies, principal Principal, tool string, args map[string]any, limits plan.Limits) ([]byte, error) {

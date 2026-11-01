@@ -21,6 +21,10 @@ func NewReadHandlers(d Dependencies) (map[string]ToolHandler, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newReadHandlers(d, catalog), nil
+}
+
+func newReadHandlers(d Dependencies, catalog *toolCatalog) map[string]ToolHandler {
 	handlers := make(map[string]ToolHandler, 5)
 	for _, tool := range []string{"graph_list", "graph_get", "node_get", "relation_list", "context_flow_get"} {
 		handlers[tool] = func(ctx context.Context, principal Principal, request *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
@@ -33,7 +37,7 @@ func NewReadHandlers(d Dependencies) (map[string]ToolHandler, error) {
 			if request == nil || request.Params == nil || request.Params.Name != tool {
 				return writeErrorResult(inputFieldError("name"))
 			}
-			args, err := catalog.validate(tool, request.Params.Arguments)
+			args, err := catalog.arguments(ctx, request)
 			if err != nil {
 				return writeErrorResult(err)
 			}
@@ -52,7 +56,7 @@ func NewReadHandlers(d Dependencies) (map[string]ToolHandler, error) {
 			return writeResult(data)
 		}
 	}
-	return handlers, nil
+	return handlers
 }
 
 func optionalInteger(args map[string]any, name string) *int {

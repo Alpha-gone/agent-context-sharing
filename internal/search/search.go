@@ -666,7 +666,7 @@ func combine(results []channelResult) []combinedCandidate {
 // 값이 있다는 것이 「예산 적용과 절단」의 근거다. 후보는 이미 순위 순이므로 먼저 만난 쪽이
 // 대표가 된다.
 //
-// 대표 후보의 삼중자 집합은 대표가 될 때 한 번만 만들고 이후 비교에 재사용한다.
+// 삼중자 집합은 같은 키에서 본문이 다른 후보를 처음 비교할 때 만들고 재사용한다.
 func foldSimilarDerived(candidates []combinedCandidate, threshold float64) []combinedCandidate {
 	type foldRepresentative struct {
 		index int
@@ -680,12 +680,21 @@ func foldSimilarDerived(candidates []combinedCandidate, threshold float64) []com
 			result = append(result, candidate)
 			continue
 		}
-		grams := trigrams(candidate.value.Body)
+		var grams map[string]struct{}
 		folded := false
-		for _, representative := range groups[key] {
-			similarity := trigramSimilarity(representative.grams, grams)
-			if result[representative.index].value.Body == candidate.value.Body {
-				similarity = 1
+		representatives := groups[key]
+		for index := range representatives {
+			representative := &representatives[index]
+			body := result[representative.index].value.Body
+			similarity := 1.0
+			if body != candidate.value.Body {
+				if representative.grams == nil {
+					representative.grams = trigrams(body)
+				}
+				if grams == nil {
+					grams = trigrams(candidate.value.Body)
+				}
+				similarity = trigramSimilarity(representative.grams, grams)
 			}
 			if similarity >= threshold {
 				result[representative.index].folded++
@@ -696,7 +705,7 @@ func foldSimilarDerived(candidates []combinedCandidate, threshold float64) []com
 		if folded {
 			continue
 		}
-		groups[key] = append(groups[key], foldRepresentative{index: len(result), grams: grams})
+		groups[key] = append(representatives, foldRepresentative{index: len(result), grams: grams})
 		result = append(result, candidate)
 	}
 	return result

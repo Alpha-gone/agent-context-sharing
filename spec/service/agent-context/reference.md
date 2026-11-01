@@ -515,3 +515,9 @@
 
 - 조회일: 2026-11-01 KST. [MCP Go SDK v1.8.0 Server.AddTool](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/server.go)의 공급자 소스를 로컬 모듈 캐시와 대조했다. 비제네릭 등록 API는 입력 JSON 해석·스키마 검증을 호출자의 책임으로 두므로 서비스 등록 경계의 검증을 유지한다. [Go context.WithValue](https://pkg.go.dev/context@go1.27.3#WithValue)의 요청별 값·비공개 키 지침에 따라 동일 요청·도구·원문에 한정해 검증 값을 전달한다.
 - 검증 알고리즘의 속성별·전체 스키마 검사 순서는 오류 필드 계약을 위해 유지하고 계층 간 반복만 제거한다. 직접 호출의 검증과 재생 지문의 결정적 JSON·UUID 정규화는 기존 계약을 유지한다. 전체 지연 개선률은 측정하지 않았다.
+
+
+## #266 중복 파생 접기의 지연 삼중자 생성
+
+- 조회일: 2026-11-01 KST. Go 1.27.3 공급자 소스의 [testing.B.Loop](https://github.com/golang/go/blob/go1.27.3/src/testing/benchmark.go)와 [testing.AllocsPerRun](https://github.com/golang/go/blob/go1.27.3/src/testing/allocs.go)을 설치된 SDK에서 대조했다. B.Loop 전 준비 비용은 측정에서 제외되며, AllocsPerRun은 준비 호출 뒤 평균 할당 횟수를 측정하고 측정 중 GOMAXPROCS를 1로 둔다. 벤치마크는 같은 도구 체인·표본·옵션에서 전후 B/op·allocs/op를 비교하며 실제 서버 응답 지연으로 확대하지 않는다.
+- 접기 키·문자 삼중자 자카드·순위 우선 대표 선택은 기존 [검색 설계](sdd/search.md#작업-컨텍스트-흐름-조회)를 유지한다. 본문 완전 일치의 유사도 1 판정을 먼저 하고, 본문이 다른 같은 키의 후보를 비교할 때만 집합을 생성한다. 외부 라이브러리·구성·저장 형식 변경은 없다.

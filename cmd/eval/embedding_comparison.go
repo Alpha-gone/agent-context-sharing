@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"agent_context_sharing/internal/index"
@@ -174,13 +175,13 @@ func runEmbeddingInput(ctx context.Context, input embeddingInput, configs []sett
 // 질의의 신호를 만든다. 검색은 두 채널의 파생 유효성을 현재 시각으로 판정하고 고정 조회
 // 시각은 시간 채널에만 쓴다. 신호에 조회 시각을 쓰면 그 시각과 현재 사이에 만료된 파생이
 // 신호에만 남아 임계값 조정이 현행 전환 규칙과 다른 후보 집합에서 계산된다.
-func embeddingQuerySignal(ctx context.Context, backend embeddingBackend, graphID model.ID, query querySpec, expected bool, limit int) (embeddingSignal, error) {
-	vector, err := backend.worker.Embed(ctx, query.WorkContext)
+func embeddingQuerySignal(ctx context.Context, backend embeddingBackend, embedder search.Embedder, graphID model.ID, query querySpec, expected bool, limit int) (embeddingSignal, error) {
+	vector, err := embedder.Embed(ctx, query.WorkContext)
 	if err != nil {
 		return embeddingSignal{}, err
 	}
 	current := time.Now().UTC()
-	semantic, err := backend.database.SemanticCandidates(ctx, graphID, backend.worker.ModelID(), vector, current, limit)
+	semantic, err := backend.database.SemanticCandidates(ctx, graphID, embedder.ModelID(), vector, current, limit)
 	if err != nil {
 		return embeddingSignal{}, err
 	}
@@ -193,6 +194,33 @@ func embeddingQuerySignal(ctx context.Context, backend embeddingBackend, graphID
 		signal.Top = semantic[0].Similarity
 	}
 	return signal, nil
+}
+
+// queryVectors는 한 회차의 질의 벡터를 검색과 전역 전환 신호가 함께 쓰게 한다. 같은 모델로
+// 같은 질의를 다시 임베딩하면 유료 호출과 측정 HTTP 시도·지연이 실제 검색 1회의 두 배로
+// 보고된다. 평가 표본은 검색이 먼저 임베딩하고 신호가 그 벡터를 재사용하며, 검색이 없는
+// 조정 표본은 신호가 처음 임베딩한다. 실패한 임베딩은 기록하지 않는다.
+type queryVectors struct {
+	search.Embedder
+	mu      sync.Mutex
+	vectors map[string][]float64
+}
+
+func (q *queryVectors) Embed(ctx context.Context, text string) ([]float64, error) {
+	q.mu.Lock()
+	vector, ok := q.vectors[text]
+	q.mu.Unlock()
+	if ok {
+		return vector, nil
+	}
+	vector, err := q.Embedder.Embed(ctx, text)
+	if err != nil {
+		return nil, err
+	}
+	q.mu.Lock()
+	q.vectors[text] = vector
+	q.mu.Unlock()
+	return vector, nil
 }
 
 func measureEmbeddingSample(ctx context.Context, input embeddingInput, sample embeddingSample, backend embeddingBackend, condition embeddingCondition, repeat int) (embeddingRun, error) {
@@ -220,16 +248,10 @@ func measureEmbeddingSample(ctx context.Context, input embeddingInput, sample em
 			q.AsOf = new(input.AsOf)
 			q.IndependentUnit = sample.Unit
 		}
-		for j, q := range queries.Queries {
-			signal, err := embeddingQuerySignal(ctx, backend, graph.GraphID, q, sample.GlobalExpected[sample.Queries[j].ID], input.Search.CandidateLimit)
-			if err != nil {
-				return err
-			}
-			run.Signals = append(run.Signals, signal)
-		}
+		vectors := &queryVectors{Embedder: backend.worker, vectors: make(map[string][]float64, len(queries.Queries))}
 		if sample.Split == "evaluation" {
 			s := input.Search
-			service, err := search.New(backend.database, backend.worker, search.Config{Execution: search.Execution(s.Execution), CandidateLimit: s.CandidateLimit, SemanticThreshold: condition.Selected.Global, FoldThreshold: s.FoldThreshold, GraphStage: search.GraphStageGlobal, GlobalFallback: true, EvidencePathSelection: true}, slog.Default())
+			service, err := search.New(backend.database, vectors, search.Config{Execution: search.Execution(s.Execution), CandidateLimit: s.CandidateLimit, SemanticThreshold: condition.Selected.Global, FoldThreshold: s.FoldThreshold, GraphStage: search.GraphStageGlobal, GlobalFallback: true, EvidencePathSelection: true}, slog.Default())
 			if err != nil {
 				return err
 			}
@@ -245,6 +267,13 @@ func measureEmbeddingSample(ctx context.Context, input embeddingInput, sample em
 				}
 			}
 			run.Metrics = &runMetrics{Stage: condition.Code, Repeat: repeat, UseCases: measured.UseCases, QuerySamples: measured.QuerySamples}
+		}
+		for j, q := range queries.Queries {
+			signal, err := embeddingQuerySignal(ctx, backend, vectors, graph.GraphID, q, sample.GlobalExpected[sample.Queries[j].ID], input.Search.CandidateLimit)
+			if err != nil {
+				return err
+			}
+			run.Signals = append(run.Signals, signal)
 		}
 		run.Calls = backend.counter.calls.Load() - calls
 		run.DurationMS = float64(time.Since(start).Microseconds()) / 1000

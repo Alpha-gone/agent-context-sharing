@@ -141,9 +141,10 @@ func TestEmbeddingComparisonCommandIntegration(t *testing.T) {
 			if len(report.Runs) != 40 || len(report.Conditions) != 2 || report.StartedAt.IsZero() || report.Activated || report.Status != "deferred" {
 				t.Fatalf("report boundary: %d %s", len(report.Runs), report.Status)
 			}
-			// 조정은 문서 5개+신호 2개, 최종은 문서 5개+신호 2개+검색 2개를 각각 20회 실행한다.
-			if count := attempts.Load() - before; count != 320 {
-				t.Fatalf("actual HTTP attempts %d != 320", count)
+			// 조정은 문서 5개+신호 2개, 최종은 문서 5개+검색 2개를 각각 20회 실행한다.
+			// 최종 신호는 검색이 만든 질의 벡터를 재사용하므로 질의 임베딩을 다시 호출하지 않는다.
+			if count := attempts.Load() - before; count != 280 {
+				t.Fatalf("actual HTTP attempts %d != 280", count)
 			}
 			if report.Conditions[0].Selected.Relation != 0.3 || report.Conditions[1].Selected.Relation != in.Variants[1].RelationThresholds[0] {
 				t.Fatal(report.Conditions)
@@ -158,9 +159,9 @@ func TestEmbeddingComparisonCommandIntegration(t *testing.T) {
 				} else {
 					candidateBytes += run.Preparation.VectorBytes
 				}
+				// 측정 HTTP 시도는 조정·최종 모두 질의 수와 같다.
 				wantCalls := int64(2)
 				if run.Split == "evaluation" {
-					wantCalls = 4
 					if len(run.Metrics.QuerySamples) != 2 {
 						t.Fatal("retrieval omitted")
 					}
@@ -339,7 +340,7 @@ func TestEmbeddingSignalUsesSearchValidityTimeIntegration(t *testing.T) {
 		if len(before) == 0 {
 			t.Fatal("만료 전 시각의 키워드 후보가 없어 표본이 무효하다")
 		}
-		signal, err := embeddingQuerySignal(t.Context(), backend, graph.GraphID, querySpec{ID: "q", WorkContext: "만료표식"}, true, 10)
+		signal, err := embeddingQuerySignal(t.Context(), backend, worker, graph.GraphID, querySpec{ID: "q", WorkContext: "만료표식"}, true, 10)
 		if err != nil {
 			return err
 		}

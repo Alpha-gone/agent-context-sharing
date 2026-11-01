@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	json "encoding/json/v2"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -435,5 +437,41 @@ func TestEmbeddingLatencySLOUsesCandidateUseCaseP95(t *testing.T) {
 				t.Fatalf("판정 = %s/%s, 기대 %s/%s", report.Status, report.Reason, test.status, test.reason)
 			}
 		})
+	}
+}
+
+type countingEmbedder struct {
+	calls int
+	fail  bool
+}
+
+func (e *countingEmbedder) Embed(context.Context, string) ([]float64, error) {
+	e.calls++
+	if e.fail {
+		return nil, errors.New("synthetic outage")
+	}
+	return []float64{1, 0}, nil
+}
+
+func (e *countingEmbedder) ModelID() string { return "synthetic" }
+
+func TestQueryVectorsReuseOnlySuccessfulEmbeddings(t *testing.T) {
+	inner := &countingEmbedder{fail: true}
+	vectors := &queryVectors{Embedder: inner, vectors: map[string][]float64{}}
+	if _, err := vectors.Embed(t.Context(), "q"); err == nil {
+		t.Fatal("실패한 임베딩을 성공으로 반환했다")
+	}
+	inner.fail = false
+	for range 3 {
+		if vector, err := vectors.Embed(t.Context(), "q"); err != nil || len(vector) != 2 {
+			t.Fatalf("질의 벡터 = %v, %v", vector, err)
+		}
+	}
+	if _, err := vectors.Embed(t.Context(), "other"); err != nil {
+		t.Fatal(err)
+	}
+	// 실패 1회 + 첫 성공 1회 + 다른 질의 1회만 제공자를 호출한다.
+	if inner.calls != 3 || vectors.ModelID() != "synthetic" {
+		t.Fatalf("제공자 호출 = %d, 모델 = %s", inner.calls, vectors.ModelID())
 	}
 }

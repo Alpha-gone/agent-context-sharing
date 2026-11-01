@@ -196,7 +196,7 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 		}
 		return model.Context{}, fmt.Errorf("컨텍스트 정점 갱신: %w", err)
 	}
-	if value.Layer == model.LayerEvent {
+	if value.Layer == model.LayerEvent && !sameEventMembers(previous.Event.MemberIDs, value.Event.MemberIDs) {
 		if err := s.replaceEventMembers(ctx, tx, graphID, value); err != nil {
 			return model.Context{}, err
 		}
@@ -924,7 +924,7 @@ func (s *Store) createReferenceEdges(ctx context.Context, tx pgx.Tx, graphID mod
 	return nil
 }
 
-// replaceEventMembers는 사건 갱신 때만 기존 구성원 간선을 새 구성원 집합으로 교체한다.
+// replaceEventMembers는 구성원 집합이 달라진 사건 갱신에서 간선을 교체한다.
 func (s *Store) replaceEventMembers(ctx context.Context, tx pgx.Tx, graphID model.ID, event model.Context) error {
 	deleteQuery := "MATCH (event:Context)-[edge:HAS_MEMBER]->() WHERE event.context_id = " + cypherString(event.ID.String()) +
 		" AND event.graph_id = " + cypherString(graphID.String()) +
@@ -940,11 +940,21 @@ func sortedMemberIDs(ids []model.ID) []model.ID {
 	return slices.SortedFunc(slices.Values(ids), model.ID.Compare)
 }
 
+func sameEventMembers(previous, next []model.ID) bool {
+	if len(previous) != len(next) {
+		return false
+	}
+	if slices.Equal(previous, next) {
+		return true
+	}
+	return slices.Equal(sortedMemberIDs(previous), sortedMemberIDs(next))
+}
+
 func eventProposalInputChanged(previous, next model.Context) bool {
 	if previous.Event == nil || next.Event == nil {
 		return false
 	}
-	if !slices.Equal(sortedMemberIDs(previous.Event.MemberIDs), sortedMemberIDs(next.Event.MemberIDs)) || !previous.Event.Start.Equal(next.Event.Start) {
+	if !sameEventMembers(previous.Event.MemberIDs, next.Event.MemberIDs) || !previous.Event.Start.Equal(next.Event.Start) {
 		return true
 	}
 	if previous.Event.End == nil || next.Event.End == nil {

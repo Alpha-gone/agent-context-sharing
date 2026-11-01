@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json/v2"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -25,9 +27,6 @@ func TestOAuthAuthorizationTLSIntegration(t *testing.T) {
 	service, err := authz.New(backend, config)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err := service.Register(t.Context(), "oauth_http", "correct password"); err != nil {
-		t.Fatal("시험 계정 준비 실패")
 	}
 	security := transportSecurity{directTLS: true}
 	adapter := webAuthentication{service: service}
@@ -58,6 +57,7 @@ func TestOAuthAuthorizationTLSIntegration(t *testing.T) {
 		}
 		if method == "POST" {
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request.Header.Set("Origin", server.URL)
 		}
 		if cookie != nil {
 			request.AddCookie(cookie)
@@ -75,19 +75,48 @@ func TestOAuthAuthorizationTLSIntegration(t *testing.T) {
 	}
 	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	digest := sha256.Sum256([]byte(verifier))
-	values := url.Values{"response_type": {"code"}, "client_id": {"first"}, "redirect_uri": {"http://127.0.0.1:49152/callback"}, "resource": {"https://resource.test/mcp"}, "scope": {"agent-context"}, "code_challenge_method": {"S256"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(digest[:])}, "state": {"synthetic-state"}}
+	values := url.Values{"response_type": {"code"}, "client_id": {"first"}, "redirect_uri": {"http://127.0.0.1:49152/callback"}, "resource": {"https://resource.test/mcp"}, "scope": {"agent-context"}, "code_challenge_method": {"S256"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(digest[:])}, "state": {"synthetic & 한글 state + /?=&"}}
 	path := "/authorize?" + values.Encode()
 	response, _ := do("GET", path, "", nil)
 	login, err := url.Parse(response.Header.Get("Location"))
 	if err != nil || response.StatusCode != 303 || login.Path != "/login" || login.Query().Get("next") != path {
 		t.Fatal("로그인으로 인가 요청 전달 실패")
 	}
-	response, _ = do("POST", "/login", url.Values{"login_id": {"oauth_http"}, "password": {"correct password"}, "next": {login.Query().Get("next")}}.Encode(), nil)
+	attribute := func(body []byte, pattern string) string {
+		t.Helper()
+		match := regexp.MustCompile(pattern).FindSubmatch(body)
+		if len(match) != 2 {
+			t.Fatal("복귀 링크 또는 양식 누락")
+		}
+		return html.UnescapeString(string(match[1]))
+	}
+	response, body := do("GET", login.RequestURI(), "", nil)
+	registerLink := attribute(body, `<a href="([^"]*)">계정 등록</a>`)
+	target, err := url.Parse(registerLink)
+	if err != nil || response.StatusCode != 200 || target.Path != "/register" || target.Query().Get("next") != path {
+		t.Fatal("로그인에서 가입으로 인가 요청 전달 실패")
+	}
+	response, body = do("GET", registerLink, "", nil)
+	next := attribute(body, `<input[^>]*name="next"[^>]*value="([^"]*)"`)
+	if response.StatusCode != 200 || next != path {
+		t.Fatal("가입 양식의 원래 인가 요청 유실")
+	}
+	response, _ = do("POST", "/register", url.Values{"login_id": {"oauth_http"}, "password": {"correct password"}, "next": {next}}.Encode(), nil)
+	login, err = url.Parse(response.Header.Get("Location"))
+	if err != nil || response.StatusCode != 303 || login.Path != "/login" || login.Query().Get("registered") != "1" || login.Query().Get("next") != path {
+		t.Fatal("가입 뒤 로그인 복귀 실패")
+	}
+	response, body = do("GET", login.RequestURI(), "", nil)
+	next = attribute(body, `<input[^>]*name="next"[^>]*value="([^"]*)"`)
+	if response.StatusCode != 200 || next != path {
+		t.Fatal("로그인 양식의 인가 요청 유실")
+	}
+	response, _ = do("POST", "/login", url.Values{"login_id": {"oauth_http"}, "password": {"correct password"}, "next": {next}}.Encode(), nil)
 	if response.StatusCode != 303 || response.Header.Get("Location") != path || len(response.Cookies()) != 1 {
 		t.Fatal("로그인 뒤 인가 흐름 복원 실패")
 	}
 	cookie := response.Cookies()[0]
-	response, body := do("GET", path, "", cookie)
+	response, body = do("GET", path, "", cookie)
 	if response.StatusCode != 200 || !strings.Contains(string(body), "연결 허용") || !strings.Contains(string(body), "연결 거절") || response.Header.Get("Referrer-Policy") != "no-referrer" {
 		t.Fatal("명시적 동의 화면 누락")
 	}
@@ -133,7 +162,7 @@ func TestOAuthAuthorizationTLSIntegration(t *testing.T) {
 	if _, _, err := service.Verify(t.Context(), cookie.Value, "web"); err != nil {
 		t.Fatal("OAuth 코드 재사용이 독립 웹 세션을 폐기")
 	}
-	for _, secret := range []string{code, tokens.AccessToken, tokens.RefreshToken, rotated.AccessToken, rotated.RefreshToken, verifier, cookie.Value, "correct password", "synthetic-state"} {
+	for _, secret := range []string{code, tokens.AccessToken, tokens.RefreshToken, rotated.AccessToken, rotated.RefreshToken, verifier, cookie.Value, "correct password", values.Get("state")} {
 		hash := sha256.Sum256([]byte(secret))
 		if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), hex.EncodeToString(hash[:])) {
 			t.Fatal("서버 로그에 OAuth·계정 자격·해시 또는 state 노출")

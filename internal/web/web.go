@@ -258,12 +258,13 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 func (server *Server) register(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
 	case http.MethodGet:
-		server.render(writer, http.StatusOK, "register", pageData{Title: "계정 등록"})
+		server.render(writer, http.StatusOK, "register", pageData{Title: "계정 등록", Next: localRedirect(request.URL.Query().Get("next"))})
 	case http.MethodPost:
 		if !server.parseAuthenticationForm(writer, request, "register") {
 			return
 		}
 		loginID := request.PostForm.Get("login_id")
+		next := localRedirect(request.PostForm.Get("next"))
 		_, err := server.auth.Register(request.Context(), loginID, request.PostForm.Get("password"))
 		if request.Context().Err() != nil {
 			return
@@ -274,13 +275,17 @@ func (server *Server) register(writer http.ResponseWriter, request *http.Request
 				return
 			}
 			if errors.Is(err, ErrAuthenticationUnavailable) {
-				server.render(writer, http.StatusInternalServerError, "register", pageData{Title: "계정 등록", LoginID: loginID, Error: "계정 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."})
+				server.render(writer, http.StatusInternalServerError, "register", pageData{Title: "계정 등록", LoginID: loginID, Next: next, Error: "계정 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."})
 				return
 			}
-			server.render(writer, http.StatusBadRequest, "register", pageData{Title: "계정 등록", LoginID: loginID, Error: "로그인 아이디 또는 비밀번호 형식이 올바르지 않거나 이미 사용 중입니다."})
+			server.render(writer, http.StatusBadRequest, "register", pageData{Title: "계정 등록", LoginID: loginID, Next: next, Error: "로그인 아이디 또는 비밀번호 형식이 올바르지 않거나 이미 사용 중입니다."})
 			return
 		}
-		http.Redirect(writer, request, "/login?registered=1", http.StatusSeeOther)
+		target := url.Values{"registered": {"1"}}
+		if next != "" {
+			target.Set("next", next)
+		}
+		http.Redirect(writer, request, "/login?"+target.Encode(), http.StatusSeeOther)
 	default:
 		writer.Header().Set("Allow", "GET, POST")
 		writer.WriteHeader(http.StatusMethodNotAllowed)
@@ -1352,8 +1357,8 @@ func newVisualizationData(contexts []model.Context, edges []store.HopEdge) visua
 	return result
 }
 
-const pageTemplates = `{{define "login"}}{{template "head" .}}<h1>로그인</h1><form class="panel" method="post" action="/login">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}<label for="login-id">로그인 아이디 (필수)<input id="login-id" name="login_id" value="{{.LoginID}}" autocomplete="username" autocorrect="off" autocapitalize="off" spellcheck="false" required></label><label for="login-password">비밀번호 (필수)<input id="login-password" type="password" name="password" autocomplete="current-password" required></label><button type="submit">로그인</button></form><p><a href="/register">계정 등록</a></p>{{template "foot" .}}{{end}}
-{{define "register"}}{{template "head" .}}<h1>계정 등록</h1><form class="panel" method="post" action="/register"><label for="register-id">로그인 아이디 (필수)<input id="register-id" name="login_id" value="{{.LoginID}}" autocomplete="username" autocorrect="off" autocapitalize="off" spellcheck="false" pattern="[a-z0-9_]{3,32}" aria-describedby="register-id-help" required></label><p class="hint" id="register-id-help">영문 소문자, 숫자, 밑줄을 사용해 3~32자로 입력합니다.</p><label for="register-password">비밀번호 (필수)<input id="register-password" type="password" name="password" autocomplete="new-password" minlength="8" maxlength="128" aria-describedby="register-password-help" required></label><p class="hint" id="register-password-help">비밀번호는 8~128자입니다.</p><button type="submit">등록</button></form><p><a href="/login">로그인으로 돌아가기</a></p>{{template "foot" .}}{{end}}
+const pageTemplates = `{{define "login"}}{{template "head" .}}<h1>로그인</h1><form class="panel" method="post" action="/login">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}<label for="login-id">로그인 아이디 (필수)<input id="login-id" name="login_id" value="{{.LoginID}}" autocomplete="username" autocorrect="off" autocapitalize="off" spellcheck="false" required></label><label for="login-password">비밀번호 (필수)<input id="login-password" type="password" name="password" autocomplete="current-password" required></label><button type="submit">로그인</button></form><p><a href="/register{{if .Next}}?next={{.Next}}{{end}}">계정 등록</a></p>{{template "foot" .}}{{end}}
+{{define "register"}}{{template "head" .}}<h1>계정 등록</h1><form class="panel" method="post" action="/register">{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}<label for="register-id">로그인 아이디 (필수)<input id="register-id" name="login_id" value="{{.LoginID}}" autocomplete="username" autocorrect="off" autocapitalize="off" spellcheck="false" pattern="[a-z0-9_]{3,32}" aria-describedby="register-id-help" required></label><p class="hint" id="register-id-help">영문 소문자, 숫자, 밑줄을 사용해 3~32자로 입력합니다.</p><label for="register-password">비밀번호 (필수)<input id="register-password" type="password" name="password" autocomplete="new-password" minlength="8" maxlength="128" aria-describedby="register-password-help" required></label><p class="hint" id="register-password-help">비밀번호는 8~128자입니다.</p><button type="submit">등록</button></form><p><a href="/login{{if .Next}}?next={{.Next}}{{end}}">로그인으로 돌아가기</a></p>{{template "foot" .}}{{end}}
 {{define "logout"}}{{template "head" .}}<h1>로그아웃</h1><form class="panel" method="post" action="/logout"><p>이 브라우저의 세션을 종료합니다.</p><button type="submit">로그아웃</button></form>{{template "foot" .}}{{end}}
 {{define "message"}}{{template "head" .}}<h1>{{.Title}}</h1><p><a href="/graphs">그래프 목록</a></p>{{template "foot" .}}{{end}}
 {{define "graphs"}}{{template "head" .}}<nav><h1>그래프</h1><a href="/access">팀 관리</a><a href="/connections">연결 관리</a><a href="/operator/restores">운영자 복구</a><a href="/logout">로그아웃</a></nav>

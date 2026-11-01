@@ -561,3 +561,9 @@
 
 - 조회일: 2026-11-01 KST. [PostgreSQL 18 행 잠금](https://www.postgresql.org/docs/18/explicit-locking.html#LOCKING-ROWS)의 트랜잭션 종료까지 유지되는 FOR UPDATE 잠금과 [Read Committed](https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED)의 명령별 스냅숏을 기준으로 정리도 같은 context_graph 행을 잠그고 다음 명령에서 관계를 다시 읽는다. 회차의 세션 자문 잠금은 정리 인스턴스끼리의 실행권만 담당하므로 확정·폐기와의 행 잠금을 대신하지 않는다.
 - 일반 SQL DELETE의 조건 재평가를 AGE의 Cypher DELETE에도 그대로 적용한다고 가정하지 않는다. 저장소 Dockerfile이 고정한 AGE release_PG18_1.8.0, 실제 PostgreSQL 18.6·AGE 1.8.0에서 그래프 잠금을 우회한 UPDATE 선행·DELETE 후행을 별도 실측했다. 후행 DELETE는 SQLSTATE XX000 오류를 반환했고 최신 confirmed 관계는 남았다. 두 공개 경로가 같은 그래프 잠금을 쓰면 이 직접 경합을 만들지 않는다. 구체적인 순서·오류와 제한은 [검토 기록](reviews/2026-11-01-issue-176.md)에 둔다.
+
+
+## #269 가입 경유 인가 복귀 상태
+
+- 조회일: 2026-11-01 KST. [WHATWG HTML hidden 상태](https://html.spec.whatwg.org/multipage/input.html#hidden-state-(type=hidden))의 양식 값 전달과 [Go 1.27.3 html/template의 문맥별 escaping](https://pkg.go.dev/html/template#hdr-Contexts)을 확인했다. `next`는 일반 문자열로 넘겨 href query·숨은 필드의 속성 문맥에 맞게 escaping하고 신뢰된 URL/HTML 타입으로 승격하지 않는다.
+- 숨은 값도 클라이언트가 바꿀 수 있으므로 GET뿐 아니라 정상 해석된 POST 본문에도 기존 localRedirect 검사를 적용한다. 중첩 인가 query는 url.Values.Encode와 template query escaping으로 전달하고, 실제 응답에서 다시 해석한 값과 원래 요청의 동등성을 검증한다. 구체적인 범위·실제 TLS/DB 결과와 미실행 인수는 [검토 기록](reviews/2026-11-01-issue-269.md)에 둔다.

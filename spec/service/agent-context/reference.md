@@ -528,3 +528,9 @@
 - 조회일: 2026-11-01 KST. [pgx v5.12.0 CHANGELOG의 5.11.0 변경](https://github.com/jackc/pgx/blob/v5.12.0/CHANGELOG.md)과 공급자 [URI 해석기](https://github.com/jackc/pgx/blob/v5.12.0/pgconn/parse_url.go)를 로컬 모듈 캐시와 대조했다. pgx는 libpq 호환 해석기로 userinfo의 첫 @·반복 query의 마지막 값·+ 문자 보존·%00 거부를 처리하며 net/url의 HTTP/RFC URL 규칙과 다르다. DATABASE_URL은 PostgreSQL URI만 허용하고 해석·기본값은 실제 드라이버에 맡긴다.
 - [pgconn.ParseConfig](https://github.com/jackc/pgx/blob/v5.12.0/pgconn/config.go)는 PG 환경 기본값과 서비스/비밀번호/TLS 파일을 읽을 수 있다. 연결·풀 생성은 하지 않지만 파일을 전혀 읽지 않는 검사로 표현해서는 안 된다. 파서 오류의 비밀번호 가림은 최선 노력이고 원문을 보존할 수 있으므로 구성 오류에 원인을 연결하지 않는다.
 - [pgxpool.ParseConfig](https://github.com/jackc/pgx/blob/v5.12.0/pgxpool/pool.go)는 pgx 해석 뒤 pool_max_conns를 RuntimeParams에서 제거한다. 저장소가 명시 키의 유무를 확인할 때는 삭제 전 pgx 해석 결과를 사용한다. 접속 준비 단계에서 파서를 두 번 호출하는 비용은 있으나 URL 해석 규칙을 복제하거나 비밀번호/값의 부분 문자열로 설정을 판정하지 않는다. config는 store의 검증 함수만 호출하여 DB 드라이버와 핸들을 저장소 안에 유지한다.
+
+
+## #263 동일 사건 구성원의 간선 유지
+
+- 조회일: 2026-11-01 KST. [Apache AGE 그래프 저장 구조](https://age.apache.org/age-manual/master/intro/graphs.html#how-graphs-are-stored-in-postgres)에서 그래프별 namespace·label별 정점/간선 테이블을 확인했다. 적용 구성인 AGE release_PG18_1.8.0·PostgreSQL 18의 실제 시험 DB에서 HAS_MEMBER.id와 시작/끝 정점을 직접 조회해 기존 구성원별 간선 ID의 유지를 대조했다. 시험 조회는 정식 쓰기 경로의 결과만 읽는다.
+- 구성원은 순서와 무관한 집합이라는 기존 수명주기 계약을 재사용했다. 활성 검증·쓰기 불변식 검사는 생략하지 않고 집합이 같은 경우의 간선 DELETE/CREATE만 생략한다. 전체 지연·dead tuple 감소량은 측정하지 않았다.

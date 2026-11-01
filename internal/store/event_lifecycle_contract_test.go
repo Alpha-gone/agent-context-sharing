@@ -272,12 +272,16 @@ func TestLifeEventReconstructionIntegration(t *testing.T) {
 }
 
 func TestLifeEventRelationRollbackIntegration(t *testing.T) {
-	for _, action := range []string{"update_event", "confirm", "discard_relation", "discard_event"} {
+	for _, action := range []string{"update_event", "update_members", "confirm", "discard_relation", "discard_event"} {
 		for _, stage := range []string{"age", "graph", "audit", "commit"} {
 			t.Run(action+"/"+stage, func(t *testing.T) {
 				database := newSmallPoolStore(t)
 				graph, from, to := relationTestEvents(t, database)
 				request, operation := lifeRelationRequest(t, from, to, model.RelationTypePrecedes)
+				var addedMember model.Context
+				if action == "update_members" {
+					addedMember = lifeDerived(t, database, graph, from.CreatedBy, from.Event.MemberIDs[0])
+				}
 				var stored model.Relation
 				var err error
 				if action == "discard_relation" || action == "discard_event" {
@@ -301,6 +305,9 @@ func TestLifeEventRelationRollbackIntegration(t *testing.T) {
 						return err
 					default:
 						next := attachReferences(from, nil, from.Event.MemberIDs)
+						if action == "update_members" {
+							next.Event.MemberIDs = append(slices.Clone(next.Event.MemberIDs), addedMember.ID)
+						}
 						next.Body += " 변경"
 						next.Version++
 						_, err := database.UpdateContextWithOperation(ctx, graph, from.Version, next, registrationOperation(next, OperationUpdate), WriteLimits{})
@@ -321,6 +328,9 @@ func TestLifeEventRelationRollbackIntegration(t *testing.T) {
 						fragment = "CREATE (from)-[edge:"
 					}
 					if action == "update_event" {
+						fragment = "SET node ="
+					}
+					if action == "update_members" {
 						fragment = "DELETE edge"
 					}
 					ctx = context.WithValue(ctx, writeTransactionContextKey{}, pgx.Tx(nodeCreationFailureTx{Tx: outer, fragment: fragment}))

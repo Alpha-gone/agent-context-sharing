@@ -316,3 +316,39 @@ func TestEmbeddingRelationScreenMatchesProposalIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestEmbeddingSignalUsesSearchValidityTimeIntegration(t *testing.T) {
+	database, worker, _ := evalDatabase(t, nil)
+	id, err := model.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	validFrom, validTo := now.Add(-60*24*time.Hour), now.Add(-time.Hour)
+	set := contextSet{Version: "issue273-" + id.String(), Contexts: []contextSpec{
+		{Key: "source", Layer: "source", Body: "원천 기록이다.", Source: &sourceSpec{Channel: "conversation", Locator: "urn:issue273:source", OccurredAt: now.Add(-90 * 24 * time.Hour), OriginKind: "user_utterance"}},
+		{Key: "expired", Layer: "derived", Body: "만료표식 파생", Derived: &derivedSpec{Kind: "proposition", DerivedFrom: []string{"source"}, EvidenceState: "observation", ValidFrom: &validFrom, ValidTo: &validTo}},
+	}}
+	backend := embeddingBackend{comparisonBackend{database: database, worker: worker}}
+	err = withEvaluationGraph(t.Context(), database, worker, set, 8, func(graph loadedGraph) error {
+		// 고정 조회 시각에 해당하는 만료 전 시각에는 키워드 후보가 있어야 표본이 유효하다.
+		before, err := database.KeywordCandidates(t.Context(), graph.GraphID, "만료표식", validTo.Add(-24*time.Hour), 10)
+		if err != nil {
+			return err
+		}
+		if len(before) == 0 {
+			t.Fatal("만료 전 시각의 키워드 후보가 없어 표본이 무효하다")
+		}
+		signal, err := embeddingQuerySignal(t.Context(), backend, graph.GraphID, querySpec{ID: "q", WorkContext: "만료표식"}, true, 10)
+		if err != nil {
+			return err
+		}
+		if signal.Keyword {
+			t.Errorf("현재 시각에 만료된 파생을 전역 전환 신호의 키워드 후보로 셌다: %+v", signal)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

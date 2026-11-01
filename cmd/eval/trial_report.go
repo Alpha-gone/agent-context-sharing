@@ -351,7 +351,7 @@ func (t *manifestTrial) decisions(value any, cost trialCost) []trialDecision {
 				}
 				status, reason := "deferred", "routing_effect_and_cost_acceptance_pending"
 				for _, metric := range metrics {
-					if metric.Significant && !metric.Improved {
+					if stageMetricRegressed(metric) {
 						status, reason = "rejected", "significant_regression"
 					}
 				}

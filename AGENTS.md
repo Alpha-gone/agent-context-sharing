@@ -8,7 +8,7 @@
 ## 소유권
 
 - 루트 DOX는 저장소 구조·공통 작업 규칙·Go 기준·루트 구성 파일과 최상위 Child DOX Index를 소유한다.
-- `check-go.sh`는 공통 Go 도구 체인·의존성 빌드·정적 검사를, `.github/workflows/go.yml`은 같은 검사의 CI 실행을 소유한다.
+- `check-go.sh`는 공통 Go 도구 체인·의존성 빌드·정적 검사·의존성 취약점 검사를, `.github/workflows/go.yml`은 같은 검사의 CI 실행을 소유한다.
 - 서버는 루트 `agent_context_sharing` Go 모듈이며 구현은 `cmd/`·`internal/`, SQL은 `migrations/`, Markdown 명세는 `spec/`에 둔다.
 - [README.md](README.md)는 개요·개발 시작, [OPERATIONS.md](OPERATIONS.md)는 운영 구성 기반 시험 운영 절차를 소유한다. 동작의 정본은 서비스 SRS·분야별 SDD다.
 - `test-wal-archive.sh`·`compose.wal-test.yaml`은 개발 WAL 회귀를, `test-pitr.sh`·`compose.pitr-test.yaml`은 별도 합성 클러스터의 물리 백업·tablespace·시점 복구 인수를 소유한다. 시험은 자신이 생성한 자원만 정리한다.
@@ -39,8 +39,8 @@
 
 ## Go 기준
 
-- `go.mod`의 `go 1.27.1`과 개발·CI·검증 도구 체인을 유지한다. [Effective Go](https://go.dev/doc/effective_go), Modern Go Guidelines의 대상 버전 지침과 `gofmt`를 따른다.
-- 기본 PATH에 Go 1.27.1이 없으면 IntelliJ IDEA의 프로젝트 Go SDK를 선택한 실행 구성·통합 터미널을 사용한다. 셸에서 go를 찾지 못한 것만으로 검증 불가로 판단하지 않는다.
+- `go.mod`의 `go 1.27.3`과 개발·CI·검증 도구 체인을 유지한다. [Effective Go](https://go.dev/doc/effective_go), Modern Go Guidelines의 대상 버전 지침과 `gofmt`를 따른다.
+- 기본 PATH에 Go 1.27.3이 없으면 IntelliJ IDEA의 프로젝트 Go SDK를 선택한 실행 구성·통합 터미널을 사용한다. 셸에서 go를 찾지 못한 것만으로 검증 불가로 판단하지 않는다.
 
 ## 루트 실행 구성
 

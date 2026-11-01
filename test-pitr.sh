@@ -33,7 +33,7 @@ trap 'exit 143' TERM
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 sql() { compose exec -T "$1" psql -U pitr_test -d pitr_test -X -At -v ON_ERROR_STOP=1 -c "$2"; }
 go_binary=${GO_BINARY:-go}
-[ "$("$go_binary" env GOVERSION)" = go1.27.1 ] || fail 'Go 1.27.1이 필요하다. GO_BINARY로 SDK를 지정한다.'
+[ "$("$go_binary" env GOVERSION)" = go1.27.3 ] || fail 'Go 1.27.3이 필요하다. GO_BINARY로 SDK를 지정한다.'
 architecture=$(docker info --format '{{.Architecture}}')
 case "$architecture" in aarch64|arm64) architecture=arm64;; x86_64|amd64) architecture=amd64;; *) fail '지원하지 않는 Docker 아키텍처다.';; esac
 cd "$repo_root"

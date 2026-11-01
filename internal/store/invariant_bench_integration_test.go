@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"testing"
 
 	"agent_context_sharing/internal/model"
@@ -10,7 +11,7 @@ import (
 // BenchmarkAuditGraphIntegration은 「그래프 불변식 규칙과 감사」가 정기 주기를 정하기 전에
 // 재라고 한 그래프 크기별 전체 감사 시간과, 쓰기 한 번이 더하는 영향 주변부 검사 시간을 잰다.
 // 표본은 홉 탐색 비교와 같은 사슬 그래프이며 모든 컨텍스트가 임베딩을 가진다. 전체 감사의
-// 데이터베이스 질의는 간선·정점·임베딩 세 번과, 다른 그래프 끝이 있을 때 한 번이다.
+// 데이터베이스 질의는 정점·label 목록·간선·임베딩 네 번과, 다른 그래프 끝이 있을 때 한 번이다.
 //
 //	TEST_DATABASE_URL=... go test -run '^$' -bench AuditGraph -benchtime 10x ./internal/store
 func BenchmarkAuditGraphIntegration(b *testing.B) {
@@ -51,6 +52,50 @@ func BenchmarkAuditGraphIntegration(b *testing.B) {
 				}
 				_ = tx.Rollback(b.Context())
 			}
+		})
+	}
+}
+
+// 각 그래프의 크기를 고정하고 전체 DB의 그래프 수를 늘린다. 한 그래프 감사와
+// 등록 그래프 전체 + 한 번의 미등록 검사 비용을 함께 기록한다.
+func BenchmarkAuditMultipleGraphsIntegration(b *testing.B) {
+	for _, count := range []int{1, 8, 32} {
+		b.Run(fmt.Sprintf("graphs=%d", count), func(b *testing.B) {
+			database := newIsolatedIntegrationStore(b)
+			var ids []model.ID
+			for range count {
+				id, _ := createHopChain(b, database, 10)
+				ids = append(ids, id)
+			}
+			for _, label := range []string{"Context", "DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"} {
+				if _, err := database.pool.Exec(b.Context(), "ANALYZE "+pgx.Identifier{database.graphName, label}.Sanitize()); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.Run("selected", func(b *testing.B) {
+				for b.Loop() {
+					if _, err := database.AuditGraph(b.Context(), ids[0], EmbeddingExpectation{}); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("all", func(b *testing.B) {
+				for b.Loop() {
+					graphs, err := database.AuditGraphIDs(b.Context())
+					if err != nil {
+						b.Fatal(err)
+					}
+					for _, id := range graphs {
+						if _, err := database.AuditGraph(b.Context(), id, EmbeddingExpectation{}); err != nil {
+							b.Fatal(err)
+						}
+					}
+					if _, err := database.AuditUnregisteredGraphs(b.Context()); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*count), "ns/graph")
+			})
 		})
 	}
 }

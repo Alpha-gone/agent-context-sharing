@@ -503,3 +503,9 @@
 - 조회일: 2026-11-01 KST. [Go 공식 릴리스 이력](https://go.dev/doc/devel/release#go1.27.3)에서 Go 1.27.2의 HTTP·TLS·템플릿 보안 수정과 1.27.3의 crypto/x509 보안 수정을 확인했다. 사용자의 승인에 따라 현재 개발·CI·이미지 기준을 1.27.3으로 맞추며 과거 인수 결과는 당시 판을 보존한다.
 - [govulncheck v1.9.0 공식 문서](https://pkg.go.dev/golang.org/x/vuln@v1.9.0/cmd/govulncheck)의 기본 symbol 분석·PATH의 Go 도구 체인 선택·종료 코드를 확인했다. 기본 텍스트 출력에서 취약점 발견 시 실패하며 JSON·SARIF·OpenVEX 출력은 발견 여부와 무관하게 성공할 수 있으므로 CI 실패 판정에 사용하지 않는다. 도구 판은 고정하고 취약점 DB는 실행 시 조회한다.
 - [go-jose v4.1.7 릴리스](https://github.com/go-jose/go-jose/releases/tag/v4.1.7)와 [x/crypto v0.58.0](https://pkg.go.dev/golang.org/x/crypto@v0.58.0)을 확인하여 검출된 모듈의 보안 수정 판을 적용했다. 이후 사용자의 전체 의존성 최신화 요청에 따라 [pgx v5.12.0 공식 릴리스](https://github.com/jackc/pgx/releases/tag/v5.12.0)와 [oauth2 v0.37.0](https://pkg.go.dev/golang.org/x/oauth2@v0.37.0)을 확인하고 최신 안정 판을 함께 적용했다. `go get -u -t ./...`·`go mod tidy` 후 `go list -m -u all`과 실제 빌드·시험 패키지의 모듈을 대조하여 사용 모듈 16개에 추가 판올림이 없음을 확인했다. 상위 모듈 메타데이터에만 등장하는 미사용 항목은 직접 의존성으로 추가하지 않았다.
+
+
+## #261 삭제 영향과 유사 사건 정체성 질의 범위
+
+- 조회일: 2026-11-01 KST. [PostgreSQL 18 표현식 인덱스](https://www.postgresql.org/docs/18/indexes-expressional.html)와 [JSON 생성 함수](https://www.postgresql.org/docs/18/functions-json.html#FUNCTIONS-JSON-CREATION-TABLE)를 확인했다. 인덱스 왼쪽 식은 기존 014의 `agtype_access_operator`와 같게 유지하고 비교할 UUID 문자열은 `to_jsonb(text)::text::agtype`로 변환한다. 끝점의 LEAST/GREATEST 정규화와 정체성의 상태 전체 제외는 유지한다.
+- [Apache AGE Cypher 호출 형식](https://age.apache.org/age-manual/master/intro/cypher.html)의 FROM/하위 질의 반환을 확인했다. 적용 구성은 저장소의 AGE `release_PG18_1.8.0`·PostgreSQL 18·pgvector 0.8.6이며, 표현식 호환성과 선택 계획은 이 구성의 실제 DB로 검증했다. 네 관계 label의 count를 SQL UNION ALL과 sum으로 한 문장에서 합쳐 왕복·문장 스냅숏을 유지한다. 새 인덱스나 스키마 변경은 없다.

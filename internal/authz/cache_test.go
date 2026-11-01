@@ -25,17 +25,17 @@ type blockedRevocationStore struct {
 	started, release chan struct{}
 }
 
-func (s *blockedRevocationStore) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, error) {
-	ids, err := s.memoryStore.RevokedTokenIDs(ctx, now)
+func (s *blockedRevocationStore) IsTokenRevoked(ctx context.Context, tokenID string, now time.Time) (bool, error) {
+	revoked, err := s.memoryStore.IsTokenRevoked(ctx, tokenID, now)
 	if s.reads.Add(1) == 1 {
 		close(s.started)
 		select {
 		case <-s.release:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return false, ctx.Err()
 		}
 	}
-	return ids, err
+	return revoked, err
 }
 
 func TestRevocationReloadCannotUndoLocalRevoke(t *testing.T) {
@@ -68,8 +68,8 @@ func TestRevocationReloadCannotUndoLocalRevoke(t *testing.T) {
 	if _, _, err := service.Verify(t.Context(), token.Raw, "web"); !errors.Is(err, ErrInvalidCredential) {
 		t.Fatalf("후속 요청도 폐기 토큰을 거부해야 한다: %v", err)
 	}
-	if backend.reads.Load() != 2 {
-		t.Fatal("경쟁한 조회가 적재 시각을 연장하여 최신 DB 재조회를 막았다")
+	if backend.reads.Load() != 1 {
+		t.Fatal("진행 중인 단건 조회에 로컬 폐기를 반영하지 못했다")
 	}
 }
 
@@ -79,8 +79,7 @@ func TestConcurrentRevocationReloadsAreCoalesced(t *testing.T) {
 	t.Cleanup(release)
 	cache := newVerificationCache()
 	now := time.Now().UTC()
-	cache.loadedAt = now.Add(-revocationTTL)
-	cache.revoked["expired"] = struct{}{}
+
 	if err := backend.RevokeToken(t.Context(), "revoked", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +110,8 @@ func TestConcurrentRevocationReloadsAreCoalesced(t *testing.T) {
 	if reads := backend.reads.Load(); reads != 1 {
 		t.Fatalf("동시 폐기 목록 조회 = %d, 기대 1", reads)
 	}
-	if _, found := cache.revoked["expired"]; found {
-		t.Fatal("새 목록 적재 뒤 만료된 캐시 항목이 남았다")
+	if len(cache.revoked) != 1 {
+		t.Fatal("조회한 토큰 이외의 판정을 적재했다")
 	}
 	if revoked, err := cache.isRevoked(t.Context(), backend, "revoked", now.Add(2*time.Hour)); err != nil || revoked {
 		t.Fatalf("만료된 폐기 항목이 정리되지 않았다: %v", err)
@@ -124,9 +123,9 @@ func (s *countingStore) SigningKeys(ctx context.Context) ([]store.SigningKey, er
 	return s.memoryStore.SigningKeys(ctx)
 }
 
-func (s *countingStore) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, error) {
+func (s *countingStore) IsTokenRevoked(ctx context.Context, tokenID string, now time.Time) (bool, error) {
 	s.revocationReads.Add(1)
-	return s.memoryStore.RevokedTokenIDs(ctx, now)
+	return s.memoryStore.IsTokenRevoked(ctx, tokenID, now)
 }
 
 // TestVerificationReadsKeysAndRevocationsFromCache는 토큰 검증이 요청마다 서명 키와 폐기
@@ -235,11 +234,11 @@ func (s *failingStore) SigningKeys(ctx context.Context) ([]store.SigningKey, err
 	return s.memoryStore.SigningKeys(ctx)
 }
 
-func (s *failingStore) RevokedTokenIDs(ctx context.Context, now time.Time) ([]string, error) {
+func (s *failingStore) IsTokenRevoked(ctx context.Context, tokenID string, now time.Time) (bool, error) {
 	if s.revocationFails {
-		return nil, errStoreUnavailable
+		return false, errStoreUnavailable
 	}
-	return s.memoryStore.RevokedTokenIDs(ctx, now)
+	return s.memoryStore.IsTokenRevoked(ctx, tokenID, now)
 }
 
 // TestStoreFailureIsNotReportedAsInvalidCredential은 인증 기반 인프라 장애가 자격 증명

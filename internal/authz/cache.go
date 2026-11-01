@@ -10,10 +10,12 @@ import (
 	"github.com/go-jose/go-jose/v4"
 )
 
-// revocationTTL은 폐기 목록을 다시 읽기까지의 간격이다.
+// revocationTTL은 토큰별 폐기 상태를 다시 읽기까지의 간격이다.
 //
 // 다른 인스턴스의 폐기를 이 간격 안에 반영한다. 로컬 폐기는 간격을 기다리지 않는다.
 const revocationTTL = 10 * time.Second
+
+const maxRevocationEntries = 4096
 
 // keyMissTTL은 정상 적재한 목록에 없는 kid의 재조회를 제한한다.
 const keyMissTTL = time.Second
@@ -80,25 +82,34 @@ func (load *cacheLoad) wait(ctx context.Context) error {
 	}
 }
 
-// verificationCache는 공개 키와 웹 세션 폐기 목록을 메모리에 둔다.
+type revocationEntry struct {
+	revoked   bool
+	checkedAt time.Time
+}
+
+type revocationLoad struct {
+	*cacheLoad
+	localRevoked bool
+}
+
+// verificationCache는 공개 키와 크기가 제한된 웹 토큰별 폐기 판정을 메모리에 둔다.
 // Bearer의 개별·계열 폐기는 이 캐시를 사용하지 않는다.
 type verificationCache struct {
 	mu sync.Mutex
 	// keys에는 실제 저장된 공개 키만 둔다. 모르는 kid 자체는 적재하지 않는다.
-	keys           map[string]jose.JSONWebKey
-	keysLoadedAt   time.Time
-	keysGeneration uint64
-	keyLoad        *cacheLoad
-	// revoked에는 폐기된 토큰 식별자를 둔다. loadedAt이 지나면 다시 읽는다.
-	revoked  map[string]struct{}
-	loadedAt time.Time
-	// generation은 로컬 폐기와 적재마다 증가하여 이전 DB 스냅숏의 덮어쓰기를 막는다.
-	generation     uint64
-	revocationLoad *cacheLoad
+	keys            map[string]jose.JSONWebKey
+	keysLoadedAt    time.Time
+	keysGeneration  uint64
+	keyLoad         *cacheLoad
+	revoked         map[string]revocationEntry
+	revocationOrder []string
+	nextRevocation  int
+	// 적재 중인 항목은 같은 토큰의 대기자만 공유하며 완료/실패 때 제거한다.
+	revocationLoads map[string]*revocationLoad
 }
 
 func newVerificationCache() *verificationCache {
-	return &verificationCache{keys: make(map[string]jose.JSONWebKey), revoked: make(map[string]struct{})}
+	return &verificationCache{keys: make(map[string]jose.JSONWebKey), revoked: make(map[string]revocationEntry), revocationLoads: make(map[string]*revocationLoad)}
 }
 
 // publicKey는 알려진 공개 키를 돌려주거나, 짧은 재조회 제한 안에서 키 목록을 적재한다.
@@ -173,7 +184,7 @@ func (cache *verificationCache) invalidateKeys() {
 	cache.mu.Unlock()
 }
 
-// isRevoked는 토큰 식별자가 폐기 목록에 있는지 본다. 목록이 오래되면 먼저 다시 읽는다.
+// isRevoked는 토큰 하나만 조회하며 정상 결과를 짧게 보관한다.
 func (cache *verificationCache) isRevoked(ctx context.Context, source authStore, tokenID string, now time.Time) (bool, error) {
 	var cancel context.CancelFunc
 	for {
@@ -185,60 +196,63 @@ func (cache *verificationCache) isRevoked(ctx context.Context, source authStore,
 			cache.mu.Unlock()
 			return false, err
 		}
-		if now.Sub(cache.loadedAt) < revocationTTL {
-			_, revoked := cache.revoked[tokenID]
+		if entry, found := cache.revoked[tokenID]; found && now.Sub(entry.checkedAt) < revocationTTL {
 			cache.mu.Unlock()
-			return revoked, nil
+			return entry.revoked, nil
 		}
 		if cancel == nil {
 			ctx, cancel = context.WithTimeout(ctx, cacheLookupTimeout)
 			defer cancel()
 		}
-		if load := cache.revocationLoad; load != nil {
+		if load := cache.revocationLoads[tokenID]; load != nil {
 			cache.mu.Unlock()
 			if err := load.wait(ctx); err != nil {
 				return false, err
 			}
 			continue
 		}
-		load := &cacheLoad{done: make(chan struct{})}
-		cache.revocationLoad = load
-		generation := cache.generation
+		load := &revocationLoad{cacheLoad: &cacheLoad{done: make(chan struct{})}}
+		cache.revocationLoads[tokenID] = load
 		cache.mu.Unlock()
-		ids, err := source.RevokedTokenIDs(ctx, now)
+		revoked, err := source.IsTokenRevoked(ctx, tokenID, now)
 		result := captureCacheLoadResult(ctx, err)
-		loaded := make(map[string]struct{}, len(ids))
-		for _, id := range ids {
-			loaded[id] = struct{}{}
-		}
 		cache.mu.Lock()
 		defer cache.mu.Unlock()
 		result = result.beforePublish(ctx)
 		load.err, load.retry = result.err, result.retry
-		cache.revocationLoad = nil
+		delete(cache.revocationLoads, tokenID)
 		defer close(load.done)
 		if result.err != nil {
 			return false, result.err
 		}
-		_, revoked := loaded[tokenID]
-		if cache.generation == generation {
-			cache.revoked, cache.loadedAt = loaded, now
-			cache.generation++
-		} else {
-			// 조회 중 갱신된 캐시는 보존한다. 로컬 폐기는 적재 시각을 연장하지 않으므로
-			// 다음 요청이 다시 읽으며, 이번 요청도 새 캐시와 DB 스냅숏의 폐기를 모두 본다.
-			_, latestRevoked := cache.revoked[tokenID]
-			revoked = revoked || latestRevoked
-		}
+		// 로컬 판정이 FIFO에서 축출됐어도 진행 중 조회의 폐기 표시는 남는다.
+		revoked = revoked || load.localRevoked
+		cache.rememberRevocation(tokenID, revocationEntry{revoked: revoked, checkedAt: now})
 		return revoked, nil
 	}
 }
 
 // invalidateRevocations는 이 인스턴스가 방금 폐기한 토큰이 곧바로 막히게 한다.
 // 다른 인스턴스의 폐기는 다음 적재에서 보인다.
-func (cache *verificationCache) invalidateRevocations(tokenID string) {
+func (cache *verificationCache) invalidateRevocations(tokenID string, now time.Time) {
 	cache.mu.Lock()
-	cache.revoked[tokenID] = struct{}{}
-	cache.generation++
+	cache.rememberRevocation(tokenID, revocationEntry{revoked: true, checkedAt: now})
+	if load := cache.revocationLoads[tokenID]; load != nil {
+		load.localRevoked = true
+	}
 	cache.mu.Unlock()
+}
+
+// 호출자가 mu를 소유한다. 갱신은 순서를 유지하고 새 ID만 가장 오래 삽입된 항목과 교체한다.
+func (cache *verificationCache) rememberRevocation(tokenID string, entry revocationEntry) {
+	if _, found := cache.revoked[tokenID]; !found {
+		if len(cache.revocationOrder) < maxRevocationEntries {
+			cache.revocationOrder = append(cache.revocationOrder, tokenID)
+		} else {
+			delete(cache.revoked, cache.revocationOrder[cache.nextRevocation])
+			cache.revocationOrder[cache.nextRevocation] = tokenID
+			cache.nextRevocation = (cache.nextRevocation + 1) % maxRevocationEntries
+		}
+	}
+	cache.revoked[tokenID] = entry
 }

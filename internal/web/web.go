@@ -353,7 +353,7 @@ func (server *Server) graphList(writer http.ResponseWriter, request *http.Reques
 	}
 	filter, err := graphFilter(request)
 	if err != nil {
-		server.render(writer, http.StatusBadRequest, "graphs", pageData{Title: "그래프", Error: "등급 필터 값이 올바르지 않습니다."})
+		server.render(writer, http.StatusBadRequest, "graphs", pageData{Title: "그래프", Error: "이름 또는 등급 필터 값이 올바르지 않습니다."})
 		return
 	}
 	limits := server.config.Plans.For(accountID)
@@ -558,6 +558,13 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 		server.render(writer, http.StatusForbidden, "message", pageData{Title: "접근 제한", Error: "등급을 바꿀 권한이 없습니다."})
 		return
 	}
+
+	if action == "grant_account" || action == "add_member" || action == "remove_member" {
+		if err := model.ValidateLoginID(request.PostForm.Get("login_id")); err != nil {
+			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "로그인 아이디 형식이 올바르지 않습니다."})
+			return
+		}
+	}
 	switch action {
 	case "grant_account", "grant_team":
 		var subjectID model.ID
@@ -574,7 +581,7 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 			account, err := server.graphs.AccountByLoginID(ctx, request.PostForm.Get("login_id"))
 			if err != nil {
 				status, message := http.StatusInternalServerError, "대상 계정을 조회할 수 없습니다."
-				if errors.Is(err, store.ErrNotFound) {
+				if _, invalid := errors.AsType[model.FieldError](err); invalid || errors.Is(err, store.ErrNotFound) {
 					status, message = http.StatusBadRequest, "대상 계정을 찾을 수 없습니다."
 				}
 				server.render(writer, status, "message", pageData{Title: "권한과 팀 관리", Error: message})
@@ -621,7 +628,12 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 			return
 		}
 	case "create_team":
-		if _, err := server.graphs.CreateTeam(ctx, actorID, strings.TrimSpace(request.PostForm.Get("team_name"))); err != nil {
+		name := strings.TrimSpace(request.PostForm.Get("team_name"))
+		if err := model.ValidateText("team_name", name); err != nil || name == "" {
+			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "권한과 팀 관리", Error: "팀 이름이 올바르지 않습니다."})
+			return
+		}
+		if _, err := server.graphs.CreateTeam(ctx, actorID, name); err != nil {
 			server.render(writer, teamMutationStatus(err), "message", pageData{Title: "권한과 팀 관리", Error: "팀을 만들 수 없습니다."})
 			return
 		}
@@ -634,7 +646,7 @@ func (server *Server) changeGraphAccess(writer http.ResponseWriter, request *htt
 		account, err := server.graphs.AccountByLoginID(ctx, request.PostForm.Get("login_id"))
 		if err != nil {
 			status, message := http.StatusInternalServerError, "대상 계정을 조회할 수 없습니다."
-			if errors.Is(err, store.ErrNotFound) {
+			if _, invalid := errors.AsType[model.FieldError](err); invalid || errors.Is(err, store.ErrNotFound) {
 				status, message = http.StatusBadRequest, "대상 계정을 찾을 수 없습니다."
 			}
 			server.render(writer, status, "message", pageData{Title: "권한과 팀 관리", Error: message})
@@ -1089,6 +1101,9 @@ func graphListPage(filter model.GraphListFilter, cursor string) string {
 
 func graphFilter(request *http.Request) (model.GraphListFilter, error) {
 	filter := model.GraphListFilter{Name: strings.TrimSpace(request.URL.Query().Get("name"))}
+	if err := model.ValidateText("name", filter.Name); err != nil {
+		return model.GraphListFilter{}, err
+	}
 	var selected []model.GraphGrade
 	for _, value := range request.URL.Query()["grade"] {
 		// 기존 "모든 등급" URL의 빈 값도 등급 조건 없음으로 유지한다.

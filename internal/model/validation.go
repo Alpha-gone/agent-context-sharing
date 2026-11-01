@@ -1,6 +1,9 @@
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+)
 
 // ValidateGraphUpdate는 이름·설명과 다음 판만 바뀌었는지 확인한다.
 // 삭제·보관 유예·저장량·활동 시각의 시스템 전이는 별도 저장 계약이 담당한다.
@@ -72,3 +75,16 @@ func ValidateSupersedes(derived, previous Context) error {
 	}
 	return nil
 }
+
+var loginIDPattern = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
+
+// ValidateLoginID는 가입·로그인·계정 지정에 공통인 아이디 형식을 검사한다.
+func ValidateLoginID(value string) error {
+	if !loginIDPattern.MatchString(value) {
+		return FieldError{Field: "login_id", Message: "로그인 아이디는 소문자·숫자·밑줄 3~32자여야 한다"}
+	}
+	return nil
+}
+
+// ValidateText는 저장 가능한 UTF-8이며 NUL을 포함하지 않는지 검사한다.
+func ValidateText(field, value string) error { return validateText(field, value) }

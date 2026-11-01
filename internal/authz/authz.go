@@ -11,7 +11,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -30,8 +29,6 @@ const (
 	passwordHashPrefix    = "bcrypt-sha256-b64-v2:"
 	legacyRawDigestPrefix = "bcrypt-sha256-v1:"
 )
-
-var loginIDPattern = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
 
 var (
 	// ErrInvalidCredential은 제시한 자격 증명 자체가 유효하지 않다는 결과다.
@@ -114,7 +111,7 @@ func New(source authStore, config Config) (*Service, error) {
 // Register는 형식이 맞는 로그인 아이디와 bcrypt-SHA-256 해시를 가진 새 계정을 만든다.
 func (s *Service) Register(ctx context.Context, loginID, password string) (accountID model.ID, resultErr error) {
 	defer func() { s.authObservation(ctx, "registration", accountID, "", model.ID{}, resultErr) }()
-	if !loginIDPattern.MatchString(loginID) || !validPassword(password) {
+	if model.ValidateLoginID(loginID) != nil || !validPassword(password) {
 		return model.ID{}, ErrInvalidAccountInput
 	}
 	if err := s.passwords.acquire(ctx); err != nil {
@@ -154,7 +151,7 @@ func (s *Service) Authenticate(ctx context.Context, loginID, password string) (a
 	defer s.passwords.release()
 	var account store.Account
 	var err error
-	if loginIDPattern.MatchString(loginID) {
+	if model.ValidateLoginID(loginID) == nil {
 		account, err = s.store.AccountByLoginID(ctx, loginID)
 	} else {
 		err = store.ErrNotFound

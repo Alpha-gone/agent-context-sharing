@@ -193,6 +193,9 @@ func (s *Store) CreateTeam(ctx context.Context, actorID model.ID, name string) (
 	if !actorID.IsV7() {
 		return model.Team{}, fmt.Errorf("팀 생성 인자가 올바르지 않다")
 	}
+	if err := model.ValidateText("name", name); err != nil {
+		return model.Team{}, err
+	}
 	if name == "" {
 		return model.Team{}, model.FieldError{Field: "name", Message: "팀 이름은 비어 있을 수 없다"}
 	}

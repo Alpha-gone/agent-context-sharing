@@ -268,7 +268,7 @@ func TestDeleteProposedRelationMissingIntegration(t *testing.T) {
 	accountID := newTestID(t)
 	createTestAccount(t, database, accountID)
 	graphID := createTestGraph(t, database, accountID)
-	removed, err := database.deleteProposedRelation(t.Context(), graphID, newTestID(t))
+	removed, err := database.deleteProposedRelation(t.Context(), graphID, newTestID(t), time.Now().UTC())
 	if err != nil || removed {
 		t.Fatalf("이미 사라진 관계 후보 삭제 = removed:%t err:%v", removed, err)
 	}

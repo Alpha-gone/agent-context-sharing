@@ -555,3 +555,9 @@
 - 조회일: 2026-11-01 KST. [PostgreSQL 18 표현식 인덱스](https://www.postgresql.org/docs/18/indexes-expressional.html)의 질의와 같은 표현식 조건을 적용하여 Context의 기존 text graph_id 인덱스와 새 일곱 edge label의 text graph_id 인덱스를 사용한다. 기존 agtype 인덱스·적용 SQL·checksum은 보존한다. 정점 속성과 간선 속성의 판독은 agtype JSON으로 유지하여 자료형 손상이 문자열로 바뀌지 않게 한다.
 - [UNION의 중복 제거](https://www.postgresql.org/docs/18/queries-union.html)를 이용해 간선 소속·시작점·끝점으로 고른 행을 합친다. 물리 id가 포함되므로 같은 속성의 서로 다른 간선은 보존한다. [EXPLAIN ANALYZE와 BUFFERS](https://www.postgresql.org/docs/18/using-explain.html)로 범위 선택과 끝점 조인의 실제 스캔량·반복 수·버퍼를 측정한다. 끝점은 범위를 고른 뒤 LATERAL 조회로 읽어 전체 Context 해시 조인을 피한다.
 - 계약 label의 범위 비용을 검증하는 표본과 예상 밖 label의 손상 검출을 구분한다. 예상 밖 label에는 계약 인덱스를 새로 쓰지 않으므로 그 비정상 테이블의 조회 비용까지 정상 label의 측정값으로 보장하지 않는다. 범위·다중 그래프 벤치마크 조건과 손상 동등성 결과는 [검토 기록](reviews/2026-11-01-issue-270.md)에 둔다.
+
+
+## #176 관계 후보 정리와 판단의 직렬화
+
+- 조회일: 2026-11-01 KST. [PostgreSQL 18 행 잠금](https://www.postgresql.org/docs/18/explicit-locking.html#LOCKING-ROWS)의 트랜잭션 종료까지 유지되는 FOR UPDATE 잠금과 [Read Committed](https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED)의 명령별 스냅숏을 기준으로 정리도 같은 context_graph 행을 잠그고 다음 명령에서 관계를 다시 읽는다. 회차의 세션 자문 잠금은 정리 인스턴스끼리의 실행권만 담당하므로 확정·폐기와의 행 잠금을 대신하지 않는다.
+- 일반 SQL DELETE의 조건 재평가를 AGE의 Cypher DELETE에도 그대로 적용한다고 가정하지 않는다. 저장소 Dockerfile이 고정한 AGE release_PG18_1.8.0, 실제 PostgreSQL 18.6·AGE 1.8.0에서 그래프 잠금을 우회한 UPDATE 선행·DELETE 후행을 별도 실측했다. 후행 DELETE는 SQLSTATE XX000 오류를 반환했고 최신 confirmed 관계는 남았다. 두 공개 경로가 같은 그래프 잠금을 쓰면 이 직접 경합을 만들지 않는다. 구체적인 순서·오류와 제한은 [검토 기록](reviews/2026-11-01-issue-176.md)에 둔다.

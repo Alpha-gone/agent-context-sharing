@@ -746,6 +746,9 @@ func (s *Store) updateRelation(ctx context.Context, tx pgx.Tx, graphID model.ID,
 		" AND to.context_id = " + cypherString(relation.ToContextID.String()) +
 		" SET edge = " + properties + " RETURN edge, startNode(edge), endNode(edge)"
 	stored, err := s.relationFromCypher(ctx, tx, graphID, query)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.Relation{}, ErrNotFound
+	}
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("사건 관계 갱신: %w", err)
 	}

@@ -200,7 +200,7 @@ func TestSimilarProposalIdentityScopeIntegration(t *testing.T) {
 		if len(proposalRelations(t, database, graph)) != 4 {
 			t.Fatal("기존 세 정체성의 상태가 후보 제외에서 보존되지 않음")
 		}
-		if removed, err := database.deleteRelationProposal(t.Context(), database.pool, graph, created); err != nil || !removed {
+		if removed, err := database.deleteProposedRelation(t.Context(), graph, created.ID, time.Now().UTC().Add(time.Hour)); err != nil || !removed {
 			t.Fatalf("시험 생성 후보 정리: %t %v", removed, err)
 		}
 		rows, err := database.pool.Query(t.Context(), queries[0], append([]any{pgx.QueryExecModeExec}, args[0]...)...)

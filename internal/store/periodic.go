@@ -118,7 +118,7 @@ func (s *Store) cleanupGraphProposals(ctx context.Context, graphID model.ID, cut
 			if relation.ProposedAt.After(cutoff) {
 				continue
 			}
-			removed, err := s.deleteRelationProposal(ctx, s.pool, graphID, relation)
+			removed, err := s.deleteProposedRelation(ctx, graphID, relation.ID, cutoff)
 			if err != nil {
 				return deleted, err
 			}
@@ -280,20 +280,42 @@ func (s *Store) retentionGraphs(ctx context.Context) ([]retentionGraph, error) {
 	return graphs, nil
 }
 
-// deleteProposedRelation은 아직 proposed인 관계만 지운다. 목록을 읽은 뒤 다른 요청이 확정하거나
-// 버린 관계는 대상이 없으므로 오류가 아니라 지우지 않은 것으로 돌려준다.
-func (s *Store) deleteProposedRelation(ctx context.Context, graphID, relationID model.ID) (bool, error) {
-	relation, err := s.relationByID(ctx, s.pool, graphID, relationID)
+// 후보마다 그래프 행 잠금을 잡고 최신 상태와 보존 시각을 다시 판정한다. 목록을 읽은 뒤
+// 확정·폐기·재제안된 관계를 옛 상태로 지우지 않으며, 삭제 그래프도 보존 정리는 계속한다.
+func (s *Store) deleteProposedRelation(ctx context.Context, graphID, relationID model.ID, cutoff time.Time) (removed bool, err error) {
+	tx, err := s.writeTransaction(ctx)
+	if err != nil {
+		return false, fmt.Errorf("관계 후보 정리 트랜잭션 시작: %w", err)
+	}
+	defer finishWrite(ctx, tx, "deleteProposedRelation", &err)
+	locked, err := lockGraphs(ctx, tx, []model.ID{graphID})
+	if err != nil {
+		return false, err
+	}
+	if len(locked) == 0 {
+		return false, nil
+	}
+	relation, err := s.relationByID(ctx, tx, graphID, relationID)
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return s.deleteRelationProposal(ctx, s.pool, graphID, relation)
+	if relation.State != model.RelationStateProposed || relation.ProposedAt.After(cutoff) {
+		return false, nil
+	}
+	removed, err = s.deleteRelationProposal(ctx, tx, graphID, relation)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("관계 후보 정리 커밋: %w", err)
+	}
+	return removed, nil
 }
 
-func (s *Store) deleteRelationProposal(ctx context.Context, queryer cypherQueryer, graphID model.ID, relation model.Relation) (bool, error) {
+func (s *Store) deleteRelationProposal(ctx context.Context, queryer pgx.Tx, graphID model.ID, relation model.Relation) (bool, error) {
 	label, err := relationLabel(relation.Type)
 	if err != nil {
 		return false, err

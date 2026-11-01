@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"agent_context_sharing/internal/store"
 )
 
 var hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_.])?$`)
@@ -31,15 +33,8 @@ func validateAddress(address string) error {
 }
 
 func validateDatabaseURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return invalid("DATABASE_URL", "URL 형식이 아니다", err)
-	}
-	if (u.Scheme != "postgres" && u.Scheme != "postgresql") || !validHost(u) || strings.Contains(raw, "#") {
-		return invalid("DATABASE_URL", "host가 있는 PostgreSQL URL이 아니다", nil)
-	}
-	if _, err := url.ParseQuery(u.RawQuery); err != nil {
-		return invalid("DATABASE_URL", "query 형식이 아니다", err)
+	if err := store.ValidateDatabaseURL(raw); err != nil {
+		return invalid("DATABASE_URL", "PostgreSQL 접속 URL을 해석할 수 없다", nil)
 	}
 	return nil
 }

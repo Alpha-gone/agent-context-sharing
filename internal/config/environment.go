@@ -26,7 +26,8 @@ var allowedKeys = []string{
 // AllowedKeys는 서버가 읽는 키의 독립된 목록을 반환한다.
 func AllowedKeys() []string { return slices.Clone(allowedKeys) }
 
-// Load는 허용된 키를 한 번씩 읽은 뒤 외부 자원에 접근하지 않고 검증한다.
+// Load는 허용된 키를 한 번씩 읽은 뒤 DB 연결·제공자 호출 전에 검증한다.
+// PostgreSQL 접속 해석은 pgx의 환경 기본값과 서비스/비밀번호/TLS 파일을 읽을 수 있다.
 // 실패하면 부분 구성을 반환하지 않는다.
 func Load(env Environment) (Config, error) {
 	if env == nil {

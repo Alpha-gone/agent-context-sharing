@@ -170,6 +170,31 @@ func runEmbeddingInput(ctx context.Context, input embeddingInput, configs []sett
 	return writeReport(output, result)
 }
 
+// embeddingQuerySignal은 실제 검색이 전역 전환을 판단할 때와 같은 의미·키워드 후보로 한
+// 질의의 신호를 만든다. 검색은 두 채널의 파생 유효성을 현재 시각으로 판정하고 고정 조회
+// 시각은 시간 채널에만 쓴다. 신호에 조회 시각을 쓰면 그 시각과 현재 사이에 만료된 파생이
+// 신호에만 남아 임계값 조정이 현행 전환 규칙과 다른 후보 집합에서 계산된다.
+func embeddingQuerySignal(ctx context.Context, backend embeddingBackend, graphID model.ID, query querySpec, expected bool, limit int) (embeddingSignal, error) {
+	vector, err := backend.worker.Embed(ctx, query.WorkContext)
+	if err != nil {
+		return embeddingSignal{}, err
+	}
+	current := time.Now().UTC()
+	semantic, err := backend.database.SemanticCandidates(ctx, graphID, backend.worker.ModelID(), vector, current, limit)
+	if err != nil {
+		return embeddingSignal{}, err
+	}
+	keywords, err := backend.database.KeywordCandidates(ctx, graphID, query.WorkContext, current, limit)
+	if err != nil {
+		return embeddingSignal{}, err
+	}
+	signal := embeddingSignal{Query: query.ID, Keyword: len(keywords) > 0, Semantic: len(semantic) > 0, Top: -1, Expected: expected}
+	if len(semantic) > 0 {
+		signal.Top = semantic[0].Similarity
+	}
+	return signal, nil
+}
+
 func measureEmbeddingSample(ctx context.Context, input embeddingInput, sample embeddingSample, backend embeddingBackend, condition embeddingCondition, repeat int) (embeddingRun, error) {
 	run := embeddingRun{Variant: condition.Code, Split: sample.Split, Sample: sample.Code, Unit: sample.Unit, Repeat: repeat, Cost: -1}
 	set := sample.Contexts
@@ -196,21 +221,9 @@ func measureEmbeddingSample(ctx context.Context, input embeddingInput, sample em
 			q.IndependentUnit = sample.Unit
 		}
 		for j, q := range queries.Queries {
-			vector, err := backend.worker.Embed(ctx, q.WorkContext)
+			signal, err := embeddingQuerySignal(ctx, backend, graph.GraphID, q, sample.GlobalExpected[sample.Queries[j].ID], input.Search.CandidateLimit)
 			if err != nil {
 				return err
-			}
-			semantic, err := backend.database.SemanticCandidates(ctx, graph.GraphID, backend.worker.ModelID(), vector, input.AsOf, input.Search.CandidateLimit)
-			if err != nil {
-				return err
-			}
-			keywords, err := backend.database.KeywordCandidates(ctx, graph.GraphID, q.WorkContext, input.AsOf, input.Search.CandidateLimit)
-			if err != nil {
-				return err
-			}
-			signal := embeddingSignal{Query: q.ID, Keyword: len(keywords) > 0, Semantic: len(semantic) > 0, Top: -1, Expected: sample.GlobalExpected[sample.Queries[j].ID]}
-			if len(semantic) > 0 {
-				signal.Top = semantic[0].Similarity
 			}
 			run.Signals = append(run.Signals, signal)
 		}

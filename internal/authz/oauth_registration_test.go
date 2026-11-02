@@ -116,7 +116,7 @@ func TestDCRRejectsInvalidMetadataAndCallbacks(t *testing.T) {
 			}
 		})
 	}
-	for _, callback := range []string{"", "/callback", "http://localhost:49152/callback", "http://client.test:49152/callback", "http://127.0.0.1/callback", "http://127.0.0.1:0/callback", "http://127.0.0.1:65536/callback", "http://[::ffff:127.0.0.1]:49152/callback", "http://[::1%25lo0]:49152/callback", "https://user@client.test/callback", "https://client.test/callback#", "https://*.test/callback", "https://client.test:/callback", "https://client.test/callback?bad=%xx", strings.Repeat("x", 1025)} {
+	for _, callback := range []string{"", "/callback", "http://client.test:49152/callback", "http://127.0.0.1/callback", "http://127.0.0.1:0/callback", "http://127.0.0.1:65536/callback", "http://[::ffff:127.0.0.1]:49152/callback", "http://[::1%25lo0]:49152/callback", "https://user@client.test/callback", "https://client.test/callback#", "https://*.test/callback", "https://client.test:/callback", "https://client.test/callback?bad=%xx", strings.Repeat("x", 1025)} {
 		t.Run(callback, func(t *testing.T) {
 			body, _ := json.Marshal(map[string]any{"redirect_uris": []string{callback}})
 			response := httptest.NewRecorder()
@@ -320,5 +320,25 @@ func TestDCRRegistryFailureInRefreshAndBearer(t *testing.T) {
 	service.oauth.Clients = canceledClientLookup{cancel: cancel}
 	if err := service.ValidateAuthorizationTarget(ctx, "first", "http://127.0.0.1:49152/callback", service.oauth.Resource); !errors.Is(err, context.Canceled) {
 		t.Fatal("lookup cancellation hidden as missing client", err)
+	}
+}
+
+func TestDCRLocalhostCallbackRequiresExactMatch(t *testing.T) {
+	service := newRegistrationTestService(t)
+	registered := "http://localhost:49152/callback?fixed=1"
+	client, err := service.RegisterClient(t.Context(), ClientRegistration{RedirectURIs: []string{registered}})
+	if err != nil {
+		t.Fatal("localhost callback registration failed", err)
+	}
+	for _, callback := range []string{registered, "http://localhost:49153/callback?fixed=1", "http://127.0.0.1:49152/callback?fixed=1", "http://[::1]:49152/callback?fixed=1", "http://localhost:49152/other?fixed=1", "http://localhost:49152/callback?fixed=2", "http://LOCALHOST:49152/callback?fixed=1", "http://localhost.:49152/callback?fixed=1"} {
+		err := service.ValidateAuthorizationTarget(t.Context(), client.ClientID, callback, "https://resource.test/mcp")
+		if (err == nil) != (callback == registered) {
+			t.Errorf("callback %q accepted=%t", callback, err == nil)
+		}
+	}
+	for _, callback := range []string{"http://localhost/callback", "http://localhost:0/callback", "http://localhost:65536/callback", "http://localhost.evil.test:49152/callback", "http://other.localhost:49152/callback", "http://localhost.:49152/callback", "http://LOCALHOST:49152/callback", "http://user@localhost:49152/callback", "http://localhost:49152/callback#fragment"} {
+		if _, err := service.RegisterClient(t.Context(), ClientRegistration{RedirectURIs: []string{callback}}); err == nil {
+			t.Errorf("unsafe localhost callback registered: %q", callback)
+		}
 	}
 }

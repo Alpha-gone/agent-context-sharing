@@ -295,7 +295,7 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 
 `MCP_RESOURCE_URL`·`MCP_ALLOWED_ORIGINS`·`DIAGNOSTIC_INSTANCE_ID`는 필수다. 리소스 URI는 query·fragment·userinfo 없이 정확한 `/mcp` 경로를 사용한다. Origin은 경로가 없는 원문을 보존하며 빈 항목·중복·와일드카드를 거부한다. issuer와 리소스의 호스트가 같아야 한다는 제약은 두지 않는다.
 
-클라이언트 등록은 항상 활성화된 공개 DCR을 사용한다. 사전 등록 환경 변수는 읽지 않으며 등록 API·callback 검증·요청 제한·총량은 [인증 설계](authentication.md#oauth-discovery와-최초-인가)가 소유한다. `016_oauth_client.sql` 적용 후 서버를 갱신하고 이전 고정 client ID를 사용하는 호스트는 수동 설정을 제거하여 다시 등록·인가받는다. 과거 ID·토큰의 자동 이관과 기존 데이터 삭제는 수행하지 않는다. 총량 10000개에 도달하면 운영자가 등록 상태를 조사하며 활성 등록을 자동 삭제하지 않는다.
+클라이언트 등록은 항상 활성화된 공개 DCR을 사용한다. Claude Code의 명시 포트 localhost callback도 등록하며 포트·경로·query까지 완전 일치로 대조한다. 서버는 DNS로 localhost를 IP로 변환하지 않는다. 참여자 안내는 [README](../../../../README.md#2-claude-code)를 따른다. 사전 등록 환경 변수는 읽지 않으며 등록 API·callback 검증·요청 제한·총량은 [인증 설계](authentication.md#oauth-discovery와-최초-인가)가 소유한다. `016_oauth_client.sql` 적용 후 서버를 갱신하고 이전 고정 client ID를 사용하는 호스트는 수동 설정을 제거하여 다시 등록·인가받는다. 과거 ID·토큰의 자동 이관과 기존 데이터 삭제는 수행하지 않는다. 총량 10000개에 도달하면 운영자가 등록 상태를 조사하며 활성 등록을 자동 삭제하지 않는다.
 
 진단 루트는 절대 경로이고 `.`·`..`·중복 구분자·제어 문자·역슬래시를 포함하지 않는다. 임시 루트(`/tmp`, `/var/tmp`, `/private/tmp`, `/private/var/tmp`, `/var/folders`, `/private/var/folders`, `/dev/shm`)와 공개 자산용 `assets`·`public`·`static` 경로 구성 요소를 거부한다. 슬롯은 `[A-Za-z0-9_-]{1,64}`만 받는다. 이 검사는 파일 시스템에 접근하지 않는다. 심볼릭 링크·실제 소유권·영속성·권한·중복 슬롯 잠금은 [기록기 기동](observability.md#경로권한다중-인스턴스)에서 확인한다.
 

@@ -357,7 +357,7 @@ macOS/Linux에서 정상 네 파일·완전한 JSON·권한·같은 ID의 동시
 
 `TBD-AGENT_CONTEXT-064`의 선택 기준은 확정되었고 실제 적합성 검증은 대기다. 현재 재검증 대상은 macOS의 Codex CLI `0.160.1`, 서버는 Go `1.27.3`, 공식 MCP Go SDK `v1.8.0`, 초기 revision은 `2026-07-28`다. Codex 앱·IDE 표면으로 지원 완료를 확대하지 않는다. 기존 TEST-08 인수 기록은 Go 1.27.1에서의 결과로 보존하며, Go 1.27.3으로 그 호스트 인수 결과를 자동 승계하지 않는다.
 
-현재 등록 경로는 DCR 전용이다. Codex 설정에서 고정 `oauth.client_id`를 제거하고 discovery의 `registration_endpoint`로 자동 등록하는지 확인한다. callback은 `http://127.0.0.1:49152/callback`이며 `oauth.callback_url`·`oauth.callback_port`가 같은 URI·포트로 수신해야 한다. 클라이언트가 표시한 실제 URI와 등록한 URI, 고정 issuer·성공/오류 응답 `iss`가 일치해야 한다. HTTP 예외는 literal loopback callback에 한정한다. 기존 TEST-08의 사전 등록 인수 결과는 역사적 근거이며 DCR CLI 인수 완료를 뜻하지 않는다.
+현재 등록 경로는 DCR 전용이다. Codex 설정에서 고정 `oauth.client_id`를 제거하고 discovery의 `registration_endpoint`로 자동 등록하는지 확인한다. callback은 `http://127.0.0.1:49152/callback`이며 `oauth.callback_url`·`oauth.callback_port`가 같은 URI·포트로 수신해야 한다. 클라이언트가 표시한 실제 URI와 등록한 URI, 고정 issuer·성공/오류 응답 `iss`가 일치해야 한다. HTTP 예외는 literal loopback 또는 완전 일치 localhost callback에 한정한다. 기존 TEST-08의 사전 등록 인수 결과는 역사적 근거이며 DCR CLI 인수 완료를 뜻하지 않는다.
 
 | 인수 | 관찰할 결과 | 실패 대조 |
 |---|---|---|
@@ -411,3 +411,7 @@ macOS/Linux에서 정상 네 파일·완전한 JSON·권한·같은 ID의 동시
 DCR 모듈 시험은 `TestDCR*`로 발급·메타데이터 거부·callback·본문·출처별 한도·상태 포화·저장 장애·취소를 검사한다. `TestDCRClientPersistenceIntegration`·`TestDCRClientCapacityConcurrentIntegration`은 격리 DB의 공유 저장·중복 ID 보존·동시 총량 상한을 검사한다. `TestDCRAccountAndRestartIntegration`은 실제 TLS 등록·코드 교환·두 계정의 토큰 분리·새 서비스의 검증·갱신을 검사한다. 필수 DB 설정은 루트 계약을 따른다. 실제 CLI 재인수는 `TestTEST08CodexCLIOAuthIntegration`의 DCR 경로를 별도로 실행하며 설치된 CLI만으로 통과를 선언하지 않는다.
 
 `TestDCRCodexCLIRegistrationIntegration`은 `TEST_DCR_CODEX_BINARY`에 실제 CLI 바이너리를 지정하여 discovery→DCR→인가 URL만 검사한다. 2026-11-02 codex-cli 0.165.0·Go 1.27.3으로 통과했다. 사용자 로그인·동의·토큰 저장은 이 시험에서 수행하지 않으며 TEST-08 전체 브라우저 인수를 대신하지 않는다.
+
+## localhost callback 호환성 (#300)
+
+`TestDCRLocalhostCallbackRequiresExactMatch`는 localhost 등록과 포트·호스트·경로·query·대소문자/후행 점 변형의 거부를 대조한다. `TestLocalhostCallbackConsentAndTokenIntegration`은 TLS DCR→인가 동의→원문 localhost callback→잘못된 포트의 교환 거부→정상 코드 교환·Bearer 검증을 실제 격리 DB로 검사한다. 기존 IP literal의 same_ip·exact와 Codex 경계 시험도 유지한다. 사전 등록은 복구하지 않는다. 실제 Claude Code의 인수 범위와 미실행 조건은 [#300 검토](../reviews/2026-11-02-issue-300.md)에 기록한다.

@@ -572,3 +572,9 @@
 
 - [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591): 등록 JSON, 공개 client 메타데이터, 201 응답, invalid_redirect_uri·invalid_client_metadata. 2026-11-02 조회. 인증 설계의 DCR 계약에 반영한다.
 - [MCP 2026-07-28 Authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization): 등록 방식 선택과 OAuth 흐름. 2026-11-02 조회. 기존 PKCE·resource·issuer 검증을 유지하며 DCR을 채택한다. 공식 문서는 실제 Codex 상호운용 완료 근거로 사용하지 않는다.
+
+## Claude Code localhost callback (#300, 2026-11-02)
+
+- [Claude Code MCP 공식 안내](https://code.claude.com/docs/en/mcp): localhost callback과 DCR에서 client ID 없이 --callback-port를 사용하는 고정 포트 연결 방법. 2026-11-02 조회. README·운영 안내와 callback 계약에 반영한다.
+- [RFC 8252 §7.3·§8.3](https://www.rfc-editor.org/rfc/rfc8252.html#section-8.3): loopback IP literal 권고와 localhost 이름 해석의 주의점을 확인했다. 기본 IP literal 동작을 유지하며 Claude Code 호환 예외로 소문자 localhost를 명시 포트·등록 원문 완전 일치로만 허용한다. 포트 예외와 DNS 정규화는 추가하지 않는다. 2026-11-02 조회.
+- [Claude Code 환경 변수](https://code.claude.com/docs/en/env-vars): CLAUDE_CONFIG_DIR로 시험 설정을 분리한다. 설치 판의 `claude mcp add --help`·`claude mcp login --help` 제공 여부와 실제 동작 검증을 구분한다. 2026-11-02 조회.

@@ -42,11 +42,11 @@
 
 등록은 `redirect_uris` 1~8개, URI당 최대 1024바이트, 선택 `client_name` 최대 128자를 받는다. JSON 본문은 8 KiB이며 중복 이름·잘못된 타입·빈 목록을 거부한다. 응답은 `201`·no-store·등록 메타데이터와 발급 시각이다. `token_endpoint_auth_method=none`, `response_types=["code"]`, `grant_types=["authorization_code","refresh_token"]`, `scope=agent-context`로 제한한다. 생략한 선택 값은 이 지원값으로 채우며 지원하지 않는 값은 거부한다. client가 요청한 ID는 채택하지 않는다. 잘못된 callback은 `400 invalid_redirect_uri`, 메타데이터는 `400 invalid_client_metadata`다.
 
-HTTP callback은 명시 포트가 있는 literal loopback IP만 허용한다. localhost·일반 HTTP·fragment·사용자 정보·잘못된 포트·중복 URI는 거부한다. HTTPS는 완전 일치이고 HTTP loopback은 같은 IP·원문 경로·query의 포트만 달라질 수 있다. 제품 이름이나 자기 신고 client_name을 신뢰된 신원으로 취급하지 않는다.
+HTTP callback은 명시 포트가 있는 literal loopback IP 또는 정확한 소문자 localhost만 허용한다. localhost는 등록 원문과 포트·경로·query까지 완전 일치로 대조하며 같은 이름의 가변 포트 예외와 IP literal 치환은 허용하지 않는다. 일반 HTTP·localhost 하위 이름·대문자/후행 점 변형·fragment·사용자 정보·잘못된 포트·중복 URI는 거부한다. HTTPS는 완전 일치이고 HTTP loopback은 같은 IP·원문 경로·query의 포트만 달라질 수 있다. 제품 이름이나 자기 신고 client_name을 신뢰된 신원으로 취급하지 않는다.
 
 등록 HTTP 처리기는 기존 전송 계층이 검증한 출처에 독립적인 10회/분 고정 창을 적용한다. IPv4는 /32·IPv6는 /64로 묶고 최대 4096개 활성 출처만 유지한다. 제한·출처 상태 포화는 `429`·Retry-After이며 만료 항목만 회수한다. DB는 전용 트랜잭션 잠금 아래 등록 총량 10000개를 검사하며 포화는 `429`다. 이 상한은 다중 인스턴스에서도 공유한다. 등록을 자동 삭제하지 않으며 포화는 운영자가 조사한다. 사용자 로그인·명시적 동의·PKCE와 계정별 토큰·권한 검증은 계속 필요하다.
 
-구성 계층이 검증한 issuer·resource와 공유 DB client registry를 인증 서비스에 주입한다. 요청의 client·resource는 원문으로 등록과 대조한다. HTTPS callback은 완전 일치이며 HTTP literal loopback은 유효한 명시 포트의 변경만 허용한다. IP 표기·경로·query·escape는 바꾸지 않는다. DCR이 저장하는 포트 정책은 same_ip다. 등록 대조 자체는 리디렉션이나 외부 요청을 수행하지 않고, 미등록·결합 위반은 고정된 오류로 반환한다.
+구성 계층이 검증한 issuer·resource와 공유 DB client registry를 인증 서비스에 주입한다. 요청의 client·resource는 원문으로 등록과 대조한다. HTTPS callback은 완전 일치이며 HTTP literal loopback은 유효한 명시 포트의 변경만 허용한다. IP 표기·경로·query·escape는 바꾸지 않는다. DCR이 저장하는 포트 정책은 same_ip지만 포트 예외는 literal loopback IP에만 적용한다. localhost의 완전 일치 검증에는 DNS 조회를 사용하지 않는다. 등록 대조 자체는 리디렉션이나 외부 요청을 수행하지 않고, 미등록·결합 위반은 고정된 오류로 반환한다.
 
 두 메타데이터 경로는 TLS 판정 뒤 인증 없이 GET·HEAD로 제공하고 JSON·no-store를 사용한다. issuer와 endpoint는 설정 origin에 고정하며 요청 Host·전달 헤더로 만들지 않는다. 발견 구현은 인가·token·갱신 처리의 완료를 뜻하지 않으며 각 작업의 별도 인수 근거를 따른다.
 

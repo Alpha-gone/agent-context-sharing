@@ -25,7 +25,7 @@ AI 에이전트가 작업 중 얻은 지식과 맥락을 저장하고, 관계를
 - 의미 유사도·키워드·시간 필터 검색과 컨텍스트 관계 탐색
 - 그래프별 소유자·편집자·열람자 권한과 팀 관리
 - 웹 관리 화면의 컨텍스트 조회, 국소 그래프 보기, 연결 관리와 운영자 복구
-- 표준 OAuth(PKCE S256·회전형 갱신)로 보호하는 MCP 서버와 14종 도구
+- 공개 클라이언트 자동 등록(DCR)과 표준 OAuth(PKCE S256·회전형 갱신)로 보호하는 MCP 서버, 14종 도구
 - 비동기 임베딩 색인, 그래프 불변식 감사와 검색 품질 평가 도구
 
 ## 구성
@@ -184,7 +184,9 @@ curl --fail --show-error --output /dev/null https://agent-context.example.com/lo
 
 MCP 클라이언트는 `<공개 주소>/mcp`에 Streamable HTTP로 연결하고 OAuth로 인가받습니다. 서버는 **공개 클라이언트 동적 등록(DCR)만** 지원합니다. 클라이언트가 callback을 등록하면 서버가 client ID를 발급하여 DB에 저장합니다. 사전 등록과 Client ID Metadata Documents는 제공하지 않습니다.
 
-여러 참여자는 각자의 환경에서 같은 서버 주소를 설정하고, 본인 계정으로 가입·로그인한 뒤 연결을 허용합니다. 운영자가 참여자별 client ID를 등록하거나 서버를 재기동할 필요는 없습니다. client ID는 사용자 계정 ID와 별개이며 토큰·인가 연결·그래프 권한은 계정별로 구분됩니다. 비밀번호와 저장된 인증 자격은 공유하지 않습니다. 상세 계약은 [인증 설계](spec/service/agent-context/sdd/authentication.md#oauth-discovery와-최초-인가)를 따릅니다.
+여러 참여자는 각자의 환경에서 같은 서버 주소를 설정하고, 본인 계정으로 가입·로그인한 뒤 연결을 허용합니다. 운영자가 참여자별 client ID를 등록하거나 서버를 재기동할 필요는 없습니다. client ID는 사용자 계정 ID와 별개이며 서버가 자동으로 발급하므로 사용자가 직접 정하거나 설정에 복사하지 않습니다.
+
+**한 계정에서 여러 client ID로 연결할 수 있습니다.** 같은 계정으로 Codex·Claude Code·다른 PC의 클라이언트를 각각 연결하면 그래프 접근 권한은 해당 계정을 기준으로 적용하고, 토큰과 인가 연결은 연결별로 관리합니다. 다른 참여자는 각자의 계정을 사용하며 비밀번호와 저장된 인증 자격은 공유하지 않습니다. 상세 계약과 등록 한도는 [인증 설계](spec/service/agent-context/sdd/authentication.md#oauth-discovery와-최초-인가)를 따릅니다.
 
 이전 사전 등록 배포에서 전환할 때는 새 마이그레이션을 적용하고 서버를 갱신한 뒤 각 클라이언트에서 다시 인가받습니다. 기존 `OAUTH_CLIENT_REGISTRATIONS`는 제거하며 서버는 이 값을 읽지 않습니다. Codex 설정의 고정 `oauth.client_id`도 제거합니다. 이전 고정 ID와 토큰은 동적 등록으로 자동 이관하지 않습니다. 서버의 계정·그래프·감사와 기존 계열 데이터는 삭제하지 않습니다.
 
@@ -211,7 +213,7 @@ codex mcp login agent-context
 
 Codex가 발견 메타데이터의 `registration_endpoint`로 등록한 뒤 인증 URL을 엽니다. 브라우저에서 서버에 로그인하거나 가입한 뒤 동의하면 자격이 저장됩니다. 브라우저를 열 수 없는 환경에서는 `--no-browser`를 붙여 출력된 주소로 진행합니다. 사설 CA를 사용하는 로컬 인수 구성에서는 `CODEX_CA_CERTIFICATE`로 CA를 지정합니다.
 
-Codex CLI 0.165.0의 발견→자동 등록→인증 URL 생성까지는 격리 환경에서 확인했습니다. 실제 브라우저 로그인 이후의 CLI 전체 인수는 대기입니다. DCR 구현의 검증 범위와 실제 CLI 인수 결과는 [인증 설계](spec/service/agent-context/sdd/authentication.md)와 [테스트 설계](spec/service/agent-context/sdd/testing.md)를 확인합니다. 과거 사전 등록 방식으로 인수한 macOS Codex CLI 0.160.1 결과를 DCR·다른 판·앱/IDE 지원 근거로 확대하지 않습니다.
+Codex CLI 0.165.0의 발견→자동 등록→인증 URL 생성까지 격리 환경에서 확인했습니다. 실제 브라우저 로그인 이후의 CLI 전체 인수는 대기이며, 현재 검증 범위는 [검증 현황](#검증-현황)을 확인합니다.
 
 ### 2. Claude Code
 
@@ -222,7 +224,9 @@ claude mcp add --transport http --callback-port 49153 agent-context https://agen
 claude mcp login agent-context
 ```
 
-브라우저에서 본인 계정으로 로그인하고 연결을 허용합니다. 터미널 세션의 `/mcp`에서도 인가를 시작할 수 있습니다. 다른 포트를 선택하면 `--callback-port`에 그 값을 지정하여 새로 등록합니다. 기존 IP literal 등록을 localhost로 치환하지 않습니다. 실제 상호운용 검증 범위는 [#300 검토](spec/service/agent-context/reviews/2026-11-02-issue-300.md)를 확인합니다.
+브라우저에서 본인 계정으로 로그인하고 연결을 허용합니다. 터미널 세션의 `/mcp`에서도 인가를 시작할 수 있습니다. 다른 포트를 선택하면 `--callback-port`에 그 값을 지정하여 새로 등록합니다. 기존 IP literal 등록을 localhost로 치환하지 않습니다.
+
+Claude Code 2.1.316의 발견→자동 등록→인증 URL 생성까지 격리 환경에서 확인했습니다. 실제 CLI의 브라우저 로그인·callback 수신·토큰 저장·도구 호출 전체 인수는 대기입니다. 서버의 동의·코드 교환 시험과 실제 CLI 시험의 범위는 [#300 검토](spec/service/agent-context/reviews/2026-11-02-issue-300.md)를 확인합니다.
 
 ### 3. 다른 MCP 클라이언트
 
@@ -233,8 +237,10 @@ Claude 앱 등 외부 서비스에서 접근하는 클라이언트는 공개 HTT
 ### 4. 연결 뒤 사용과 관리
 
 - 에이전트는 노드·관계를 쓰기 전에 `agent_register`로 `agent_id`를 받아 후속 쓰기에 전달합니다. 서버의 instructions가 이 순서를 안내하며, 14종 도구의 설명과 입력 스키마는 [도구 스냅숏](internal/mcp/testdata/tools.json)에 있습니다.
-- 웹 `/connections`에서 본인의 OAuth 연결과 활성 등록을 확인하고 폐기합니다. 연결을 폐기하면 접근·갱신 토큰이 차단되고 웹 세션은 유지됩니다. 등록을 폐기해도 기존 기여와 감사 기록은 보존됩니다.
+- 웹 `/connections`에서 본인의 OAuth 연결과 활성 에이전트 등록을 확인하고 폐기합니다. 특정 OAuth 연결을 폐기하면 해당 연결의 접근·갱신 토큰이 차단되며 다른 연결과 웹 세션은 유지됩니다. 에이전트 등록을 폐기해도 기존 기여와 감사 기록은 보존됩니다.
 - 클라이언트에서 로컬 연결만 삭제하면 서버 자격은 폐기되지 않습니다.
+
+인증 URL에서 「연결 요청을 처리할 수 없습니다. 클라이언트에서 다시 시작해 주세요.」가 표시되면 고정 client ID 설정이 남아 있는지 확인하고 클라이언트에서 인증을 새로 시작합니다. 계속 실패하면 요청의 `client_id`·`redirect_uri`·`resource`와 서버의 DCR 등록을 대조합니다. 특히 localhost callback은 포트까지 일치해야 하며, 오류 문구만으로 실패 원인을 확정할 수는 없습니다.
 
 ## 개발 환경 재생성
 
@@ -287,6 +293,8 @@ macOS의 진단 기록기 인수는 `go test -race -count=1 -skip '^TestOBS08Con
 
 | 시험 | 조건과 기준 문서 |
 |---|---|
+| 현재 Codex DCR 초기 연결 | `TEST_DCR_CODEX_BINARY`에 실제 CLI 바이너리를 지정하고 `go test -count=1 -v -run '^TestDCRCodexCLIRegistrationIntegration$' ./cmd/server` 실행. 발견·자동 등록·인가 URL 생성을 검사합니다. [DCR 전환 검토](spec/service/agent-context/reviews/2026-11-02-oauth-dcr.md) |
+| Claude Code localhost 초기 연결 | macOS에서 `TEST_CLAUDE_BINARY`에 실제 CLI 바이너리를 지정하고 `go test -count=1 -v -run '^TestLocalhostClaudeCodeRegistrationIntegration$' ./cmd/server` 실행. 임시 PTY·설정으로 발견·자동 등록·인가 URL 생성을 검사합니다. [#300 검토](spec/service/agent-context/reviews/2026-11-02-issue-300.md) |
 | 실제 Codex CLI 1시간 접근 만료 | `codex_expiry_live` 태그, `-timeout=75m`, `TEST_CODEX_BINARY`(정확한 CLI 0.160.1)·`TEST_CODEX_REQUIRED=1`. [TEST-08 인수](spec/service/agent-context/reviews/2026-10-27-test-08-completion.md) |
 | 조합 장애 회복(`operations_runtime`) | 약 3분의 자연 백오프·리스 만료를 포함하므로 `-timeout=420s`. [OPS-09 실행 범위](spec/service/agent-context/reviews/2026-10-27-ops-09.md) |
 | 실제 Gemini 전송 | `embedding_live` 태그. 외부 전송·비용 허용과 키 주입이 필요합니다. 기본 회귀는 로컬 TLS 합성 제공자를 사용합니다. [임베딩 실연결 시험 경계](spec/service/agent-context/sdd/testing.md#임베딩-제공자-실연결-테스트) |
@@ -318,19 +326,22 @@ macOS의 진단 기록기 인수는 `go test -race -count=1 -skip '^TestOBS08Con
 
 ## 검증 현황
 
-신규 개발 계획의 124개 작업을 [TRACE-05 최종 문서 점검](spec/service/agent-context/reviews/2026-10-29-trace-05.md)까지 마쳤습니다. 현재 작업 상태는 [개발 계획](spec/service/agent-context/DEVELOPMENT_PLAN.md)에서 확인합니다.
+초기 개발 계획의 124개 작업은 2026-10-29의 [TRACE-05 최종 문서 점검](spec/service/agent-context/reviews/2026-10-29-trace-05.md)까지 마쳤습니다. 이후 DCR 전용 전환과 Claude Code localhost callback 지원을 반영했습니다. 과거 사전 등록 방식의 호스트 인수 결과를 현재 DCR 전체 지원으로 확대하지 않으며, 현재 작업 상태는 [개발 계획](spec/service/agent-context/DEVELOPMENT_PLAN.md)과 아래 후속 검증 기록을 함께 확인합니다.
 
 | 범위 | 결과 |
 |---|---|
 | 종합 회귀 | [TEST-09](spec/service/agent-context/reviews/2026-10-28-test-09.md): 필수 DB·race 전체 두 회차를 각각 6,422건(최상위 1,146건) 통과했습니다. 격리 WAL·물리 복구·이행/복귀·Linux 파일·조합 장애 회복도 범위를 나눠 인수했습니다. |
 | MCP 도구 | [MCP-09](spec/service/agent-context/reviews/2026-10-24-mcp-09.md): 14종 도구·오류·부분 응답 |
-| 실제 호스트 | [TEST-08](spec/service/agent-context/reviews/2026-10-27-test-08-completion.md): macOS Codex CLI 0.160.1 exec·`features.mcp_2026_07_28=true`·파일 자격 저장 구성 |
+| 현재 DCR 서버 | [DCR 전환 검토](spec/service/agent-context/reviews/2026-11-02-oauth-dcr.md): 등록 저장·동시 총량 한도·계정별 토큰 분리·새 서비스의 검증·갱신과 관련 모듈/DB 시험 |
+| 현재 CLI 초기 연결 | Codex CLI 0.165.0과 Claude Code 2.1.316의 발견·DCR·인가 URL 생성 확인. localhost 동의·코드 교환은 별도 TLS/DB 시험으로 확인했습니다. [#300 검토](spec/service/agent-context/reviews/2026-11-02-issue-300.md) |
+| 과거 호스트 인수 | [TEST-08](spec/service/agent-context/reviews/2026-10-27-test-08-completion.md): 사전 등록 당시의 macOS Codex CLI 0.160.1 exec·`features.mcp_2026_07_28=true`·파일 자격 저장 구성 |
 | 웹 화면 | [TEST-06](spec/service/agent-context/reviews/2026-10-28-test-06-completion.md): 실제 Chrome·자동 키보드·접근성 트리와 사용자 화면 확인 |
 | 진단 기록 | [OBS-08](spec/service/agent-context/reviews/2026-10-23-obs-08.md): 여섯 진단 파일과 macOS/Linux 파일·볼륨 보존 |
 | 추적 | [TRACE-04](spec/service/agent-context/reviews/2026-10-29-trace-04.md): 요구사항 184건·작업 124개의 근거 연결 |
 
 다음은 아직 인수하지 않았으며 완료 수로 대체하지 않습니다.
 
+- 현재 DCR 구성의 실제 CLI 브라우저 로그인 이후 토큰 저장·도구 호출 전체 인수
 - Codex keyring·TUI·앱/IDE, Claude 앱 등 다른 호스트와 판
 - 실제 Gemini 품질·청구, 공개 데이터 전체 효과와 외부 과업 효과
 - 운영 공개와 실제 Tunnel 인수

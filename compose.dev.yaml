@@ -3,6 +3,8 @@
 #   docker compose -f compose.dev.yaml --profile server up -d --build
 x-app-environment: &app-environment
   DATABASE_URL: postgres://${POSTGRES_USER:-agent_context}:${POSTGRES_PASSWORD:-agent_context}@db:5432/${POSTGRES_DB:-agent_context}
+  # 컨테이너 로컬 시각. 저장·응답 시각은 코드가 UTC로 정규화한다.
+  TZ: ${TZ:-Asia/Seoul}
 
 services:
   db:
@@ -11,6 +13,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-agent_context}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent_context}
       POSTGRES_DB: ${POSTGRES_DB:-agent_context}
+      TZ: ${TZ:-Asia/Seoul}
     ports:
       # 로컬 개발용 자격 증명을 외부 인터페이스에 공개하지 않는다.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
@@ -30,6 +33,11 @@ services:
       - archive_mode=on
       - -c
       - archive_command=/usr/local/bin/agent-context-wal-archive %p %f
+      # 세션 시간대는 볼륨 초기화 시점과 무관하게 UTC로 고정하고 서버 로그 시각만 TZ를 따른다.
+      - -c
+      - timezone=UTC
+      - -c
+      - log_timezone=${TZ:-Asia/Seoul}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_context} -d ${POSTGRES_DB:-agent_context}"]
       interval: 5s

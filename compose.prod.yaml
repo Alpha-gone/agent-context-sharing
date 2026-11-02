@@ -15,6 +15,8 @@ name: agent_context_prod
 x-app-environment: &app-environment
   # 비밀번호는 URL에 그대로 넣으므로 영문·숫자처럼 퍼센트 인코딩이 필요 없는 문자만 쓴다.
   DATABASE_URL: postgres://${POSTGRES_USER:-agent_context}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD가 필요하다}@db:5432/${POSTGRES_DB:-agent_context}
+  # 컨테이너 로컬 시각. 저장·응답 시각은 코드가 UTC로 정규화한다.
+  TZ: ${TZ:-Asia/Seoul}
 
 services:
   db:
@@ -24,6 +26,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-agent_context}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD가 필요하다}
       POSTGRES_DB: ${POSTGRES_DB:-agent_context}
+      TZ: ${TZ:-Asia/Seoul}
     volumes:
       - db_data:/var/lib/postgresql
       # 보관본은 데이터와 다른 볼륨에 둔다. 기본 백업과 함께 따로 옮기거나 정리하기 위해서다.
@@ -39,6 +42,11 @@ services:
       - archive_mode=on
       - -c
       - archive_command=/usr/local/bin/agent-context-wal-archive %p %f
+      # 세션 시간대는 볼륨 초기화 시점과 무관하게 UTC로 고정하고 서버 로그 시각만 TZ를 따른다.
+      - -c
+      - timezone=UTC
+      - -c
+      - log_timezone=${TZ:-Asia/Seoul}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_context} -d ${POSTGRES_DB:-agent_context}"]
       interval: 5s

@@ -52,7 +52,7 @@ trap 'exit 143' TERM
 # 호출자의 .env와 DB 자격 증명을 사용하지 않는다. 공개 인터페이스는 구성에 고정한다.
 export POSTGRES_USER=dev_compose_test POSTGRES_PASSWORD=dev_compose_test POSTGRES_DB=dev_compose_test
 export WAL_ARCHIVE_RETENTION_DAYS=7
-unset POSTGRES_PORT COMPOSE_PROFILES
+unset POSTGRES_PORT COMPOSE_PROFILES TZ
 unset DIAGNOSTIC_INSTANCE_ID
 
 check_config() {
@@ -66,7 +66,8 @@ check_config() {
         (.services.db.volumes | length == 1) and
         (.services.db.volumes[0] | .type == "volume" and .source == "db_data" and .target == "/var/lib/postgresql") and
         (.services.wal_cleanup.volumes == .services.db.volumes) and
-        (.services.db.command == ["postgres", "-c", "shared_preload_libraries=age", "-c", "archive_mode=on", "-c", "archive_command=/usr/local/bin/agent-context-wal-archive %p %f"]) and
+        (.services.db.command == ["postgres", "-c", "shared_preload_libraries=age", "-c", "archive_mode=on", "-c", "archive_command=/usr/local/bin/agent-context-wal-archive %p %f", "-c", "timezone=UTC", "-c", "log_timezone=Asia/Seoul"]) and
+        (.services.db.environment.TZ == "Asia/Seoul") and
         (.services.wal_cleanup.depends_on.db.condition == "service_healthy") and
         (.services.wal_cleanup.user == "postgres") and
         (.services.wal_cleanup.entrypoint == ["/bin/sh", "-c"]) and
@@ -160,7 +161,7 @@ check_config "$test_dir/runtime.json" 0
 jq -e '
     (.services.migrate.env_file // [] | length == 0) and
     (.services.server.env_file // [] | length == 0) and
-    (.services.migrate.environment | keys == ["DATABASE_URL"])
+    (.services.migrate.environment | keys == ["DATABASE_URL", "TZ"])
 ' "$test_dir/runtime.json" > /dev/null
 # 둘 다 빌드하여 up이 기존 이미지나 암묵적 빌드에 의존하지 않게 한다.
 compose build --no-cache db wal_cleanup

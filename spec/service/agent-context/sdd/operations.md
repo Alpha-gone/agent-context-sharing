@@ -158,6 +158,8 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 
 `.env.example`의 DB 기본 자격 증명은 로컬 개발 편의용이며 운영 또는 외부 공개 환경의 인증 기준이 아니다. 이미지와 패키지는 [버전 요구](architecture.md#버전-요구)의 개발 고정값을 사용하고, 새 빌드에서 임의의 최신 판을 선택하지 않는다.
 
+컨테이너 로컬 시각은 두 Compose 파일이 `TZ`(IANA 시간대 이름, 기본 `Asia/Seoul`)로 `db`·`migrate`·`server`에 함께 준다. 이 값은 로그 시각만 바꾸며 애플리케이션 구성 값이 아니다. 저장·응답 시각은 SRS대로 UTC이고, DB는 `timezone=UTC`를 명령 인자로 고정하여 볼륨 초기화 시점의 `TZ`와 무관하게 세션 시간대를 유지하며 `log_timezone`만 `TZ`를 따른다. 애플리케이션 이미지는 tzdata가 없는 alpine이므로 `timetzdata` 빌드 태그로 시간대 DB를 바이너리에 포함한다.
+
 개발 기본 기동은 `docker compose -f compose.dev.yaml up -d --build`이며 DB와 WAL 정리만 기동한다. 임베딩은 Gemini API로 호출하며 별도 모델 서비스·profile·볼륨을 두지 않는다.
 
 파일 변경만으로 이미 실행 중인 컨테이너의 포트와 이미지가 바뀌지는 않는다. 기존 데이터를 유지하여 적용할 때는 `docker compose -f compose.dev.yaml up -d --build --force-recreate db wal_cleanup`로 기본 서비스를 재생성한다. profile 전환으로 기존 컨테이너·볼륨을 자동 삭제하지 않으며 이 변경의 적용에는 볼륨 삭제가 필요하지 않다.

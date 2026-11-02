@@ -11,7 +11,7 @@ trap 'rm -rf "$test_dir"' EXIT
 compose() {
     docker compose --env-file /dev/null -f "$repo_root/compose.prod.yaml" "$@"
 }
-unset POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB HTTP_PORT TLS_CERT_FILE TLS_KEY_FILE DIAGNOSTIC_INSTANCE_ID
+unset POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB HTTP_PORT TLS_CERT_FILE TLS_KEY_FILE DIAGNOSTIC_INSTANCE_ID TZ
 
 if compose config --no-env-resolution --format json > /dev/null 2>&1; then
     echo "운영 구성 검사 실패: POSTGRES_PASSWORD 없이 구성이 만들어졌습니다." >&2
@@ -30,6 +30,10 @@ check_config() {
         (.services.server.ports[0] | .host_ip == "127.0.0.1" and .target == 8080 and .published == $http_port) and
         (.services.db.command | index("archive_mode=on") != null) and
         (.services.db.command | index("archive_command=/usr/local/bin/agent-context-wal-archive %p %f") != null) and
+        (.services.db.command | index("timezone=UTC") != null) and
+        (.services.db.command | index("log_timezone=Asia/Seoul") != null) and
+        (.services.db.environment.TZ == "Asia/Seoul") and
+        (.services.server.environment.TZ == "Asia/Seoul") and
         (.services.db.volumes | length == 2) and
         (.services.db.volumes | map(.target) | index("/var/lib/postgresql/wal_archive") != null) and
         (.services.server.environment.TLS_TERMINATION == "proxy") and

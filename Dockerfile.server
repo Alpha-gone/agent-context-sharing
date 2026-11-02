@@ -14,7 +14,8 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 COPY migrations ./migrations
-RUN CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/server ./cmd/migrate ./cmd/audit
+# alpine에 tzdata가 없으므로 시간대 DB를 바이너리에 넣어 TZ를 해석한다.
+RUN CGO_ENABLED=0 go build -trimpath -tags timetzdata -o /out/ ./cmd/server ./cmd/migrate ./cmd/audit
 
 # 정적 바이너리라 런타임 의존이 없다. alpine을 쓰는 이유는 컨테이너 헬스체크가 wget으로
 # /healthz를 부르기 때문이다. Gemini 호출에 필요한 CA 인증서는 베이스에 들어 있다.

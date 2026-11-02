@@ -271,6 +271,9 @@ func (s *Store) ProposeEventRelations(ctx context.Context, graphID, eventID mode
 	precedes := make([]rankedRelationCandidate, 0)
 	partOf := make([]rankedRelationCandidate, 0)
 	for _, other := range events {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if other.ID == target.ID {
 			continue
 		}
@@ -307,12 +310,16 @@ type rankedRelationCandidate struct {
 	rank     int64
 }
 
+// eventRelationProposalTimeout은 저장 후 최선 노력 제안의 실행 상한이다.
+// 요청 취소와 더 짧은 요청 마감은 그대로 적용한다.
+const eventRelationProposalTimeout = time.Second
+
 func (s *Store) proposeEventRelationsAfterSave(ctx context.Context, graphID model.ID, event model.Context) {
 	if event.Layer != model.LayerEvent || event.DeletedAt != nil {
 		return
 	}
 	if deferAfterWriteCommit(ctx, func() {
-		s.proposeEventRelations(context.WithoutCancel(ctx), graphID, event)
+		s.proposeEventRelations(ctx, graphID, event)
 	}) {
 		return
 	}
@@ -320,6 +327,8 @@ func (s *Store) proposeEventRelationsAfterSave(ctx context.Context, graphID mode
 }
 
 func (s *Store) proposeEventRelations(ctx context.Context, graphID model.ID, event model.Context) {
+	ctx, cancel := context.WithTimeout(ctx, eventRelationProposalTimeout)
+	defer cancel()
 	if err := s.ProposeEventRelations(ctx, graphID, event.ID); err != nil {
 		slog.ErrorContext(ctx, "사건 관계 후보 제안 실패", "graph_id", graphID.String(), "context_id", event.ID.String(),
 			"stage", "relation_proposal", "result", "failed", "reason_code", "proposal_failed")

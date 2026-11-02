@@ -415,3 +415,7 @@ DCR 모듈 시험은 `TestDCR*`로 발급·메타데이터 거부·callback·본
 ## localhost callback 호환성 (#300)
 
 `TestDCRLocalhostCallbackRequiresExactMatch`는 localhost 등록과 포트·호스트·경로·query·대소문자/후행 점 변형의 거부를 대조한다. `TestLocalhostCallbackConsentAndTokenIntegration`은 TLS DCR→인가 동의→원문 localhost callback→잘못된 포트의 교환 거부→정상 코드 교환·Bearer 검증을 실제 격리 DB로 검사한다. 기존 IP literal의 same_ip·exact와 Codex 경계 시험도 유지한다. 사전 등록은 복구하지 않는다. 실제 Claude Code의 인수 범위와 미실행 조건은 [#300 검토](../reviews/2026-11-02-issue-300.md)에 기록한다.
+
+## 커밋 후 관계 제안의 실행 예산 (#260)
+
+`TestPostCommitProposalBudgetIntegration`은 별도 세션이 커밋 직후 그래프 행을 잠그고 pg_blocking_pids로 실제 제안 대기를 확인한다. 사건 생성·갱신 × request_id 유무 × 요청 마감·취소·요청 마감 없음의 12개 경로에서 확정 결과의 성공 반환·저장 판·제안 미생성·고정 실패 진단·예약과 연결 반환을 검사한다. 멱등 경로는 같은 결과의 재생과 제안 미재실행도 대조한다. `TestUnkeyedWriteRunsPostCommitOnlyAfterCompletion`은 단독 apply의 완료·실패·불완전 결과·진행 중 취소에 따른 큐 실행 조건을 검사한다. `TestMCP05PostCommitCancellationDatabase`는 커밋 이후 취소가 완료 응답을 덮지 않고 결과 재생도 유지함을 검증한다. 실행 1초와 정리 5초의 예산은 [수명주기](context-lifecycle.md#관계-후보-제안과-확정)를 따른다.

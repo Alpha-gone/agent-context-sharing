@@ -294,7 +294,7 @@ MCP-06은 `NewWriteHandlers`에 현재 등급·플랜·그래프/노드 조회·
 
 성공 완료 객체의 graph/node/relation은 snake_case 속성과 문자열 UUID·UTC 시각으로 직렬화한다. 거부는 code·message와 field/required_grade/current_version/limit/current/allowed/alternative_channel의 해당 값을 보존한다. 저장 내부 장애는 조립 어댑터가 원인을 보존한 DependencyFailure로 구분해 내부 오류에 포함된 필드 오류가 결정적 입력 거부로 저장되지 않게 한다. 결정적 거부만 저장점 롤백 후 거부 기록과 함께 재생 결과로 커밋하며, 내부 장애·취소는 완료 결과로 저장하지 않는다.
 
-MCP-05의 실행 경계는 `WriteRunner`와 주입 `WriteExecutor.ExecuteWrite`다. 기존 미사용 WriteResult 전용 주입 계약을 도메인 완료 객체의 JSON 바이트 계약으로 구체화한다. 저장소는 MCP SDK·프로토콜 오류를 알지 않으며 성공·결정적 거부 객체만 보관한다. Apply의 error는 미완료 실패이며 예약까지 롤백한다. 도메인 거부는 해당 쓰기의 저장점 롤백 뒤 필요한 거부 감사를 남기고 오류 코드·부가 정보를 완료 객체로 직렬화한다. 여덟 도구의 변환은 [쓰기 도구 연결](#쓰기-도구-연결)을 따른다.
+MCP-05의 실행 경계는 `WriteRunner`와 주입 `WriteExecutor.ExecuteWrite`다. 기존 미사용 WriteResult 전용 주입 계약을 도메인 완료 객체의 JSON 바이트 계약으로 구체화한다. 저장소는 MCP SDK·프로토콜 오류를 알지 않으며 성공·결정적 거부 객체만 보관한다. Apply의 error는 미완료 실패이며 예약까지 롤백한다. 실제 커밋 또는 키 없는 apply의 완료 결과 검증 뒤 실행하는 관계 제안은 별도 후처리이며, 그 취소·마감은 확정한 결과를 오류로 바꾸지 않는다. 제안 예산과 큐의 실행 조건은 [수명주기](context-lifecycle.md#관계-후보-제안과-확정)를 따른다. 도메인 거부는 해당 쓰기의 저장점 롤백 뒤 필요한 거부 감사를 남기고 오류 코드·부가 정보를 완료 객체로 직렬화한다. 여덟 도구의 변환은 [쓰기 도구 연결](#쓰기-도구-연결)을 따른다.
 
 WriteRunner는 등록 경계 또는 직접 호출에서 같은 공개 스키마로 검증한 인자를 받아 지문용 사본에서 request_id를 제외한다. 도구 이름·나머지 인자를 결정적으로 직렬화하며 객체 키 순서·JSON escape·정수의 소수/지수 표기·UUID의 허용 표기를 통일한다. 배열 순서·중복과 선택 필드 생략 여부는 유지하고 clientInfo·표준 외피·자격은 지문에 넣지 않는다. 문자열 키는 대소문자를 구분한다. WriteExecutor는 이 정규화 값의 SHA-256을 저장하고 같은 계정·키로 직렬화한다.
 

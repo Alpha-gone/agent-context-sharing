@@ -121,6 +121,11 @@ func validRegistrationCallback(raw string) bool {
 	if u.Scheme != "http" || u.Port() == "" {
 		return false
 	}
+	// localhost는 등록 원문의 완전 일치만 허용한다. 가변 포트 대조는
+	// sameLoopbackCallback이 literal IP에만 적용하므로 DNS 조회가 필요 없다.
+	if u.Hostname() == "localhost" {
+		return true
+	}
 	address, err := netip.ParseAddr(u.Hostname())
 	return err == nil && address.IsLoopback() && !address.Is4In6() && address.Zone() == ""
 }

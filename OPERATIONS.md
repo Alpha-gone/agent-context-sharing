@@ -50,7 +50,7 @@ chmod 600 .env
 - `GEMINI_API_KEY`: 실제 키를 지정합니다. `EMBEDDING_PROVIDER=gemini`, 모델·타입·차원은 우선 운영 예시를 유지합니다.
 - `AUTHORIZATION_SERVER_URL=https://agent-context.example.com`
 - `MCP_RESOURCE_URL=https://agent-context.example.com/mcp`, `MCP_ALLOWED_ORIGINS=https://agent-context.example.com`: 실제 공개 주소를 사용합니다. 리소스와 issuer는 독립된 HTTPS 식별자입니다.
-- MCP 공개 클라이언트는 `/oauth/register`의 DCR로 자동 등록합니다. 참여자에게 서버 주소와 scope를 안내하고 각자 가입·로그인·동의를 진행하게 합니다. 사전 등록 환경 변수와 Codex의 고정 `oauth.client_id`는 제거합니다. 이전 배포에서 전환하면 마이그레이션 적용 후 각 클라이언트가 새로 등록·인가받아야 합니다. 등록 요청 제한·저장 총량·callback 계약은 [인증 설계](spec/service/agent-context/sdd/authentication.md#oauth-discovery와-최초-인가)를 따릅니다.
+- MCP 공개 클라이언트는 `/oauth/register`의 DCR로 자동 등록합니다. 참여자에게 서버 주소와 scope를 안내하고 각자 가입·로그인·동의를 진행하게 합니다. 사전 등록 환경 변수와 Codex의 고정 `oauth.client_id`는 제거합니다. 이전 배포에서 전환하면 마이그레이션 적용 후 각 클라이언트가 새로 등록·인가받아야 합니다. 등록 요청 제한·저장 총량·callback 계약은 [인증 설계](spec/service/agent-context/sdd/authentication.md#oauth-discovery와-최초-인가)를 따릅니다. Claude Code는 `claude mcp add --transport http --callback-port 49153 agent-context https://<공개 주소>/mcp`로 추가하고 `claude mcp login agent-context`로 인가합니다. localhost callback은 포트까지 완전 일치하며 IP literal의 가변 포트 예외를 적용하지 않습니다.
 - `DIAGNOSTIC_INSTANCE_ID`: 운영 Compose에 필수인 안정적인 슬롯별 고유 ID입니다. `server-1`처럼 재시작에도 같은 값을 유지하고 동시 서버가 같은 슬롯을 공유하지 않게 합니다. Compose는 `DIAGNOSTIC_LOG_DIR=/var/log/agent-context`를 고정하고 `diagnostic_logs` 볼륨을 연결합니다. 수준 기본값은 `INFO`입니다.
 - `HTTP_PORT=80`: 커넥터의 원본 URL `http://localhost:80`과 맞춥니다. 기존 설정의 `8080` 또는 `443`을 그대로 두지 않습니다. 포트를 재정의하면 커넥터의 원본 URL도 함께 바꿉니다.
 

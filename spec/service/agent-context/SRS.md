@@ -613,7 +613,7 @@ MCP primitive는 `tools`만 사용한다. 모든 연산이 그래프 선택, 홉
 ### 프로토콜 매핑
 
 - 공개 클라이언트의 OAuth Authorization Code with PKCE `S256`을 사용한다. 클라이언트 비밀과 Client Credentials는 요구하지 않는다.
-- 등록은 RFC 7591의 공개 DCR만 제공한다. 서버가 client ID를 발급하며 사전 등록은 제거한다. `redirect_uri`는 완전 일치로 검증하되 같은 loopback IP의 가변 포트만 허용한다. CIMD 지원은 `TBD-AGENT_CONTEXT-060`의 후속 판단이다.
+- 등록은 RFC 7591의 공개 DCR만 제공한다. 서버가 client ID를 발급하며 사전 등록은 제거한다. `redirect_uri`는 완전 일치로 검증하되 같은 loopback IP의 가변 포트만 허용한다. Claude Code 호환을 위해 명시적 유효 포트를 가진 소문자 localhost HTTP callback도 허용하되 포트·원문 경로·query까지 완전 일치로 대조하며 IP literal과 서로 치환하지 않는다. CIMD 지원은 `TBD-AGENT_CONTEXT-060`의 후속 판단이다.
 - 보호 리소스 메타데이터에 `resource`, `authorization_servers`, `scopes_supported`를, 인가 서버 메타데이터에 `issuer`, 인가·토큰·JWKS 주소, `S256`, 공개 클라이언트 인증 방식과 지원 grant를 공개한다.
 - 인증 정보가 없거나 접근 토큰이 유효하지 않으면 Bearer `WWW-Authenticate`와 `resource_metadata` 위치를 제공한다. 토큰 오류는 `401`, scope 부족은 `403`, 내부 검증 장애는 `500`으로 구분한다.
 - 인가 코드 교환은 `client_id`, `redirect_uri`, PKCE와 `resource`를 대조한다. 인가 응답의 `iss`, 코드 60초 수명·한 번 사용·해시 저장과 재사용 폐기 원칙은 유지한다.

@@ -528,3 +528,5 @@
 | 2026-11-02 | 00:30 | 사용자 | 리드미에 클라이언트 설정 방법 추가하고 문서 최신화랑 가독성 좀 높여줘 | README에 사전 등록·callback 규칙, Codex CLI·Claude 앱 설정과 Claude Code 미지원(#300)을 담은 클라이언트 연결 절을 추가했다. MCP 미연결·진단 후속 구현 같은 낡은 문구를 현재 상태로 고치고 목차·표·경고 블록으로 재구성했다. 운영 매뉴얼에서 이 절을 참조하고 루트 DOX의 README 소유 범위에 클라이언트 연결을 더했다. | README·운영 매뉴얼·루트 DOX | Codex 설정은 `cmd/server/codex_oauth_test.go`의 인수 구성, callback 규칙은 `internal/config/connections.go`와 대조했다. 내부 링크·앵커와 기존 외부 참조 앵커 유지, `git diff --check` 확인. 코드 변경 없어 Go 시험 미실행. Claude 앱 연결은 미인수로 표시했다. |
 
 | 2026-11-02 | 시각 미기록 | 사용자 | 여러 참여자의 자동 클라이언트 등록을 지원하고 사전 등록은 제거한다. | 공개 DCR·공유 client registry·016 migration을 추가하고 사전 등록 설정과 인증 map 경로를 제거했다. 서버/DB 시험과 Codex 0.165.0 초기 handshake를 확인했다. | `SRS.md`, `sdd/authentication.md`, `reviews/2026-11-02-oauth-dcr.md`, `README.md`, `OPERATIONS.md` | 실제 브라우저 이후 CLI 전체 인수·운영 적용 대기 |
+
+| 2026-11-02 | 시각 미기록 | 사용자 | #300을 별도 브랜치에서 처리하고 PR을 생성한다. | DCR의 localhost callback을 명시 포트·원문 완전 일치로 허용하고 IP literal의 기존 대조를 유지했다. 단위·TLS/DB 동의·교환과 Claude Code 2.1.316 초기 DCR 흐름을 확인했다. | `reviews/2026-11-02-issue-300.md`, `SRS.md`, `sdd/authentication.md`, `README.md` | 실제 CLI 브라우저 이후 전체 인수·운영 배포 미실행 |

@@ -213,13 +213,24 @@ Codex가 발견 메타데이터의 `registration_endpoint`로 등록한 뒤 인�
 
 Codex CLI 0.165.0의 발견→자동 등록→인증 URL 생성까지는 격리 환경에서 확인했습니다. 실제 브라우저 로그인 이후의 CLI 전체 인수는 대기입니다. DCR 구현의 검증 범위와 실제 CLI 인수 결과는 [인증 설계](spec/service/agent-context/sdd/authentication.md)와 [테스트 설계](spec/service/agent-context/sdd/testing.md)를 확인합니다. 과거 사전 등록 방식으로 인수한 macOS Codex CLI 0.160.1 결과를 DCR·다른 판·앱/IDE 지원 근거로 확대하지 않습니다.
 
-### 2. 다른 MCP 클라이언트
+### 2. Claude Code
 
-클라이언트가 DCR을 지원해야 하며 서버 주소를 설정하고 자동 OAuth 연결을 시작합니다. HTTP callback은 유효한 포트가 있는 literal loopback IP만 허용하고 HTTPS callback은 등록한 URI와 완전 일치시킵니다. 같은 HTTP loopback IP·경로·query에서는 포트 변경을 허용합니다. `localhost` callback을 사용하는 Claude Code는 현재 연결할 수 없으며 [#300](https://github.com/Alpha-gone/agent-context-sharing/issues/300)의 범위입니다.
+서버는 DCR로 `http://localhost:PORT/callback`을 등록할 수 있습니다. localhost callback은 포트·경로·query까지 등록 원문과 완전 일치해야 하므로 사용 가능한 고정 callback 포트를 지정합니다. client ID와 client secret은 지정하지 않습니다.
+
+```sh
+claude mcp add --transport http --callback-port 49153 agent-context https://agent-context.example.com/mcp
+claude mcp login agent-context
+```
+
+브라우저에서 본인 계정으로 로그인하고 연결을 허용합니다. 터미널 세션의 `/mcp`에서도 인가를 시작할 수 있습니다. 다른 포트를 선택하면 `--callback-port`에 그 값을 지정하여 새로 등록합니다. 기존 IP literal 등록을 localhost로 치환하지 않습니다. 실제 상호운용 검증 범위는 [#300 검토](spec/service/agent-context/reviews/2026-11-02-issue-300.md)를 확인합니다.
+
+### 3. 다른 MCP 클라이언트
+
+클라이언트가 DCR을 지원해야 하며 서버 주소를 설정하고 자동 OAuth 연결을 시작합니다. HTTP callback은 유효한 포트가 있는 literal loopback IP 또는 정확한 소문자 localhost만 허용합니다. HTTPS·localhost callback은 등록 원문과 완전 일치시키고, 같은 HTTP loopback IP·경로·query에서는 포트 변경을 허용합니다.
 
 Claude 앱 등 외부 서비스에서 접근하는 클라이언트는 공개 HTTPS 주소가 필요합니다. DCR 제공만으로 해당 클라이언트의 실제 연결 지원을 선언하지 않습니다. 첫 연결 때 공개 discovery·`/oauth/register`·`/authorize`·`/token`의 요청과 서버 로그를 확인합니다.
 
-### 3. 연결 뒤 사용과 관리
+### 4. 연결 뒤 사용과 관리
 
 - 에이전트는 노드·관계를 쓰기 전에 `agent_register`로 `agent_id`를 받아 후속 쓰기에 전달합니다. 서버의 instructions가 이 순서를 안내하며, 14종 도구의 설명과 입력 스키마는 [도구 스냅숏](internal/mcp/testdata/tools.json)에 있습니다.
 - 웹 `/connections`에서 본인의 OAuth 연결과 활성 등록을 확인하고 폐기합니다. 연결을 폐기하면 접근·갱신 토큰이 차단되고 웹 세션은 유지됩니다. 등록을 폐기해도 기존 기여와 감사 기록은 보존됩니다.

@@ -48,7 +48,7 @@ func TestOAuthCodeRequestValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			input := validAuthorizationRequest()
 			test.change(&input)
-			err := service.ValidateAuthorizationRequest(input)
+			err := service.ValidateAuthorizationRequest(t.Context(), input)
 			if test.code == "" {
 				if err != nil {
 					t.Fatal("정상 인가 거부")
@@ -63,7 +63,7 @@ func TestOAuthCodeRequestValidation(t *testing.T) {
 	}
 	request := validAuthorizationRequest()
 	request.ClientID = "unknown"
-	if !errors.Is(service.ValidateAuthorizationRequest(request), ErrInvalidAuthorizationTarget) {
+	if !errors.Is(service.ValidateAuthorizationRequest(t.Context(), request), ErrInvalidAuthorizationTarget) {
 		t.Fatal("미등록 인가 허용")
 	}
 }

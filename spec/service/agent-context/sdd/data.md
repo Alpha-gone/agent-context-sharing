@@ -528,3 +528,7 @@ Row Level Security는 채택하지 않은 채로 둔다. [`SRS.md`](../SRS.md)�
 색인 큐의 선택 `correlation_id`는 진단 메타데이터로 추가한다. 기존 행은 NULL로 보존하고 재등록 시 검증된 요청 상관 ID로 갱신한다. 진단 필드로 작업 유일 키·세대·확보·재시도 의미를 바꾸지 않는다. 필드의 전달·정리·민감정보 제한은 [진단 흐름 추적](observability.md#이벤트-외피와-흐름-추적)을 따른다.
 
 변환 전 서비스·작업자를 정지하고 백업·적용 이력·구성 지문을 확보한다. 적용 후 전체 불변식 감사와 계정/등록/멱등성/OAuth 결합을 대조하고 별도 호스트 시험을 수행한다. 실패 시 롤백 가능한 스키마 트랜잭션은 되돌리고, 이미 적용·사용한 변경의 복귀는 검증한 백업·서버 이미지로 별도 절차를 수행한다. 제거된 전용 연결 경로를 복귀 기본 경로로 다시 만들지 않는다. 운영 DB 적용·전환은 대상·백업·복귀 조건을 확인한 별도 실행으로 수행한다.
+
+## OAuth 동적 클라이언트 등록
+
+`FR-AGENT_CONTEXT-147`·`166`의 DCR은 `public.oauth_client`에 client_id(text PK), client_name(text), redirect_uris(text[]), resource(text), loopback_port_policy(text), created_at(timestamptz)을 저장한다. 열은 모두 NOT NULL이며 발급 ID는 dcr_ 접두사와 난수로 구성한다. callback 수·이름 길이·포트 정책은 DB 제약으로 재검사한다. 발급 요청은 전용 트랜잭션 자문 잠금과 같은 스냅숏에서 10000개 상한을 확인하고 삽입한다. 조회는 ID 기본 키를 사용한다. 016 마이그레이션으로 테이블을 추가하며 기존 계정·코드·계열은 삭제하지 않는다. 기존 고정 client ID는 이 테이블에 자동 이관하지 않으므로 이전 연결은 DCR 재등록·재인가가 필요하다. 등록 메타데이터와 HTTP 제한은 [인증 설계](authentication.md#oauth-discovery와-최초-인가)가 소유한다.

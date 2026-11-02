@@ -57,10 +57,7 @@ func TestTEST08CodexCLITransportIntegration(t *testing.T) {
 	cfg.MCPResourceURL, _ = url.Parse(origin + "/mcp")
 	cfg.AuthorizationServerURL, _ = url.Parse(origin)
 	cfg.MCPAllowedOrigins = []string{origin}
-	client := cfg.OAuthClients["codex-cli-first-test"]
-	client.Resources = []string{cfg.MCPResourceURL.String()}
-	cfg.OAuthClients["codex-cli-first-test"] = client
-	service, err := authz.New(database, authz.Config{Issuer: origin, BcryptCost: 4, OAuth: oauthConfiguration(cfg), AuthorizationCodes: database, AccessTokens: database, RefreshTokens: database, Connections: database})
+	service, err := authz.New(database, authz.Config{Issuer: origin, BcryptCost: 4, OAuth: oauthTestConfiguration(t, cfg, database), AuthorizationCodes: database, AccessTokens: database, RefreshTokens: database, Connections: database})
 	if err != nil {
 		t.Fatal(err)
 	}

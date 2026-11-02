@@ -567,3 +567,8 @@
 
 - 조회일: 2026-11-01 KST. [WHATWG HTML hidden 상태](https://html.spec.whatwg.org/multipage/input.html#hidden-state-(type=hidden))의 양식 값 전달과 [Go 1.27.3 html/template의 문맥별 escaping](https://pkg.go.dev/html/template#hdr-Contexts)을 확인했다. `next`는 일반 문자열로 넘겨 href query·숨은 필드의 속성 문맥에 맞게 escaping하고 신뢰된 URL/HTML 타입으로 승격하지 않는다.
 - 숨은 값도 클라이언트가 바꿀 수 있으므로 GET뿐 아니라 정상 해석된 POST 본문에도 기존 localRedirect 검사를 적용한다. 중첩 인가 query는 url.Values.Encode와 template query escaping으로 전달하고, 실제 응답에서 다시 해석한 값과 원래 요청의 동등성을 검증한다. 구체적인 범위·실제 TLS/DB 결과와 미실행 인수는 [검토 기록](reviews/2026-11-01-issue-269.md)에 둔다.
+
+## OAuth DCR 전용 전환 근거 (2026-11-02)
+
+- [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591): 등록 JSON, 공개 client 메타데이터, 201 응답, invalid_redirect_uri·invalid_client_metadata. 2026-11-02 조회. 인증 설계의 DCR 계약에 반영한다.
+- [MCP 2026-07-28 Authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization): 등록 방식 선택과 OAuth 흐름. 2026-11-02 조회. 기존 PKCE·resource·issuer 검증을 유지하며 DCR을 채택한다. 공식 문서는 실제 Codex 상호운용 완료 근거로 사용하지 않는다.

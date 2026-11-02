@@ -13,20 +13,26 @@ import (
 )
 
 type authorizationProbe struct {
-	issued     int
-	account    model.ID
-	validation string
-	failure    error
-	cancel     context.CancelFunc
+	issued        int
+	account       model.ID
+	validation    string
+	failure       error
+	targetFailure error
+	cancel        context.CancelFunc
 }
 
-func (*authorizationProbe) ValidateAuthorizationTarget(client, callback, resource string) error {
+func (p *authorizationProbe) ValidateAuthorizationTarget(_ context.Context, client, callback, resource string) error {
+	if p.targetFailure != nil {
+		return p.targetFailure
+	}
 	if client != "first" || callback != "http://127.0.0.1:49152/callback?fixed=1" || resource != "https://resource.test/mcp" {
 		return errors.New("invalid target")
 	}
 	return nil
 }
-func (p *authorizationProbe) ValidateAuthorizationRequest(url.Values) string { return p.validation }
+func (p *authorizationProbe) ValidateAuthorizationRequest(context.Context, url.Values) string {
+	return p.validation
+}
 func (p *authorizationProbe) IssueAuthorizationCode(_ context.Context, account model.ID, _ url.Values) (string, error) {
 	p.issued++
 	p.account = account
@@ -198,5 +204,19 @@ func TestOAuthAuthorizationSharesLoginBudget(t *testing.T) {
 	server.ServeHTTP(response, request)
 	if response.Code != 429 || probe.issued != 0 || response.Header().Get("Retry-After") == "" {
 		t.Fatal("동의 요청이 공유 인증 예산을 우회")
+	}
+}
+
+func TestOAuthAuthorizationRegistryUnavailable(t *testing.T) {
+	for _, probe := range []*authorizationProbe{{targetFailure: ErrAuthenticationUnavailable}, {validation: "server_error"}} {
+		server, err := New(fakeAuthentication{accountID: testID(t)}, &fakeGraphStore{}, Config{SecureCookie: func(*http.Request) bool { return true }, Authorization: probe})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest("GET", "https://issuer.test/authorize?"+authorizationValues().Encode(), nil))
+		if response.Code != 500 || response.Header().Get("Location") != "" || probe.issued != 0 {
+			t.Fatal("registry outage induced redirect or credential failure", response.Code)
+		}
 	}
 }

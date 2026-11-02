@@ -22,7 +22,7 @@ import (
 // 실제 저장 API를 연결한다. MCP-06·07의 업무 도구 인수를 대신하지 않는다.
 func TestMCP02ProtectedTLSIntegration(t *testing.T) {
 	backend := newPublicAuthenticationStore(t)
-	config := authz.Config{Issuer: "https://issuer.test", BcryptCost: 4, AuthorizationCodes: backend, AccessTokens: backend, RefreshTokens: backend, OAuth: &authz.OAuthConfig{Resource: "https://resource.test/mcp", Clients: map[string]authz.OAuthClient{
+	config := authz.Config{Issuer: "https://issuer.test", BcryptCost: 4, AuthorizationCodes: backend, AccessTokens: backend, RefreshTokens: backend, OAuth: &authz.OAuthConfig{Resource: "https://resource.test/mcp", Clients: testClients{
 		"first":  {RedirectURIs: []string{"http://127.0.0.1:49152/callback"}, Resources: []string{"https://resource.test/mcp"}, LoopbackPortPolicy: "exact"},
 		"second": {RedirectURIs: []string{"http://127.0.0.1:49153/callback"}, Resources: []string{"https://resource.test/mcp"}, LoopbackPortPolicy: "exact"},
 	}}}
@@ -45,7 +45,7 @@ func TestMCP02ProtectedTLSIntegration(t *testing.T) {
 	}
 	issue := func(account model.ID, client string) authorization {
 		t.Helper()
-		callback := config.OAuth.Clients[client].RedirectURIs[0]
+		callback := testClientCallback(t, config.OAuth.Clients, client)
 		code, err := service.IssueAuthorizationCode(t.Context(), account, authz.AuthorizationRequest{ClientID: client, RedirectURI: callback, Resource: config.OAuth.Resource, ResponseType: "code", Scope: "agent-context", Challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", ChallengeMethod: "S256"})
 		if err != nil {
 			t.Fatal(err)

@@ -209,7 +209,7 @@ func TestData09ShapeTransitionAndPreservationIntegration(t *testing.T) {
 				if preservationQuery(t, pool, preservationMutable) != mutable || preservationQuery(t, pool, preservationOriginals) != before {
 					t.Fatal("실패한 전환이 기존 상태를 변경했다")
 				}
-				if count, err := applyTarget(t.Context(), pool, migrations.FS, target); err != nil || count != 3 {
+				if count, err := applyTarget(t.Context(), pool, migrations.FS, target); err != nil || count != 5 {
 					t.Fatalf("전환=%d: %v", count, err)
 				}
 				if preservationQuery(t, pool, preservationOriginals) != before || preservationQuery(t, pool, historySQL) != history {
@@ -309,7 +309,7 @@ func TestData09LegacyConfigurationBackfillAtomicIntegration(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), `UPDATE public.schema_migration SET checksum=$1 WHERE version=9`, loaded[1].Checksum); err != nil {
 		t.Fatal(err)
 	}
-	if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != 5 {
+	if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != 7 {
 		t.Fatalf("보충 후 적용=%d: %v", count, err)
 	}
 	if preservationQuery(t, pool, `SELECT count(*)::text FROM public.schema_migration WHERE render_config IS NULL`) != "0" {

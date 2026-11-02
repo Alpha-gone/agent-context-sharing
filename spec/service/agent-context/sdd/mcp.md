@@ -52,7 +52,7 @@
 |---|---|---|
 | `agent_id` | `uuid`, PK | 서버 발급 UUIDv7. 판 검증은 모델·저장소 |
 | `account_id` | `uuid` | 검증한 등록 계정. 저장소가 계정 존재를 확인 |
-| `client_id` | `text` | 접근 토큰에서 검증한 사전 등록 client |
+| `client_id` | `text` | 접근 토큰에서 검증한 동적 등록 client |
 | `registration_key` | `text` | 16~128자 ASCII `[A-Za-z0-9_-]` CHECK |
 | `created_at` | `timestamptz` | 최초 등록 시각, 재등록으로 변경하지 않음 |
 | `revoked_at` | `timestamptz`, 선택 | 본인 관리 폐기 시각. NULL이면 활성 |

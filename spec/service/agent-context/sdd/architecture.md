@@ -88,7 +88,7 @@ flowchart TB
 | `store`  | 그래프와 테이블에 닿는 모든 질의와 기록, 그래프 불변식 규칙 실행. `graph_id`를 필수 인자로 받는다 | `model`, `plan`, `diagnostic` |
 | `perm`   | 직접 부여와 팀 상속으로 계산한 유효 등급으로 연산별 등급을 검사한다                        | `model`                                    |
 | `index`  | 색인 작업 소비·재시도와 본문·질의의 임베딩 제공자 호출                                     | `model`, `store`, `diagnostic` |
-| `authz` | 계정 등록·비밀번호 검증, 웹 세션 발급·검증·폐기, JWKS·OAuth 발견·사전 등록·인가 코드·최초 토큰 교환·Bearer 보호 인증·갱신 회전·본인 연결 관리 | `model`, `store`, `diagnostic` |
+| `authz` | 계정 등록·비밀번호 검증, 웹 세션 발급·검증·폐기, JWKS·OAuth 발견·동적 등록·인가 코드·최초 토큰 교환·Bearer 보호 인증·갱신 회전·본인 연결 관리 | `model`, `store`, `diagnostic` |
 | `search` | 네 채널 실행, 질의 적응형 라우팅, 순위 역수 합 결합, 근거 경로 보존 선택, 예산 적용 | `model` (저장·임베딩 호출은 주입 인터페이스), `diagnostic` |
 | `web`    | 관리 화면 여섯 종·인증 및 인가 동의 화면의 처리와 렌더링                                                               | `model`, `perm`, `plan`, `store`, `diagnostic` |
 | `config` | 배포 구성 값의 읽기와 검증. PostgreSQL URL 해석은 저장소 검증 함수를 호출한다 | `plan`, `store` |
@@ -196,6 +196,7 @@ AGE가 돌려주는 `agtype`은 PostgreSQL 기본 타입이 아니다. `store`�
 | `/logout` | GET, POST | 로그아웃 확인·웹 세션 폐기 |
 | `/jwks.json` | GET, HEAD | 서명 공개 키 |
 | `/.well-known/oauth-protected-resource/mcp`, `/.well-known/oauth-authorization-server` | GET, HEAD | 고정 OAuth 발견 |
+| `/oauth/register` | POST | 공개 DCR·메타데이터 검증·등록 저장 |
 | `/authorize` | GET, POST | 웹 세션·명시적 동의와 인가 코드 |
 | `/token` | POST | OAuth 최초 코드 교환과 갱신 회전 |
 | `/mcp` | POST | Bearer 보호 MCP 14종 도구 |

@@ -31,8 +31,8 @@ func (err *OAuthError) Error() string { return err.Code }
 var verifierPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{43,128}$`)
 
 // ValidateAuthorizationRequest는 등록 대조 후 code·단일 scope·S256만 허용한다.
-func (s *Service) ValidateAuthorizationRequest(input AuthorizationRequest) error {
-	if err := s.ValidateAuthorizationTarget(input.ClientID, input.RedirectURI, input.Resource); err != nil {
+func (s *Service) ValidateAuthorizationRequest(ctx context.Context, input AuthorizationRequest) error {
+	if err := s.ValidateAuthorizationTarget(ctx, input.ClientID, input.RedirectURI, input.Resource); err != nil {
 		return err
 	}
 	if input.ResponseType != "code" {
@@ -60,7 +60,7 @@ func (s *Service) IssueAuthorizationCode(ctx context.Context, account model.ID, 
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := s.ValidateAuthorizationRequest(input); err != nil {
+	if err := s.ValidateAuthorizationRequest(ctx, input); err != nil {
 		return "", err
 	}
 	if !account.IsV7() {
@@ -107,7 +107,10 @@ func (s *Service) ExchangeAuthorizationCode(ctx context.Context, raw, client, ca
 	if raw == "" || !verifierPattern.MatchString(verifier) {
 		return OAuthTokens{}, &OAuthError{Code: "invalid_grant"}
 	}
-	if err := s.ValidateAuthorizationTarget(client, callback, resource); err != nil {
+	if err := s.ValidateAuthorizationTarget(ctx, client, callback, resource); err != nil {
+		if !errors.Is(err, ErrInvalidAuthorizationTarget) {
+			return OAuthTokens{}, err
+		}
 		return OAuthTokens{}, &OAuthError{Code: "invalid_grant"}
 	}
 	if s.config.AuthorizationCodes == nil {

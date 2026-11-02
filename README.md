@@ -103,7 +103,6 @@ TLS_KEY_FILE=/absolute/path/localhost-key.pem
 |---|---|
 | `AUTHORIZATION_SERVER_URL` | `https://localhost:8080`. 웹 세션과 OAuth의 고정 issuer입니다. |
 | `MCP_RESOURCE_URL`·`MCP_ALLOWED_ORIGINS` | `https://localhost:8080/mcp`·`https://localhost:8080`. issuer와 다른 HTTPS origin을 사용할 수 있습니다. |
-| `OAUTH_CLIENT_REGISTRATIONS` | 사전 등록 client 목록입니다. 작성 방법은 [클라이언트 연결](#클라이언트-연결)을 따릅니다. |
 | `DIAGNOSTIC_INSTANCE_ID` | 재시작에도 유지할 진단 슬롯 ID입니다. `DIAGNOSTIC_LOG_DIR`·`DIAGNOSTIC_LOG_LEVEL`은 비우면 각각 `/var/log/agent-context`·`INFO`입니다. |
 
 전체 항목과 검증 규칙은 [배포 구성](spec/service/agent-context/sdd/operations.md#배포-구성)과 [목표 추가 구성](spec/service/agent-context/sdd/operations.md#목표-추가-구성)을 따릅니다.
@@ -183,36 +182,15 @@ curl --fail --show-error --output /dev/null https://agent-context.example.com/lo
 
 ## 클라이언트 연결
 
-MCP 클라이언트는 `<공개 주소>/mcp`에 Streamable HTTP로 연결하고 OAuth로 인가받습니다. 서버는 **공개 클라이언트 사전 등록만** 지원하며 동적 등록(DCR)과 Client ID Metadata Documents는 지원하지 않습니다. 따라서 client ID는 서버가 발급하거나 클라이언트에서 조회하는 값이 아닙니다. 운영자가 정한 문자열을 서버와 클라이언트 양쪽에 같은 값으로 지정합니다.
+MCP 클라이언트는 `<공개 주소>/mcp`에 Streamable HTTP로 연결하고 OAuth로 인가받습니다. 서버는 **공개 클라이언트 동적 등록(DCR)만** 지원합니다. 클라이언트가 callback을 등록하면 서버가 client ID를 발급하여 DB에 저장합니다. 사전 등록과 Client ID Metadata Documents는 제공하지 않습니다.
 
-| 클라이언트 | callback | 상태 |
-|---|---|---|
-| Codex CLI | `http://127.0.0.1:49152/callback` | macOS 0.160.1 exec·파일 자격 저장 구성을 인수했습니다. |
-| Claude 앱(웹·Desktop) | `https://claude.ai/api/mcp/auth_callback` | 등록할 수 있으나 상호운용 인수는 하지 않았습니다. |
-| Claude Code | `http://localhost:PORT/callback` | 현재 연결할 수 없습니다. [#300](https://github.com/Alpha-gone/agent-context-sharing/issues/300)에서 다룹니다. |
+여러 참여자는 각자의 환경에서 같은 서버 주소를 설정하고, 본인 계정으로 가입·로그인한 뒤 연결을 허용합니다. 운영자가 참여자별 client ID를 등록하거나 서버를 재기동할 필요는 없습니다. client ID는 사용자 계정 ID와 별개이며 토큰·인가 연결·그래프 권한은 계정별로 구분됩니다. 비밀번호와 저장된 인증 자격은 공유하지 않습니다. 상세 계약은 [인증 설계](spec/service/agent-context/sdd/authentication.md#oauth-discovery와-최초-인가)를 따릅니다.
 
-### 1. 서버에 client 등록
+이전 사전 등록 배포에서 전환할 때는 새 마이그레이션을 적용하고 서버를 갱신한 뒤 각 클라이언트에서 다시 인가받습니다. 기존 `OAUTH_CLIENT_REGISTRATIONS`는 제거하며 서버는 이 값을 읽지 않습니다. Codex 설정의 고정 `oauth.client_id`도 제거합니다. 이전 고정 ID와 토큰은 동적 등록으로 자동 이관하지 않습니다. 서버의 계정·그래프·감사와 기존 계열 데이터는 삭제하지 않습니다.
 
-`OAUTH_CLIENT_REGISTRATIONS`는 client ID를 키로 하는 한 줄 JSON입니다. 다음은 Codex CLI와 Claude 앱을 함께 등록하는 예시입니다.
+### 1. Codex CLI
 
-```dotenv
-OAUTH_CLIENT_REGISTRATIONS='{"codex-cli":{"redirect_uris":["http://127.0.0.1:49152/callback"],"resources":["https://agent-context.example.com/mcp"],"loopback_port_policy":"exact"},"claude-web":{"redirect_uris":["https://claude.ai/api/mcp/auth_callback"],"resources":["https://agent-context.example.com/mcp"]}}'
-```
-
-- `resources`의 값은 `MCP_RESOURCE_URL`과 정확히 같아야 합니다.
-- HTTPS callback은 완전 일치로 대조합니다.
-- HTTP callback은 포트를 명시한 literal loopback IP(`127.0.0.1` 등)만 허용합니다. `localhost`나 다른 호스트의 HTTP 주소가 있으면 서버가 기동하지 않습니다.
-- `loopback_port_policy`는 생략하면 `same_ip`(같은 IP·경로에서 포트만 다를 수 있음)이고, `exact`는 포트까지 일치시킵니다. Codex 고정 callback에는 `exact`를 사용합니다.
-
-등록을 바꾼 뒤에는 서버를 다시 기동합니다. 운영 Compose에서는 다음 명령을 사용합니다.
-
-```sh
-docker compose -f compose.prod.yaml up -d --no-deps --force-recreate --wait server
-```
-
-### 2. Codex CLI
-
-`~/.codex/config.toml`에 다음을 추가합니다. 최상위 두 키는 다른 테이블보다 앞에 둡니다. `client_id`는 서버에 등록한 값과 같아야 합니다.
+`~/.codex/config.toml`에 다음을 추가합니다. 최상위 키는 다른 테이블보다 앞에 둡니다. 서버별 `oauth.client_id`와 client secret은 설정하지 않습니다.
 
 ```toml
 features.mcp_2026_07_28 = true
@@ -223,7 +201,6 @@ url = "https://agent-context.example.com/mcp"
 scopes = ["agent-context"]
 
 [mcp_servers.agent-context.oauth]
-client_id = "codex-cli"
 callback_url = "http://127.0.0.1:49152/callback"
 callback_port = 49152
 ```
@@ -232,21 +209,17 @@ callback_port = 49152
 codex mcp login agent-context
 ```
 
-브라우저에서 서버에 로그인하거나 가입한 뒤 동의하면 자격이 저장됩니다. 브라우저를 열 수 없는 환경에서는 `--no-browser`를 붙여 출력된 주소로 진행합니다. 로컬 개발 서버처럼 사설 CA 인증서를 쓰는 경우, 인수 시험에서는 `CODEX_CA_CERTIFICATE`로 CA를 지정했습니다.
+Codex가 발견 메타데이터의 `registration_endpoint`로 등록한 뒤 인증 URL을 엽니다. 브라우저에서 서버에 로그인하거나 가입한 뒤 동의하면 자격이 저장됩니다. 브라우저를 열 수 없는 환경에서는 `--no-browser`를 붙여 출력된 주소로 진행합니다. 사설 CA를 사용하는 로컬 인수 구성에서는 `CODEX_CA_CERTIFICATE`로 CA를 지정합니다.
 
-위 설정은 인수한 구성의 MCP 관련 항목입니다. keyring 저장, TUI, 앱·IDE와 다른 판은 인수하지 않았습니다.
+Codex CLI 0.165.0의 발견→자동 등록→인증 URL 생성까지는 격리 환경에서 확인했습니다. 실제 브라우저 로그인 이후의 CLI 전체 인수는 대기입니다. DCR 구현의 검증 범위와 실제 CLI 인수 결과는 [인증 설계](spec/service/agent-context/sdd/authentication.md)와 [테스트 설계](spec/service/agent-context/sdd/testing.md)를 확인합니다. 과거 사전 등록 방식으로 인수한 macOS Codex CLI 0.160.1 결과를 DCR·다른 판·앱/IDE 지원 근거로 확대하지 않습니다.
 
-### 3. Claude 앱(웹·Desktop)
+### 2. 다른 MCP 클라이언트
 
-1. 서버에 `https://claude.ai/api/mcp/auth_callback`을 callback으로 하는 client를 등록하고 서버를 다시 기동합니다.
-2. Claude 설정 → 커넥터 → **사용자 지정 커넥터 추가**를 엽니다.
-3. URL에 `https://<공개 주소>/mcp`를 입력합니다.
-4. OAuth 클라이언트 선택(Advanced settings 또는 두 번째 단계)에서 직접 지정한 client ID를 고르고 등록한 ID를 입력합니다. Client Secret은 비워 둡니다.
-5. 연결하면 브라우저에서 서버 로그인·동의를 진행합니다.
+클라이언트가 DCR을 지원해야 하며 서버 주소를 설정하고 자동 OAuth 연결을 시작합니다. HTTP callback은 유효한 포트가 있는 literal loopback IP만 허용하고 HTTPS callback은 등록한 URI와 완전 일치시킵니다. 같은 HTTP loopback IP·경로·query에서는 포트 변경을 허용합니다. `localhost` callback을 사용하는 Claude Code는 현재 연결할 수 없으며 [#300](https://github.com/Alpha-gone/agent-context-sharing/issues/300)의 범위입니다.
 
-이 방식은 Anthropic 서버가 공개 주소로 요청을 보내므로 `localhost` 개발 서버에는 연결할 수 없습니다. Cloudflare의 봇 방어나 WAF가 이 요청을 막을 수 있으니 첫 연결 때 서버 로그를 함께 확인하십시오. 대화 상자 구성은 [Claude 공식 안내](https://claude.com/docs/connectors/custom/add-unlisted)를 기준으로 확인합니다.
+Claude 앱 등 외부 서비스에서 접근하는 클라이언트는 공개 HTTPS 주소가 필요합니다. DCR 제공만으로 해당 클라이언트의 실제 연결 지원을 선언하지 않습니다. 첫 연결 때 공개 discovery·`/oauth/register`·`/authorize`·`/token`의 요청과 서버 로그를 확인합니다.
 
-### 4. 연결 뒤 사용과 관리
+### 3. 연결 뒤 사용과 관리
 
 - 에이전트는 노드·관계를 쓰기 전에 `agent_register`로 `agent_id`를 받아 후속 쓰기에 전달합니다. 서버의 instructions가 이 순서를 안내하며, 14종 도구의 설명과 입력 스키마는 [도구 스냅숏](internal/mcp/testdata/tools.json)에 있습니다.
 - 웹 `/connections`에서 본인의 OAuth 연결과 활성 등록을 확인하고 폐기합니다. 연결을 폐기하면 접근·갱신 토큰이 차단되고 웹 세션은 유지됩니다. 등록을 폐기해도 기존 기여와 감사 기록은 보존됩니다.

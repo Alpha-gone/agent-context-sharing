@@ -11,7 +11,7 @@ import (
 
 func TestAgentBearerIdentityIntegration(t *testing.T) {
 	backend := newPublicAuthenticationStore(t)
-	config := authz.Config{Issuer: "https://issuer.test", BcryptCost: 4, AuthorizationCodes: backend, AccessTokens: backend, RefreshTokens: backend, OAuth: &authz.OAuthConfig{Resource: "https://resource.test/mcp", Clients: map[string]authz.OAuthClient{
+	config := authz.Config{Issuer: "https://issuer.test", BcryptCost: 4, AuthorizationCodes: backend, AccessTokens: backend, RefreshTokens: backend, OAuth: &authz.OAuthConfig{Resource: "https://resource.test/mcp", Clients: testClients{
 		"first":  {RedirectURIs: []string{"http://127.0.0.1:49152/callback"}, Resources: []string{"https://resource.test/mcp"}, LoopbackPortPolicy: "exact"},
 		"second": {RedirectURIs: []string{"http://127.0.0.1:49153/callback"}, Resources: []string{"https://resource.test/mcp"}, LoopbackPortPolicy: "exact"},
 	}}}
@@ -26,7 +26,7 @@ func TestAgentBearerIdentityIntegration(t *testing.T) {
 	const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	issue := func(client string) (authz.OAuthTokens, string, string) {
 		t.Helper()
-		callback := config.OAuth.Clients[client].RedirectURIs[0]
+		callback := testClientCallback(t, config.OAuth.Clients, client)
 		code, err := service.IssueAuthorizationCode(t.Context(), owner, authz.AuthorizationRequest{ClientID: client, RedirectURI: callback, Resource: config.OAuth.Resource, ResponseType: "code", Scope: "agent-context", Challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", ChallengeMethod: "S256"})
 		if err != nil {
 			t.Fatal(err)

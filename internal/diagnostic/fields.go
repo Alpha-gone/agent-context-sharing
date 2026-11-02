@@ -3,7 +3,7 @@ package diagnostic
 import "strings"
 
 // Fields는 종류별 허용 목록이다. 확장 map·인터페이스·원문 문자열·포인터를
-// 받지 않으며 문자열은 고정 목록·확인한 UUIDv7·사전 등록한 공개 client 이름으로 제한한다.
+// 받지 않으며 문자열은 고정 목록·확인한 UUIDv7·검증한 동적 client ID으로 제한한다.
 type Fields struct {
 	Identity   IdentityFields   `json:"identity,omitzero"`
 	Request    RequestFields    `json:"request,omitzero"`
@@ -79,7 +79,7 @@ func (fields Fields) valid(kind Kind, verified bool) bool {
 			return false
 		}
 	}
-	// client_id는 운영자가 사전 등록한 공개 이름만 전달한다. 자유 입력은 금지한다.
+	// client_id는 등록 대조를 마친 공개 ID만 전달한다. 자유 입력은 금지한다.
 	if id.ClientID != "" && !validInstance(id.ClientID) {
 		return false
 	}
@@ -98,7 +98,7 @@ func (fields Fields) valid(kind Kind, verified bool) bool {
 		return false
 	}
 	r, a, s, i, m, y := fields.Request, fields.Auth, fields.Search, fields.Index, fields.Management, fields.System
-	return optional(r.Route, "login register logout authorize token connections graphs graph_detail graph_access graph_deletion teams audit operator_restores mcp discovery health unknown") &&
+	return optional(r.Route, "login register logout authorize token client_registration connections graphs graph_detail graph_access graph_deletion teams audit operator_restores mcp discovery health unknown") &&
 		optional(r.Method, "GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE unknown") && optional(r.Tool, tools) && status(r.Status) && rpcCode(r.RPCCode) && optional(r.ValidationField, validationFields) &&
 		optional(a.ValidationField, validationFields) && optional(s.Channel, "semantic keyword time graph global_summary") && optional(s.Path, "direct local global") &&
 		optional(s.SelectionReason, "no_relevant_local event_anchor cross_channel_agreement semantic_separation ambiguous_local global_summary_absent forced legacy_auto explicit_scope") &&

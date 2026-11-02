@@ -55,13 +55,12 @@ func TestOAuthDiscoveryHTTPIntegration(t *testing.T) {
 	values["AUTHORIZATION_SERVER_URL"] = "https://issuer.test"
 	values["MCP_RESOURCE_URL"] = "https://resource.test/mcp"
 	values["MCP_ALLOWED_ORIGINS"] = "https://resource.test"
-	values["OAUTH_CLIENT_REGISTRATIONS"] = `{"codex-cli-first-test":{"redirect_uris":["http://127.0.0.1:49152/callback"],"resources":["https://resource.test/mcp"],"loopback_port_policy":"exact"},"native":{"redirect_uris":["http://127.0.0.1:4000/callback"],"resources":["https://resource.test/mcp"],"loopback_port_policy":"same_ip"}}`
 	cfg, err := config.Load(func(key string) string { return values[key] })
 	if err != nil {
 		t.Fatal("시험용 OAuth 구성 해석 실패")
 	}
 	backend := newPublicAuthenticationStore(t)
-	service, err := authz.New(backend, authz.Config{Issuer: cfg.AuthorizationServerURL.String(), BcryptCost: cfg.BcryptCost, OAuth: oauthConfiguration(cfg)})
+	service, err := authz.New(backend, authz.Config{Issuer: cfg.AuthorizationServerURL.String(), BcryptCost: cfg.BcryptCost, OAuth: oauthTestConfiguration(t, cfg, backend)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +73,7 @@ func TestOAuthDiscoveryHTTPIntegration(t *testing.T) {
 		{"general changed port", "native", "http://127.0.0.1:50000/callback", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := service.ValidateAuthorizationTarget(test.client, test.callback, cfg.MCPResourceURL.String())
+			err := service.ValidateAuthorizationTarget(t.Context(), test.client, test.callback, cfg.MCPResourceURL.String())
 			if (err == nil) != test.valid {
 				t.Fatal("구성→인증 주입이 callback 포트 정책을 바꿨습니다")
 			}
@@ -131,8 +130,8 @@ func TestOAuthDiscoveryHTTPIntegration(t *testing.T) {
 					}
 					return
 				}
-				if strings.Contains(string(body), "attacker.test") || strings.Contains(string(body), "codex-cli-first-test") || strings.Contains(string(body), "redirect_uris") || strings.Contains(string(body), "registration_endpoint") {
-					t.Fatal("요청 값·등록 목록·자동 등록 endpoint 노출")
+				if strings.Contains(string(body), "attacker.test") || strings.Contains(string(body), "codex-cli-first-test") || strings.Contains(string(body), "redirect_uris") {
+					t.Fatal("요청 값·등록 목록 노출")
 				}
 				var document map[string]any
 				if json.Unmarshal(body, &document) != nil {

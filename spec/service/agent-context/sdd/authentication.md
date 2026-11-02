@@ -1,12 +1,12 @@
 # 계정 인증과 OAuth
 
-계정 자격 증명, 웹 세션, OAuth 발견·사전 등록·최초 인가·코드 교환·Bearer 검증·갱신 회전, 본인 폐기와 키 검증의 정본이다. 구현·모듈 인수와 후속 통합·실제 호스트 인수를 구분한다.
+계정 자격 증명, 웹 세션, OAuth 발견·동적 등록·최초 인가·코드 교환·Bearer 검증·갱신 회전, 본인 폐기와 키 검증의 정본이다. 구현·모듈 인수와 후속 통합·실제 호스트 인수를 구분한다.
 
 [설계 전체](../SDD.md) · [요구사항과 설계 대응](traceability.md)
 
 ## 인가 서버
 
-현재 `internal/authz`는 계정 자격 증명·웹 세션 JWT·서명 키와 폐기 목록, OAuth 발견·사전 등록·인가 코드·최초 토큰 교환·Bearer 보호 인증·갱신 회전을 소유한다. `internal/web`가 로그인·가입·로그아웃·명시적 동의 화면과 쿠키를 처리하고 `cmd/server/web_adapter.go`가 두 경계를 연결한다. 코드 소비·최초 계열·갱신 해시의 원자적 저장과 Bearer 공유 상태 대조는 `store`가 담당한다. ES256 서명·검증은 `github.com/go-jose/go-jose/v4`에 맡기고 암호 알고리즘을 직접 구현하지 않는다.
+현재 `internal/authz`는 계정 자격 증명·웹 세션 JWT·서명 키와 폐기 목록, OAuth 발견·동적 등록·인가 코드·최초 토큰 교환·Bearer 보호 인증·갱신 회전을 소유한다. `internal/web`가 로그인·가입·로그아웃·명시적 동의 화면과 쿠키를 처리하고 `cmd/server/web_adapter.go`가 두 경계를 연결한다. 코드 소비·최초 계열·갱신 해시의 원자적 저장과 Bearer 공유 상태 대조는 `store`가 담당한다. ES256 서명·검증은 `github.com/go-jose/go-jose/v4`에 맡기고 암호 알고리즘을 직접 구현하지 않는다.
 
 인가 코드 발급·최초 교환과 코드 재사용 계열 폐기는 [AUTH-07 모듈 인수](../reviews/2026-10-20-auth-07.md), Bearer 보호 인증 경계는 [AUTH-08 모듈 인수](../reviews/2026-10-20-auth-08.md)에서 확인했다. 갱신 회전은 [AUTH-09 모듈 인수](../reviews/2026-10-20-auth-09.md)에서 확인했다. 보호 HTTP·서버 라우터·Bearer 결합 모듈은 [MCP-02](../reviews/2026-10-20-mcp-02.md)에서 인수했다. 기동 경로의 업무 도구 조립·본인 연결 폐기는 [갱신·폐기와 공유 저장](authentication.md#갱신폐기와-공유-저장)의 후속 구현이며 실제 호스트 인수와 구분한다.
 
@@ -38,15 +38,23 @@
 
 보호 리소스 메타데이터는 `resource`를 공개 HTTPS `/mcp` URI로, `authorization_servers`를 인가 서버 issuer로, scope를 `agent-context`로 제공한다. 인가 서버 메타데이터는 표준 endpoint와 `S256`, `token_endpoint_auth_methods_supported=["none"]`, `authorization_response_iss_parameter_supported=true`, `grant_types_supported=["authorization_code","refresh_token"]`을 광고한다.
 
-초기 등록은 대상 호스트별 공개 `client_id`와 허용 callback을 직접 연결용 등록 구성으로 관리한다. 제품 이름이 아니라 실제 표시한 callback을 검증하며 동일 loopback IP의 포트만 예외로 둔다. 등록은 설정 데이터이며 호스트별 코드가 아니다. CIMD는 `TBD-AGENT_CONTEXT-060`을 유지하고, 외부 URL fetch·SSRF 방어 없는 자동 등록은 열지 않는다.
+등록은 RFC 7591 공개 DCR만 제공한다. `POST /oauth/register`는 계정 가입 `/register`와 분리되며 인증 없이 JSON 메타데이터를 받아 서버가 client ID를 발급한다. 사전 등록·수동 client ID 설정·client secret은 제공하지 않는다. CIMD는 `TBD-AGENT_CONTEXT-060`을 유지하며 외부 URL은 조회하지 않는다. discovery는 고정 issuer의 `registration_endpoint`를 광고한다.
 
-구성 계층이 검증한 issuer·resource·client 등록을 인증 서비스에 복사하여 주입한다. 요청의 client·resource는 원문으로 등록과 대조한다. HTTPS와 `exact` callback은 완전 일치이며 `same_ip`의 HTTP literal loopback만 유효한 명시 포트의 변경을 허용한다. IP 표기·경로·query·escape는 바꾸지 않는다. 첫 시험의 exact 등록에는 일반 loopback 포트 예외를 적용하지 않는다. 등록 대조 자체는 리디렉션이나 외부 요청을 수행하지 않고, 미등록·결합 위반은 고정된 오류로 반환한다.
+등록은 `redirect_uris` 1~8개, URI당 최대 1024바이트, 선택 `client_name` 최대 128자를 받는다. JSON 본문은 8 KiB이며 중복 이름·잘못된 타입·빈 목록을 거부한다. 응답은 `201`·no-store·등록 메타데이터와 발급 시각이다. `token_endpoint_auth_method=none`, `response_types=["code"]`, `grant_types=["authorization_code","refresh_token"]`, `scope=agent-context`로 제한한다. 생략한 선택 값은 이 지원값으로 채우며 지원하지 않는 값은 거부한다. client가 요청한 ID는 채택하지 않는다. 잘못된 callback은 `400 invalid_redirect_uri`, 메타데이터는 `400 invalid_client_metadata`다.
+
+HTTP callback은 명시 포트가 있는 literal loopback IP만 허용한다. localhost·일반 HTTP·fragment·사용자 정보·잘못된 포트·중복 URI는 거부한다. HTTPS는 완전 일치이고 HTTP loopback은 같은 IP·원문 경로·query의 포트만 달라질 수 있다. 제품 이름이나 자기 신고 client_name을 신뢰된 신원으로 취급하지 않는다.
+
+등록 HTTP 처리기는 기존 전송 계층이 검증한 출처에 독립적인 10회/분 고정 창을 적용한다. IPv4는 /32·IPv6는 /64로 묶고 최대 4096개 활성 출처만 유지한다. 제한·출처 상태 포화는 `429`·Retry-After이며 만료 항목만 회수한다. DB는 전용 트랜잭션 잠금 아래 등록 총량 10000개를 검사하며 포화는 `429`다. 이 상한은 다중 인스턴스에서도 공유한다. 등록을 자동 삭제하지 않으며 포화는 운영자가 조사한다. 사용자 로그인·명시적 동의·PKCE와 계정별 토큰·권한 검증은 계속 필요하다.
+
+구성 계층이 검증한 issuer·resource와 공유 DB client registry를 인증 서비스에 주입한다. 요청의 client·resource는 원문으로 등록과 대조한다. HTTPS callback은 완전 일치이며 HTTP literal loopback은 유효한 명시 포트의 변경만 허용한다. IP 표기·경로·query·escape는 바꾸지 않는다. DCR이 저장하는 포트 정책은 same_ip다. 등록 대조 자체는 리디렉션이나 외부 요청을 수행하지 않고, 미등록·결합 위반은 고정된 오류로 반환한다.
 
 두 메타데이터 경로는 TLS 판정 뒤 인증 없이 GET·HEAD로 제공하고 JSON·no-store를 사용한다. issuer와 endpoint는 설정 origin에 고정하며 요청 Host·전달 헤더로 만들지 않는다. 발견 구현은 인가·token·갱신 처리의 완료를 뜻하지 않으며 각 작업의 별도 인수 근거를 따른다.
 
 인가 코드는 해시 저장·60초·1회 소비·PKCE·client·callback·resource 결합과 `iss` 응답을 사용한다. 토큰 교환에서 `token_type=Bearer` 접근 토큰과 새 갱신 계열을 발급한다. 웹 세션은 12시간 정책으로 검증하되 그 만료를 MCP 갱신 계열의 만료로 사용하지 않는다. 인가 코드 재사용 시 최초 교환으로 만든 갱신 계열을 폐기한다.
 
 `/token`의 64 KiB 본문 상한을 갱신 grant에도 적용한다. 응답은 OAuth 토큰 JSON과 `Cache-Control: no-store`, `Pragma: no-cache`이며 도구 응답과 로그에는 토큰을 전달하지 않는다.
+
+2026-11-02 DCR 전용 전환은 사전 등록 설정과 고정 ID를 제거하는 비호환 변경이다. 기존 계정·그래프·계열은 보존하고 클라이언트는 새로 등록·인가받는다. 과거 TEST-08의 CLI 판정은 사전 등록 당시 근거이며 DCR CLI는 별도 재인수한다.
 
 최초 인가 HTTP는 다음 경계로 구현한다. `/authorize` GET은 등록 결합·중복 없는 요청·code·단일 scope·S256 challenge를 확인하고, 세션 부재 시 기존 로그인으로 이동하여 내부 `next`로 요청을 복원한다. 로그인에서 계정 등록을 경유해도 내부 `next`를 등록 링크·등록 양식·로그인 복귀 링크와 가입 성공 후 이동에 보존한다. 등록 자격 검증 실패나 인증 저장소 오류로 다시 그리는 양식에도 보존하며, 각 GET·POST에서 기존 `localRedirect` 규칙을 적용해 외부 주소를 버린다. 숨은 필드는 신뢰 경계가 아니므로 POST에서도 재검사한다. 가입 성공 자체는 동의나 코드 발급을 대신하지 않고 로그인 후 원래 인가 요청의 동의 화면으로 돌아간다. 유효한 웹 세션에도 동의 화면을 표시하며 GET으로 코드를 만들지 않는다. POST는 기존 웹 출처·출처별 공유 예산·8 KiB 양식 보호를 먼저 적용한 뒤 세션과 요청을 재검사하고, 명시적 허용만 코드 발급으로 이어진다. 거절은 `access_denied`이며 검증된 callback에 `state`와 고정 issuer의 `iss`를 반환한다. 미등록 결합·구문 오류에는 로컬 오류를 제공하고 임의 callback으로 이동하지 않는다. 동의 화면과 리디렉션에는 no-store·no-cache·Referrer-Policy: no-referrer와 프레임 차단을 적용한다.
 
@@ -152,7 +160,7 @@ JWT 서명·공통 클레임 검증을 공유하고 `aud`와 폐기 책임을 �
 
 ### OAuth 저장 열
 
-다음은 위 저장 모델을 DDL로 옮길 열 이름·타입·NULL 계약이다. 표에서 선택으로 표시하지 않은 열은 `NOT NULL`이다. UUIDv7은 SQL `uuid`, 시각은 `timestamptz`로 저장한다. 사전 등록 client·redirect·resource 목록은 배포 구성이므로 별도 client 테이블을 만들지 않는다. 아래 결합 값은 인가 시점의 검증 결과를 보존하며 이후 요청에서 현재 등록과도 대조한다.
+다음은 위 저장 모델을 DDL로 옮길 열 이름·타입·NULL 계약이다. 표에서 선택으로 표시하지 않은 열은 `NOT NULL`이다. UUIDv7은 SQL `uuid`, 시각은 `timestamptz`로 저장한다. 동적 client·redirect·resource 목록은 public.oauth_client에 저장하며 재시작·다중 인스턴스에서 공유한다. 아래 결합 값은 인가 시점의 검증 결과를 보존하며 이후 요청에서 현재 등록과도 대조한다.
 
 | 테이블 | 열 | SQL 타입·NULL | 의미 |
 |---|---|---|---|
@@ -189,7 +197,8 @@ DB는 해시 길이·소비 쌍의 NULL 조합·FK와 키 유일성을 검사한
 |---|---|---|
 | `/.well-known/oauth-protected-resource/mcp` | GET, HEAD | 공개 HTTPS `/mcp` resource·issuer·단일 scope 메타데이터 |
 | `/.well-known/oauth-authorization-server` | GET, HEAD | 고정 issuer, authorize·token·JWKS, PKCE S256·grant·공개 client·iss 지원 |
-| `/authorize` | GET, POST | 사전 등록·callback·resource 검증, 계정 로그인·명시적 동의, 단일 사용 코드 발급 |
+| `/oauth/register` | POST | 공개 DCR·callback·메타데이터 검증·공유 등록 저장 |
+| `/authorize` | GET, POST | 동적 등록·callback·resource 검증, 계정 로그인·명시적 동의, 단일 사용 코드 발급 |
 | `/token` | POST | 코드 또는 갱신 grant. form 본문 64 KiB, 성공 응답 `no-store`·`no-cache` |
 | `/jwks.json` | GET, HEAD | 공개 키만 반환하며 개인 키 성분을 제외한다 |
 | `/connections` | GET, POST | 본인 계열·활성 등록 목록과 명시적 폐기. 웹 세션·출처 검사 적용 |

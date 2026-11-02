@@ -10,7 +10,7 @@ import (
 
 func oauthTestConfig() Config {
 	const resource = "https://resource.test/mcp"
-	return Config{Issuer: "https://issuer.test", BcryptCost: 4, OAuth: &OAuthConfig{Resource: resource, Clients: map[string]OAuthClient{
+	return Config{Issuer: "https://issuer.test", BcryptCost: 4, OAuth: &OAuthConfig{Resource: resource, Clients: testClients{
 		"first":       {RedirectURIs: []string{"http://127.0.0.1:49152/callback"}, Resources: []string{resource}, LoopbackPortPolicy: "exact"},
 		"native":      {RedirectURIs: []string{"http://127.0.0.1:4000/callback?mode=fixed"}, Resources: []string{resource}, LoopbackPortPolicy: "same_ip"},
 		"native6":     {RedirectURIs: []string{"http://[::1]:4000/callback"}, Resources: []string{resource}, LoopbackPortPolicy: "same_ip"},
@@ -72,7 +72,7 @@ func TestOAuthAuthorizationTargetBinding(t *testing.T) {
 		{"resource query", "first", "http://127.0.0.1:49152/callback", "https://resource.test/mcp?x=1", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := service.ValidateAuthorizationTarget(test.client, test.callback, test.resource)
+			err := service.ValidateAuthorizationTarget(t.Context(), test.client, test.callback, test.resource)
 			if test.valid && err != nil {
 				t.Fatal("등록된 결합 거부")
 			}
@@ -89,11 +89,8 @@ func TestOAuthRegistrationSnapshotIsIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := input.OAuth.Clients["first"]
-	client.RedirectURIs[0], client.Resources[0] = "https://other.test/callback", "https://other.test/mcp"
 	input.OAuth.Resource = "https://other.test/mcp"
-	delete(input.OAuth.Clients, "first")
-	if err := service.ValidateAuthorizationTarget("first", "http://127.0.0.1:49152/callback", "https://resource.test/mcp"); err != nil {
+	if err := service.ValidateAuthorizationTarget(t.Context(), "first", "http://127.0.0.1:49152/callback", "https://resource.test/mcp"); err != nil {
 		t.Fatal("호출자의 변경이 활성 등록을 바꿨습니다")
 	}
 }
@@ -113,7 +110,7 @@ func TestOAuthMetadataIsFixedAndDoesNotReadStore(t *testing.T) {
 		expected map[string]any
 	}{
 		{"resource", handler.ProtectedResourceMetadata, map[string]any{"resource": "https://resource.test/mcp", "authorization_servers": []string{"https://issuer.test"}, "scopes_supported": []string{"agent-context"}, "bearer_methods_supported": []string{"header"}}},
-		{"issuer", handler.AuthorizationServerMetadata, map[string]any{"issuer": "https://issuer.test", "authorization_endpoint": "https://issuer.test/authorize", "token_endpoint": "https://issuer.test/token", "jwks_uri": "https://issuer.test/jwks.json", "scopes_supported": []string{"agent-context"}, "response_types_supported": []string{"code"}, "grant_types_supported": []string{"authorization_code", "refresh_token"}, "token_endpoint_auth_methods_supported": []string{"none"}, "code_challenge_methods_supported": []string{"S256"}, "authorization_response_iss_parameter_supported": true}},
+		{"issuer", handler.AuthorizationServerMetadata, map[string]any{"issuer": "https://issuer.test", "authorization_endpoint": "https://issuer.test/authorize", "token_endpoint": "https://issuer.test/token", "registration_endpoint": "https://issuer.test/oauth/register", "jwks_uri": "https://issuer.test/jwks.json", "scopes_supported": []string{"agent-context"}, "response_types_supported": []string{"code"}, "grant_types_supported": []string{"authorization_code", "refresh_token"}, "token_endpoint_auth_methods_supported": []string{"none"}, "code_challenge_methods_supported": []string{"S256"}, "authorization_response_iss_parameter_supported": true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "https://attacker.test/metadata", nil)
@@ -138,7 +135,7 @@ func TestOAuthMetadataIsFixedAndDoesNotReadStore(t *testing.T) {
 
 func TestOAuthMetadataWithoutRegistrationFailsClosed(t *testing.T) {
 	service := testService(t, &sessionFaultStore{})
-	if !errors.Is(service.ValidateAuthorizationTarget("first", "http://127.0.0.1:49152/callback", "https://resource.test/mcp"), ErrInvalidAuthorizationTarget) {
+	if !errors.Is(service.ValidateAuthorizationTarget(t.Context(), "first", "http://127.0.0.1:49152/callback", "https://resource.test/mcp"), ErrInvalidAuthorizationTarget) {
 		t.Fatal("등록 없는 서비스가 대조를 허용했습니다")
 	}
 	handler, err := NewHandler(service)

@@ -357,7 +357,7 @@ macOS/Linux에서 정상 네 파일·완전한 JSON·권한·같은 ID의 동시
 
 `TBD-AGENT_CONTEXT-064`의 선택 기준은 확정되었고 실제 적합성 검증은 대기다. 현재 재검증 대상은 macOS의 Codex CLI `0.160.1`, 서버는 Go `1.27.3`, 공식 MCP Go SDK `v1.8.0`, 초기 revision은 `2026-07-28`다. Codex 앱·IDE 표면으로 지원 완료를 확대하지 않는다. 기존 TEST-08 인수 기록은 Go 1.27.1에서의 결과로 보존하며, Go 1.27.3으로 그 호스트 인수 결과를 자동 승계하지 않는다.
 
-첫 공개 client는 사전 등록 ID를 Codex의 서버별 `oauth.client_id`에 지정한다. callback은 `http://127.0.0.1:49152/callback`, `oauth.callback_url`·`oauth.callback_port`는 같은 URI·포트다. 실제 브라우저 요청 URI와 수신 주소·포트·사전 등록이 정확히 같은지 확인한다. issuer 지원 메타데이터와 성공·오류 응답의 `iss`도 일치해야 한다. 외부 MCP·authorize·token은 HTTPS이고 HTTP 예외는 loopback callback에 한정한다. 이 문서 작업은 실제 호스트 설정·자격 증명을 바꾸지 않는다.
+현재 등록 경로는 DCR 전용이다. Codex 설정에서 고정 `oauth.client_id`를 제거하고 discovery의 `registration_endpoint`로 자동 등록하는지 확인한다. callback은 `http://127.0.0.1:49152/callback`이며 `oauth.callback_url`·`oauth.callback_port`가 같은 URI·포트로 수신해야 한다. 클라이언트가 표시한 실제 URI와 등록한 URI, 고정 issuer·성공/오류 응답 `iss`가 일치해야 한다. HTTP 예외는 literal loopback callback에 한정한다. 기존 TEST-08의 사전 등록 인수 결과는 역사적 근거이며 DCR CLI 인수 완료를 뜻하지 않는다.
 
 | 인수 | 관찰할 결과 | 실패 대조 |
 |---|---|---|
@@ -405,3 +405,9 @@ macOS/Linux에서 정상 네 파일·완전한 JSON·권한·같은 ID의 동시
 감사 조회의 등급 상세 회귀는 실제 부여·등급 변경·소유권 이전·회수·운영자 복구를 수행한 뒤 없는 등급의 `-` 표시와 이전/이후 순서를 대조한다. 팀 상속 근거는 팀 대상을 유지하면서 구성원 UUID를 상세에 표시하고 구성원 대상 필터에서도 같은 행을 확인한다. 등급 없는 일반 웹 삭제·복구는 상세에 가상의 등급 전이를 만들지 않아야 한다. 소유자 접근·안정 페이지·기간/대상 필터 회귀는 기존 감사 시험을 유지한다.
 
 공백 본문 색인 회귀는 공백·개행·Unicode 공백과 8000자 경계를 문서/질의 양쪽에서 대조한다. 문서는 원문을 기존 접두사 뒤에 전송하고 빈 문자열·잘못된 UTF-8·상한 초과는 거부하며, 질의는 공백만인 입력을 계속 거부한다. 실제 DB에서는 공백 본문의 원천·사건 생성과 사건 갱신 뒤 pending 등록→합성 TLS 제공자 호출→벡터 공개/교체→작업 제거와 completed/INFO 진단을 확인한다. MCP 생성·갱신의 공백 수용·원문 보존과 빈 문자열 거부, 도구 스냅샷도 함께 대조한다.
+
+## DCR 전용 전환 검증
+
+DCR 모듈 시험은 `TestDCR*`로 발급·메타데이터 거부·callback·본문·출처별 한도·상태 포화·저장 장애·취소를 검사한다. `TestDCRClientPersistenceIntegration`·`TestDCRClientCapacityConcurrentIntegration`은 격리 DB의 공유 저장·중복 ID 보존·동시 총량 상한을 검사한다. `TestDCRAccountAndRestartIntegration`은 실제 TLS 등록·코드 교환·두 계정의 토큰 분리·새 서비스의 검증·갱신을 검사한다. 필수 DB 설정은 루트 계약을 따른다. 실제 CLI 재인수는 `TestTEST08CodexCLIOAuthIntegration`의 DCR 경로를 별도로 실행하며 설치된 CLI만으로 통과를 선언하지 않는다.
+
+`TestDCRCodexCLIRegistrationIntegration`은 `TEST_DCR_CODEX_BINARY`에 실제 CLI 바이너리를 지정하여 discovery→DCR→인가 URL만 검사한다. 2026-11-02 codex-cli 0.165.0·Go 1.27.3으로 통과했다. 사용자 로그인·동의·토큰 저장은 이 시험에서 수행하지 않으며 TEST-08 전체 브라우저 인수를 대신하지 않는다.

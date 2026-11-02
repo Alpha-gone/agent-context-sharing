@@ -287,22 +287,15 @@ HTTP 수신 주소도 구성으로 두어 개발 환경과 역방향 프록시 �
 |---|---|---|
 | `MCP_RESOURCE_URL` | 절대 HTTPS `/mcp` URI. issuer와 독립된 고정 리소스 식별자이며 토큰 aud·OAuth resource·보호 메타데이터에 동일 적용 | 구현·구성 인수 |
 | `MCP_ALLOWED_ORIGINS` | 쉼표 구분 HTTPS origin 목록. path·query·fragment·userinfo와 와일드카드를 허용하지 않으며 요청 Origin은 완전 일치 | 구현·구성 인수 |
-| `OAUTH_CLIENT_REGISTRATIONS` | 공개 `client_id`를 키로 하는 등록 JSON. callback URI와 허용 resource 목록을 검증하고 중복 client·빈 목록·비루프백 HTTP를 거부 | 구현·구성 인수 |
 | `DIAGNOSTIC_LOG_DIR` | 영속 로그 루트. 기본 `/var/log/agent-context`, 공개 자산 경로·임시 디렉터리를 쓰지 않는다 | 구현·구성 인수 |
 | `DIAGNOSTIC_INSTANCE_ID` | 영속 배포 슬롯별 1~64자 ASCII 식별자. 경로 구분자·점 경로 금지, 동시 인스턴스 간 중복은 기동 거부 | 구현·구성 인수 |
 | `DIAGNOSTIC_LOG_LEVEL` | `INFO` 기본. `WARN`, `ERROR`, 시험용 `DEBUG`만 허용하고 허용 필드·용량 제한을 완화하지 않는다 | 구현·구성 인수 |
 
-토큰 수명·소비 상태 보존·로그 회전 크기·기간·저장량·대기 상한은 SRS의 확정값이며 배포 선택으로 열지 않는다. 첫 Codex 시험 등록은 `http://127.0.0.1:49152/callback`을 정확히 일치시키고 다른 loopback 포트 예외를 그 등록에 적용하지 않는다. 기존 일반 loopback 등록에만 같은 IP의 가변 포트 정책을 사용할 수 있다.
+토큰 수명·소비 상태 보존·로그 회전 크기·기간·저장량·대기 상한은 SRS의 확정값이며 배포 선택으로 열지 않는다.
 
-`MCP_RESOURCE_URL`·`MCP_ALLOWED_ORIGINS`·`OAUTH_CLIENT_REGISTRATIONS`·`DIAGNOSTIC_INSTANCE_ID`는 필수다. 리소스 URI는 query·fragment·userinfo 없이 정확한 `/mcp` 경로를 사용한다. Origin은 경로가 없는 원문을 보존하며 빈 항목·중복·와일드카드를 거부한다. issuer와 리소스의 호스트가 같아야 한다는 제약은 두지 않는다.
+`MCP_RESOURCE_URL`·`MCP_ALLOWED_ORIGINS`·`DIAGNOSTIC_INSTANCE_ID`는 필수다. 리소스 URI는 query·fragment·userinfo 없이 정확한 `/mcp` 경로를 사용한다. Origin은 경로가 없는 원문을 보존하며 빈 항목·중복·와일드카드를 거부한다. issuer와 리소스의 호스트가 같아야 한다는 제약은 두지 않는다.
 
-등록 JSON은 `client_id`를 키로 하는 비어 있지 않은 객체다. 각 값은 `redirect_uris`와 `resources`의 비어 있지 않은 문자열 배열, 선택 `loopback_port_policy`만 받는다. ID는 비어 있거나 공백·제어 문자를 포함할 수 없고 원문을 보존한다. 중복 JSON 이름·알 수 없는 필드·`null`·중복 배열 원소를 거부한다. callback은 fragment·userinfo 없는 절대 HTTPS URI 또는 명시적 유효 포트를 가진 literal loopback IP의 HTTP URI다. `localhost`·비루프백 HTTP·zone 주소는 허용하지 않는다. `resources`의 모든 URI는 이 서버의 `MCP_RESOURCE_URL`과 정확히 같아야 한다.
-
-`loopback_port_policy`는 생략 시 `same_ip`이며 명시 값은 `same_ip`·`exact`만 허용한다. `same_ip`는 등록한 HTTP loopback callback의 IP·경로·query를 유지하고 포트만 달라질 수 있다는 조립 입력이다. HTTPS callback은 항상 완전 일치다. 첫 Codex 시험 등록에는 `exact`를 명시한다. 이 정책은 등록 데이터로 전달하며 호스트 이름에 따른 코드 분기를 만들지 않는다. 사전 등록만 지원하므로 서버가 client ID를 발급하거나 호스트에서 조회하지 않는다. 예시는 합성 client ID이며 운영자가 정한 ID로 교체하고 대상 호스트의 클라이언트 설정에 같은 값을 지정한다.
-
-```json
-{"codex-cli-first-test":{"redirect_uris":["http://127.0.0.1:49152/callback"],"resources":["https://agent-context.example.com/mcp"],"loopback_port_policy":"exact"}}
-```
+클라이언트 등록은 항상 활성화된 공개 DCR을 사용한다. 사전 등록 환경 변수는 읽지 않으며 등록 API·callback 검증·요청 제한·총량은 [인증 설계](authentication.md#oauth-discovery와-최초-인가)가 소유한다. `016_oauth_client.sql` 적용 후 서버를 갱신하고 이전 고정 client ID를 사용하는 호스트는 수동 설정을 제거하여 다시 등록·인가받는다. 과거 ID·토큰의 자동 이관과 기존 데이터 삭제는 수행하지 않는다. 총량 10000개에 도달하면 운영자가 등록 상태를 조사하며 활성 등록을 자동 삭제하지 않는다.
 
 진단 루트는 절대 경로이고 `.`·`..`·중복 구분자·제어 문자·역슬래시를 포함하지 않는다. 임시 루트(`/tmp`, `/var/tmp`, `/private/tmp`, `/private/var/tmp`, `/var/folders`, `/private/var/folders`, `/dev/shm`)와 공개 자산용 `assets`·`public`·`static` 경로 구성 요소를 거부한다. 슬롯은 `[A-Za-z0-9_-]{1,64}`만 받는다. 이 검사는 파일 시스템에 접근하지 않는다. 심볼릭 링크·실제 소유권·영속성·권한·중복 슬롯 잠금은 [기록기 기동](observability.md#경로권한다중-인스턴스)에서 확인한다.
 
@@ -350,7 +343,6 @@ TLS_CERT_FILE
 TLS_KEY_FILE
 MCP_RESOURCE_URL
 MCP_ALLOWED_ORIGINS
-OAUTH_CLIENT_REGISTRATIONS
 DIAGNOSTIC_LOG_DIR
 DIAGNOSTIC_INSTANCE_ID
 DIAGNOSTIC_LOG_LEVEL

@@ -169,7 +169,7 @@ FR 171건과 NFR 13건, 총 184건을 각 한 행으로 추적한다. 폐기된 
 | `FR-AGENT_CONTEXT-163` | 에이전트 업무 비용 평가 | [에이전트 업무 비용과 축소 비교](evaluation.md#에이전트-업무-비용과-축소-비교) | 성공률·턴·토큰·완전한 비용과 무관한 컨텍스트·축소의 독립 비교 | 실패 포함 분모·미측정·준비 비용·성공률 악화 방지와 효과를 대조 | 설계 반영 |
 | `FR-AGENT_CONTEXT-164` | 호스트 직접 연결 | [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계) | 호스트 내장 클라이언트·공식 SDK와 서버/호스트 책임 분리 | 전용 클라이언트 없이 공개 URL·OAuth·도구를 실제 호출 | 설계 반영 |
 | `FR-AGENT_CONTEXT-165` | 표준 수명주기 | [SDK와 수명주기](mcp.md#sdk와-수명주기) | SDK v1.8.0·revision 2026-07-28·발견·요청별 JSON 전송 | 발견 생략·메타데이터·표준 헤더·완료 외피·캐시·HTTP 취소와 상태를 대조 | 설계 반영 |
-| `FR-AGENT_CONTEXT-166` | 표준 OAuth | [OAuth discovery와 최초 인가](authentication.md#oauth-discovery와-최초-인가) | 사전 등록·S256·callback/resource/issuer 결합 | 성공·오류 iss, 코드 단일 소비와 잘못된 결합의 거부를 대조 | 설계 반영 |
+| `FR-AGENT_CONTEXT-166` | 표준 OAuth | [OAuth discovery와 최초 인가](authentication.md#oauth-discovery와-최초-인가) | DCR·S256·callback/resource/issuer 결합 | 성공·오류 iss, 코드 단일 소비와 잘못된 결합의 거부를 대조 | 설계 반영 |
 | `FR-AGENT_CONTEXT-167` | 갱신 토큰 안전성 | [갱신 자격의 수명과 정리](authentication.md#갱신-자격의-수명과-정리) | 1시간 접근·30일 절대/7일 비활동·원자적 회전·계열 폐기 | 유휴·재사용·경합·응답 유실·보존 종료·명시적 폐기를 대조 | 설계 반영 |
 | `FR-AGENT_CONTEXT-168` | 인증 재사용 | [첫 Codex CLI 상호운용 시험](testing.md#첫-codex-cli-상호운용-시험) | 호스트 보안 저장·자격 복원과 서버 공유 상태 | 유효 자격을 가진 재시작·유휴 후 불필요한 재인가 없는 호출 확인 | 설계 반영 |
 | `FR-AGENT_CONTEXT-169` | 행위자 결합 | [공통 행위자·도구·쓰기 안전성](mcp.md#공통-행위자도구쓰기-안전성) | agent_register·계정/client 결합·활성 등록 상한 | 임의/다른 계정/client/폐기 ID 거부와 동시 동일 등록 확인 | 설계 반영 |

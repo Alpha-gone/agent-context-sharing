@@ -29,8 +29,11 @@ func (s *Service) Refresh(ctx context.Context, raw, clientID, resource, scope st
 	if err != nil || len(decoded) != 32 || len(raw) != 43 || s.oauth == nil {
 		return OAuthTokens{}, &OAuthError{Code: "invalid_grant"}
 	}
-	client, found := s.oauth.Clients[clientID]
-	if !found || resource != s.oauth.Resource || !slices.Contains(client.Resources, resource) {
+	client, lookupErr := s.oauthClient(ctx, clientID)
+	if lookupErr != nil && !errors.Is(lookupErr, ErrInvalidAuthorizationTarget) {
+		return OAuthTokens{}, lookupErr
+	}
+	if lookupErr != nil || resource != s.oauth.Resource || !slices.Contains(client.Resources, resource) {
 		return OAuthTokens{}, &OAuthError{Code: "invalid_grant"}
 	}
 	if scope != "" && scope != "agent-context" {

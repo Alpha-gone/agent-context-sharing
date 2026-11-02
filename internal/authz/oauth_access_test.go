@@ -114,9 +114,9 @@ func TestBearerClaimBoundaries(t *testing.T) {
 			case "client":
 				claims["client_id"] = "unknown"
 			case "client resource":
-				client := service.oauth.Clients["first"]
+				client := service.oauth.Clients.(testClients)["first"]
 				client.Resources = []string{"https://other.test/mcp"}
-				service.oauth.Clients["first"] = client
+				service.oauth.Clients.(testClients)["first"] = client
 			case "empty jti":
 				claims["jti"] = ""
 			case "empty scope":

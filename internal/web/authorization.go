@@ -11,8 +11,8 @@ import (
 
 // Authorization은 authz 타입을 웹에 노출하지 않는 인가 어댑터 계약이다.
 type Authorization interface {
-	ValidateAuthorizationTarget(string, string, string) error
-	ValidateAuthorizationRequest(url.Values) string
+	ValidateAuthorizationTarget(context.Context, string, string, string) error
+	ValidateAuthorizationRequest(context.Context, url.Values) string
 	IssueAuthorizationCode(context.Context, model.ID, url.Values) (string, error)
 	AuthorizationIssuer() string
 }
@@ -50,11 +50,22 @@ func (server *Server) authorize(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	authorization := server.config.Authorization
-	if err := authorization.ValidateAuthorizationTarget(values.Get("client_id"), values.Get("redirect_uri"), values.Get("resource")); err != nil {
+	if err := authorization.ValidateAuthorizationTarget(request.Context(), values.Get("client_id"), values.Get("redirect_uri"), values.Get("resource")); err != nil {
+		if errors.Is(err, ErrAuthenticationUnavailable) {
+			server.sessionUnavailable(writer)
+			return
+		}
 		server.authorizationError(writer, http.StatusBadRequest)
 		return
 	}
-	if code := authorization.ValidateAuthorizationRequest(values); code != "" {
+	if code := authorization.ValidateAuthorizationRequest(request.Context(), values); code != "" {
+		if request.Context().Err() != nil {
+			return
+		}
+		if code == "server_error" {
+			server.sessionUnavailable(writer)
+			return
+		}
 		server.authorizationRedirect(writer, request, values, "error", code)
 		return
 	}

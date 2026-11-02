@@ -30,7 +30,7 @@ func TestConfigurationRejectsBeforeResourceStartup(t *testing.T) {
 	base := serverConfiguration(t)
 	for key, value := range map[string]string{
 		"EMBEDDING_PROVIDER": "unsupported", "MCP_RESOURCE_URL": "http://resource.test/mcp",
-		"MCP_ALLOWED_ORIGINS": "*", "OAUTH_CLIENT_REGISTRATIONS": "null",
+		"MCP_ALLOWED_ORIGINS":    "*",
 		"DIAGNOSTIC_INSTANCE_ID": "../slot", "DIAGNOSTIC_LOG_DIR": "/tmp/logs",
 		"DIAGNOSTIC_LOG_LEVEL": "TRACE", "AUTHORIZATION_SERVER_URL": "https://host#",
 		"SEARCH_SEMANTIC_SIMILARITY_THRESHOLD": "NaN", "TRUSTED_PROXY_CIDRS": "",
@@ -57,7 +57,7 @@ func TestConfigurationPassesValidatedInputsOnce(t *testing.T) {
 	starts := 0
 	err := configureAndRun(func(key string) string { return values[key] }, func(cfg config.Config) error {
 		starts++
-		if cfg.MCPResourceURL.String() != "https://localhost:8080/mcp" || cfg.OAuthClients["codex-cli-first-test"].LoopbackPortPolicy != config.LoopbackExact || cfg.Diagnostic.InstanceID != "development" {
+		if cfg.MCPResourceURL.String() != "https://localhost:8080/mcp" || cfg.Diagnostic.InstanceID != "development" {
 			t.Fatal("검증된 조립 입력이 보존되지 않았다")
 		}
 		return expected

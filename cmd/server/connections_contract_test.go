@@ -39,7 +39,7 @@ func (log *connectionLog) String() string {
 
 func TestAUTH10ConnectionsTLSIntegration(t *testing.T) {
 	f := newMCPWriteFixture(t)
-	config := authz.Config{Issuer: "https://issuer.test", BcryptCost: 4, AuthorizationCodes: f.database, AccessTokens: f.database, RefreshTokens: f.database, Connections: f.database, OAuth: &authz.OAuthConfig{Resource: "https://resource.test/mcp", Clients: map[string]authz.OAuthClient{"first": {RedirectURIs: []string{"http://127.0.0.1:49152/callback"}, Resources: []string{"https://resource.test/mcp"}, LoopbackPortPolicy: "exact"}}}}
+	config := authz.Config{Issuer: "https://issuer.test", BcryptCost: 4, AuthorizationCodes: f.database, AccessTokens: f.database, RefreshTokens: f.database, Connections: f.database, OAuth: &authz.OAuthConfig{Resource: "https://resource.test/mcp", Clients: testClients{"first": {RedirectURIs: []string{"http://127.0.0.1:49152/callback"}, Resources: []string{"https://resource.test/mcp"}, LoopbackPortPolicy: "exact"}}}}
 	var services []*authz.Service
 	var servers []*httptest.Server
 	logs := &connectionLog{}

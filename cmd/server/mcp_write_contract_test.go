@@ -561,7 +561,7 @@ func TestMCP06GuardAfterAdvisoryWaitIntegration(t *testing.T) {
 // 호출되면 실패하며 전체 14종 조립 인수나 실제 호스트 지원을 뜻하지 않는다.
 func TestMCP06ProtectedWriteTLSIntegration(t *testing.T) {
 	f := newMCPWriteFixture(t)
-	config := authz.Config{Issuer: "https://issuer.test", BcryptCost: 4, AuthorizationCodes: f.database, AccessTokens: f.database, RefreshTokens: f.database, OAuth: &authz.OAuthConfig{Resource: "https://resource.test/mcp", Clients: map[string]authz.OAuthClient{"first": {RedirectURIs: []string{"http://127.0.0.1:49152/callback"}, Resources: []string{"https://resource.test/mcp"}, LoopbackPortPolicy: "exact"}}}}
+	config := authz.Config{Issuer: "https://issuer.test", BcryptCost: 4, AuthorizationCodes: f.database, AccessTokens: f.database, RefreshTokens: f.database, OAuth: &authz.OAuthConfig{Resource: "https://resource.test/mcp", Clients: testClients{"first": {RedirectURIs: []string{"http://127.0.0.1:49152/callback"}, Resources: []string{"https://resource.test/mcp"}, LoopbackPortPolicy: "exact"}}}}
 	service, err := authz.New(f.database, config)
 	if err != nil {
 		t.Fatal(err)

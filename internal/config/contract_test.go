@@ -37,7 +37,7 @@ func TestConfigReadsOnlyAllowedKeysOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := AllowedKeys()
-	if len(keys) != 38 || len(reads) != len(keys) {
+	if len(keys) != 37 || len(reads) != len(keys) {
 		t.Fatalf("허용 키·읽은 키 수 = %d·%d", len(keys), len(reads))
 	}
 	for _, key := range keys {
@@ -95,7 +95,7 @@ func TestConfigRejectsMissingRequiredKeys(t *testing.T) {
 		"SEARCH_FOLD_SIMILARITY_THRESHOLD", "SEARCH_GRAPH_STAGE", "SEARCH_GLOBAL_FALLBACK_ENABLED",
 		"AUTHORIZATION_SERVER_URL", "BCRYPT_COST", "RELATION_ADJACENCY_WINDOW", "RELATION_SIMILARITY_THRESHOLD",
 		"RELATION_PROPOSAL_LIMIT", "TLS_TERMINATION", "TRUSTED_PROXY_CIDRS", "MCP_RESOURCE_URL",
-		"MCP_ALLOWED_ORIGINS", "OAUTH_CLIENT_REGISTRATIONS", "DIAGNOSTIC_INSTANCE_ID",
+		"MCP_ALLOWED_ORIGINS", "DIAGNOSTIC_INSTANCE_ID",
 	} {
 		t.Run(key, func(t *testing.T) {
 			values := validValues()
@@ -166,18 +166,16 @@ func TestConfigDefaultsAndIndependentConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AuthorizationServerURL.String() != "https://issuer.test" || cfg.MCPResourceURL.String() != "https://resource.test/mcp" || len(cfg.MCPAllowedOrigins) != 2 || cfg.OAuthClients["test-client"].LoopbackPortPolicy != LoopbackExact {
+	if cfg.AuthorizationServerURL.String() != "https://issuer.test" || cfg.MCPResourceURL.String() != "https://resource.test/mcp" || len(cfg.MCPAllowedOrigins) != 2 {
 		t.Fatal("독립된 issuer·resource·Origin·정확한 callback 정책이 보존되지 않았다")
 	}
 	if cfg.Diagnostic != (DiagnosticConfig{Directory: "/var/log/agent-context", InstanceID: "test-slot", Level: "INFO"}) || cfg.EmbeddingColdTablespace != "cold_storage" || cfg.SearchAdaptiveRouting || cfg.SearchEvidencePathSelection || cfg.SearchAdaptiveDirectThreshold != 0 || cfg.SearchAdaptiveMarginThreshold != 0 {
 		t.Fatal("기본값 또는 비활성 적응형 임계값 처리 불일치")
 	}
 	cfg.MCPAllowedOrigins[0] = "changed"
-	client := cfg.OAuthClients["test-client"]
-	client.RedirectURIs[0] = "changed"
 	cfg.MCPResourceURL.Host = "changed"
 	fresh, err := loadValues(values)
-	if err != nil || fresh.MCPAllowedOrigins[0] == "changed" || fresh.OAuthClients["test-client"].RedirectURIs[0] == "changed" || fresh.MCPResourceURL.Host == "changed" {
+	if err != nil || fresh.MCPAllowedOrigins[0] == "changed" || fresh.MCPResourceURL.Host == "changed" {
 		t.Fatal("다른 구성 로드에 가변 상태가 공유됐다")
 	}
 }
@@ -190,7 +188,7 @@ func TestConfigPreservesSafeParserCauses(t *testing.T) {
 		t.Fatal("접속 원문을 보존할 수 있는 드라이버 원인이 노출됐다")
 	}
 	values = validValues()
-	values["OAUTH_CLIENT_REGISTRATIONS"] = `{"synthetic-secret":{},"synthetic-secret":{}}`
+	values["ACCOUNT_PLAN_LIMITS"] = `{"synthetic-secret":{},"synthetic-secret":{}}`
 	if !errors.Is(rejectValues(t, values), jsontext.ErrDuplicateName) {
 		t.Fatal("JSON 중복 이름 원인이 소실됐다")
 	}

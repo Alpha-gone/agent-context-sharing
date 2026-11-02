@@ -52,6 +52,7 @@ func (h *Handler) AuthorizationServerMetadata(writer http.ResponseWriter, reques
 		"issuer":                                         issuer,
 		"authorization_endpoint":                         issuer + "/authorize",
 		"token_endpoint":                                 issuer + "/token",
+		"registration_endpoint":                          issuer + "/oauth/register",
 		"jwks_uri":                                       issuer + "/jwks.json",
 		"scopes_supported":                               []string{"agent-context"},
 		"response_types_supported":                       []string{"code"},

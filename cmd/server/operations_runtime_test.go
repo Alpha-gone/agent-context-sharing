@@ -96,7 +96,7 @@ func TestOPS09DatabaseRecoveryRuntimeIntegration(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	service, err := authz.New(database, authz.Config{Issuer: cfg.AuthorizationServerURL.String(), BcryptCost: 4, OAuth: oauthConfiguration(cfg), AuthorizationCodes: database, AccessTokens: database, RefreshTokens: database, Connections: database})
+	service, err := authz.New(database, authz.Config{Issuer: cfg.AuthorizationServerURL.String(), BcryptCost: 4, OAuth: oauthTestConfiguration(t, cfg, database), AuthorizationCodes: database, AccessTokens: database, RefreshTokens: database, Connections: database})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestOPS09DatabaseRecoveryRuntimeIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := "codex-cli-first-test"
-	callback := cfg.OAuthClients[client].RedirectURIs[0]
+	callback := "http://127.0.0.1:49152/callback"
 	code, err := service.IssueAuthorizationCode(ctx, owner, authz.AuthorizationRequest{ClientID: client, RedirectURI: callback, Resource: cfg.MCPResourceURL.String(), ResponseType: "code", Scope: "agent-context", Challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", ChallengeMethod: "S256"})
 	if err != nil {
 		t.Fatal(err)

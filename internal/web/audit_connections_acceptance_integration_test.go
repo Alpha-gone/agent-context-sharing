@@ -154,7 +154,7 @@ func web08Service(t *testing.T, database *store.Store) *authz.Service {
 	t.Helper()
 	service, err := authz.New(database, authz.Config{
 		Issuer: "https://permission.test", BcryptCost: 4,
-		OAuth: &authz.OAuthConfig{Resource: web08Resource, Clients: map[string]authz.OAuthClient{
+		OAuth: &authz.OAuthConfig{Resource: web08Resource, Clients: testClients{
 			"first": {RedirectURIs: []string{web08Callback}, Resources: []string{web08Resource}, LoopbackPortPolicy: "exact"},
 		}},
 		AuthorizationCodes: database, AccessTokens: database, RefreshTokens: database, Connections: database,

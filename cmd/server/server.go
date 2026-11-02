@@ -49,16 +49,17 @@ type oauthTokenRoutes interface {
 
 // application은 HTTP 경로와 공통 요청 경계를 관리한다.
 type application struct {
-	diagnostics   diagnostic.Observer
-	database      readiness
-	logger        *slog.Logger
-	transport     transportSecurity
-	web           *web.Server
-	publicKeys    publicKeyRoutes
-	oauthMetadata oauthMetadataRoutes
-	oauthTokens   oauthTokenRoutes
-	mcp           http.Handler
-	accepting     atomic.Bool
+	diagnostics       diagnostic.Observer
+	database          readiness
+	logger            *slog.Logger
+	transport         transportSecurity
+	web               *web.Server
+	publicKeys        publicKeyRoutes
+	oauthMetadata     oauthMetadataRoutes
+	oauthTokens       oauthTokenRoutes
+	oauthRegistration http.Handler
+	mcp               http.Handler
+	accepting         atomic.Bool
 }
 
 // statusResponse는 상태 확인 경로가 반환하는 민감 정보 없는 본문이다.
@@ -112,6 +113,9 @@ func (app *application) handler() http.Handler {
 		// OAuth와 MCP는 메서드 거부의 채널별 외피·Origin 우선 순서를 소유한다.
 		mux.HandleFunc("POST /token", app.oauthTokens.Token)
 		mux.HandleFunc("/token", app.oauthTokens.Token)
+	}
+	if app.oauthRegistration != nil {
+		handleHTTPMethods(mux, "/oauth/register", app.oauthRegistration, "POST")
 	}
 	if app.mcp != nil {
 		mux.Handle("POST /mcp", app.mcp)
@@ -442,6 +446,8 @@ func diagnosticRoute(path string) string {
 		return "authorize"
 	case "/token":
 		return "token"
+	case "/oauth/register":
+		return "client_registration"
 	case "/operator/restores":
 		return "operator_restores"
 	case "/access":

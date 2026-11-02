@@ -96,10 +96,7 @@ func test08CodexOAuth(t *testing.T, scenario string, afterLogin func(*testing.T,
 	cfg.MCPResourceURL, _ = url.Parse(origin + "/mcp")
 	cfg.AuthorizationServerURL, _ = url.Parse(origin)
 	cfg.MCPAllowedOrigins = []string{origin}
-	registered := cfg.OAuthClients["codex-cli-first-test"]
-	registered.Resources = []string{origin + "/mcp"}
-	cfg.OAuthClients["codex-cli-first-test"] = registered
-	service, err := authz.New(database, authz.Config{Issuer: origin, BcryptCost: 4, OAuth: oauthConfiguration(cfg), AuthorizationCodes: database, AccessTokens: database, RefreshTokens: database, Connections: database})
+	service, err := authz.New(database, authz.Config{Issuer: origin, BcryptCost: 4, OAuth: oauthConfiguration(cfg, database), AuthorizationCodes: database, AccessTokens: database, RefreshTokens: database, Connections: database})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +344,6 @@ required = true
 startup_timeout_sec = 10
 default_tools_approval_mode = "approve"
 [mcp_servers.test08.oauth]
-client_id = "codex-cli-first-test"
 callback_url = "http://127.0.0.1:49152/callback"
 callback_port = 49152
 `, inference.URL, origin+"/mcp")
@@ -401,7 +397,7 @@ callback_port = 49152
 		t.Fatal("CLI OAuth 인가 URL 대기 시간 초과")
 	}
 	uri, err := url.Parse(authorization)
-	if err != nil || uri.Query().Get("client_id") != "codex-cli-first-test" || uri.Query().Get("redirect_uri") != "http://127.0.0.1:49152/callback" || uri.Query().Get("resource") != origin+"/mcp" || uri.Query().Get("code_challenge_method") != "S256" {
+	if err != nil || !strings.HasPrefix(uri.Query().Get("client_id"), "dcr_") || uri.Query().Get("redirect_uri") != "http://127.0.0.1:49152/callback" || uri.Query().Get("resource") != origin+"/mcp" || uri.Query().Get("code_challenge_method") != "S256" {
 		t.Fatal("CLI 인가 요청의 사전 등록·callback·resource·S256 결합 불일치")
 	}
 	listener, err := net.DialTimeout("tcp", "127.0.0.1:49152", time.Second)
@@ -467,7 +463,7 @@ callback_port = 49152
 		t.Fatal("CLI OAuth callback 완료 대기 시간 초과")
 	}
 	var grants int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM oauth_grant WHERE client_id='codex-cli-first-test'").Scan(&grants); err != nil || grants != 1 || exchanges.Load() != 1 {
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM oauth_grant WHERE client_id LIKE 'dcr_%'").Scan(&grants); err != nil || grants != 1 || exchanges.Load() != 1 {
 		t.Fatal("실제 CLI 최초 코드 교환의 단일 계열 저장 불일치")
 	}
 	credentials := filepath.Join(root, ".credentials.json")

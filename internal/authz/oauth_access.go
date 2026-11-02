@@ -47,8 +47,11 @@ func (s *Service) VerifyBearer(ctx context.Context, raw string) (principal Beare
 	}
 	account, accountErr := model.ParseID(claims.Subject)
 	grant, grantErr := model.ParseID(access.GrantID)
-	client, registered := s.oauth.Clients[access.ClientID]
-	if accountErr != nil || grantErr != nil || access.Scope == "" || !registered || !slices.Contains(client.Resources, s.oauth.Resource) || claims.Expiry.Time().Sub(claims.IssuedAt.Time()) > time.Hour {
+	client, lookupErr := s.oauthClient(ctx, access.ClientID)
+	if lookupErr != nil && !errors.Is(lookupErr, ErrInvalidAuthorizationTarget) {
+		return BearerPrincipal{}, lookupErr
+	}
+	if accountErr != nil || grantErr != nil || access.Scope == "" || lookupErr != nil || !slices.Contains(client.Resources, s.oauth.Resource) || claims.Expiry.Time().Sub(claims.IssuedAt.Time()) > time.Hour {
 		return BearerPrincipal{}, ErrInvalidCredential
 	}
 	binding := store.OAuthAccessBinding{

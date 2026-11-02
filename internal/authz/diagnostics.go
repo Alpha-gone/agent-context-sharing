@@ -60,7 +60,7 @@ func (s *Service) authObservation(ctx context.Context, stage string, account mod
 		fields.Identity.AccountID = account.String()
 		// 공개 client는 성공한 등록 대조 뒤에만 받으며 안전한 이름이 아니면 생략한다.
 		if s.oauth != nil {
-			if _, registered := s.oauth.Clients[client]; registered {
+			if safeClient(client) {
 				fields.Identity.ClientID = client
 			}
 		}

@@ -143,8 +143,6 @@ type Config struct {
 	MCPResourceURL *url.URL
 	// MCPAllowedOrigins는 요청 헤더와 완전 일치시킬 원문 origin이다.
 	MCPAllowedOrigins []string
-	// OAuthClients는 공개 client별 callback·resource·loopback 포트 정책이다.
-	OAuthClients map[string]OAuthClient
 	// Diagnostic은 파일 준비 전에 검증할 진단 구성이다.
 	Diagnostic DiagnosticConfig
 }

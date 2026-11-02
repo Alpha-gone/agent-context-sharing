@@ -45,7 +45,7 @@ var (
 type Config struct {
 	Issuer     string
 	BcryptCost int
-	// OAuth는 구성 계층에서 URI와 사전 등록을 검증한 뒤 주입한다. nil이면 웹 인증만 제공한다.
+	// OAuth는 구성 계층에서 URI와 동적 등록 저장소를 준비한 뒤 주입한다. nil이면 웹 인증만 제공한다.
 	OAuth *OAuthConfig
 	// AuthorizationCodes는 코드 저장·소비·최초 계열 생성을 하나의 DB 경계로 묶는다.
 	AuthorizationCodes AuthorizationCodeStore

@@ -23,18 +23,21 @@ func (adapter webAuthentication) RevokeConnection(ctx context.Context, account m
 	return webCredentialError(adapter.service.RevokeConnection(ctx, account, action, target))
 }
 
-func (adapter webAuthentication) ValidateAuthorizationTarget(client, callback, resource string) error {
-	return adapter.service.ValidateAuthorizationTarget(client, callback, resource)
+func (adapter webAuthentication) ValidateAuthorizationTarget(ctx context.Context, client, callback, resource string) error {
+	return webCredentialError(adapter.service.ValidateAuthorizationTarget(ctx, client, callback, resource))
 }
 
 func authorizationRequest(values url.Values) authz.AuthorizationRequest {
 	return authz.AuthorizationRequest{ClientID: values.Get("client_id"), RedirectURI: values.Get("redirect_uri"), Resource: values.Get("resource"), ResponseType: values.Get("response_type"), Scope: values.Get("scope"), Challenge: values.Get("code_challenge"), ChallengeMethod: values.Get("code_challenge_method")}
 }
 
-func (adapter webAuthentication) ValidateAuthorizationRequest(values url.Values) string {
-	err := adapter.service.ValidateAuthorizationRequest(authorizationRequest(values))
+func (adapter webAuthentication) ValidateAuthorizationRequest(ctx context.Context, values url.Values) string {
+	err := adapter.service.ValidateAuthorizationRequest(ctx, authorizationRequest(values))
 	if err == nil {
 		return ""
+	}
+	if errors.Is(err, authz.ErrUnavailable) {
+		return "server_error"
 	}
 	if failure, ok := errors.AsType[*authz.OAuthError](err); ok {
 		return failure.Code

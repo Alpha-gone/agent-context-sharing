@@ -160,7 +160,7 @@ func TestARCH06AssemblyMCPProviderAndPlacementIntegration(t *testing.T) {
 			if a.app.mcp == nil || a.app.web == nil || a.app.publicKeys == nil || a.app.oauthTokens == nil {
 				t.Fatal("실제 처리기 조립 누락")
 			}
-			service, err := authz.New(a.database, authz.Config{Issuer: cfg.AuthorizationServerURL.String(), BcryptCost: 4, OAuth: oauthConfiguration(cfg), AuthorizationCodes: a.database, AccessTokens: a.database, RefreshTokens: a.database, Connections: a.database})
+			service, err := authz.New(a.database, authz.Config{Issuer: cfg.AuthorizationServerURL.String(), BcryptCost: 4, OAuth: oauthTestConfiguration(t, cfg, a.database), AuthorizationCodes: a.database, AccessTokens: a.database, RefreshTokens: a.database, Connections: a.database})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -169,7 +169,7 @@ func TestARCH06AssemblyMCPProviderAndPlacementIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := "codex-cli-first-test"
-			callback := cfg.OAuthClients[client].RedirectURIs[0]
+			callback := "http://127.0.0.1:49152/callback"
 			code, err := service.IssueAuthorizationCode(t.Context(), owner, authz.AuthorizationRequest{ClientID: client, RedirectURI: callback, Resource: cfg.MCPResourceURL.String(), ResponseType: "code", Scope: "agent-context", Challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", ChallengeMethod: "S256"})
 			if err != nil {
 				t.Fatal(err)

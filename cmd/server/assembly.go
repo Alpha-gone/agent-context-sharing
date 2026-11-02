@@ -128,7 +128,7 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	flow.SetDiagnostics(reports[diagnostic.Search])
 	startupReason = "authentication_unavailable"
 	authorization, err := authz.New(a.database, authz.Config{
-		Issuer: cfg.AuthorizationServerURL.String(), BcryptCost: cfg.BcryptCost, OAuth: oauthConfiguration(cfg),
+		Issuer: cfg.AuthorizationServerURL.String(), BcryptCost: cfg.BcryptCost, OAuth: oauthConfiguration(cfg, a.database),
 		AuthorizationCodes: a.database, AccessTokens: a.database, RefreshTokens: a.database, Connections: a.database,
 	})
 	if err != nil {
@@ -169,6 +169,7 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	a.app.diagnostics = reports[diagnostic.Request]
 	a.app.web, a.app.publicKeys, a.app.oauthMetadata, a.app.oauthTokens = webServer, authorizationHandler, authorizationHandler, authorizationHandler
 	a.app.mcp = mcpHandler
+	a.app.oauthRegistration = authz.NewRegistrationHandler(authorization, transport.clientAddress)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

@@ -1,58 +1,76 @@
 package authz
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+
+	"agent_context_sharing/internal/store"
 )
 
-// OAuthConfig는 구성 계층에서 형식 검증을 마친 고정 공개 resource와 사전 등록이다.
-// 인증 계층은 요청 값을 이 등록과 대조하며 URI를 자동 등록하거나 외부에서 조회하지 않는다.
+// OAuthConfig는 고정 공개 resource와 동적 등록 저장소이다.
+// 인증 계층은 요청 값을 이 등록과 대조하며 인가 요청으로 등록하거나 외부에서 조회하지 않는다.
 type OAuthConfig struct {
 	Resource string
-	Clients  map[string]OAuthClient
+	Clients  OAuthClientStore
 }
 
-// OAuthClient는 공개 client의 허용 callback·resource와 포트 대조 정책이다.
-type OAuthClient struct {
-	RedirectURIs []string
-	Resources    []string
-	// LoopbackPortPolicy는 exact 또는 same_ip다. 빈 값의 기본 해석은 구성 계층이 맡는다.
-	LoopbackPortPolicy string
+// OAuthClientStore는 동적 등록 저장과 모든 인증 경로의 공통 조회 경계다.
+type OAuthClientStore interface {
+	RegisterOAuthClient(context.Context, store.OAuthClient) error
+	OAuthClient(context.Context, string) (store.OAuthClient, error)
 }
 
-// ErrInvalidAuthorizationTarget은 client·callback·resource의 사전 등록 결합 위반이다.
+type OAuthClient = store.OAuthClient
+
+// ErrInvalidAuthorizationTarget은 client·callback·resource의 동적 등록 결합 위반이다.
 var ErrInvalidAuthorizationTarget = errors.New("invalid_authorization_target")
 
 func copyOAuthConfig(input *OAuthConfig) (*OAuthConfig, error) {
 	if input == nil {
 		return nil, nil
 	}
-	if input.Resource == "" || len(input.Clients) == 0 {
-		return nil, errors.New("OAuth 공개 구성 또는 사전 등록이 비어 있다")
+	if input.Resource == "" || input.Clients == nil {
+		return nil, errors.New("OAuth 공개 구성 또는 등록 저장소가 없다")
 	}
-	result := &OAuthConfig{Resource: input.Resource, Clients: make(map[string]OAuthClient, len(input.Clients))}
-	for id, client := range input.Clients {
-		if id == "" || len(client.RedirectURIs) == 0 || len(client.Resources) == 0 || (client.LoopbackPortPolicy != "exact" && client.LoopbackPortPolicy != "same_ip") {
-			return nil, errors.New("OAuth 사전 등록 구성이 올바르지 않다")
-		}
-		client.RedirectURIs, client.Resources = slices.Clone(client.RedirectURIs), slices.Clone(client.Resources)
-		result.Clients[id] = client
+	return &OAuthConfig{Resource: input.Resource, Clients: input.Clients}, nil
+}
+
+func (s *Service) oauthClient(ctx context.Context, id string) (OAuthClient, error) {
+	if err := ctx.Err(); err != nil {
+		return OAuthClient{}, err
 	}
-	return result, nil
+	if s.oauth == nil || id == "" {
+		return OAuthClient{}, ErrInvalidAuthorizationTarget
+	}
+	client, err := s.oauth.Clients.OAuthClient(ctx, id)
+	if ctx.Err() != nil {
+		return OAuthClient{}, ctx.Err()
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return OAuthClient{}, ErrInvalidAuthorizationTarget
+	}
+	if err != nil {
+		return OAuthClient{}, &credentialFailure{ErrUnavailable, err}
+	}
+	return client, ctx.Err()
 }
 
 // ValidateAuthorizationTarget은 오류 리디렉션 전에도 필요한 등록 결합을 대조한다.
 // 미등록 callback으로 이동하거나 요청 값을 정규화해 허용 목록을 넓히지 않는다.
-func (s *Service) ValidateAuthorizationTarget(clientID, callback, resource string) error {
+func (s *Service) ValidateAuthorizationTarget(ctx context.Context, clientID, callback, resource string) error {
 	if s.oauth == nil {
 		return ErrInvalidAuthorizationTarget
 	}
-	client, exists := s.oauth.Clients[clientID]
-	if !exists || resource != s.oauth.Resource || !slices.Contains(client.Resources, resource) {
+	client, err := s.oauthClient(ctx, clientID)
+	if err != nil {
+		return err
+	}
+	if resource != s.oauth.Resource || !slices.Contains(client.Resources, resource) {
 		return ErrInvalidAuthorizationTarget
 	}
 	for _, registered := range client.RedirectURIs {

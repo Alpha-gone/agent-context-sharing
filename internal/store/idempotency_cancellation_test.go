@@ -28,3 +28,38 @@ func TestWritePreservesCauseWhenAlreadyCanceled(t *testing.T) {
 		}
 	}
 }
+
+func TestUnkeyedWriteRunsPostCommitOnlyAfterCompletion(t *testing.T) {
+	for _, mode := range []string{"complete", "apply_failure", "incomplete", "cancel_during_apply"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var database Store
+			callbacks := 0
+			result, err := database.ExecuteWrite(ctx, newTestID(t), "", "node_create", []byte(`{}`), writeReplayCheck, func(applyCtx context.Context) ([]byte, error) {
+				if !deferAfterWriteCommit(applyCtx, func() { callbacks++; cancel() }) {
+					t.Error("단독 쓰기의 후처리 경계 누락")
+				}
+				if callbacks != 0 {
+					t.Error("apply 완료 전 후처리 실행")
+				}
+				switch mode {
+				case "apply_failure":
+					return nil, errors.New("synthetic apply failure")
+				case "incomplete":
+					return nil, nil
+				case "cancel_during_apply":
+					cancel()
+				}
+				return []byte(`{"ok":true}`), nil
+			})
+			if mode == "complete" {
+				if err != nil || len(result) == 0 || callbacks != 1 {
+					t.Fatalf("완료 결과/후처리: %s %v calls=%d", result, err, callbacks)
+				}
+			} else if err == nil || result != nil || callbacks != 0 {
+				t.Fatalf("미완료 후처리 실행: %s %v calls=%d", result, err, callbacks)
+			}
+		})
+	}
+}

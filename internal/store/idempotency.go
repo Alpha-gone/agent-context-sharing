@@ -69,7 +69,10 @@ func (s *Store) ExecuteWrite(ctx context.Context, account model.ID, key, tool st
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		result, err := apply(ctx)
+		// 단독 쓰기도 완료 결과를 검증한 뒤 같은 후처리 경계를 실행한다.
+		afterCommit := &afterWriteCommit{}
+		applyContext := context.WithValue(ctx, afterWriteCommitContextKey{}, afterCommit)
+		result, err := apply(applyContext)
 		if err != nil {
 			return nil, writeFailure(ctx, "write_apply", storageError("write_apply", err))
 		}
@@ -78,6 +81,9 @@ func (s *Store) ExecuteWrite(ctx context.Context, account model.ID, key, tool st
 		}
 		if !completedWriteJSON(result) {
 			return nil, storageError("write_result", errors.New("완료 도메인 객체가 필요하다"))
+		}
+		for _, callback := range afterCommit.callbacks {
+			callback()
 		}
 		return result, nil
 	}
@@ -195,12 +201,12 @@ func (s *Store) replayWrite(ctx context.Context, account model.ID, key, tool str
 		return nil, storageError("idempotency_commit", err)
 	}
 	outcome = "committed"
+	// 후처리는 커밋된 트랜잭션의 연결 예약을 필요로 하지 않는다.
+	release()
 	for _, callback := range afterCommit.callbacks {
 		callback()
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+	// 제안의 취소·마감으로 이미 확정한 결과를 실패로 바꾸지 않는다.
 	return result, nil
 }
 
@@ -217,8 +223,8 @@ func completedWriteJSON(data []byte) bool {
 	return true
 }
 
-// deferAfterWriteCommit은 호출자가 소유하지 않은 쓰기 트랜잭션의 커밋 뒤에만 실행할
-// 부수 작업을 등록한다. 멱등성 트랜잭션이 롤백되면 콜백도 실행되지 않는다.
+// deferAfterWriteCommit은 쓰기의 완료 결과가 확정된 뒤 실행할 부수 작업을 등록한다.
+// 멱등성 트랜잭션의 롤백이나 단독 apply의 실패에는 콜백을 실행하지 않는다.
 func deferAfterWriteCommit(ctx context.Context, callback func()) bool {
 	afterCommit, ok := ctx.Value(afterWriteCommitContextKey{}).(*afterWriteCommit)
 	if !ok || callback == nil {

@@ -530,3 +530,5 @@
 | 2026-11-02 | 시각 미기록 | 사용자 | 여러 참여자의 자동 클라이언트 등록을 지원하고 사전 등록은 제거한다. | 공개 DCR·공유 client registry·016 migration을 추가하고 사전 등록 설정과 인증 map 경로를 제거했다. 서버/DB 시험과 Codex 0.165.0 초기 handshake를 확인했다. | `SRS.md`, `sdd/authentication.md`, `reviews/2026-11-02-oauth-dcr.md`, `README.md`, `OPERATIONS.md` | 실제 브라우저 이후 CLI 전체 인수·운영 적용 대기 |
 
 | 2026-11-02 | 시각 미기록 | 사용자 | #300을 별도 브랜치에서 처리하고 PR을 생성한다. | DCR의 localhost callback을 명시 포트·원문 완전 일치로 허용하고 IP literal의 기존 대조를 유지했다. 단위·TLS/DB 동의·교환과 Claude Code 2.1.316 초기 DCR 흐름을 확인했다. | `reviews/2026-11-02-issue-300.md`, `SRS.md`, `sdd/authentication.md`, `README.md` | 실제 CLI 브라우저 이후 전체 인수·운영 배포 미실행 |
+
+| 2026-11-02 | 시각 미기록 | 사용자 | #260을 #300과 같은 절차로 별도 브랜치에서 처리하고 PR을 생성한다. | 사건 저장 후 제안에 요청 취소를 유지한 1초 예산을 적용하고 키 유무의 완료 후처리 경계를 통일했다. 커밋 결과 보존·예약/연결 반환·12개 실제 DB 경합과 race를 확인했다. | `reviews/2026-11-02-issue-260.md`, `sdd/context-lifecycle.md`, `sdd/mcp.md`, `sdd/testing.md` | 관련 회귀·MCP 전체 통과. 저장소 전체는 기준 dev에서도 재현한 기대값·홉 적재량 실패가 있어 검토 기록에 구분 |

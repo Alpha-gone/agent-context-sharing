@@ -301,8 +301,8 @@ func TestMCP05PostCommitCancellationDatabase(t *testing.T) {
 		return []byte(`{"committed":true}`), nil
 	}
 	result, err := database.ExecuteWrite(ctx, write.actor, "postcommit_key_1", "node_create", []byte(`{}`), writeReplayCheck, apply)
-	if !errors.Is(err, context.Canceled) || result != nil {
-		t.Fatal("커밋 뒤 취소 전달", err)
+	if err != nil || !bytes.Contains(result, []byte("true")) {
+		t.Fatal("커밋 뒤 부수 작업 취소가 완료 결과를 바꿨습니다", err)
 	}
 	after := lifeAcceptanceFingerprint(t, database)
 	value, err := second.ExecuteWrite(t.Context(), write.actor, "postcommit_key_1", "node_create", []byte(`{}`), writeReplayCheck, apply)

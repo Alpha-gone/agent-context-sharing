@@ -582,3 +582,11 @@
 ## 커밋 후 관계 제안 예산 (#260, 2026-11-02)
 
 - [Go 1.27.3 context 공식 문서](https://pkg.go.dev/context#WithTimeout): WithTimeout은 부모 취소·더 짧은 마감을 유지하며 반환한 CancelFunc로 타이머를 정리한다. WithoutCancel은 부모 취소와 마감을 제거하므로 관계 제안에는 사용하지 않는다. 2026-11-02 조회. 수명주기·제안 실행 경계에 반영하며 트랜잭션 정리의 독립 유한 예산은 유지한다.
+
+## MCP 도구 컨텍스트 비용 분석 (#305, 2026-11-04)
+
+- [tiktoken](https://github.com/openai/tiktoken)의 공개 o200k_base·cl100k_base 인코딩을 비교 기준으로 사용했다. 실제 호스트나 Claude 과금량으로 해석하지 않는다.
+- [MCP 2026-07-28 tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)의 목록/호출 구분과 구조화 결과의 호환 text 권고, [caching](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching)의 재조회 신선도 의미를 확인했다.
+- [Claude Code MCP](https://code.claude.com/docs/en/mcp#scale-with-mcp-tool-search)와 [제공자 토큰 계산](https://platform.claude.com/docs/en/build-with-claude/token-counting)을 기준으로 지연 적재·호스트 변환·모델별 측정을 구분했다. 조회일 2026-11-04 KST.
+- 최초 조사에서는 위 근거를 [#305 분석](reviews/2026-11-04-issue-305.md)에만 반영했다. 후속 구현은 [공개 도구 정의](sdd/mcp.md#공개-도구-정의의-크기-예산)와 [검증](sdd/testing.md)에 반영하며 실제 호스트 지원·사용량 판정과 구분한다.
+- [Go MCP SDK v1.8.0 Server.AddTool](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/server.go)의 공급자 주석·구현에서 입력 인자 해석/검증이 호출자 책임임을 확인했다. [jsonschema-go v0.4.3 CloneSchemas](https://github.com/google/jsonschema-go/blob/v0.4.3/jsonschema/schema.go)는 스키마 이외의 map·slice를 공유하므로 공개 메타데이터는 JSON 왕복으로 독립시켰다. 로컬 적용 판 모듈 소스 확인 2026-11-04 KST.

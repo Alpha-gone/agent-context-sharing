@@ -433,7 +433,11 @@ func TestCatalogSDKRegistrationAndValidationBeforeHandler(t *testing.T) {
 		if !seen[name] {
 			t.Fatalf("도구 누락: %s", name)
 		}
-		encoded, err := json.Marshal(definition.tool)
+		public, err := publicTool(definition.tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(public)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -349,7 +349,7 @@
         "capabilities": {
           "tools": {}
         },
-        "instructions": "공유 컨텍스트 그래프를 사용하는 도구입니다. graph_list로 접근 가능한 그래프를 확인하고 graph_id를 선택하세요.\n노드·관계 쓰기 전에 agent_register에 16~128자의 ASCII 등록 키를 보내 agent_id를 받으세요. 같은 계정·OAuth client에서 같은 등록 키를 재사용하고 반환한 agent_id를 후속 여섯 쓰기에 전달하세요. 등록은 개별 모델·대화의 신원 증명이나 그래프 권한 부여가 아닙니다.\ngraph_get의 entry_context_id는 대표 요약입니다. 요약의 navigation_refs는 안내 참조이며 derived_from 근거와 구분합니다. node_get의 traversal_filter=navigation_refs로 사건·요약·원천을 탐색할 수 있습니다. source의 conversation_id·turn_index는 원문 순서이고 event의 conversation_id·previous_event_id는 명시적 대화 흐름을 연결합니다.\ngraph_update·node_update는 조회한 현재 expected_version이 필요합니다. 충돌하면 재조회하고 변경을 검토하세요. 원천은 불변이며 정정은 새 원천, 파생의 근거·종류 변경은 새 파생과 supersedes_context_id로 표현하세요.\n여덟 업무 쓰기의 request_id는 선택이며 16~128자의 ASCII 키입니다. 같은 논리 요청은 같은 키·인자로 재시도할 수 있고 최초 결과는 24시간 보존됩니다. 새 키는 새 쓰기입니다. 키 없는 쓰기의 결과가 불명확하거나 키를 잃었다면 현재 상태를 재조회하세요.\n인증·현재 등급·agent 결합은 서버가 매 요청 확인합니다. annotations와 호스트 승인은 서버 권한 검사를 대신하지 않습니다. 내부 장애를 반복 로그인으로 해결하려 하지 마세요.\n삭제·권한·팀 관리는 웹 전용입니다. node_discard는 소프트 폐기이며 node_restore는 연산으로 폐기한 노드만 복구합니다. 웹 삭제 복구는 웹을 사용하세요. 검색은 context_flow_get으로 요청하며 별도 검색 도구는 없습니다. 결과 절단·일부 검색 채널 실패는 정상 부분 결과일 수 있습니다.",
+        "instructions": "graph_list로 그래프를 선택하세요. 여섯 노드·관계 쓰기 전 agent_register에서 agent_id를 받으세요. 등록 키는 계정·OAuth client별 재사용하며 대화 신원·권한을 부여하지 않습니다.\ngraph_get.entry_context_id는 대표 요약입니다. navigation_refs는 안내, derived_from은 근거입니다. node_get으로 탐색하고 conversation_id·turn_index·previous_event_id로 대화 순서를 명시하세요.\ngraph_update·node_update는 현재 expected_version이 필요합니다. 충돌하면 재조회하세요. 원천 정정은 새 원천, 파생 근거·종류 변경은 새 파생과 supersedes_context_id를 사용하세요.\n여덟 업무 쓰기의 request_id는 선택입니다. 같은 키·인자는 최초 결과를 24시간 재생하며 새 키는 새 쓰기입니다. 키 없는 불확정 결과·키 유실은 재조회하세요. 내부 장애에 반복 로그인하지 마세요.\n서버는 매 요청 인증·등급·agent 결합을 검사합니다. annotations·호스트 승인이 권한을 대신하지 않습니다. 삭제·권한·팀 관리는 웹 전용입니다. node_restore는 연산 폐기만 복구하며 웹 삭제는 웹에서 복구하세요.\n검색은 context_flow_get입니다. 검색 채널 일부 실패·예산/홉 절단은 정상 부분 결과일 수 있습니다.",
         "resultType": "complete",
         "supportedVersions": [
           "2026-07-28"
@@ -1513,15 +1513,14 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "인증 계정·OAuth client에 등록 키를 결합해 agent_id를 받는다. 같은 활성 키는 같은 ID를 반환하고 폐기 키를 암묵 복구하지 않는다. 등급·개별 대화 신원을 부여하지 않는다.",
+            "description": "등록 키로 agent_id 발급. 같은 활성 키는 같은 ID이며 폐기 키는 복구하지 않는다.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "registration_key": {
-                  "description": "계정·검증된 OAuth client에 등록을 결합하는 재사용 키. 자격 증명·대화 제목·본문을 넣지 않는다.",
+                  "description": "재사용 등록 키: ASCII 영숫자·_·- 16~128자. 자격 증명·본문 금지.",
                   "maxLength": 128,
                   "minLength": 16,
-                  "pattern": "^[A-Za-z0-9_-]+$",
                   "type": "string"
                 }
               },
@@ -1539,29 +1538,27 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "현재 작업 텍스트로 공유 그래프의 평면 컨텍스트 흐름을 조회한다. UTC as_of·scope·문자 budget을 지정할 수 있다. 일부 채널 실패와 예산/홉 절단은 정상 부분 결과다.",
+            "description": "작업 텍스트로 평면 컨텍스트 흐름 검색. 채널 일부 실패·예산/홉 절단은 정상 부분 결과.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "as_of": {
-                  "description": "검색 기준 UTC 시각. 생략하면 요청 시점 현재 UTC를 사용한다.",
+                  "description": "검색 기준 UTC(과거 상태 복원 아님). 기본 현재.",
                   "format": "date-time",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
                   "type": "string"
                 },
                 "budget": {
-                  "description": "응답 body의 양수 문자 예산. 생략하면 계정 플랜 예산을 사용하며 0으로 한도를 우회할 수 없다.",
+                  "description": "응답 body 문자 예산(토큰 아님). 기본값·상한은 플랜 기준.",
                   "minimum": 1,
                   "type": "integer"
                 },
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "scope": {
-                  "description": "local·global·auto 중 검색 범위. 생략하면 설계의 기본 경로를 사용한다.",
+                  "description": "검색 범위. 기본 auto.",
                   "enum": [
                     "local",
                     "global",
@@ -1571,14 +1568,11 @@
                 },
                 "work_context": {
                   "allOf": [
-                    {
-                      "pattern": "[^\t-\r    -     　]"
-                    }
+                    {}
                   ],
-                  "description": "현재 작업 텍스트. 1~8000자이며 공백만인 값은 거부한다. 별도 시작 노드는 지정하지 않는다.",
+                  "description": "현재 작업 텍스트. 공백만은 금지.",
                   "maxLength": 8000,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 }
               },
@@ -1597,34 +1591,29 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "새 그래프를 만들고 인증 계정이 소유자가 된다. request_id 없는 불확정 결과는 재조회하며 새 키는 새 그래프를 만들 수 있다.",
+            "description": "인증 계정을 소유자로 하는 그래프 생성.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "description": {
-                  "description": "그래프 설명. 빈 문자열을 허용한다.",
+                  "description": "설명. 빈 문자열 허용.",
                   "maxLength": 2000,
                   "minLength": 0,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "name": {
                   "allOf": [
-                    {
-                      "pattern": "[^\t-\r    -     　]"
-                    }
+                    {}
                   ],
-                  "description": "그래프 표시 이름. 공백만인 값은 허용하지 않으며 중복 이름은 허용한다.",
+                  "description": "표시 이름. 공백만은 금지, 중복 허용.",
                   "maxLength": 200,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "선택 멱등성 키. 같은 계정·같은 논리 요청은 같은 키·인자로 재시도한다. 최초 결과는 24시간 보존하며 키가 없으면 자동 재시도 안전성을 보장하지 않는다.",
+                  "description": "선택 재시도 키: ASCII 영숫자·_·- 16~128자. 같은 키·인자는 24시간 최초 결과 재생.",
                   "maxLength": 128,
                   "minLength": 16,
-                  "pattern": "^[A-Za-z0-9_-]+$",
                   "type": "string"
                 }
               },
@@ -1642,14 +1631,13 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "선택한 graph_id의 현재 메타데이터·version을 조회한다. 현재 등급은 서버가 검사한다.",
+            "description": "그래프 메타데이터·현재 version·대표 진입점 조회.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 }
               },
@@ -1667,20 +1655,19 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "현재 등급을 가진 활성 그래프를 최근 활동순으로 조회한다. 받은 불투명 커서를 그대로 사용하고 응답 등급으로 가능한 작업을 판단한다.",
+            "description": "접근 가능한 활성 그래프를 최근 활동순으로 조회.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "cursor": {
-                  "description": "앞 응답의 불투명 커서를 그대로 반환한다. 내부 값을 구성하거나 해석하지 않는다. 생략·빈 문자열은 첫 페이지다.",
+                  "description": "앞 응답 커서를 그대로 사용. 생략·빈 문자열은 첫 페이지.",
                   "format": "base64url",
-                  "pattern": "^[A-Za-z0-9_-]*$",
                   "type": "string"
                 },
                 "grade_filter": {
-                  "description": "요청 계정의 현재 유효 등급으로 필터한다. 빈 배열·중복을 허용하되 중복도 상한에 포함한다.",
+                  "description": "현재 등급 필터. 빈 배열·중복 허용.",
                   "items": {
-                    "description": "허용된 필터 값.",
+                    "description": "허용값.",
                     "enum": [
                       "owner",
                       "editor",
@@ -1692,13 +1679,12 @@
                   "type": "array"
                 },
                 "name_filter": {
-                  "description": "대소문자를 무시한 이름 부분 일치. 정규식이 아니다.",
+                  "description": "이름 부분 일치(대소문자 무시).",
                   "minLength": 0,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "page_size": {
-                  "description": "요청 페이지 크기. 생략하면 계정 플랜 기본값을 적용하며 양수·플랜 상한을 검사한다.",
+                  "description": "페이지 크기. 기본값·상한은 플랜 기준.",
                   "minimum": 1,
                   "type": "integer"
                 }
@@ -1714,54 +1700,47 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "현재 expected_version으로 이름·설명·대표 entry_context_id를 갱신한다. 충돌하면 재조회한다. 같은 request_id·인자의 24시간 최초 결과 재생과 새 키의 판 검사를 구분한다.",
+            "description": "현재 expected_version으로 이름·설명·대표 요약 갱신.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "description": {
-                  "description": "변경할 설명. 빈 문자열이면 설명을 비운다. 생략하면 유지한다.",
+                  "description": "새 설명. 생략 시 유지, 빈 문자열로 삭제.",
                   "maxLength": 2000,
                   "minLength": 0,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "entry_context_id": {
-                  "description": "활성 요약 파생인 대표 진입점. 생략하면 유지하고 null이면 해제한다.",
+                  "description": "대표 활성 요약. 생략 시 유지, null로 해제.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": [
                     "string",
                     "null"
                   ]
                 },
                 "expected_version": {
-                  "description": "조회한 현재 양수 version. 충돌하면 대상을 재조회하며 자동 병합하지 않는다.",
+                  "description": "조회한 현재 version. 충돌 시 재조회.",
                   "minimum": 1,
                   "type": "integer"
                 },
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "name": {
                   "allOf": [
-                    {
-                      "pattern": "[^\t-\r    -     　]"
-                    }
+                    {}
                   ],
-                  "description": "변경할 그래프 이름. 생략하면 유지한다.",
+                  "description": "새 이름. 생략 시 유지, 공백만은 금지.",
                   "maxLength": 200,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "선택 멱등성 키. 같은 계정·같은 논리 요청은 같은 키·인자로 재시도한다. 최초 결과는 24시간 보존하며 키가 없으면 자동 재시도 안전성을 보장하지 않는다.",
+                  "description": "선택 재시도 키: ASCII 영숫자·_·- 16~128자. 같은 키·인자는 24시간 최초 결과 재생.",
                   "maxLength": 128,
                   "minLength": 16,
-                  "pattern": "^[A-Za-z0-9_-]+$",
                   "type": "string"
                 }
               },
@@ -1780,7 +1759,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "등록한 agent_id로 원천·파생·사건을 만든다. 계층별 필수 속성을 채운다. 원천은 source_ref로 중복 판정한다. 폐기·삭제된 기존 원천은 creation_status=existing_deleted와 warning을 반환하며 활성 근거로 사용할 수 없다. MCP 폐기는 node_restore로, 웹 삭제는 웹에서 복구한다. 파생 대체는 supersedes_context_id를 사용한다. 기존 노드와의 연결은 생성 때 파생의 derived_from이나 사건의 member_refs로 지정하며, 사건 사이 관계만 생성 뒤 relation_confirm으로 확정한다. request_id 재시도와 새 생성을 구분한다.",
+            "description": "원천·파생·사건 생성. creation_status=existing_deleted는 활성 근거로 사용 불가. 사건 연결은 previous_event_id 또는 relation_confirm 사용.",
             "inputSchema": {
               "additionalProperties": false,
               "allOf": [
@@ -2190,20 +2169,18 @@
               ],
               "properties": {
                 "agent_id": {
-                  "description": "agent_register에서 발급받은 활성 agent_id. 현재 인증 계정·OAuth client와의 결합은 서버가 검사한다.",
+                  "description": "agent_register의 활성 agent_id.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "body": {
-                  "description": "컨텍스트 본문. 유효한 UTF-8의 1~8000자이며 U+0000을 허용하지 않는다. 공백만인 본문도 허용하고 원문 그대로 저장·색인한다.",
+                  "description": "본문. U+0000 금지, 공백만 허용. 원문 저장·색인.",
                   "maxLength": 8000,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "confidence_state": {
-                  "description": "opinion일 때만 필수인 신뢰 상태. 다른 파생에는 지정하지 않는다.",
+                  "description": "opinion 전용 필수 신뢰 상태.",
                   "enum": [
                     "supported",
                     "uncertain",
@@ -2213,18 +2190,15 @@
                 },
                 "conversation_id": {
                   "allOf": [
-                    {
-                      "pattern": "[^\t-\r    -     　]"
-                    }
+                    {}
                   ],
-                  "description": "source·event의 명시적 대화 식별자. 1~128자이며 생성 후 불변이다. source에서는 conversation 출처와 turn_index를 함께 지정한다.",
+                  "description": "source·event의 대화 식별자. 불변·공백만 금지. source는 conversation 출처·turn_index 필수.",
                   "maxLength": 128,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "derivation_kind": {
-                  "description": "derived 전용 필수 필드. 파생의 생성 목적이며 생성 후 변경할 수 없다.",
+                  "description": "파생 목적. 불변.",
                   "enum": [
                     "proposition",
                     "summary",
@@ -2233,11 +2207,10 @@
                   "type": "string"
                 },
                 "derived_from": {
-                  "description": "derived 전용 필수 필드. 이 파생이 근거로 삼는 기존 원천·파생 UUIDv7 1~100개이며 생성 후 불변이다. 근거 참조이며 사건 관계가 아니다.",
+                  "description": "같은 그래프의 원천·파생 근거. 불변.",
                   "items": {
-                    "description": "참조할 컨텍스트 UUIDv7. 실제 존재·계층·같은 그래프 여부는 저장 상태로 판정한다.",
+                    "description": "컨텍스트 UUIDv7.",
                     "format": "uuid-v7",
-                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                     "type": "string"
                   },
                   "maxItems": 100,
@@ -2245,19 +2218,17 @@
                   "type": "array"
                 },
                 "event_end": {
-                  "description": "event 전용 선택 필드. 사건 종료 UTC 시각이며 생략하면 진행 중이다.",
+                  "description": "사건 종료 UTC. 생략 시 진행 중.",
                   "format": "date-time",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
                   "type": "string"
                 },
                 "event_start": {
-                  "description": "event 전용 필수 필드. 사건 시작 UTC 시각이다. 원천 구성원의 occurred_at은 event_start~event_end 범위 안이어야 하며 파생 구성원은 검사하지 않는다.",
+                  "description": "사건 시작 UTC. 원천 구성원의 occurred_at을 시작~종료 범위에 포함해야 한다.",
                   "format": "date-time",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
                   "type": "string"
                 },
                 "evidence_state": {
-                  "description": "derived 전용 필수 필드. 파생 근거의 성격이며 생성 후 불변이다.",
+                  "description": "파생 근거 성격. 불변.",
                   "enum": [
                     "observation",
                     "experience",
@@ -2266,20 +2237,18 @@
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "선택 판단 입력. 1~8000자이며 같은 재구성의 요청에 같은 값을 넣을 수 있다. 생략하면 검증된 인자 묶음을 기록한다.",
+                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
                   "maxLength": 8000,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "layer": {
-                  "description": "생성할 계층. source(원천 기록)는 source_ref·occurred_at·origin_kind, derived(파생)는 derived_from·derivation_kind·evidence_state, event(사건)는 member_refs·event_start가 필수다. 다른 계층의 필드는 거부한다.",
+                  "description": "계층. 계층별 필수·금지 필드는 조건식 참조.",
                   "enum": [
                     "source",
                     "derived",
@@ -2288,11 +2257,10 @@
                   "type": "string"
                 },
                 "member_refs": {
-                  "description": "event 전용 필수 필드. 이 사건이 묶는 기존 원천·파생 구성원 UUIDv7 1~1000개다. 사건은 구성원이 될 수 없으며 사건 사이 연결은 relation_confirm으로 확정한다.",
+                  "description": "같은 그래프의 원천·파생 구성원(사건 제외).",
                   "items": {
-                    "description": "참조할 컨텍스트 UUIDv7. 실제 존재·계층·같은 그래프 여부는 저장 상태로 판정한다.",
+                    "description": "컨텍스트 UUIDv7.",
                     "format": "uuid-v7",
-                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                     "type": "string"
                   },
                   "maxItems": 1000,
@@ -2300,11 +2268,10 @@
                   "type": "array"
                 },
                 "navigation_refs": {
-                  "description": "summary 파생의 선택 안내 참조. 같은 그래프의 사건·요약·원천 최대 100개이며 근거가 아니다. 자기 참조·중복은 거부하고 생성 후 불변이다.",
+                  "description": "summary 안내 참조(근거 아님). 같은 그래프의 사건·요약·원천. 자기 참조 금지·불변.",
                   "items": {
-                    "description": "참조할 컨텍스트 UUIDv7. 실제 존재·계층·같은 그래프 여부는 저장 상태로 판정한다.",
+                    "description": "컨텍스트 UUIDv7.",
                     "format": "uuid-v7",
-                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                     "type": "string"
                   },
                   "maxItems": 100,
@@ -2313,13 +2280,12 @@
                   "uniqueItems": true
                 },
                 "occurred_at": {
-                  "description": "source 전용 필수 필드. 원본 내용이 발생한 UTC 시각이며 시스템 기록 시각과 구분한다.",
+                  "description": "원본 발생 UTC 시각(기록 시각과 별개).",
                   "format": "date-time",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
                   "type": "string"
                 },
                 "origin_kind": {
-                  "description": "source 전용 필수 필드. 원천 내용의 생성 주체이며 생성 후 불변이다.",
+                  "description": "원천 생성 주체. 불변.",
                   "enum": [
                     "user_utterance",
                     "agent_output",
@@ -2328,24 +2294,22 @@
                   "type": "string"
                 },
                 "previous_event_id": {
-                  "description": "event 생성 전용 앞 사건. 같은 그래프·같은 명시적 conversation_id의 활성 사건을 지정하며 confirmed precedes를 함께 생성한다. 속성으로 저장하지 않는다.",
+                  "description": "같은 그래프·conversation_id의 활성 앞 사건. confirmed precedes를 원자 생성하며 속성 저장은 하지 않는다.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "선택 멱등성 키. 같은 계정·같은 논리 요청은 같은 키·인자로 재시도한다. 최초 결과는 24시간 보존하며 키가 없으면 자동 재시도 안전성을 보장하지 않는다.",
+                  "description": "선택 재시도 키: ASCII 영숫자·_·- 16~128자. 같은 키·인자는 24시간 최초 결과 재생.",
                   "maxLength": 128,
                   "minLength": 16,
-                  "pattern": "^[A-Za-z0-9_-]+$",
                   "type": "string"
                 },
                 "source_ref": {
                   "additionalProperties": false,
-                  "description": "원천의 자연 키인 출처 참조. 같은 그래프에서 같은 참조는 폐기·삭제 상태도 포함해 기존 원천을 반환한다. 삭제 시각과 creation_status=existing_deleted를 확인하며 자동 복구하지 않는다.",
+                  "description": "원천 중복 키. 폐기·삭제 상태도 기존 원천을 반환하며 자동 복구하지 않는다.",
                   "properties": {
                     "channel": {
-                      "description": "원본을 얻은 수집 경로. 내용의 생성 주체인 origin_kind와 구분한다.",
+                      "description": "수집 경로(origin_kind와 별개).",
                       "enum": [
                         "conversation",
                         "file",
@@ -2356,11 +2320,10 @@
                       "type": "string"
                     },
                     "locator": {
-                      "description": "scheme을 가진 원본 URI. 1~1024자이며 서버는 원본에 접근하지 않는다.",
+                      "description": "원본 URI. 서버는 접근하지 않는다.",
                       "format": "uri",
                       "maxLength": 1024,
                       "minLength": 1,
-                      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
                       "type": "string"
                     }
                   },
@@ -2371,7 +2334,7 @@
                   "type": "object"
                 },
                 "summary_scope": {
-                  "description": "summary일 때만 필수인 요약 범위. 다른 파생에는 지정하지 않는다.",
+                  "description": "summary 전용 필수 범위.",
                   "enum": [
                     "local",
                     "global"
@@ -2379,26 +2342,23 @@
                   "type": "string"
                 },
                 "supersedes_context_id": {
-                  "description": "derived 전용 선택 필드. 새 파생이 대체할 같은 계열의 기존 파생 UUIDv7이며 새 파생에서 이전 파생으로 대체 간선을 남긴다. 근거 목록인 derived_from과 별개다.",
+                  "description": "대체할 같은 계열의 이전 파생. 새 파생→이전 파생 간선이며 근거와 별개.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "turn_index": {
-                  "description": "conversation 원천의 0 이상 턴 순서. conversation_id와 한 쌍이며 생성 후 불변이다.",
+                  "description": "대화 원천의 턴 순서. conversation_id와 쌍, 불변.",
                   "minimum": 0,
                   "type": "integer"
                 },
                 "valid_from": {
-                  "description": "파생의 유효 시작 UTC 시각. 생략하면 열린 시작이다.",
+                  "description": "유효 시작 UTC. 생략 시 열린 시작.",
                   "format": "date-time",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
                   "type": "string"
                 },
                 "valid_to": {
-                  "description": "파생의 유효 종료 UTC 시각. 생략하면 계속 유효하다.",
+                  "description": "유효 종료 UTC. 생략 시 열린 종료.",
                   "format": "date-time",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
                   "type": "string"
                 }
               },
@@ -2419,40 +2379,35 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "등록한 agent_id로 노드를 소프트 폐기한다. 재폐기는 거부되며 연쇄 폐기는 하지 않는다. 같은 request_id의 결과 재생과 새 키의 상태 검사를 구분한다.",
+            "description": "노드 소프트 폐기. 재폐기 거부, 연쇄 폐기 없음.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "agent_register에서 발급받은 활성 agent_id. 현재 인증 계정·OAuth client와의 결합은 서버가 검사한다.",
+                  "description": "agent_register의 활성 agent_id.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "context_id": {
-                  "description": "대상 컨텍스트 UUIDv7. graph_id 안의 현재 상태를 조회하여 사용한다.",
+                  "description": "대상 컨텍스트 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "선택 판단 입력. 1~8000자이며 같은 재구성의 요청에 같은 값을 넣을 수 있다. 생략하면 검증된 인자 묶음을 기록한다.",
+                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
                   "maxLength": 8000,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "선택 멱등성 키. 같은 계정·같은 논리 요청은 같은 키·인자로 재시도한다. 최초 결과는 24시간 보존하며 키가 없으면 자동 재시도 안전성을 보장하지 않는다.",
+                  "description": "선택 재시도 키: ASCII 영숫자·_·- 16~128자. 같은 키·인자는 24시간 최초 결과 재생.",
                   "maxLength": 128,
                   "minLength": 16,
-                  "pattern": "^[A-Za-z0-9_-]+$",
                   "type": "string"
                 }
               },
@@ -2472,18 +2427,17 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "graph_id 안에서 시작 노드와 확정 간선의 부분 그래프를 조회한다. 0홉은 시작점만이며 정상 절단은 오류가 아니다.",
+            "description": "시작점과 확정 간선의 부분 그래프 조회. 정상 절단은 오류가 아니다.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "context_id": {
-                  "description": "대상 컨텍스트 UUIDv7. graph_id 안의 현재 상태를 조회하여 사용한다.",
+                  "description": "대상 컨텍스트 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "direction": {
-                  "description": "저장된 간선 방향 기준의 탐색 방향. out은 시작 노드에서 나가는 간선(파생→근거, 새 파생→이전 파생, 사건→구성원, 관계 시작→대상), in은 들어오는 간선을 따른다. 생략하면 양방향 both다.",
+                  "description": "기본 both. out은 파생→근거·이전 파생, 요약→안내, 사건→구성원·관계 대상이며 in은 역방향.",
                   "enum": [
                     "in",
                     "out",
@@ -2492,20 +2446,19 @@
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "hops": {
-                  "description": "탐색 깊이(간선 수). 0은 시작 노드만 반환하며 최대 홉 수는 계정 플랜이 제한한다.",
+                  "description": "탐색 홉 수. 기본 0은 시작점만, 상한은 플랜 기준.",
                   "minimum": 0,
                   "type": "integer"
                 },
                 "traversal_filter": {
-                  "description": "탐색할 확정 참조·사건 관계. 생략하거나 빈 배열이면 8종 모두를 탐색하며 중복을 허용하되 최대 8개다.",
+                  "description": "탐색 간선 필터. 생략·빈 배열은 전체, 중복 허용.",
                   "items": {
-                    "description": "허용된 필터 값.",
+                    "description": "허용값.",
                     "enum": [
                       "derived_from",
                       "supersedes",
@@ -2537,40 +2490,35 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "등록한 agent_id로 연산 채널에서 폐기한 노드를 복구한다. 웹 삭제는 웹에서 복구하며 활성 노드의 재복구는 거부한다. 불확정 결과는 같은 키 재시도 또는 조회로 확인한다.",
+            "description": "연산으로 폐기한 노드 복구. 웹 삭제는 웹에서 복구. 활성 노드 재복구 금지.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "agent_register에서 발급받은 활성 agent_id. 현재 인증 계정·OAuth client와의 결합은 서버가 검사한다.",
+                  "description": "agent_register의 활성 agent_id.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "context_id": {
-                  "description": "대상 컨텍스트 UUIDv7. graph_id 안의 현재 상태를 조회하여 사용한다.",
+                  "description": "대상 컨텍스트 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "선택 판단 입력. 1~8000자이며 같은 재구성의 요청에 같은 값을 넣을 수 있다. 생략하면 검증된 인자 묶음을 기록한다.",
+                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
                   "maxLength": 8000,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "선택 멱등성 키. 같은 계정·같은 논리 요청은 같은 키·인자로 재시도한다. 최초 결과는 24시간 보존하며 키가 없으면 자동 재시도 안전성을 보장하지 않는다.",
+                  "description": "선택 재시도 키: ASCII 영숫자·_·- 16~128자. 같은 키·인자는 24시간 최초 결과 재생.",
                   "maxLength": 128,
                   "minLength": 16,
-                  "pattern": "^[A-Za-z0-9_-]+$",
                   "type": "string"
                 }
               },
@@ -2590,7 +2538,7 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "등록한 agent_id·현재 expected_version으로 파생/사건의 가변 필드만 갱신한다. 원천은 불변이고 keep은 가변 필드 없이 유지 판단을 기록한다. 충돌·불확정 결과는 재조회한다.",
+            "description": "파생·사건의 가변 필드 갱신 또는 keep 판단 기록. 원천은 불변. 생략 필드는 유지.",
             "inputSchema": {
               "additionalProperties": false,
               "allOf": [
@@ -2654,20 +2602,18 @@
               ],
               "properties": {
                 "agent_id": {
-                  "description": "agent_register에서 발급받은 활성 agent_id. 현재 인증 계정·OAuth client와의 결합은 서버가 검사한다.",
+                  "description": "agent_register의 활성 agent_id.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "body": {
-                  "description": "컨텍스트 본문. 유효한 UTF-8의 1~8000자이며 U+0000을 허용하지 않는다. 공백만인 본문도 허용하고 원문 그대로 저장·색인한다.",
+                  "description": "본문. U+0000 금지, 공백만 허용. 원문 저장·색인.",
                   "maxLength": 8000,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "confidence_state": {
-                  "description": "의견 파생의 새 신뢰 상태. 기존 계층·의견 여부는 모델에서 검사한다.",
+                  "description": "opinion 파생의 새 신뢰 상태.",
                   "enum": [
                     "supported",
                     "uncertain",
@@ -2676,46 +2622,41 @@
                   "type": "string"
                 },
                 "context_id": {
-                  "description": "대상 컨텍스트 UUIDv7. graph_id 안의 현재 상태를 조회하여 사용한다.",
+                  "description": "대상 컨텍스트 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "event_end": {
-                  "description": "사건의 새 종료 UTC 시각. null이면 진행 중으로 비운다.",
+                  "description": "새 사건 종료 UTC. null이면 진행 중.",
                   "format": "date-time",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
                   "type": [
                     "string",
                     "null"
                   ]
                 },
                 "event_start": {
-                  "description": "사건의 새 시작 UTC 시각. 원천 구성원의 occurred_at이 갱신된 시간 범위 안이어야 한다.",
+                  "description": "새 사건 시작 UTC. 원천 구성원의 occurred_at을 범위에 포함해야 한다.",
                   "format": "date-time",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
                   "type": "string"
                 },
                 "expected_version": {
-                  "description": "조회한 현재 양수 version. 충돌하면 대상을 재조회하며 자동 병합하지 않는다.",
+                  "description": "조회한 현재 version. 충돌 시 재조회.",
                   "minimum": 1,
                   "type": "integer"
                 },
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "선택 판단 입력. 1~8000자이며 같은 재구성의 요청에 같은 값을 넣을 수 있다. 생략하면 검증된 인자 묶음을 기록한다.",
+                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
                   "maxLength": 8000,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "management_action": {
-                  "description": "생략/update는 일반 갱신. keep은 가변 필드 없이 현재 판을 검사하고 유지 판단만 기록한다.",
+                  "description": "기본 update. keep은 가변 필드 없이 현재 판을 검사하고 유지 판단만 기록.",
                   "enum": [
                     "update",
                     "keep"
@@ -2723,11 +2664,10 @@
                   "type": "string"
                 },
                 "member_refs": {
-                  "description": "사건의 교체할 원천·파생 구성원 UUIDv7 목록. 1~1000개이며 사건은 넣지 않는다.",
+                  "description": "교체할 원천·파생 구성원(사건 제외).",
                   "items": {
-                    "description": "참조할 컨텍스트 UUIDv7. 실제 존재·계층·같은 그래프 여부는 저장 상태로 판정한다.",
+                    "description": "컨텍스트 UUIDv7.",
                     "format": "uuid-v7",
-                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                     "type": "string"
                   },
                   "maxItems": 1000,
@@ -2735,25 +2675,22 @@
                   "type": "array"
                 },
                 "request_id": {
-                  "description": "선택 멱등성 키. 같은 계정·같은 논리 요청은 같은 키·인자로 재시도한다. 최초 결과는 24시간 보존하며 키가 없으면 자동 재시도 안전성을 보장하지 않는다.",
+                  "description": "선택 재시도 키: ASCII 영숫자·_·- 16~128자. 같은 키·인자는 24시간 최초 결과 재생.",
                   "maxLength": 128,
                   "minLength": 16,
-                  "pattern": "^[A-Za-z0-9_-]+$",
                   "type": "string"
                 },
                 "valid_from": {
-                  "description": "파생의 새 유효 시작. null이면 열린 시작으로 비운다.",
+                  "description": "새 유효 시작 UTC. null로 해제.",
                   "format": "date-time",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
                   "type": [
                     "string",
                     "null"
                   ]
                 },
                 "valid_to": {
-                  "description": "파생의 새 유효 종료. null이면 열린 종료로 비운다.",
+                  "description": "새 유효 종료 UTC. null로 해제.",
                   "format": "date-time",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$",
                   "type": [
                     "string",
                     "null"
@@ -2777,37 +2714,33 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "등록한 agent_id로 제안된 관계 또는 직접 판단한 사건 관계를 확정한다. 같은 정체성의 재확정은 현재 상태를 반환한다. 양 끝은 같은 그래프의 활성 사건(layer=event)이어야 하며 원천·파생은 node_create의 derived_from·member_refs로 연결한다. 거부되어도 앞선 노드 생성은 되돌리지 않는다. 그래프·사건 유형·시간·순환 제약은 서버가 검사한다.",
+            "description": "같은 그래프의 활성 사건 간 관계 확정·재확정. 원천·파생 연결은 derived_from·member_refs 사용. 실패해도 앞선 노드 생성은 유지.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "agent_register에서 발급받은 활성 agent_id. 현재 인증 계정·OAuth client와의 결합은 서버가 검사한다.",
+                  "description": "agent_register의 활성 agent_id.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "from_context_id": {
-                  "description": "같은 그래프의 활성 시작 사건(layer=event) UUIDv7. precedes·causes에서는 대상보다 늦게 시작할 수 없고 part_of에서는 부분 사건이다.",
+                  "description": "같은 그래프의 활성 시작 사건. precedes·causes는 대상보다 늦게 시작할 수 없다.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "선택 판단 입력. 1~8000자이며 같은 재구성의 요청에 같은 값을 넣을 수 있다. 생략하면 검증된 인자 묶음을 기록한다.",
+                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
                   "maxLength": 8000,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "relation_type": {
-                  "description": "확정할 사건 관계 유형과 방향. precedes는 앞선 사건→뒤따르는 사건, causes는 원인→결과, part_of는 부분→전체이며 relates_to는 방향이 없어 양 끝 순서를 정규화한다. 정체성은 그래프·유형·양 끝의 조합이며 재확정은 기존 현재 상태를 반환한다.",
+                  "description": "precedes: 앞→뒤, causes: 원인→결과, part_of: 부분→전체, relates_to: 무방향. 같은 그래프·유형·양 끝의 재확정은 현재 상태 반환.",
                   "enum": [
                     "precedes",
                     "causes",
@@ -2817,16 +2750,14 @@
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "선택 멱등성 키. 같은 계정·같은 논리 요청은 같은 키·인자로 재시도한다. 최초 결과는 24시간 보존하며 키가 없으면 자동 재시도 안전성을 보장하지 않는다.",
+                  "description": "선택 재시도 키: ASCII 영숫자·_·- 16~128자. 같은 키·인자는 24시간 최초 결과 재생.",
                   "maxLength": 128,
                   "minLength": 16,
-                  "pattern": "^[A-Za-z0-9_-]+$",
                   "type": "string"
                 },
                 "to_context_id": {
-                  "description": "같은 그래프의 활성 대상 사건(layer=event) UUIDv7. part_of에서는 시작 사건의 기간을 포함하는 전체 사건이다.",
+                  "description": "같은 그래프의 활성 대상 사건. part_of는 시작 사건의 기간을 포함해야 한다.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 }
               },
@@ -2848,40 +2779,35 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "등록한 agent_id로 사건 관계를 폐기한다. 재폐기는 거부되며 관계 복구는 relation_confirm 재확정으로 처리한다. 선택 request_id로 같은 논리 요청을 재생한다.",
+            "description": "사건 관계 폐기. 재폐기 금지, 복구는 relation_confirm 사용.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "agent_register에서 발급받은 활성 agent_id. 현재 인증 계정·OAuth client와의 결합은 서버가 검사한다.",
+                  "description": "agent_register의 활성 agent_id.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "선택 판단 입력. 1~8000자이며 같은 재구성의 요청에 같은 값을 넣을 수 있다. 생략하면 검증된 인자 묶음을 기록한다.",
+                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
                   "maxLength": 8000,
                   "minLength": 1,
-                  "pattern": "^[^\u0000]*$",
                   "type": "string"
                 },
                 "relation_id": {
-                  "description": "폐기할 사건 관계 UUIDv7. 이미 폐기된 관계의 재폐기는 입력 오류다.",
+                  "description": "폐기할 관계 UUIDv7. 재폐기 금지.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "선택 멱등성 키. 같은 계정·같은 논리 요청은 같은 키·인자로 재시도한다. 최초 결과는 24시간 보존하며 키가 없으면 자동 재시도 안전성을 보장하지 않는다.",
+                  "description": "선택 재시도 키: ASCII 영숫자·_·- 16~128자. 같은 키·인자는 24시간 최초 결과 재생.",
                   "maxLength": 128,
                   "minLength": 16,
-                  "pattern": "^[A-Za-z0-9_-]+$",
                   "type": "string"
                 }
               },
@@ -2901,37 +2827,34 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "선택한 사건에 붙은 사건 관계를 상태·유형으로 필터하고 relation_id 내림차순으로 조회한다. 받은 커서는 변경하지 않는다.",
+            "description": "사건 관계를 상태·유형별로 relation_id 내림차순 조회.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "context_id": {
-                  "description": "대상 컨텍스트 UUIDv7. graph_id 안의 현재 상태를 조회하여 사용한다.",
+                  "description": "대상 컨텍스트 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "cursor": {
-                  "description": "앞 응답의 불투명 커서를 그대로 반환한다. 내부 값을 구성하거나 해석하지 않는다. 생략·빈 문자열은 첫 페이지다.",
+                  "description": "앞 응답 커서를 그대로 사용. 생략·빈 문자열은 첫 페이지.",
                   "format": "base64url",
-                  "pattern": "^[A-Za-z0-9_-]*$",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "대상 그래프 UUIDv7. graph_list에서 확인한 접근 가능한 그래프를 선택한다.",
+                  "description": "graph_list에서 선택한 그래프 UUIDv7.",
                   "format": "uuid-v7",
-                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
                   "type": "string"
                 },
                 "page_size": {
-                  "description": "양수 페이지 크기. 생략하면 계정 플랜 기본값이며 상한도 플랜이 정한다.",
+                  "description": "페이지 크기. 기본값·상한은 플랜 기준.",
                   "minimum": 1,
                   "type": "integer"
                 },
                 "state_filter": {
-                  "description": "관계 상태 필터. 빈 배열·중복을 허용하되 최대 3개다.",
+                  "description": "상태 필터. 빈 배열·중복 허용.",
                   "items": {
-                    "description": "허용된 필터 값.",
+                    "description": "허용값.",
                     "enum": [
                       "proposed",
                       "confirmed",
@@ -2943,9 +2866,9 @@
                   "type": "array"
                 },
                 "type_filter": {
-                  "description": "사건 관계 유형 필터. 빈 배열·중복을 허용하되 최대 4개다.",
+                  "description": "유형 필터. 빈 배열·중복 허용.",
                   "items": {
-                    "description": "허용된 필터 값.",
+                    "description": "허용값.",
                     "enum": [
                       "precedes",
                       "causes",

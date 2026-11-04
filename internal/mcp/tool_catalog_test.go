@@ -135,7 +135,7 @@ func TestCatalogToolSetAndAnnotations(t *testing.T) {
 			validateCatalogSample(t, catalog, tool.Name, sample, "unexpected")
 		})
 	}
-	for _, required := range []string{"agent_register", "graph_list", "expected_version", "request_id", "24시간", "웹", "annotations"} {
+	for _, required := range []string{"agent_register", "graph_list", "expected_version", "request_id", "24 hours", "web", "annotations"} {
 		if !strings.Contains(serverInstructions, required) {
 			t.Fatalf("instructions 안내 누락: %s", required)
 		}

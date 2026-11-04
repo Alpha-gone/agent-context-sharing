@@ -5,12 +5,12 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const serverInstructions = `공유 컨텍스트 그래프 검색·기록 도구. graph_list로 그래프를 선택하세요. 노드·관계 쓰기 전 agent_register에서 agent_id를 받으세요. 등록 키는 계정·OAuth client별 재사용하며 신원·권한을 부여하지 않습니다.
-graph_get.entry_context_id는 대표 요약입니다. navigation_refs는 안내, derived_from은 근거입니다. node_get으로 탐색하고 conversation_id·turn_index·previous_event_id로 대화 순서를 명시하세요.
-graph_update·node_update는 현재 expected_version이 필요합니다. 충돌하면 재조회하세요. 원천 정정은 새 원천, 파생 근거·종류 변경은 새 파생과 supersedes_context_id를 사용하세요.
-등록·재시도 키는 ASCII 영숫자·_·-만 사용하세요. request_id는 선택이며 같은 키·인자는 최초 결과를 24시간 재생하며 새 키는 새 쓰기입니다. 키 없는 불확정 결과·키 유실은 재조회하세요. 내부 장애에 반복 로그인하지 마세요.
-서버는 매 요청 인증·등급·agent 결합을 검사합니다. annotations·호스트 승인이 권한을 대신하지 않습니다. 삭제·권한·팀 관리는 웹 전용입니다. node_restore는 연산 폐기만 복구하며 웹 삭제는 웹에서 복구하세요.
-검색은 context_flow_get이며 일부 채널 실패·절단도 정상 부분 결과일 수 있습니다.`
+const serverInstructions = `Shared context graph search and recording. Select a graph with graph_list. Before node/relation writes, get agent_id from agent_register. Reuse registration keys per account/OAuth client; registration does not prove identity or grant access.
+graph_get.entry_context_id is the entry summary. navigation_refs are navigation; derived_from is evidence. Traverse with node_get and express conversation order through conversation_id, turn_index and previous_event_id.
+graph_update/node_update require the current expected_version; reread on conflict. Correct sources with new sources. Change derived evidence/kind with a new derived node and supersedes_context_id.
+Registration/retry keys use only ASCII letters, digits, _ or -. request_id is optional; the same key and arguments replay the first result for 24 hours, while a new key is a new write. Reread state if an unkeyed result is uncertain or the key is lost. Do not repeatedly log in for internal failures.
+The server checks authentication, grade and agent binding per request; annotations/host approval do not replace authorization. Deletion, permissions and teams are web-only. node_restore restores operation discards; restore web deletions on the web.
+Search with context_flow_get. Partial channel failures and truncation may yield normal partial results.`
 
 func toolDefinitions() []*sdk.Tool {
 	read := func() *sdk.ToolAnnotations {
@@ -23,61 +23,61 @@ func toolDefinitions() []*sdk.Tool {
 		return &sdk.Tool{Name: name, Description: description, InputSchema: schema, Annotations: annotations}
 	}
 	graph := func() map[string]*jsonschema.Schema {
-		return map[string]*jsonschema.Schema{"graph_id": idSchema("그래프 UUIDv7.")}
+		return map[string]*jsonschema.Schema{"graph_id": idSchema("Graph UUIDv7.")}
 	}
 	node := func() map[string]*jsonschema.Schema {
 		p := graph()
-		p["context_id"] = idSchema("컨텍스트 UUIDv7.")
+		p["context_id"] = idSchema("Context UUIDv7.")
 		return p
 	}
 
-	registration := objectSchema(map[string]*jsonschema.Schema{"registration_key": keySchema("재사용 등록 키: ASCII 영숫자·_·- 16~128자. 자격 증명·본문 금지.")}, "registration_key")
+	registration := objectSchema(map[string]*jsonschema.Schema{"registration_key": keySchema("Reusable key: 16-128 ASCII letters, digits, _ or -. Never include credentials or content.")}, "registration_key")
 	list := objectSchema(map[string]*jsonschema.Schema{
-		"name_filter":  textSchema("이름 부분 일치(대소문자 무시).", 0, 0),
-		"grade_filter": enumArray("현재 등급 필터. 빈 배열·중복 허용.", 3, "owner", "editor", "viewer"),
-		"cursor":       cursorSchema(), "page_size": integerSchema("페이지 크기. 기본값·상한은 플랜 기준.", 1),
+		"name_filter":  textSchema("Case-insensitive name substring.", 0, 0),
+		"grade_filter": enumArray("Filter by current grade. Empty and duplicate values allowed.", 3, "owner", "editor", "viewer"),
+		"cursor":       cursorSchema(), "page_size": integerSchema("Page size; default and maximum depend on plan.", 1),
 	})
 	createGraph := objectSchema(map[string]*jsonschema.Schema{
-		"name":        nonblankSchema("표시 이름. 공백만은 금지, 중복 허용.", 200),
-		"description": textSchema("설명. 빈 문자열 허용.", 0, 2000), "request_id": requestKeySchema(),
+		"name":        nonblankSchema("Display name; nonblank, duplicates allowed.", 200),
+		"description": textSchema("Description; may be empty.", 0, 2000), "request_id": requestKeySchema(),
 	}, "name")
 	updateGraph := graph()
 	updateGraph["expected_version"] = versionSchema()
-	updateGraph["name"] = nonblankSchema("새 이름. 생략 시 유지, 공백만은 금지.", 200)
-	updateGraph["description"] = textSchema("새 설명. 생략 시 유지, 빈 문자열로 삭제.", 0, 2000)
+	updateGraph["name"] = nonblankSchema("New nonblank name; omit to keep.", 200)
+	updateGraph["description"] = textSchema("New description; omit to keep, empty to clear.", 0, 2000)
 	updateGraph["request_id"] = requestKeySchema()
-	updateGraph["entry_context_id"] = idSchema("대표 활성 요약. 생략 시 유지, null로 해제.")
+	updateGraph["entry_context_id"] = idSchema("Active entry summary; omit to keep, null to clear.")
 	updateGraph["entry_context_id"].Type = ""
 	updateGraph["entry_context_id"].Types = []string{"string", "null"}
 
 	createNode := graph()
-	createNode["layer"] = enumSchema("계층별 필수: source는 source_ref·occurred_at·origin_kind, derived는 derived_from·derivation_kind·evidence_state, event는 member_refs·event_start. 다른 계층 필드는 금지.", "source", "derived", "event")
+	createNode["layer"] = enumSchema("Required by layer: source: source_ref, occurred_at, origin_kind; derived: derived_from, derivation_kind, evidence_state; event: member_refs, event_start. Reject fields belonging to other layers.", "source", "derived", "event")
 	createNode["body"] = bodySchema()
 	actorFields(createNode)
 	createNode["source_ref"] = objectSchema(map[string]*jsonschema.Schema{
-		"channel": enumSchema("수집 경로(origin_kind와 별개).", "conversation", "file", "web", "api", "other"),
-		"locator": {Type: "string", Description: "원본 URI. 서버는 접근하지 않는다.", MinLength: new(1), MaxLength: new(1024), Pattern: "^[A-Za-z][A-Za-z0-9+.-]*:", Format: "uri"},
+		"channel": enumSchema("Collection channel, separate from origin_kind.", "conversation", "file", "web", "api", "other"),
+		"locator": {Type: "string", Description: "Original URI; the server does not fetch it.", MinLength: new(1), MaxLength: new(1024), Pattern: "^[A-Za-z][A-Za-z0-9+.-]*:", Format: "uri"},
 	}, "channel", "locator")
-	createNode["source_ref"].Description = "원천 중복 키. 폐기·삭제 상태도 기존 원천을 반환하며 자동 복구하지 않는다."
-	createNode["occurred_at"] = utcSchema("원본 발생 UTC 시각(기록 시각과 별개).", false)
-	createNode["origin_kind"] = enumSchema("원천 생성 주체. 불변.", "user_utterance", "agent_output", "external_content")
-	createNode["conversation_id"] = nonblankSchema("source·event의 대화 식별자. 불변·공백만 금지. source는 conversation 출처·turn_index 필수.", 128)
-	createNode["turn_index"] = integerSchema("대화 원천의 턴 순서. conversation_id와 쌍, 불변.", 0)
-	createNode["previous_event_id"] = idSchema("event 전용 활성 앞 사건. 같은 그래프·conversation_id 필수. confirmed precedes를 원자 생성하며 속성 저장은 하지 않는다.")
-	createNode["navigation_refs"] = refsSchema("summary 안내 참조(근거 아님). 같은 그래프의 사건·요약·원천. 자기 참조 금지·불변.", 100)
+	createNode["source_ref"].Description = "Source deduplication key. Returns existing sources even if discarded/deleted; never restores automatically."
+	createNode["occurred_at"] = utcSchema("Original occurrence time in UTC, distinct from recording time.", false)
+	createNode["origin_kind"] = enumSchema("Immutable origin category.", "user_utterance", "agent_output", "external_content")
+	createNode["conversation_id"] = nonblankSchema("Immutable nonblank conversation ID for sources and events. Sources require channel=conversation and turn_index.", 128)
+	createNode["turn_index"] = integerSchema("Immutable conversation source turn order; paired with conversation_id.", 0)
+	createNode["previous_event_id"] = idSchema("Event only: active previous event in the same graph and conversation. Requires conversation_id. Atomically creates confirmed precedes; not stored as a property.")
+	createNode["navigation_refs"] = refsSchema("Immutable summary navigation, not evidence: events, summaries or sources in the same graph. No self-reference.", 100)
 	createNode["navigation_refs"].MinItems = new(0)
 	createNode["navigation_refs"].UniqueItems = true
-	createNode["derived_from"] = refsSchema("같은 그래프의 원천·파생 근거. 불변.", 100)
-	createNode["derivation_kind"] = enumSchema("파생 목적. 불변.", "proposition", "summary", "reflection")
-	createNode["summary_scope"] = enumSchema("summary 전용 필수 범위.", "local", "global")
-	createNode["evidence_state"] = enumSchema("파생 근거 성격. 불변.", "observation", "experience", "opinion")
-	createNode["confidence_state"] = enumSchema("opinion 전용 필수 신뢰 상태.", "supported", "uncertain", "disputed")
-	createNode["valid_from"] = utcSchema("파생 유효 시작 UTC. 생략 시 열린 시작.", false)
-	createNode["valid_to"] = utcSchema("파생 유효 종료 UTC. 생략 시 열린 종료.", false)
-	createNode["supersedes_context_id"] = idSchema("대체할 같은 계열의 이전 파생. 새 파생→이전 파생 간선이며 근거와 별개.")
-	createNode["member_refs"] = refsSchema("같은 그래프의 원천·파생 구성원(사건 제외).", 1000)
-	createNode["event_start"] = utcSchema("사건 시작 UTC. 원천 구성원의 occurred_at을 시작~종료 범위에 포함해야 한다.", false)
-	createNode["event_end"] = utcSchema("사건 종료 UTC. 생략 시 진행 중.", false)
+	createNode["derived_from"] = refsSchema("Immutable source/derived evidence references in the same graph.", 100)
+	createNode["derivation_kind"] = enumSchema("Immutable derivation purpose.", "proposition", "summary", "reflection")
+	createNode["summary_scope"] = enumSchema("Summary scope: required for summary; forbidden otherwise.", "local", "global")
+	createNode["evidence_state"] = enumSchema("Immutable evidence category.", "observation", "experience", "opinion")
+	createNode["confidence_state"] = enumSchema("Confidence state: required for opinion; forbidden otherwise.", "supported", "uncertain", "disputed")
+	createNode["valid_from"] = utcSchema("Derived validity start in UTC; omit for open start.", false)
+	createNode["valid_to"] = utcSchema("Derived validity end in UTC; omit for open end.", false)
+	createNode["supersedes_context_id"] = idSchema("Prior derived node in the same lineage. Edge: new to prior; separate from evidence.")
+	createNode["member_refs"] = refsSchema("Source/derived members in the same graph; no events.", 1000)
+	createNode["event_start"] = utcSchema("Event start in UTC. Source members must occur within the event interval.", false)
+	createNode["event_end"] = utcSchema("Event end in UTC; omit for ongoing.", false)
 	creation := objectSchema(createNode, "graph_id", "layer", "body", "agent_id")
 	sourceFields := []string{"source_ref", "occurred_at", "origin_kind"}
 	sourceOnlyFields := append(append([]string{}, sourceFields...), "turn_index")
@@ -97,57 +97,57 @@ func toolDefinitions() []*sdk.Tool {
 	}
 
 	getNode := node()
-	getNode["hops"] = integerSchema("탐색 홉 수. 기본 0은 시작점만, 상한은 플랜 기준.", 0)
-	getNode["direction"] = enumSchema("기본 both. out은 파생→근거·이전 파생, 요약→안내, 사건→구성원·관계 대상이며 in은 역방향.", "in", "out", "both")
-	getNode["traversal_filter"] = enumArray("탐색 간선 필터. 생략·빈 배열은 전체, 중복 허용.", 8, "derived_from", "supersedes", "member_refs", "navigation_refs", "precedes", "causes", "part_of", "relates_to")
+	getNode["hops"] = integerSchema("Hop count; default 0 returns only the start. Maximum depends on plan.", 0)
+	getNode["direction"] = enumSchema("Default both. out follows derived to evidence/prior, summary to navigation, event to members/relation targets; in reverses.", "in", "out", "both")
+	getNode["traversal_filter"] = enumArray("Edge filter; omit or empty for all. Duplicates allowed.", 8, "derived_from", "supersedes", "member_refs", "navigation_refs", "precedes", "causes", "part_of", "relates_to")
 	updateNode := node()
 	actorFields(updateNode)
 	updateNode["expected_version"] = versionSchema()
-	updateNode["management_action"] = enumSchema("기본 update. keep은 가변 필드 없이 현재 판을 검사하고 유지 판단만 기록.", "update", "keep")
+	updateNode["management_action"] = enumSchema("Default update. keep checks the current version and records judgment without mutable fields.", "update", "keep")
 	updateNode["body"] = bodySchema()
-	updateNode["confidence_state"] = enumSchema("opinion 파생의 새 신뢰 상태.", "supported", "uncertain", "disputed")
-	updateNode["valid_from"] = utcSchema("파생의 새 유효 시작 UTC. null로 해제.", true)
-	updateNode["valid_to"] = utcSchema("파생의 새 유효 종료 UTC. null로 해제.", true)
-	updateNode["member_refs"] = refsSchema("교체할 원천·파생 구성원(사건 제외).", 1000)
-	updateNode["event_start"] = utcSchema("새 사건 시작 UTC. 원천 구성원의 occurred_at을 범위에 포함해야 한다.", false)
-	updateNode["event_end"] = utcSchema("새 사건 종료 UTC. null이면 진행 중.", true)
+	updateNode["confidence_state"] = enumSchema("New confidence for an opinion derived node.", "supported", "uncertain", "disputed")
+	updateNode["valid_from"] = utcSchema("New derived validity start in UTC; null to clear.", true)
+	updateNode["valid_to"] = utcSchema("New derived validity end in UTC; null to clear.", true)
+	updateNode["member_refs"] = refsSchema("Replacement source/derived members; no events.", 1000)
+	updateNode["event_start"] = utcSchema("New event start in UTC; source members must occur within the interval.", false)
+	updateNode["event_end"] = utcSchema("New event end in UTC; null for ongoing.", true)
 	updating := objectSchema(updateNode, "graph_id", "context_id", "expected_version", "agent_id")
 	updating.AllOf = []*jsonschema.Schema{conditional("management_action", "keep", nil, []string{"body", "confidence_state", "valid_from", "valid_to", "member_refs", "event_start", "event_end"})}
 	discard, restore := node(), node()
 	actorFields(discard)
 	actorFields(restore)
 	flow := graph()
-	flow["work_context"] = nonblankSchema("현재 작업 텍스트. 공백만은 금지.", 8000)
-	flow["as_of"] = utcSchema("검색 기준 UTC(과거 상태 복원 아님). 기본 현재.", false)
-	flow["scope"] = enumSchema("검색 범위. 기본 auto.", "local", "global", "auto")
-	flow["budget"] = integerSchema("응답 body 문자 예산(토큰 아님). 기본값·상한은 플랜 기준.", 1)
+	flow["work_context"] = nonblankSchema("Current task text; nonblank.", 8000)
+	flow["as_of"] = utcSchema("Query time in UTC, not historical restoration. Defaults to now.", false)
+	flow["scope"] = enumSchema("Search scope; default auto.", "local", "global", "auto")
+	flow["budget"] = integerSchema("Response body character budget, not tokens. Default and maximum depend on plan.", 1)
 	relations := node()
-	relations["state_filter"] = enumArray("상태 필터. 빈 배열·중복 허용.", 3, "proposed", "confirmed", "discarded")
-	relations["type_filter"] = enumArray("유형 필터. 빈 배열·중복 허용.", 4, "precedes", "causes", "part_of", "relates_to")
-	relations["cursor"], relations["page_size"] = cursorSchema(), integerSchema("페이지 크기. 기본값·상한은 플랜 기준.", 1)
+	relations["state_filter"] = enumArray("State filter; empty and duplicate values allowed.", 3, "proposed", "confirmed", "discarded")
+	relations["type_filter"] = enumArray("Type filter; empty and duplicate values allowed.", 4, "precedes", "causes", "part_of", "relates_to")
+	relations["cursor"], relations["page_size"] = cursorSchema(), integerSchema("Page size; default and maximum depend on plan.", 1)
 	confirm := graph()
 	actorFields(confirm)
-	confirm["relation_type"] = enumSchema("precedes: 앞→뒤, causes: 원인→결과, part_of: 부분→전체, relates_to: 무방향. 같은 그래프·유형·양 끝의 재확정은 현재 상태 반환.", "precedes", "causes", "part_of", "relates_to")
-	confirm["from_context_id"] = idSchema("같은 그래프의 활성 시작 사건. precedes·causes는 대상보다 늦게 시작할 수 없다.")
-	confirm["to_context_id"] = idSchema("같은 그래프의 활성 대상 사건. part_of는 시작 사건의 기간을 포함해야 한다.")
+	confirm["relation_type"] = enumSchema("precedes: earlier to later; causes: cause to effect; part_of: part to whole; relates_to: undirected. Reconfirming the same graph/type/endpoints returns current state.", "precedes", "causes", "part_of", "relates_to")
+	confirm["from_context_id"] = idSchema("Active event at the starting endpoint in the same graph. For precedes/causes, it must not start after the target event.")
+	confirm["to_context_id"] = idSchema("Active target event in the same graph. For part_of, its interval must contain the source event.")
 	discardRelation := graph()
 	actorFields(discardRelation)
-	discardRelation["relation_id"] = idSchema("폐기할 관계 UUIDv7. 재폐기 금지.")
+	discardRelation["relation_id"] = idSchema("Relation UUIDv7 to discard; no repeated discard.")
 	return []*sdk.Tool{
-		tool("agent_register", "등록 키로 agent_id 발급. 같은 활성 키는 같은 ID이며 폐기 키는 복구하지 않는다.", registration, write(false, true)),
-		tool("graph_list", "접근 가능한 활성 그래프를 최근 활동순으로 조회.", list, read()),
-		tool("graph_create", "인증 계정을 소유자로 하는 그래프 생성.", createGraph, write(false, false)),
-		tool("graph_get", "그래프 메타데이터·현재 version·대표 진입점 조회.", objectSchema(graph(), "graph_id"), read()),
-		tool("graph_update", "현재 expected_version으로 이름·설명·대표 요약 갱신.", objectSchema(updateGraph, "graph_id", "expected_version"), write(true, false)),
-		tool("node_create", "원천·파생·사건 생성. creation_status=existing_deleted는 활성 근거로 사용 불가. 사건 연결은 previous_event_id 또는 relation_confirm 사용.", creation, write(true, false)),
-		tool("node_get", "시작점과 확정 간선의 부분 그래프 조회. 정상 절단은 오류가 아니다.", objectSchema(getNode, "graph_id", "context_id"), read()),
-		tool("node_update", "파생·사건의 가변 필드 갱신 또는 keep 판단 기록. 원천은 불변. 생략 필드는 유지.", updating, write(true, false)),
-		tool("node_discard", "노드 소프트 폐기. 재폐기 거부, 연쇄 폐기 없음.", objectSchema(discard, "graph_id", "context_id", "agent_id"), write(true, false)),
-		tool("node_restore", "연산으로 폐기한 노드 복구. 웹 삭제는 웹에서 복구. 활성 노드 재복구 금지.", objectSchema(restore, "graph_id", "context_id", "agent_id"), write(true, false)),
-		tool("context_flow_get", "작업 텍스트로 평면 컨텍스트 흐름 검색. 채널 일부 실패·예산/홉 절단은 정상 부분 결과.", objectSchema(flow, "graph_id", "work_context"), read()),
-		tool("relation_list", "사건 관계를 상태·유형별로 relation_id 내림차순 조회.", objectSchema(relations, "graph_id", "context_id"), read()),
-		tool("relation_confirm", "같은 그래프의 활성 사건 간 관계 확정·재확정. 원천·파생 연결은 derived_from·member_refs 사용. 실패해도 앞선 노드 생성은 유지.", objectSchema(confirm, "graph_id", "relation_type", "from_context_id", "to_context_id", "agent_id"), write(true, true)),
-		tool("relation_discard", "사건 관계 폐기. 재폐기 금지, 복구는 relation_confirm 사용.", objectSchema(discardRelation, "graph_id", "relation_id", "agent_id"), write(true, false)),
+		tool("agent_register", "Register an agent. Reusing an active key returns the same ID; revoked keys stay revoked.", registration, write(false, true)),
+		tool("graph_list", "List accessible active graphs by recent activity.", list, read()),
+		tool("graph_create", "Create a graph owned by the authenticated account.", createGraph, write(false, false)),
+		tool("graph_get", "Get graph metadata, current version and entry point.", objectSchema(graph(), "graph_id"), read()),
+		tool("graph_update", "Update name, description or entry summary using the current expected_version.", objectSchema(updateGraph, "graph_id", "expected_version"), write(true, false)),
+		tool("node_create", "Create a source, derived node or event. A creation_status=existing_deleted result cannot be active evidence. Connect events with previous_event_id or relation_confirm.", creation, write(true, false)),
+		tool("node_get", "Get a subgraph via confirmed edges. Truncation is a normal partial result.", objectSchema(getNode, "graph_id", "context_id"), read()),
+		tool("node_update", "Update mutable derived/event fields or record a keep judgment. Sources are immutable. Omitted fields stay unchanged.", updating, write(true, false)),
+		tool("node_discard", "Soft-discard a node. Reject repeated discard; no cascade.", objectSchema(discard, "graph_id", "context_id", "agent_id"), write(true, false)),
+		tool("node_restore", "Restore an operation-discarded node. Restore web deletions on the web. Reject already active nodes.", objectSchema(restore, "graph_id", "context_id", "agent_id"), write(true, false)),
+		tool("context_flow_get", "Retrieve a flat context flow for a task. Channel failures and budget/hop truncation may produce normal partial results.", objectSchema(flow, "graph_id", "work_context"), read()),
+		tool("relation_list", "List event relations by state/type, ordered by descending relation_id.", objectSchema(relations, "graph_id", "context_id"), read()),
+		tool("relation_confirm", "Confirm/reconfirm relations between active events in one graph. Use derived_from/member_refs for source/derived links. Failure does not undo prior node creation.", objectSchema(confirm, "graph_id", "relation_type", "from_context_id", "to_context_id", "agent_id"), write(true, true)),
+		tool("relation_discard", "Discard an event relation. Reject repeated discard; restore with relation_confirm.", objectSchema(discardRelation, "graph_id", "relation_id", "agent_id"), write(true, false)),
 	}
 }
 
@@ -186,20 +186,20 @@ func keySchema(description string) *jsonschema.Schema {
 }
 
 func requestKeySchema() *jsonschema.Schema {
-	return keySchema("재시도 키.")
+	return keySchema("Retry key.")
 }
 
 func actorFields(properties map[string]*jsonschema.Schema) {
-	properties["agent_id"] = idSchema("활성 agent_id.")
+	properties["agent_id"] = idSchema("Active agent_id.")
 	properties["request_id"] = requestKeySchema()
-	properties["judgment_input"] = textSchema("판단 입력. 생략 시 검증된 인자를 기록.", 1, 8000)
+	properties["judgment_input"] = textSchema("Judgment input; omit to record validated arguments.", 1, 8000)
 }
 
 func bodySchema() *jsonschema.Schema {
-	return textSchema("본문. U+0000 금지, 공백만 허용. 원문 저장·색인.", 1, 8000)
+	return textSchema("Body; no NUL, whitespace-only allowed. Stored and indexed verbatim.", 1, 8000)
 }
 func versionSchema() *jsonschema.Schema {
-	return integerSchema("조회한 현재 version. 충돌 시 재조회.", 1)
+	return integerSchema("Current retrieved version; reread on conflict.", 1)
 }
 func integerSchema(description string, minimum int) *jsonschema.Schema {
 	return &jsonschema.Schema{Type: "integer", Description: description, Minimum: new(float64(minimum))}
@@ -219,7 +219,7 @@ func utcSchema(description string, nullable bool) *jsonschema.Schema {
 	return s
 }
 func cursorSchema() *jsonschema.Schema {
-	return &jsonschema.Schema{Type: "string", Description: "앞 응답 커서를 그대로 사용. 생략·빈 문자열은 첫 페이지.", Pattern: "^[A-Za-z0-9_-]*$", Format: "base64url"}
+	return &jsonschema.Schema{Type: "string", Description: "Reuse the returned cursor unchanged. Omit or empty for the first page.", Pattern: "^[A-Za-z0-9_-]*$", Format: "base64url"}
 }
 func requiredValue(field, value string) *jsonschema.Schema {
 	return &jsonschema.Schema{Properties: map[string]*jsonschema.Schema{field: {Const: new(any(value))}}, Required: []string{field}}

@@ -349,7 +349,7 @@
         "capabilities": {
           "tools": {}
         },
-        "instructions": "공유 컨텍스트 그래프 검색·기록 도구. graph_list로 그래프를 선택하세요. 노드·관계 쓰기 전 agent_register에서 agent_id를 받으세요. 등록 키는 계정·OAuth client별 재사용하며 신원·권한을 부여하지 않습니다.\ngraph_get.entry_context_id는 대표 요약입니다. navigation_refs는 안내, derived_from은 근거입니다. node_get으로 탐색하고 conversation_id·turn_index·previous_event_id로 대화 순서를 명시하세요.\ngraph_update·node_update는 현재 expected_version이 필요합니다. 충돌하면 재조회하세요. 원천 정정은 새 원천, 파생 근거·종류 변경은 새 파생과 supersedes_context_id를 사용하세요.\n등록·재시도 키는 ASCII 영숫자·_·-만 사용하세요. request_id는 선택이며 같은 키·인자는 최초 결과를 24시간 재생하며 새 키는 새 쓰기입니다. 키 없는 불확정 결과·키 유실은 재조회하세요. 내부 장애에 반복 로그인하지 마세요.\n서버는 매 요청 인증·등급·agent 결합을 검사합니다. annotations·호스트 승인이 권한을 대신하지 않습니다. 삭제·권한·팀 관리는 웹 전용입니다. node_restore는 연산 폐기만 복구하며 웹 삭제는 웹에서 복구하세요.\n검색은 context_flow_get이며 일부 채널 실패·절단도 정상 부분 결과일 수 있습니다.",
+        "instructions": "Shared context graph search and recording. Select a graph with graph_list. Before node/relation writes, get agent_id from agent_register. Reuse registration keys per account/OAuth client; registration does not prove identity or grant access.\ngraph_get.entry_context_id is the entry summary. navigation_refs are navigation; derived_from is evidence. Traverse with node_get and express conversation order through conversation_id, turn_index and previous_event_id.\ngraph_update/node_update require the current expected_version; reread on conflict. Correct sources with new sources. Change derived evidence/kind with a new derived node and supersedes_context_id.\nRegistration/retry keys use only ASCII letters, digits, _ or -. request_id is optional; the same key and arguments replay the first result for 24 hours, while a new key is a new write. Reread state if an unkeyed result is uncertain or the key is lost. Do not repeatedly log in for internal failures.\nThe server checks authentication, grade and agent binding per request; annotations/host approval do not replace authorization. Deletion, permissions and teams are web-only. node_restore restores operation discards; restore web deletions on the web.\nSearch with context_flow_get. Partial channel failures and truncation may yield normal partial results.",
         "resultType": "complete",
         "supportedVersions": [
           "2026-07-28"
@@ -1513,12 +1513,12 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "등록 키로 agent_id 발급. 같은 활성 키는 같은 ID이며 폐기 키는 복구하지 않는다.",
+            "description": "Register an agent. Reusing an active key returns the same ID; revoked keys stay revoked.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "registration_key": {
-                  "description": "재사용 등록 키: ASCII 영숫자·_·- 16~128자. 자격 증명·본문 금지.",
+                  "description": "Reusable key: 16-128 ASCII letters, digits, _ or -. Never include credentials or content.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -1538,27 +1538,27 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "작업 텍스트로 평면 컨텍스트 흐름 검색. 채널 일부 실패·예산/홉 절단은 정상 부분 결과.",
+            "description": "Retrieve a flat context flow for a task. Channel failures and budget/hop truncation may produce normal partial results.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "as_of": {
-                  "description": "검색 기준 UTC(과거 상태 복원 아님). 기본 현재.",
+                  "description": "Query time in UTC, not historical restoration. Defaults to now.",
                   "format": "date-time",
                   "type": "string"
                 },
                 "budget": {
-                  "description": "응답 body 문자 예산(토큰 아님). 기본값·상한은 플랜 기준.",
+                  "description": "Response body character budget, not tokens. Default and maximum depend on plan.",
                   "minimum": 1,
                   "type": "integer"
                 },
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "scope": {
-                  "description": "검색 범위. 기본 auto.",
+                  "description": "Search scope; default auto.",
                   "enum": [
                     "local",
                     "global",
@@ -1570,7 +1570,7 @@
                   "allOf": [
                     {}
                   ],
-                  "description": "현재 작업 텍스트. 공백만은 금지.",
+                  "description": "Current task text; nonblank.",
                   "maxLength": 8000,
                   "minLength": 1,
                   "type": "string"
@@ -1591,12 +1591,12 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "인증 계정을 소유자로 하는 그래프 생성.",
+            "description": "Create a graph owned by the authenticated account.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "description": {
-                  "description": "설명. 빈 문자열 허용.",
+                  "description": "Description; may be empty.",
                   "maxLength": 2000,
                   "minLength": 0,
                   "type": "string"
@@ -1605,13 +1605,13 @@
                   "allOf": [
                     {}
                   ],
-                  "description": "표시 이름. 공백만은 금지, 중복 허용.",
+                  "description": "Display name; nonblank, duplicates allowed.",
                   "maxLength": 200,
                   "minLength": 1,
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "재시도 키.",
+                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -1631,12 +1631,12 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "그래프 메타데이터·현재 version·대표 진입점 조회.",
+            "description": "Get graph metadata, current version and entry point.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 }
@@ -1655,17 +1655,17 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "접근 가능한 활성 그래프를 최근 활동순으로 조회.",
+            "description": "List accessible active graphs by recent activity.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "cursor": {
-                  "description": "앞 응답 커서를 그대로 사용. 생략·빈 문자열은 첫 페이지.",
+                  "description": "Reuse the returned cursor unchanged. Omit or empty for the first page.",
                   "format": "base64url",
                   "type": "string"
                 },
                 "grade_filter": {
-                  "description": "현재 등급 필터. 빈 배열·중복 허용.",
+                  "description": "Filter by current grade. Empty and duplicate values allowed.",
                   "items": {
                     "enum": [
                       "owner",
@@ -1678,12 +1678,12 @@
                   "type": "array"
                 },
                 "name_filter": {
-                  "description": "이름 부분 일치(대소문자 무시).",
+                  "description": "Case-insensitive name substring.",
                   "minLength": 0,
                   "type": "string"
                 },
                 "page_size": {
-                  "description": "페이지 크기. 기본값·상한은 플랜 기준.",
+                  "description": "Page size; default and maximum depend on plan.",
                   "minimum": 1,
                   "type": "integer"
                 }
@@ -1699,18 +1699,18 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "현재 expected_version으로 이름·설명·대표 요약 갱신.",
+            "description": "Update name, description or entry summary using the current expected_version.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "description": {
-                  "description": "새 설명. 생략 시 유지, 빈 문자열로 삭제.",
+                  "description": "New description; omit to keep, empty to clear.",
                   "maxLength": 2000,
                   "minLength": 0,
                   "type": "string"
                 },
                 "entry_context_id": {
-                  "description": "대표 활성 요약. 생략 시 유지, null로 해제.",
+                  "description": "Active entry summary; omit to keep, null to clear.",
                   "format": "uuid-v7",
                   "type": [
                     "string",
@@ -1718,12 +1718,12 @@
                   ]
                 },
                 "expected_version": {
-                  "description": "조회한 현재 version. 충돌 시 재조회.",
+                  "description": "Current retrieved version; reread on conflict.",
                   "minimum": 1,
                   "type": "integer"
                 },
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -1731,13 +1731,13 @@
                   "allOf": [
                     {}
                   ],
-                  "description": "새 이름. 생략 시 유지, 공백만은 금지.",
+                  "description": "New nonblank name; omit to keep.",
                   "maxLength": 200,
                   "minLength": 1,
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "재시도 키.",
+                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -1758,23 +1758,23 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "원천·파생·사건 생성. creation_status=existing_deleted는 활성 근거로 사용 불가. 사건 연결은 previous_event_id 또는 relation_confirm 사용.",
+            "description": "Create a source, derived node or event. A creation_status=existing_deleted result cannot be active evidence. Connect events with previous_event_id or relation_confirm.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "활성 agent_id.",
+                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "body": {
-                  "description": "본문. U+0000 금지, 공백만 허용. 원문 저장·색인.",
+                  "description": "Body; no NUL, whitespace-only allowed. Stored and indexed verbatim.",
                   "maxLength": 8000,
                   "minLength": 1,
                   "type": "string"
                 },
                 "confidence_state": {
-                  "description": "opinion 전용 필수 신뢰 상태.",
+                  "description": "Confidence state: required for opinion; forbidden otherwise.",
                   "enum": [
                     "supported",
                     "uncertain",
@@ -1786,13 +1786,13 @@
                   "allOf": [
                     {}
                   ],
-                  "description": "source·event의 대화 식별자. 불변·공백만 금지. source는 conversation 출처·turn_index 필수.",
+                  "description": "Immutable nonblank conversation ID for sources and events. Sources require channel=conversation and turn_index.",
                   "maxLength": 128,
                   "minLength": 1,
                   "type": "string"
                 },
                 "derivation_kind": {
-                  "description": "파생 목적. 불변.",
+                  "description": "Immutable derivation purpose.",
                   "enum": [
                     "proposition",
                     "summary",
@@ -1801,7 +1801,7 @@
                   "type": "string"
                 },
                 "derived_from": {
-                  "description": "같은 그래프의 원천·파생 근거. 불변.",
+                  "description": "Immutable source/derived evidence references in the same graph.",
                   "items": {
                     "format": "uuid-v7",
                     "type": "string"
@@ -1811,17 +1811,17 @@
                   "type": "array"
                 },
                 "event_end": {
-                  "description": "사건 종료 UTC. 생략 시 진행 중.",
+                  "description": "Event end in UTC; omit for ongoing.",
                   "format": "date-time",
                   "type": "string"
                 },
                 "event_start": {
-                  "description": "사건 시작 UTC. 원천 구성원의 occurred_at을 시작~종료 범위에 포함해야 한다.",
+                  "description": "Event start in UTC. Source members must occur within the event interval.",
                   "format": "date-time",
                   "type": "string"
                 },
                 "evidence_state": {
-                  "description": "파생 근거 성격. 불변.",
+                  "description": "Immutable evidence category.",
                   "enum": [
                     "observation",
                     "experience",
@@ -1830,18 +1830,18 @@
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
+                  "description": "Judgment input; omit to record validated arguments.",
                   "maxLength": 8000,
                   "minLength": 1,
                   "type": "string"
                 },
                 "layer": {
-                  "description": "계층별 필수: source는 source_ref·occurred_at·origin_kind, derived는 derived_from·derivation_kind·evidence_state, event는 member_refs·event_start. 다른 계층 필드는 금지.",
+                  "description": "Required by layer: source: source_ref, occurred_at, origin_kind; derived: derived_from, derivation_kind, evidence_state; event: member_refs, event_start. Reject fields belonging to other layers.",
                   "enum": [
                     "source",
                     "derived",
@@ -1850,7 +1850,7 @@
                   "type": "string"
                 },
                 "member_refs": {
-                  "description": "같은 그래프의 원천·파생 구성원(사건 제외).",
+                  "description": "Source/derived members in the same graph; no events.",
                   "items": {
                     "format": "uuid-v7",
                     "type": "string"
@@ -1860,7 +1860,7 @@
                   "type": "array"
                 },
                 "navigation_refs": {
-                  "description": "summary 안내 참조(근거 아님). 같은 그래프의 사건·요약·원천. 자기 참조 금지·불변.",
+                  "description": "Immutable summary navigation, not evidence: events, summaries or sources in the same graph. No self-reference.",
                   "items": {
                     "format": "uuid-v7",
                     "type": "string"
@@ -1871,12 +1871,12 @@
                   "uniqueItems": true
                 },
                 "occurred_at": {
-                  "description": "원본 발생 UTC 시각(기록 시각과 별개).",
+                  "description": "Original occurrence time in UTC, distinct from recording time.",
                   "format": "date-time",
                   "type": "string"
                 },
                 "origin_kind": {
-                  "description": "원천 생성 주체. 불변.",
+                  "description": "Immutable origin category.",
                   "enum": [
                     "user_utterance",
                     "agent_output",
@@ -1885,22 +1885,22 @@
                   "type": "string"
                 },
                 "previous_event_id": {
-                  "description": "event 전용 활성 앞 사건. 같은 그래프·conversation_id 필수. confirmed precedes를 원자 생성하며 속성 저장은 하지 않는다.",
+                  "description": "Event only: active previous event in the same graph and conversation. Requires conversation_id. Atomically creates confirmed precedes; not stored as a property.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "재시도 키.",
+                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
                 },
                 "source_ref": {
                   "additionalProperties": false,
-                  "description": "원천 중복 키. 폐기·삭제 상태도 기존 원천을 반환하며 자동 복구하지 않는다.",
+                  "description": "Source deduplication key. Returns existing sources even if discarded/deleted; never restores automatically.",
                   "properties": {
                     "channel": {
-                      "description": "수집 경로(origin_kind와 별개).",
+                      "description": "Collection channel, separate from origin_kind.",
                       "enum": [
                         "conversation",
                         "file",
@@ -1911,7 +1911,7 @@
                       "type": "string"
                     },
                     "locator": {
-                      "description": "원본 URI. 서버는 접근하지 않는다.",
+                      "description": "Original URI; the server does not fetch it.",
                       "format": "uri",
                       "maxLength": 1024,
                       "minLength": 1,
@@ -1925,7 +1925,7 @@
                   "type": "object"
                 },
                 "summary_scope": {
-                  "description": "summary 전용 필수 범위.",
+                  "description": "Summary scope: required for summary; forbidden otherwise.",
                   "enum": [
                     "local",
                     "global"
@@ -1933,22 +1933,22 @@
                   "type": "string"
                 },
                 "supersedes_context_id": {
-                  "description": "대체할 같은 계열의 이전 파생. 새 파생→이전 파생 간선이며 근거와 별개.",
+                  "description": "Prior derived node in the same lineage. Edge: new to prior; separate from evidence.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "turn_index": {
-                  "description": "대화 원천의 턴 순서. conversation_id와 쌍, 불변.",
+                  "description": "Immutable conversation source turn order; paired with conversation_id.",
                   "minimum": 0,
                   "type": "integer"
                 },
                 "valid_from": {
-                  "description": "파생 유효 시작 UTC. 생략 시 열린 시작.",
+                  "description": "Derived validity start in UTC; omit for open start.",
                   "format": "date-time",
                   "type": "string"
                 },
                 "valid_to": {
-                  "description": "파생 유효 종료 UTC. 생략 시 열린 종료.",
+                  "description": "Derived validity end in UTC; omit for open end.",
                   "format": "date-time",
                   "type": "string"
                 }
@@ -1970,33 +1970,33 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "노드 소프트 폐기. 재폐기 거부, 연쇄 폐기 없음.",
+            "description": "Soft-discard a node. Reject repeated discard; no cascade.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "활성 agent_id.",
+                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "context_id": {
-                  "description": "컨텍스트 UUIDv7.",
+                  "description": "Context UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
+                  "description": "Judgment input; omit to record validated arguments.",
                   "maxLength": 8000,
                   "minLength": 1,
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "재시도 키.",
+                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -2018,17 +2018,17 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "시작점과 확정 간선의 부분 그래프 조회. 정상 절단은 오류가 아니다.",
+            "description": "Get a subgraph via confirmed edges. Truncation is a normal partial result.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "context_id": {
-                  "description": "컨텍스트 UUIDv7.",
+                  "description": "Context UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "direction": {
-                  "description": "기본 both. out은 파생→근거·이전 파생, 요약→안내, 사건→구성원·관계 대상이며 in은 역방향.",
+                  "description": "Default both. out follows derived to evidence/prior, summary to navigation, event to members/relation targets; in reverses.",
                   "enum": [
                     "in",
                     "out",
@@ -2037,17 +2037,17 @@
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "hops": {
-                  "description": "탐색 홉 수. 기본 0은 시작점만, 상한은 플랜 기준.",
+                  "description": "Hop count; default 0 returns only the start. Maximum depends on plan.",
                   "minimum": 0,
                   "type": "integer"
                 },
                 "traversal_filter": {
-                  "description": "탐색 간선 필터. 생략·빈 배열은 전체, 중복 허용.",
+                  "description": "Edge filter; omit or empty for all. Duplicates allowed.",
                   "items": {
                     "enum": [
                       "derived_from",
@@ -2080,33 +2080,33 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "연산으로 폐기한 노드 복구. 웹 삭제는 웹에서 복구. 활성 노드 재복구 금지.",
+            "description": "Restore an operation-discarded node. Restore web deletions on the web. Reject already active nodes.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "활성 agent_id.",
+                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "context_id": {
-                  "description": "컨텍스트 UUIDv7.",
+                  "description": "Context UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
+                  "description": "Judgment input; omit to record validated arguments.",
                   "maxLength": 8000,
                   "minLength": 1,
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "재시도 키.",
+                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -2128,23 +2128,23 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "파생·사건의 가변 필드 갱신 또는 keep 판단 기록. 원천은 불변. 생략 필드는 유지.",
+            "description": "Update mutable derived/event fields or record a keep judgment. Sources are immutable. Omitted fields stay unchanged.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "활성 agent_id.",
+                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "body": {
-                  "description": "본문. U+0000 금지, 공백만 허용. 원문 저장·색인.",
+                  "description": "Body; no NUL, whitespace-only allowed. Stored and indexed verbatim.",
                   "maxLength": 8000,
                   "minLength": 1,
                   "type": "string"
                 },
                 "confidence_state": {
-                  "description": "opinion 파생의 새 신뢰 상태.",
+                  "description": "New confidence for an opinion derived node.",
                   "enum": [
                     "supported",
                     "uncertain",
@@ -2153,12 +2153,12 @@
                   "type": "string"
                 },
                 "context_id": {
-                  "description": "컨텍스트 UUIDv7.",
+                  "description": "Context UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "event_end": {
-                  "description": "새 사건 종료 UTC. null이면 진행 중.",
+                  "description": "New event end in UTC; null for ongoing.",
                   "format": "date-time",
                   "type": [
                     "string",
@@ -2166,28 +2166,28 @@
                   ]
                 },
                 "event_start": {
-                  "description": "새 사건 시작 UTC. 원천 구성원의 occurred_at을 범위에 포함해야 한다.",
+                  "description": "New event start in UTC; source members must occur within the interval.",
                   "format": "date-time",
                   "type": "string"
                 },
                 "expected_version": {
-                  "description": "조회한 현재 version. 충돌 시 재조회.",
+                  "description": "Current retrieved version; reread on conflict.",
                   "minimum": 1,
                   "type": "integer"
                 },
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
+                  "description": "Judgment input; omit to record validated arguments.",
                   "maxLength": 8000,
                   "minLength": 1,
                   "type": "string"
                 },
                 "management_action": {
-                  "description": "기본 update. keep은 가변 필드 없이 현재 판을 검사하고 유지 판단만 기록.",
+                  "description": "Default update. keep checks the current version and records judgment without mutable fields.",
                   "enum": [
                     "update",
                     "keep"
@@ -2195,7 +2195,7 @@
                   "type": "string"
                 },
                 "member_refs": {
-                  "description": "교체할 원천·파생 구성원(사건 제외).",
+                  "description": "Replacement source/derived members; no events.",
                   "items": {
                     "format": "uuid-v7",
                     "type": "string"
@@ -2205,13 +2205,13 @@
                   "type": "array"
                 },
                 "request_id": {
-                  "description": "재시도 키.",
+                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
                 },
                 "valid_from": {
-                  "description": "파생의 새 유효 시작 UTC. null로 해제.",
+                  "description": "New derived validity start in UTC; null to clear.",
                   "format": "date-time",
                   "type": [
                     "string",
@@ -2219,7 +2219,7 @@
                   ]
                 },
                 "valid_to": {
-                  "description": "파생의 새 유효 종료 UTC. null로 해제.",
+                  "description": "New derived validity end in UTC; null to clear.",
                   "format": "date-time",
                   "type": [
                     "string",
@@ -2244,33 +2244,33 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "같은 그래프의 활성 사건 간 관계 확정·재확정. 원천·파생 연결은 derived_from·member_refs 사용. 실패해도 앞선 노드 생성은 유지.",
+            "description": "Confirm/reconfirm relations between active events in one graph. Use derived_from/member_refs for source/derived links. Failure does not undo prior node creation.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "활성 agent_id.",
+                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "from_context_id": {
-                  "description": "같은 그래프의 활성 시작 사건. precedes·causes는 대상보다 늦게 시작할 수 없다.",
+                  "description": "Active event at the starting endpoint in the same graph. For precedes/causes, it must not start after the target event.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
+                  "description": "Judgment input; omit to record validated arguments.",
                   "maxLength": 8000,
                   "minLength": 1,
                   "type": "string"
                 },
                 "relation_type": {
-                  "description": "precedes: 앞→뒤, causes: 원인→결과, part_of: 부분→전체, relates_to: 무방향. 같은 그래프·유형·양 끝의 재확정은 현재 상태 반환.",
+                  "description": "precedes: earlier to later; causes: cause to effect; part_of: part to whole; relates_to: undirected. Reconfirming the same graph/type/endpoints returns current state.",
                   "enum": [
                     "precedes",
                     "causes",
@@ -2280,13 +2280,13 @@
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "재시도 키.",
+                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
                 },
                 "to_context_id": {
-                  "description": "같은 그래프의 활성 대상 사건. part_of는 시작 사건의 기간을 포함해야 한다.",
+                  "description": "Active target event in the same graph. For part_of, its interval must contain the source event.",
                   "format": "uuid-v7",
                   "type": "string"
                 }
@@ -2309,33 +2309,33 @@
               "openWorldHint": false,
               "readOnlyHint": false
             },
-            "description": "사건 관계 폐기. 재폐기 금지, 복구는 relation_confirm 사용.",
+            "description": "Discard an event relation. Reject repeated discard; restore with relation_confirm.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "활성 agent_id.",
+                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "judgment_input": {
-                  "description": "판단 입력. 생략 시 검증된 인자를 기록.",
+                  "description": "Judgment input; omit to record validated arguments.",
                   "maxLength": 8000,
                   "minLength": 1,
                   "type": "string"
                 },
                 "relation_id": {
-                  "description": "폐기할 관계 UUIDv7. 재폐기 금지.",
+                  "description": "Relation UUIDv7 to discard; no repeated discard.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "재시도 키.",
+                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -2357,32 +2357,32 @@
               "openWorldHint": false,
               "readOnlyHint": true
             },
-            "description": "사건 관계를 상태·유형별로 relation_id 내림차순 조회.",
+            "description": "List event relations by state/type, ordered by descending relation_id.",
             "inputSchema": {
               "additionalProperties": false,
               "properties": {
                 "context_id": {
-                  "description": "컨텍스트 UUIDv7.",
+                  "description": "Context UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "cursor": {
-                  "description": "앞 응답 커서를 그대로 사용. 생략·빈 문자열은 첫 페이지.",
+                  "description": "Reuse the returned cursor unchanged. Omit or empty for the first page.",
                   "format": "base64url",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "그래프 UUIDv7.",
+                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "page_size": {
-                  "description": "페이지 크기. 기본값·상한은 플랜 기준.",
+                  "description": "Page size; default and maximum depend on plan.",
                   "minimum": 1,
                   "type": "integer"
                 },
                 "state_filter": {
-                  "description": "상태 필터. 빈 배열·중복 허용.",
+                  "description": "State filter; empty and duplicate values allowed.",
                   "items": {
                     "enum": [
                       "proposed",
@@ -2395,7 +2395,7 @@
                   "type": "array"
                 },
                 "type_filter": {
-                  "description": "유형 필터. 빈 배열·중복 허용.",
+                  "description": "Type filter; empty and duplicate values allowed.",
                   "items": {
                     "enum": [
                       "precedes",

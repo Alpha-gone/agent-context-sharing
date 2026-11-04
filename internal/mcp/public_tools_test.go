@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"net/http"
@@ -57,8 +58,9 @@ func TestPublicToolProjection(t *testing.T) {
 			}
 		}
 		removePatterns(want["inputSchema"])
+		delete(want["inputSchema"].(map[string]any), "allOf")
 		if !reflect.DeepEqual(want, got) {
-			t.Fatalf("%s: changed more than pattern", original.Name)
+			t.Fatalf("%s: changed more than pattern and root allOf", original.Name)
 		}
 		schema := published.InputSchema.(map[string]any)
 		if required, ok := schema["required"].([]any); ok && len(required) > 0 {
@@ -114,6 +116,25 @@ func TestPublicToolMetadataBudget(t *testing.T) {
 	t.Logf("tools=%d bytes=%d instructions=%d", len(tools), len(wire), len(serverInstructions))
 }
 
+func TestPublicRootSchemaCompatibility(t *testing.T) {
+	for _, original := range toolDefinitions() {
+		published, err := publicTool(original)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schema := published.InputSchema.(map[string]any)
+		for _, keyword := range []string{"allOf", "anyOf", "oneOf"} {
+			if _, exists := schema[keyword]; exists {
+				t.Errorf("%s: unsupported root keyword %s", original.Name, keyword)
+			}
+		}
+		strict := original.InputSchema.(*jsonschema.Schema)
+		if (original.Name == "node_create" || original.Name == "node_update") && len(strict.AllOf) == 0 {
+			t.Errorf("%s lost strict conditional validation", original.Name)
+		}
+	}
+}
+
 func TestPublicSchemaKeepsStrictHTTPValidation(t *testing.T) {
 	catalog := mustCatalog(t)
 	server := sdk.NewServer(&sdk.Implementation{Name: "public-schema", Version: "1"}, &sdk.ServerOptions{SupportedProtocolVersions: []string{protocolRevision}})
@@ -135,12 +156,15 @@ func TestPublicSchemaKeepsStrictHTTPValidation(t *testing.T) {
 	for _, sample := range []struct {
 		tool, field string
 		value       any
+		errorField  string
 	}{
-		{"graph_get", "graph_id", "not-a-uuid"},
-		{"graph_create", "name", "\u2003\t"},
-		{"node_create", "body", "private-input\u0000"},
-		{"agent_register", "registration_key", "private-input invalid key"},
-		{"node_create", "occurred_at", "2026-10-18T01:00:00+01:00"},
+		{"graph_get", "graph_id", "not-a-uuid", ""},
+		{"graph_create", "name", "\u2003\t", ""},
+		{"node_create", "body", "private-input\u0000", ""},
+		{"agent_register", "registration_key", "private-input invalid key", ""},
+		{"node_create", "occurred_at", "2026-10-18T01:00:00+01:00", ""},
+		{"node_create", "member_refs", []string{catalogID}, "layer"},
+		{"node_update", "management_action", "keep", "management_action"},
 	} {
 		args := catalogSample(sample.tool)
 		args[sample.field] = sample.value
@@ -151,7 +175,7 @@ func TestPublicSchemaKeepsStrictHTTPValidation(t *testing.T) {
 		response := exchangeSDKProbe(t, probe, http.MethodPost, body, map[string]string{"Mcp-Name": sample.tool})
 		result := decodeSDKProbe(t, response)["result"].(map[string]any)
 		failure := result["structuredContent"].(map[string]any)
-		if result["isError"] != true || failure["code"] != "invalid_argument" || failure["field"] != sample.field || calls.Load() != before || strings.Contains(string(response.Body), "private-input") {
+		if result["isError"] != true || failure["code"] != "invalid_argument" || failure["field"] != cmp.Or(sample.errorField, sample.field) || calls.Load() != before || strings.Contains(string(response.Body), "private-input") {
 			t.Fatalf("%s.%s validation changed: %s", sample.tool, sample.field, response.Body)
 		}
 	}

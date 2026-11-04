@@ -349,7 +349,7 @@
         "capabilities": {
           "tools": {}
         },
-        "instructions": "graph_list로 그래프를 선택하세요. 여섯 노드·관계 쓰기 전 agent_register에서 agent_id를 받으세요. 등록 키는 계정·OAuth client별 재사용하며 대화 신원·권한을 부여하지 않습니다.\ngraph_get.entry_context_id는 대표 요약입니다. navigation_refs는 안내, derived_from은 근거입니다. node_get으로 탐색하고 conversation_id·turn_index·previous_event_id로 대화 순서를 명시하세요.\ngraph_update·node_update는 현재 expected_version이 필요합니다. 충돌하면 재조회하세요. 원천 정정은 새 원천, 파생 근거·종류 변경은 새 파생과 supersedes_context_id를 사용하세요.\n여덟 업무 쓰기의 request_id는 선택입니다. 같은 키·인자는 최초 결과를 24시간 재생하며 새 키는 새 쓰기입니다. 키 없는 불확정 결과·키 유실은 재조회하세요. 내부 장애에 반복 로그인하지 마세요.\n서버는 매 요청 인증·등급·agent 결합을 검사합니다. annotations·호스트 승인이 권한을 대신하지 않습니다. 삭제·권한·팀 관리는 웹 전용입니다. node_restore는 연산 폐기만 복구하며 웹 삭제는 웹에서 복구하세요.\n검색은 context_flow_get입니다. 검색 채널 일부 실패·예산/홉 절단은 정상 부분 결과일 수 있습니다.",
+        "instructions": "공유 컨텍스트 그래프 검색·기록 도구입니다. graph_list로 그래프를 선택하세요. 여섯 노드·관계 쓰기 전 agent_register에서 agent_id를 받으세요. 등록 키는 계정·OAuth client별 재사용하며 대화 신원·권한을 부여하지 않습니다.\ngraph_get.entry_context_id는 대표 요약입니다. navigation_refs는 안내, derived_from은 근거입니다. node_get으로 탐색하고 conversation_id·turn_index·previous_event_id로 대화 순서를 명시하세요.\ngraph_update·node_update는 현재 expected_version이 필요합니다. 충돌하면 재조회하세요. 원천 정정은 새 원천, 파생 근거·종류 변경은 새 파생과 supersedes_context_id를 사용하세요.\n여덟 업무 쓰기의 request_id는 선택입니다. 같은 키·인자는 최초 결과를 24시간 재생하며 새 키는 새 쓰기입니다. 키 없는 불확정 결과·키 유실은 재조회하세요. 내부 장애에 반복 로그인하지 마세요.\n서버는 매 요청 인증·등급·agent 결합을 검사합니다. annotations·호스트 승인이 권한을 대신하지 않습니다. 삭제·권한·팀 관리는 웹 전용입니다. node_restore는 연산 폐기만 복구하며 웹 삭제는 웹에서 복구하세요.\n검색은 context_flow_get입니다. 검색 채널 일부 실패·예산/홉 절단은 정상 부분 결과일 수 있습니다.",
         "resultType": "complete",
         "supportedVersions": [
           "2026-07-28"
@@ -1762,411 +1762,6 @@
             "description": "원천·파생·사건 생성. creation_status=existing_deleted는 활성 근거로 사용 불가. 사건 연결은 previous_event_id 또는 relation_confirm 사용.",
             "inputSchema": {
               "additionalProperties": false,
-              "allOf": [
-                {
-                  "if": {
-                    "properties": {
-                      "layer": {
-                        "const": "source"
-                      }
-                    },
-                    "required": [
-                      "layer"
-                    ]
-                  },
-                  "then": {
-                    "allOf": [
-                      {
-                        "not": {
-                          "anyOf": [
-                            {
-                              "required": [
-                                "derived_from"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "derivation_kind"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "summary_scope"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "evidence_state"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "confidence_state"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "valid_from"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "valid_to"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "supersedes_context_id"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "navigation_refs"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "member_refs"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "event_start"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "event_end"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "previous_event_id"
-                              ]
-                            }
-                          ]
-                        }
-                      }
-                    ],
-                    "required": [
-                      "source_ref",
-                      "occurred_at",
-                      "origin_kind"
-                    ]
-                  }
-                },
-                {
-                  "if": {
-                    "properties": {
-                      "layer": {
-                        "const": "derived"
-                      }
-                    },
-                    "required": [
-                      "layer"
-                    ]
-                  },
-                  "then": {
-                    "allOf": [
-                      {
-                        "not": {
-                          "anyOf": [
-                            {
-                              "required": [
-                                "source_ref"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "occurred_at"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "origin_kind"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "turn_index"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "member_refs"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "event_start"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "event_end"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "previous_event_id"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "conversation_id"
-                              ]
-                            }
-                          ]
-                        }
-                      }
-                    ],
-                    "required": [
-                      "derived_from",
-                      "derivation_kind",
-                      "evidence_state"
-                    ]
-                  }
-                },
-                {
-                  "if": {
-                    "properties": {
-                      "layer": {
-                        "const": "event"
-                      }
-                    },
-                    "required": [
-                      "layer"
-                    ]
-                  },
-                  "then": {
-                    "allOf": [
-                      {
-                        "not": {
-                          "anyOf": [
-                            {
-                              "required": [
-                                "source_ref"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "occurred_at"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "origin_kind"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "turn_index"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "derived_from"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "derivation_kind"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "summary_scope"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "evidence_state"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "confidence_state"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "valid_from"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "valid_to"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "supersedes_context_id"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "navigation_refs"
-                              ]
-                            }
-                          ]
-                        }
-                      }
-                    ],
-                    "required": [
-                      "member_refs",
-                      "event_start"
-                    ]
-                  }
-                },
-                {
-                  "if": {
-                    "properties": {
-                      "derivation_kind": {
-                        "const": "summary"
-                      }
-                    },
-                    "required": [
-                      "derivation_kind"
-                    ]
-                  },
-                  "then": {
-                    "required": [
-                      "summary_scope"
-                    ]
-                  }
-                },
-                {
-                  "if": {
-                    "properties": {
-                      "evidence_state": {
-                        "const": "opinion"
-                      }
-                    },
-                    "required": [
-                      "evidence_state"
-                    ]
-                  },
-                  "then": {
-                    "required": [
-                      "confidence_state"
-                    ]
-                  }
-                },
-                {
-                  "if": {
-                    "required": [
-                      "turn_index"
-                    ]
-                  },
-                  "then": {
-                    "required": [
-                      "conversation_id"
-                    ]
-                  }
-                },
-                {
-                  "if": {
-                    "allOf": [
-                      {
-                        "properties": {
-                          "layer": {
-                            "const": "source"
-                          }
-                        },
-                        "required": [
-                          "layer"
-                        ]
-                      },
-                      {
-                        "required": [
-                          "conversation_id"
-                        ]
-                      }
-                    ]
-                  },
-                  "then": {
-                    "properties": {
-                      "source_ref": {
-                        "properties": {
-                          "channel": {
-                            "const": "conversation"
-                          }
-                        }
-                      }
-                    },
-                    "required": [
-                      "turn_index"
-                    ]
-                  }
-                },
-                {
-                  "if": {
-                    "required": [
-                      "previous_event_id"
-                    ]
-                  },
-                  "then": {
-                    "required": [
-                      "conversation_id"
-                    ]
-                  }
-                },
-                {
-                  "if": {
-                    "not": {
-                      "properties": {
-                        "derivation_kind": {
-                          "const": "summary"
-                        }
-                      },
-                      "required": [
-                        "derivation_kind"
-                      ]
-                    }
-                  },
-                  "then": {
-                    "not": {
-                      "anyOf": [
-                        {
-                          "required": [
-                            "summary_scope"
-                          ]
-                        },
-                        {
-                          "required": [
-                            "navigation_refs"
-                          ]
-                        }
-                      ]
-                    }
-                  }
-                },
-                {
-                  "if": {
-                    "not": {
-                      "properties": {
-                        "evidence_state": {
-                          "const": "opinion"
-                        }
-                      },
-                      "required": [
-                        "evidence_state"
-                      ]
-                    }
-                  },
-                  "then": {
-                    "not": {
-                      "anyOf": [
-                        {
-                          "required": [
-                            "confidence_state"
-                          ]
-                        }
-                      ]
-                    }
-                  }
-                }
-              ],
               "properties": {
                 "agent_id": {
                   "description": "agent_register의 활성 agent_id.",
@@ -2248,7 +1843,7 @@
                   "type": "string"
                 },
                 "layer": {
-                  "description": "계층. 계층별 필수·금지 필드는 조건식 참조.",
+                  "description": "계층별 필수: source는 source_ref·occurred_at·origin_kind, derived는 derived_from·derivation_kind·evidence_state, event는 member_refs·event_start. 다른 계층 필드는 금지.",
                   "enum": [
                     "source",
                     "derived",
@@ -2294,7 +1889,7 @@
                   "type": "string"
                 },
                 "previous_event_id": {
-                  "description": "같은 그래프·conversation_id의 활성 앞 사건. confirmed precedes를 원자 생성하며 속성 저장은 하지 않는다.",
+                  "description": "event 전용 활성 앞 사건. 같은 그래프·conversation_id 필수. confirmed precedes를 원자 생성하며 속성 저장은 하지 않는다.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2352,12 +1947,12 @@
                   "type": "integer"
                 },
                 "valid_from": {
-                  "description": "유효 시작 UTC. 생략 시 열린 시작.",
+                  "description": "파생 유효 시작 UTC. 생략 시 열린 시작.",
                   "format": "date-time",
                   "type": "string"
                 },
                 "valid_to": {
-                  "description": "유효 종료 UTC. 생략 시 열린 종료.",
+                  "description": "파생 유효 종료 UTC. 생략 시 열린 종료.",
                   "format": "date-time",
                   "type": "string"
                 }
@@ -2541,65 +2136,6 @@
             "description": "파생·사건의 가변 필드 갱신 또는 keep 판단 기록. 원천은 불변. 생략 필드는 유지.",
             "inputSchema": {
               "additionalProperties": false,
-              "allOf": [
-                {
-                  "if": {
-                    "properties": {
-                      "management_action": {
-                        "const": "keep"
-                      }
-                    },
-                    "required": [
-                      "management_action"
-                    ]
-                  },
-                  "then": {
-                    "allOf": [
-                      {
-                        "not": {
-                          "anyOf": [
-                            {
-                              "required": [
-                                "body"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "confidence_state"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "valid_from"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "valid_to"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "member_refs"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "event_start"
-                              ]
-                            },
-                            {
-                              "required": [
-                                "event_end"
-                              ]
-                            }
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                }
-              ],
               "properties": {
                 "agent_id": {
                   "description": "agent_register의 활성 agent_id.",
@@ -2681,7 +2217,7 @@
                   "type": "string"
                 },
                 "valid_from": {
-                  "description": "새 유효 시작 UTC. null로 해제.",
+                  "description": "파생의 새 유효 시작 UTC. null로 해제.",
                   "format": "date-time",
                   "type": [
                     "string",
@@ -2689,7 +2225,7 @@
                   ]
                 },
                 "valid_to": {
-                  "description": "새 유효 종료 UTC. null로 해제.",
+                  "description": "파생의 새 유효 종료 UTC. null로 해제.",
                   "format": "date-time",
                   "type": [
                     "string",

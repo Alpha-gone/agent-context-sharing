@@ -5,7 +5,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const serverInstructions = `graph_list로 그래프를 선택하세요. 여섯 노드·관계 쓰기 전 agent_register에서 agent_id를 받으세요. 등록 키는 계정·OAuth client별 재사용하며 대화 신원·권한을 부여하지 않습니다.
+const serverInstructions = `공유 컨텍스트 그래프 검색·기록 도구입니다. graph_list로 그래프를 선택하세요. 여섯 노드·관계 쓰기 전 agent_register에서 agent_id를 받으세요. 등록 키는 계정·OAuth client별 재사용하며 대화 신원·권한을 부여하지 않습니다.
 graph_get.entry_context_id는 대표 요약입니다. navigation_refs는 안내, derived_from은 근거입니다. node_get으로 탐색하고 conversation_id·turn_index·previous_event_id로 대화 순서를 명시하세요.
 graph_update·node_update는 현재 expected_version이 필요합니다. 충돌하면 재조회하세요. 원천 정정은 새 원천, 파생 근거·종류 변경은 새 파생과 supersedes_context_id를 사용하세요.
 여덟 업무 쓰기의 request_id는 선택입니다. 같은 키·인자는 최초 결과를 24시간 재생하며 새 키는 새 쓰기입니다. 키 없는 불확정 결과·키 유실은 재조회하세요. 내부 장애에 반복 로그인하지 마세요.
@@ -51,7 +51,7 @@ func toolDefinitions() []*sdk.Tool {
 	updateGraph["entry_context_id"].Types = []string{"string", "null"}
 
 	createNode := graph()
-	createNode["layer"] = enumSchema("계층. 계층별 필수·금지 필드는 조건식 참조.", "source", "derived", "event")
+	createNode["layer"] = enumSchema("계층별 필수: source는 source_ref·occurred_at·origin_kind, derived는 derived_from·derivation_kind·evidence_state, event는 member_refs·event_start. 다른 계층 필드는 금지.", "source", "derived", "event")
 	createNode["body"] = bodySchema()
 	actorFields(createNode)
 	createNode["source_ref"] = objectSchema(map[string]*jsonschema.Schema{
@@ -63,7 +63,7 @@ func toolDefinitions() []*sdk.Tool {
 	createNode["origin_kind"] = enumSchema("원천 생성 주체. 불변.", "user_utterance", "agent_output", "external_content")
 	createNode["conversation_id"] = nonblankSchema("source·event의 대화 식별자. 불변·공백만 금지. source는 conversation 출처·turn_index 필수.", 128)
 	createNode["turn_index"] = integerSchema("대화 원천의 턴 순서. conversation_id와 쌍, 불변.", 0)
-	createNode["previous_event_id"] = idSchema("같은 그래프·conversation_id의 활성 앞 사건. confirmed precedes를 원자 생성하며 속성 저장은 하지 않는다.")
+	createNode["previous_event_id"] = idSchema("event 전용 활성 앞 사건. 같은 그래프·conversation_id 필수. confirmed precedes를 원자 생성하며 속성 저장은 하지 않는다.")
 	createNode["navigation_refs"] = refsSchema("summary 안내 참조(근거 아님). 같은 그래프의 사건·요약·원천. 자기 참조 금지·불변.", 100)
 	createNode["navigation_refs"].MinItems = new(0)
 	createNode["navigation_refs"].UniqueItems = true
@@ -72,8 +72,8 @@ func toolDefinitions() []*sdk.Tool {
 	createNode["summary_scope"] = enumSchema("summary 전용 필수 범위.", "local", "global")
 	createNode["evidence_state"] = enumSchema("파생 근거 성격. 불변.", "observation", "experience", "opinion")
 	createNode["confidence_state"] = enumSchema("opinion 전용 필수 신뢰 상태.", "supported", "uncertain", "disputed")
-	createNode["valid_from"] = utcSchema("유효 시작 UTC. 생략 시 열린 시작.", false)
-	createNode["valid_to"] = utcSchema("유효 종료 UTC. 생략 시 열린 종료.", false)
+	createNode["valid_from"] = utcSchema("파생 유효 시작 UTC. 생략 시 열린 시작.", false)
+	createNode["valid_to"] = utcSchema("파생 유효 종료 UTC. 생략 시 열린 종료.", false)
 	createNode["supersedes_context_id"] = idSchema("대체할 같은 계열의 이전 파생. 새 파생→이전 파생 간선이며 근거와 별개.")
 	createNode["member_refs"] = refsSchema("같은 그래프의 원천·파생 구성원(사건 제외).", 1000)
 	createNode["event_start"] = utcSchema("사건 시작 UTC. 원천 구성원의 occurred_at을 시작~종료 범위에 포함해야 한다.", false)
@@ -106,8 +106,8 @@ func toolDefinitions() []*sdk.Tool {
 	updateNode["management_action"] = enumSchema("기본 update. keep은 가변 필드 없이 현재 판을 검사하고 유지 판단만 기록.", "update", "keep")
 	updateNode["body"] = bodySchema()
 	updateNode["confidence_state"] = enumSchema("opinion 파생의 새 신뢰 상태.", "supported", "uncertain", "disputed")
-	updateNode["valid_from"] = utcSchema("새 유효 시작 UTC. null로 해제.", true)
-	updateNode["valid_to"] = utcSchema("새 유효 종료 UTC. null로 해제.", true)
+	updateNode["valid_from"] = utcSchema("파생의 새 유효 시작 UTC. null로 해제.", true)
+	updateNode["valid_to"] = utcSchema("파생의 새 유효 종료 UTC. null로 해제.", true)
 	updateNode["member_refs"] = refsSchema("교체할 원천·파생 구성원(사건 제외).", 1000)
 	updateNode["event_start"] = utcSchema("새 사건 시작 UTC. 원천 구성원의 occurred_at을 범위에 포함해야 한다.", false)
 	updateNode["event_end"] = utcSchema("새 사건 종료 UTC. null이면 진행 중.", true)

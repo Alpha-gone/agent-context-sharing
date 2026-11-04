@@ -171,7 +171,7 @@ func (definition toolDefinition) validateValues(arguments []byte) (map[string]an
 		values[name] = value
 	}
 	if definition.resolved.Validate(values) != nil {
-		// 조건부 필수 필드도 공개 스키마에서 찾아 안내한다.
+		// 조건부 필수 필드도 내부 엄격 스키마에서 찾아 안내한다.
 		for _, condition := range schema.AllOf {
 			if condition.If == nil || condition.Then == nil {
 				continue

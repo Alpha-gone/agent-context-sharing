@@ -23,6 +23,8 @@ func publicTool(original *sdk.Tool) (*sdk.Tool, error) {
 		return nil, fmt.Errorf("공개 도구 입력은 객체 스키마여야 한다")
 	}
 	omitPublicPatterns(schema)
+	// Claude API는 루트 allOf를 받지 않는다. 조건은 설명과 내부 검증에 유지한다.
+	delete(schema, "allOf")
 	return &published, nil
 }
 

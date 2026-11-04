@@ -691,7 +691,7 @@ func (s *Store) ListRestoreEligibleGraphs(ctx context.Context, accountID model.I
 		return nil, fmt.Errorf("계정 식별자가 UUIDv7이 아니다")
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT graph_id, name, description, created_by, created_at, last_activity_at, grace_started_at, stored_chars, version, deleted_at
+		SELECT graph_id, name, description, created_by, created_at, last_activity_at, grace_started_at, stored_chars, version, deleted_at, entry_context_id
 		FROM public.context_graph AS graph
 		WHERE graph.deleted_at IS NOT NULL AND graph.grace_started_at IS NOT NULL
 		  AND `+formerOwnerSQL+`
@@ -724,7 +724,7 @@ func (s *Store) ListOwnedDeletedGraphs(ctx context.Context, accountID model.ID) 
 		return nil, fmt.Errorf("계정 식별자가 UUIDv7이 아니다")
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT graph_id, name, description, created_by, created_at, last_activity_at, grace_started_at, stored_chars, version, deleted_at
+		SELECT graph_id, name, description, created_by, created_at, last_activity_at, grace_started_at, stored_chars, version, deleted_at, entry_context_id
 		FROM public.context_graph AS graph
 		WHERE graph.deleted_at IS NOT NULL AND graph.grace_started_at IS NULL
 		  AND EXISTS (
@@ -951,7 +951,16 @@ func (s *Store) GraphVisualization(ctx context.Context, graphID model.ID, hops, 
 	if fetch > 0 && fetch < math.MaxInt {
 		fetch++
 	}
-	starts, err := s.graphContexts(ctx, graphID, activeGlobalSummaries, fetch)
+	graph, err := s.Graph(ctx, graphID)
+	if err != nil {
+		return HopResult{}, err
+	}
+	var starts []model.Context
+	if graph.EntryContextID != nil {
+		starts, err = s.contextsByIDs(ctx, s.reader(ctx), graphID, []model.ID{*graph.EntryContextID})
+	} else {
+		starts, err = s.graphContexts(ctx, graphID, activeGlobalSummaries, fetch)
+	}
 	if err != nil {
 		return HopResult{}, err
 	}

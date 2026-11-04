@@ -4,7 +4,7 @@
 
 ## 목표와 구현 범위
 
-확정 요구사항 184건을 신규 개발 작업과 인수 작업에 연결하고 누락·미정·완료 근거를 관리한다. 이 문서의 작업 표는 설계 추적표를 대체하지 않는다. TRACE-01의 기준·범위, TRACE-02의 요구사항·작업·선행 관계, TRACE-03의 미정·조건부 채택, TRACE-04의 실행 증거 연결과 TRACE-05의 최종 문서·DOX·안내 점검을 완료했다. 전체 124개 계획 작업은 완료했으며 코드/서버 계약·실제 호스트·파일·정량 효과·운영의 판정은 분리한다.
+확정 요구사항 188건을 신규 개발 작업과 인수 작업에 연결하고 누락·미정·완료 근거를 관리한다. 이 문서의 작업 표는 설계 추적표를 대체하지 않는다. TRACE-01의 기준·범위, TRACE-02의 요구사항·작업·선행 관계, TRACE-03의 미정·조건부 채택, TRACE-04의 실행 증거 연결과 TRACE-05의 최종 문서·DOX·안내 점검을 완료했다. 전체 124개 계획 작업은 완료했으며 코드/서버 계약·실제 호스트·파일·정량 효과·운영의 판정은 분리한다.
 
 - 설계 입력: [요구사항 추적표](../sdd/traceability.md#요구사항-추적표), [설계 미정](../sdd/traceability.md#설계-미정-사항), [해소 선택](../sdd/traceability.md#해소한-설계-선택), [SRS 미정](../SRS.md#미정-사항).
 - 예정 산출물: 요구사항→SDD→개발 작업→인수 증거의 대응, 미정 해소 조건과 상태·DOX 점검.
@@ -30,7 +30,7 @@
 
 - 확정일: 2026-10-14. 사용자가 현재 내용을 신규 구현 기준으로 확정하도록 지시했다.
 - 기준 문서 판: 커밋 `b82bf51c97da6d2eb82a4f1df45caed7f80a74a4`의 [SRS](../SRS.md), [SDD 진입점](../SDD.md)과 연결된 14개 분야별 상세 문서, [용어 정리집](../../../DICTIONARY.md). 확정 시 작업 트리의 해당 문서는 이 커밋과 동일함을 확인했다.
-- 기준 집합: `FR-AGENT_CONTEXT-001`~`175` 중 폐기된 `156`~`159`를 제외한 171건과 `NFR-AGENT_CONTEXT-001`~`013`의 13건, 총 184건. SRS의 요구사항 집합·설계 추적표·개발 대응표를 대조해 누락·추가가 없고 두 추적표에 중복 행이 없음을 확인했다.
+- 기준 집합: `FR-AGENT_CONTEXT-001`~`175` 중 폐기된 `156`~`159`를 제외한 171건과 `NFR-AGENT_CONTEXT-001`~`013`의 13건, 총 188건. SRS의 요구사항 집합·설계 추적표·개발 대응표를 대조해 누락·추가가 없고 두 추적표에 중복 행이 없음을 확인했다.
 - 신규 실행 범위: 기준 문서의 확정 요구사항과 채택된 설계 전체. 표준 MCP·OAuth·회전형 갱신·공통 등록·진단 파일·새 평가를 포함한다. 기존 구현 설명·소스·테스트·완료 표시·과거 측정은 작업 생략이나 신규 완료 근거로 사용하지 않는다. 기존 코드·데이터의 삭제나 운영 전환은 이 확정에 포함하지 않는다.
 - 미정·실증 경계: 현재 SRS·SDD의 상태를 유지한다. TBD-048·049·052·060·061과 RLS·플랜 이름/값은 임의로 확정하지 않으며, 해소된 TBD-063의 계약과 TBD-064의 실제 SDK·Codex CLI 검증 대기를 구분한다.
 - 완료 판정: 사용자 확정 지시와 위 문서·집합 대조를 TRACE-01의 새 완료 근거로 사용한다. 코드 구현·실행 인수 완료를 뜻하지 않으며, 다음 구현 항목은 [ARCH-01](architecture.md#arch-01)이다.
@@ -49,7 +49,7 @@
 
 #### 새 대조와 완료 근거
 
-2026-10-27 [TRACE-02 검토](../reviews/2026-10-27-trace-02.md)에서 현재 SRS·SDD 추적표·개발 대응표의 FR 171건/NFR 13건, 총 184건이 각각 정확히 한 행이며 집합·주 책임 링크가 일치하는지 대조했다. 구현 링크 286개와 인수 링크 265개는 모두 실제 작업의 파일·앵커를 가리킨다. 주 책임 설계나 요구사항을 변경하지 않았다.
+2026-10-27 [TRACE-02 검토](../reviews/2026-10-27-trace-02.md)에서 현재 SRS·SDD 추적표·개발 대응표의 FR 175건/NFR 13건, 총 188건이 각각 정확히 한 행이며 집합·주 책임 링크가 일치하는지 대조했다. 구현 링크 286개와 인수 링크 265개는 모두 실제 작업의 파일·앵커를 가리킨다. 주 책임 설계나 요구사항을 변경하지 않았다.
 
 124개 작업과 선행 링크 341개에 중복 ID·잘못된 대상·순환이 없고 모든 작업이 TRACE-01로 이어진다. 완료 작업에 미완료 선행이 없으며 단계 범위를 풀어 대조한 124개 작업에도 누락·중복이 없다. 직접 대응된 101개 작업 외 공통 기반·추적 작업 23개는 선행 관계와 단계에서 확인했다. 18개 문서의 로컬 링크 1,795개와 Markdown 구조 검사를 통과했다.
 
@@ -295,6 +295,10 @@ TRACE-05 완료로 전체 124개 완료·0개 진행·0개 미착수다. 선정 
 | `FR-AGENT_CONTEXT-173` | [종류별 진단 로그](../sdd/observability.md#종류별-진단-로그) | [OBS-03](observability.md#obs-03), [OBS-02](observability.md#obs-02), [OBS-08](observability.md#obs-08) | [OBS-08](observability.md#obs-08), [TEST-05](testing.md#test-05) |
 | `FR-AGENT_CONTEXT-174` | [이벤트 외피와 흐름 추적](../sdd/observability.md#이벤트-외피와-흐름-추적) | [OBS-05](observability.md#obs-05), [IDX-01](indexing.md#idx-01) | [OBS-08](observability.md#obs-08), [TEST-05](testing.md#test-05) |
 | `FR-AGENT_CONTEXT-175` | [회전·보존과 총상한](../sdd/observability.md#회전보존과-총상한) | [OBS-04](observability.md#obs-04), [OBS-07](observability.md#obs-07), [OBS-08](observability.md#obs-08) | [OBS-08](observability.md#obs-08), [TEST-05](testing.md#test-05) |
+| `FR-AGENT_CONTEXT-176` | [대화·안내 시험](../sdd/testing.md#대화-흐름과-안내-진입점-시험) | [LIFE-10](context-lifecycle.md#life-10) | [LIFE-10](context-lifecycle.md#life-10) |
+| `FR-AGENT_CONTEXT-177` | [대화·안내 시험](../sdd/testing.md#대화-흐름과-안내-진입점-시험) | [LIFE-10](context-lifecycle.md#life-10) | [LIFE-10](context-lifecycle.md#life-10) |
+| `FR-AGENT_CONTEXT-178` | [대화·안내 시험](../sdd/testing.md#대화-흐름과-안내-진입점-시험) | [LIFE-10](context-lifecycle.md#life-10) | [LIFE-10](context-lifecycle.md#life-10) |
+| `FR-AGENT_CONTEXT-179` | [대화·안내 시험](../sdd/testing.md#대화-흐름과-안내-진입점-시험) | [LIFE-10](context-lifecycle.md#life-10) | [LIFE-10](context-lifecycle.md#life-10) |
 | `NFR-AGENT_CONTEXT-001` | [버전 요구](../sdd/architecture.md#버전-요구) | [ARCH-01](architecture.md#arch-01), [DATA-10](data.md#data-10) | [DATA-10](data.md#data-10), [TEST-09](testing.md#test-09) |
 | `NFR-AGENT_CONTEXT-002` | [비기능 요구사항의 성립 근거](../sdd/architecture.md#비기능-요구사항의-성립-근거) | [LIFE-03](context-lifecycle.md#life-03), [LIFE-08](context-lifecycle.md#life-08) | [TEST-03](testing.md#test-03), [TEST-09](testing.md#test-09) |
 | `NFR-AGENT_CONTEXT-003` | [설명 가능성](../sdd/evaluation.md#설명-가능성) | [SEARCH-07](search.md#search-07), [EVAL-04](evaluation.md#eval-04) | [EVAL-13](evaluation.md#eval-13), [TEST-09](testing.md#test-09) |

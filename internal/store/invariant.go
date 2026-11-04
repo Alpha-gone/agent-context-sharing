@@ -64,6 +64,7 @@ type EmbeddingExpectation struct {
 
 type auditContext struct {
 	id, graphID, layer string
+	kind               string
 	vertexID           int64
 	deleted            bool
 	start              time.Time
@@ -104,7 +105,7 @@ func (snapshot auditSnapshot) inScope(id string) bool {
 	return ok
 }
 
-var referenceLabels = map[string]string{"DERIVED_FROM": "derived_from", "SUPERSEDES": "supersedes", "HAS_MEMBER": "has_member"}
+var referenceLabels = map[string]string{"DERIVED_FROM": "derived_from", "SUPERSEDES": "supersedes", "HAS_MEMBER": "has_member", "NAVIGATES_TO": "navigation_refs"}
 
 var relationLabels = map[string]model.RelationType{"PRECEDES": model.RelationTypePrecedes, "CAUSES": model.RelationTypeCauses, "PART_OF": model.RelationTypePartOf, "RELATES_TO": model.RelationTypeRelatesTo}
 
@@ -170,6 +171,7 @@ func checkEndpointLayer(snapshot auditSnapshot) ([]InvariantViolation, error) {
 		"DERIVED_FROM": {{"derived"}, {"source", "derived"}},
 		"SUPERSEDES":   {{"derived"}, {"derived"}},
 		"HAS_MEMBER":   {{"event"}, {"source", "derived"}},
+		"NAVIGATES_TO": {{"derived"}, {"source", "derived", "event"}},
 	}
 	for label := range relationLabels {
 		allowed[label] = [2][]string{{"event"}, {"event"}}
@@ -179,7 +181,7 @@ func checkEndpointLayer(snapshot auditSnapshot) ([]InvariantViolation, error) {
 		layers, known := allowed[edge.label]
 		from, fromOK := snapshot.contexts[edge.from]
 		to, toOK := snapshot.contexts[edge.to]
-		if !known || !fromOK || !toOK || !slices.Contains(layers[0], from.layer) || !slices.Contains(layers[1], to.layer) {
+		if !known || !fromOK || !toOK || !slices.Contains(layers[0], from.layer) || !slices.Contains(layers[1], to.layer) || (edge.label == "NAVIGATES_TO" && (from.kind != "summary" || edge.from == edge.to)) {
 			violations = append(violations, snapshot.edgeViolation(RuleEndpointLayer, edge))
 		}
 	}
@@ -211,7 +213,7 @@ func checkReferenceCardinality(snapshot auditSnapshot) ([]InvariantViolation, er
 		broken := false
 		switch value.layer {
 		case "derived":
-			broken = counts["DERIVED_FROM"] < 1 || counts["DERIVED_FROM"] > 100 || counts["SUPERSEDES"] > 1
+			broken = counts["DERIVED_FROM"] < 1 || counts["DERIVED_FROM"] > 100 || counts["SUPERSEDES"] > 1 || counts["NAVIGATES_TO"] > 100
 		case "event":
 			broken = counts["HAS_MEMBER"] < 1 || counts["HAS_MEMBER"] > 1000
 		}
@@ -491,7 +493,7 @@ func (s *Store) loadDanglingAuditEdges(ctx context.Context, queryer cypherQuerye
 		filters = []string{"e.start_id IN " + values, "e.end_id IN " + values}
 		arguments = nil
 	}
-	for _, label := range []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"} {
+	for _, label := range []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "NAVIGATES_TO", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"} {
 		for _, filter := range filters {
 			edges := pgx.Identifier{s.graphName, label}.Sanitize() + ` e`
 			if snapshot.scope != nil {
@@ -576,7 +578,7 @@ func (s *Store) AuditUnregisteredGraphs(ctx context.Context) (violations []Invar
 	queries := []string{`SELECT 'Context', coalesce(c.properties ->> 'graph_id'::text, ''), '',
 		coalesce(c.properties ->> 'context_id'::text, 'age:' || c.id::text), ''
 		FROM ` + contexts + ` c WHERE ` + unregistered("c")}
-	for _, label := range []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"} {
+	for _, label := range []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "NAVIGATES_TO", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"} {
 		queries = append(queries, `SELECT '`+label+`', coalesce(e.properties ->> 'graph_id'::text, ''),
 			coalesce(e.properties ->> 'relation_id'::text, ''),
 			coalesce(a.properties ->> 'context_id'::text, 'age:' || e.start_id::text),
@@ -725,8 +727,8 @@ func (s *Store) loadAuditEdges(ctx context.Context, queryer cypherQueryer, filte
 // 쓰지 않으므로 읽지 않는다.
 func (s *Store) loadAuditContexts(ctx context.Context, queryer cypherQueryer, filter string, contexts map[string]auditContext) error {
 	_, err := s.readAuditContexts(ctx, queryer, s.cypherSQL("MATCH (n:Context) WHERE "+filter+
-		" RETURN n.context_id, coalesce(n.graph_id, ''), coalesce(n.layer, ''), coalesce(n.deleted_at, ''), coalesce(n.event_start, ''), coalesce(n.event_end, ''), id(n)",
-		"id agtype, graph agtype, layer agtype, deleted agtype, start agtype, finish agtype, vertex agtype"), contexts, pgx.QueryExecModeExec)
+		" RETURN n.context_id, coalesce(n.graph_id, ''), coalesce(n.layer, ''), coalesce(n.deleted_at, ''), coalesce(n.event_start, ''), coalesce(n.event_end, ''), coalesce(n.derivation_kind, ''), id(n)",
+		"id agtype, graph agtype, layer agtype, deleted agtype, start agtype, finish agtype, kind agtype, vertex agtype"), contexts, pgx.QueryExecModeExec)
 	return err
 }
 
@@ -738,18 +740,18 @@ func (s *Store) readAuditContexts(ctx context.Context, queryer cypherQueryer, qu
 	defer rows.Close()
 	var vertexIDs []int64
 	for rows.Next() {
-		var raw [6]string
+		var raw [7]string
 		var vertex string
-		if err := rows.Scan(&raw[0], &raw[1], &raw[2], &raw[3], &raw[4], &raw[5], &vertex); err != nil {
+		if err := rows.Scan(&raw[0], &raw[1], &raw[2], &raw[3], &raw[4], &raw[5], &raw[6], &vertex); err != nil {
 			return nil, fmt.Errorf("불변식 정점 행 해석: %w", err)
 		}
-		var values [6]string
+		var values [7]string
 		for index := range raw {
 			if err := json.Unmarshal([]byte(raw[index]), &values[index]); err != nil {
 				return nil, fmt.Errorf("불변식 정점 값 해석: %w", err)
 			}
 		}
-		value := auditContext{id: values[0], graphID: values[1], layer: values[2], deleted: values[3] != ""}
+		value := auditContext{id: values[0], graphID: values[1], layer: values[2], deleted: values[3] != "", kind: values[6]}
 		if err := json.Unmarshal([]byte(vertex), &value.vertexID); err != nil {
 			return nil, fmt.Errorf("불변식 정점 물리 식별자 해석: %w", err)
 		}

@@ -37,6 +37,9 @@ func (s *Store) CreateContextWithOperation(ctx context.Context, graphID model.ID
 		return created, nil
 	}
 	duplicate, ok := errors.AsType[*pgconn.PgError](err)
+	if value.Layer == model.LayerSource && ok && duplicate.Code == "23505" && duplicate.ConstraintName == "context_source_conversation_turn_idx" && duplicate.SchemaName == s.graphName {
+		return model.Context{}, model.FieldError{Field: "turn_index", Message: "같은 그래프의 대화와 턴 순서가 이미 존재한다", Cause: err}
+	}
 	if value.Layer != model.LayerSource || !ok || duplicate.Code != "23505" || duplicate.ConstraintName != "context_source_ref_idx" || duplicate.SchemaName != s.graphName {
 		return model.Context{}, err
 	}
@@ -650,6 +653,9 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	}
 	var replaced *model.Context
 	if value.Layer == model.LayerDerived {
+		if err := s.validateNavigationTargets(ctx, tx, graphID, value.Derived.NavigationRefs); err != nil {
+			return model.Context{}, err
+		}
 		if err := s.validateReferences(ctx, tx, graphID, derivedFrom); err != nil {
 			return model.Context{}, err
 		}
@@ -684,6 +690,14 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	}
 	if err := s.createReferenceEdges(ctx, tx, graphID, value, derivedFrom); err != nil {
 		return model.Context{}, err
+	}
+	if err := s.createNavigationEdges(ctx, tx, graphID, value); err != nil {
+		return model.Context{}, err
+	}
+	if value.Event != nil && value.Event.PreviousEventID != nil {
+		if err := s.createPreviousEventRelation(ctx, tx, graphID, value, operation); err != nil {
+			return model.Context{}, err
+		}
 	}
 	if supersededID.IsV7() {
 		if err := s.createSupersedesEdge(ctx, tx, graphID, value.ID, supersededID); err != nil {
@@ -733,10 +747,50 @@ func withReferences(stored model.Context, derivedFrom []model.ID, written model.
 		members = written.Event.MemberIDs
 	}
 	stored = attachReferences(stored, derivedFrom, members)
+	if stored.Derived != nil && written.Derived != nil {
+		stored.Derived.NavigationRefs = slices.Clone(written.Derived.NavigationRefs)
+	}
 	if stored.Derived != nil && written.Derived != nil && written.Derived.Supersedes != nil {
 		stored.Derived.Supersedes = new(*written.Derived.Supersedes)
 	}
 	return stored
+}
+
+// createPreviousEventRelation은 사건 생성의 그래프 잠금과 트랜잭션을 공유한다.
+// 입력은 정점 속성에 보존하지 않고 확정 관계와 별도 관계 감사만 남긴다.
+func (s *Store) createPreviousEventRelation(ctx context.Context, tx pgx.Tx, graphID model.ID, event model.Context, operation *OperationRecord) error {
+	previous, err := s.context(ctx, tx, graphID, *event.Event.PreviousEventID)
+	if err != nil {
+		return model.FieldError{Field: "previous_event_id", Message: "앞 사건을 같은 그래프에서 찾을 수 없다", Cause: err}
+	}
+	if previous.Event == nil || previous.DeletedAt != nil || previous.Event.ConversationID != event.Event.ConversationID || event.Event.ConversationID == "" {
+		return model.FieldError{Field: "previous_event_id", Message: "앞 사건은 활성 상태이며 같은 명시적 대화에 속해야 한다"}
+	}
+	id, err := model.NewID()
+	if err != nil {
+		return fmt.Errorf("앞 사건 관계 식별자 생성: %w", err)
+	}
+	now := nowUTC()
+	relation := model.Relation{ID: id, GraphID: graphID, Type: model.RelationTypePrecedes,
+		FromContextID: previous.ID, ToContextID: event.ID, State: model.RelationStateConfirmed,
+		ProposedBy: model.ProposalSourceAgent, ProposedAt: now, ConfirmedAt: new(now),
+		ConfirmedBy: event.CreatedBy, ConfirmedByAgent: event.CreatedByAgent}
+	if err := model.ValidateRelation(relation, previous, event); err != nil {
+		return model.FieldError{Field: "previous_event_id", Message: "앞 사건의 시간 순서가 올바르지 않다", Cause: err}
+	}
+	if _, err := s.validateRelationCycle(ctx, tx, graphID, relation); err != nil {
+		return err
+	}
+	if _, err := s.createRelation(ctx, tx, graphID, relation); err != nil {
+		return err
+	}
+	// 관리 입력이 없는 내부 호출도 확정 행위자의 관계 감사를 남긴다.
+	audit := OperationRecord{Kind: OperationAdd, GraphID: graphID, AccountID: event.CreatedBy,
+		AgentID: event.CreatedByAgent, JudgmentInput: "previous_event_id"}
+	if operation != nil {
+		audit = *operation
+	}
+	return s.recordAppliedRelationOperation(ctx, tx, &audit, relation.ID)
 }
 
 // attachReferences는 단건·묶음·쓰기 응답이 공통으로 쓰는 참조 조립 경계다.
@@ -745,6 +799,7 @@ func attachReferences(value model.Context, derivedFrom, members []model.ID) mode
 	if value.Derived != nil {
 		value.Derived = new(*value.Derived)
 		value.Derived.DerivedFrom = slices.Clone(derivedFrom)
+		value.Derived.NavigationRefs = slices.Clone(value.Derived.NavigationRefs)
 	}
 	if value.Event != nil {
 		value.Event = new(*value.Event)
@@ -823,6 +878,7 @@ func validateContextInput(graphID model.ID, value model.Context, derivedFrom []m
 	if value.Layer == model.LayerDerived && value.Derived != nil {
 		value.Derived = new(*value.Derived)
 		value.Derived.DerivedFrom = slices.Clone(derivedFrom)
+		value.Derived.NavigationRefs = slices.Clone(value.Derived.NavigationRefs)
 	}
 	if err := value.Validate(); err != nil {
 		return fmt.Errorf("컨텍스트 검증: %w", err)
@@ -1329,11 +1385,18 @@ func (s *Store) contextsByIDs(ctx context.Context, queryer cypherQueryer, graphI
 	if err != nil {
 		return nil, err
 	}
+	navigation, err := s.edgeTargetsBySource(ctx, queryer, graphID, "NAVIGATES_TO", list)
+	if err != nil {
+		return nil, err
+	}
 	ordered := make([]model.Context, 0, len(contextIDs))
 	for _, contextID := range contextIDs {
 		value, found := byID[contextID]
 		if !found {
 			return nil, missingContextError{ID: contextID}
+		}
+		if value.Derived != nil {
+			value.Derived.NavigationRefs = navigation[contextID]
 		}
 		value, err = assembleStoredContext(value, references[contextID], members[contextID], supersedes[contextID])
 		if err != nil {
@@ -1379,6 +1442,9 @@ func (s *Store) edgeTargetsBySource(ctx context.Context, queryer cypherQueryer, 
 // 구성원이며, 이 정점들에 닿은 간선이 쓰기 검사의 영향 주변부다.
 func createdScope(value model.Context, derivedFrom []model.ID, supersededID model.ID) []model.ID {
 	scope := append([]model.ID{value.ID}, derivedFrom...)
+	if value.Derived != nil {
+		scope = append(scope, value.Derived.NavigationRefs...)
+	}
 	if supersededID.IsV7() {
 		scope = append(scope, supersededID)
 	}

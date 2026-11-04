@@ -135,7 +135,7 @@ UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용
 
 다만 "1개 이상"은 `model`이 본다. [`SRS.md`](../SRS.md)의 [SRS 컨텍스트 모델](../SRS.md#컨텍스트-모델)이 둘을 필수 속성으로 두었으므로 상한과 달리 계층별 필수 속성에 해당하며, 저장 방식과 무관하게 근거 없는 파생이나 구성원 없는 사건이 만들어지지 않아야 한다. 같은 규칙을 두 곳에 두지 않는다는 원칙은 그대로다. 존재는 `model`이, 상한은 `mcp`가 한 번씩만 본다.
 
-열거형 배열 필터도 공개 `inputSchema.maxItems`와 같은 원소 수 상한을 서버에서 검증한다. `grade_filter`와 `state_filter`는 3개, `traversal_filter`는 7개, `type_filter`는 4개다. 빈 배열과 상한 이하의 중복 값은 기존대로 허용하지만 중복도 원소 수에 포함한다. 초과는 도구 입력 검증에서 해당 필드를 명시한 `invalid_argument`이며, 전송 본문 초과의 `413`과 계정 플랜의 `limit_exceeded`와 구분한다. 참조 배열은 기존 100개·1000개 상한을 유지하므로 배열 종류마다 새 일괄 상한을 추가하지 않는다.
+열거형 배열 필터도 공개 `inputSchema.maxItems`와 같은 원소 수 상한을 서버에서 검증한다. `grade_filter`와 `state_filter`는 3개, `traversal_filter`는 8개, `type_filter`는 4개다. 빈 배열과 상한 이하의 중복 값은 기존대로 허용하지만 중복도 원소 수에 포함한다. 초과는 도구 입력 검증에서 해당 필드를 명시한 `invalid_argument`이며, 전송 본문 초과의 `413`과 계정 플랜의 `limit_exceeded`와 구분한다. 참조 배열은 기존 100개·1000개 상한을 유지하므로 배열 종류마다 새 일괄 상한을 추가하지 않는다.
 
 `body`와 `work_context`의 길이는 `mcp`가 본다. 둘 다 연산 표면의 파라미터이고 [SRS 입력 검증 세부](../SRS.md#입력-검증-세부)가 값을 정했으므로 위 분담표의 첫 줄에 그대로 해당한다.
 
@@ -315,3 +315,12 @@ WriteRunner는 등록 경계 또는 직접 호출에서 같은 공개 스키마�
 이 응답은 오류가 아닌 상태를 명시한 기존 원천 반환이며, `request_id` 사용 시 이 안내도 최초 결과의 일부로 저장·재생한다. 이후 복구해도 같은 키의 재생은 최초 결과를 반환하므로 복구 후 활성 원천은 `node_get`으로 조회하고, 삭제 상태를 포함한 중복 반환 결과는 새 키의 생성 호출로 확인한다. `node_get` 자체는 삭제 원천을 반환하지 않는다. 이미 저장된 과거 멱등 결과는 소급 변경하지 않는다. 중복 반환으로 정점·색인·관리 감사·활동 시각을 갱신하지 않는다.
 
 본문 `body`는 모든 계층의 생성·수정에서 비어 있지 않은 공백 문자열도 허용하고 원문을 보존한다. 문서 색인도 같은 입력을 처리한다. 현재 질의 `work_context`는 계속 공백만인 값을 거부하며 본문과 구분한다.
+
+## 대화 기록과 안내 진입점
+
+FR-176~179의 논리 계약은 [SRS](../SRS.md#대화-흐름과-안내-진입점)가 소유한다. 도구 수와 기존 필수 입력은 유지하고 선택 입력을 추가한다.
+
+- source node_create: conversation_id와 turn_index 쌍. event node_create: conversation_id와 생성 전용 previous_event_id. 서로 다른 계층 필드는 거부한다. node_update는 대화/턴·앞 사건을 수정하지 않는다. 원천/사건 응답에는 보존된 대화, 원천에는 턴 순서를 포함한다.
+- summary node_create: 선택 navigation_refs. 다른 파생 종류에는 허용하지 않고 일반 node_update에서는 수정하지 않는다. node_get의 traversal_filter에는 여덟 번째 navigation_refs를 허용하고 응답 참조도 같은 이름을 사용한다.
+- graph_update: 선택 entry_context_id, null 해제·생략 유지. graph_get 응답은 유효 대표만 노출한다. 기존 기대 판·현재 권한·행위자·멱등 지문 검사에 새 입력도 포함한다.
+- server instructions에 원천 구성원→사건→precedes와 대표→탐색 참조의 구조를 짧게 안내한다. 개인 수집 절차는 강제하지 않는다. previous_event_id는 입력만으로 확정을 요청하는 행위이며 자동 추론 확정이 아니다. 공개 응답은 정점에 입력을 되풀이하지 않고 관계 조회로 확인한다.

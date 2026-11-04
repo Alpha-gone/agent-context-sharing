@@ -1,5 +1,5 @@
 {
-  "instructions": "공유 컨텍스트 그래프를 사용하는 도구입니다. graph_list로 접근 가능한 그래프를 확인하고 graph_id를 선택하세요.\n노드·관계 쓰기 전에 agent_register에 16~128자의 ASCII 등록 키를 보내 agent_id를 받으세요. 같은 계정·OAuth client에서 같은 등록 키를 재사용하고 반환한 agent_id를 후속 여섯 쓰기에 전달하세요. 등록은 개별 모델·대화의 신원 증명이나 그래프 권한 부여가 아닙니다.\ngraph_update·node_update는 조회한 현재 expected_version이 필요합니다. 충돌하면 재조회하고 변경을 검토하세요. 원천은 불변이며 정정은 새 원천, 파생의 근거·종류 변경은 새 파생과 supersedes_context_id로 표현하세요.\n여덟 업무 쓰기의 request_id는 선택이며 16~128자의 ASCII 키입니다. 같은 논리 요청은 같은 키·인자로 재시도할 수 있고 최초 결과는 24시간 보존됩니다. 새 키는 새 쓰기입니다. 키 없는 쓰기의 결과가 불명확하거나 키를 잃었다면 현재 상태를 재조회하세요.\n인증·현재 등급·agent 결합은 서버가 매 요청 확인합니다. annotations와 호스트 승인은 서버 권한 검사를 대신하지 않습니다. 내부 장애를 반복 로그인으로 해결하려 하지 마세요.\n삭제·권한·팀 관리는 웹 전용입니다. node_discard는 소프트 폐기이며 node_restore는 연산으로 폐기한 노드만 복구합니다. 웹 삭제 복구는 웹을 사용하세요. 검색은 context_flow_get으로 요청하며 별도 검색 도구는 없습니다. 결과 절단·일부 검색 채널 실패는 정상 부분 결과일 수 있습니다.",
+  "instructions": "공유 컨텍스트 그래프를 사용하는 도구입니다. graph_list로 접근 가능한 그래프를 확인하고 graph_id를 선택하세요.\n노드·관계 쓰기 전에 agent_register에 16~128자의 ASCII 등록 키를 보내 agent_id를 받으세요. 같은 계정·OAuth client에서 같은 등록 키를 재사용하고 반환한 agent_id를 후속 여섯 쓰기에 전달하세요. 등록은 개별 모델·대화의 신원 증명이나 그래프 권한 부여가 아닙니다.\ngraph_get의 entry_context_id는 대표 요약입니다. 요약의 navigation_refs는 안내 참조이며 derived_from 근거와 구분합니다. node_get의 traversal_filter=navigation_refs로 사건·요약·원천을 탐색할 수 있습니다. source의 conversation_id·turn_index는 원문 순서이고 event의 conversation_id·previous_event_id는 명시적 대화 흐름을 연결합니다.\ngraph_update·node_update는 조회한 현재 expected_version이 필요합니다. 충돌하면 재조회하고 변경을 검토하세요. 원천은 불변이며 정정은 새 원천, 파생의 근거·종류 변경은 새 파생과 supersedes_context_id로 표현하세요.\n여덟 업무 쓰기의 request_id는 선택이며 16~128자의 ASCII 키입니다. 같은 논리 요청은 같은 키·인자로 재시도할 수 있고 최초 결과는 24시간 보존됩니다. 새 키는 새 쓰기입니다. 키 없는 쓰기의 결과가 불명확하거나 키를 잃었다면 현재 상태를 재조회하세요.\n인증·현재 등급·agent 결합은 서버가 매 요청 확인합니다. annotations와 호스트 승인은 서버 권한 검사를 대신하지 않습니다. 내부 장애를 반복 로그인으로 해결하려 하지 마세요.\n삭제·권한·팀 관리는 웹 전용입니다. node_discard는 소프트 폐기이며 node_restore는 연산으로 폐기한 노드만 복구합니다. 웹 삭제 복구는 웹을 사용하세요. 검색은 context_flow_get으로 요청하며 별도 검색 도구는 없습니다. 결과 절단·일부 검색 채널 실패는 정상 부분 결과일 수 있습니다.",
   "protocolVersion": "2026-07-28",
   "tools": [
     {
@@ -152,7 +152,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "현재 expected_version으로 이름·설명을 갱신한다. 충돌하면 재조회한다. 같은 request_id·인자의 24시간 최초 결과 재생과 새 키의 판 검사를 구분한다.",
+      "description": "현재 expected_version으로 이름·설명·대표 entry_context_id를 갱신한다. 충돌하면 재조회한다. 같은 request_id·인자의 24시간 최초 결과 재생과 새 키의 판 검사를 구분한다.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -162,6 +162,15 @@
             "minLength": 0,
             "maxLength": 2000,
             "pattern": "^[^\u0000]*$"
+          },
+          "entry_context_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "활성 요약 파생인 대표 진입점. 생략하면 유지하고 null이면 해제한다.",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
+            "format": "uuid-v7"
           },
           "expected_version": {
             "type": "integer",
@@ -233,6 +242,18 @@
               "supported",
               "uncertain",
               "disputed"
+            ]
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "source·event의 명시적 대화 식별자. 1~128자이며 생성 후 불변이다. source에서는 conversation 출처와 turn_index를 함께 지정한다.",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[^\u0000]*$",
+            "allOf": [
+              {
+                "pattern": "[^\t-\r    -     　]"
+              }
             ]
           },
           "derivation_kind": {
@@ -311,6 +332,19 @@
             "minItems": 1,
             "maxItems": 1000
           },
+          "navigation_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "참조할 컨텍스트 UUIDv7. 실제 존재·계층·같은 그래프 여부는 저장 상태로 판정한다.",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
+              "format": "uuid-v7"
+            },
+            "description": "summary 파생의 선택 안내 참조. 같은 그래프의 사건·요약·원천 최대 100개이며 근거가 아니다. 자기 참조·중복은 거부하고 생성 후 불변이다.",
+            "minItems": 0,
+            "maxItems": 100,
+            "uniqueItems": true
+          },
           "occurred_at": {
             "type": "string",
             "description": "source 전용 필수 필드. 원본 내용이 발생한 UTC 시각이며 시스템 기록 시각과 구분한다.",
@@ -325,6 +359,12 @@
               "agent_output",
               "external_content"
             ]
+          },
+          "previous_event_id": {
+            "type": "string",
+            "description": "event 생성 전용 앞 사건. 같은 그래프·같은 명시적 conversation_id의 활성 사건을 지정하며 confirmed precedes를 함께 생성한다. 속성으로 저장하지 않는다.",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
+            "format": "uuid-v7"
           },
           "request_id": {
             "type": "string",
@@ -376,6 +416,11 @@
             "description": "derived 전용 선택 필드. 새 파생이 대체할 같은 계열의 기존 파생 UUIDv7이며 새 파생에서 이전 파생으로 대체 간선을 남긴다. 근거 목록인 derived_from과 별개다.",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|[0-9a-fA-F]{12}7[0-9a-fA-F]{3}[89aAbB][0-9a-fA-F]{15})$",
             "format": "uuid-v7"
+          },
+          "turn_index": {
+            "type": "integer",
+            "description": "conversation 원천의 0 이상 턴 순서. conversation_id와 한 쌍이며 생성 후 불변이다.",
+            "minimum": 0
           },
           "valid_from": {
             "type": "string",
@@ -461,6 +506,11 @@
                       },
                       {
                         "required": [
+                          "navigation_refs"
+                        ]
+                      },
+                      {
+                        "required": [
                           "member_refs"
                         ]
                       },
@@ -472,6 +522,11 @@
                       {
                         "required": [
                           "event_end"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "previous_event_id"
                         ]
                       }
                     ]
@@ -518,6 +573,11 @@
                       },
                       {
                         "required": [
+                          "turn_index"
+                        ]
+                      },
+                      {
+                        "required": [
                           "member_refs"
                         ]
                       },
@@ -529,6 +589,16 @@
                       {
                         "required": [
                           "event_end"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "previous_event_id"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "conversation_id"
                         ]
                       }
                     ]
@@ -574,6 +644,11 @@
                       },
                       {
                         "required": [
+                          "turn_index"
+                        ]
+                      },
+                      {
+                        "required": [
                           "derived_from"
                         ]
                       },
@@ -610,6 +685,11 @@
                       {
                         "required": [
                           "supersedes_context_id"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "navigation_refs"
                         ]
                       }
                     ]
@@ -654,6 +734,65 @@
           },
           {
             "if": {
+              "required": [
+                "turn_index"
+              ]
+            },
+            "then": {
+              "required": [
+                "conversation_id"
+              ]
+            }
+          },
+          {
+            "if": {
+              "allOf": [
+                {
+                  "properties": {
+                    "layer": {
+                      "const": "source"
+                    }
+                  },
+                  "required": [
+                    "layer"
+                  ]
+                },
+                {
+                  "required": [
+                    "conversation_id"
+                  ]
+                }
+              ]
+            },
+            "then": {
+              "properties": {
+                "source_ref": {
+                  "properties": {
+                    "channel": {
+                      "const": "conversation"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "turn_index"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "previous_event_id"
+              ]
+            },
+            "then": {
+              "required": [
+                "conversation_id"
+              ]
+            }
+          },
+          {
+            "if": {
               "not": {
                 "properties": {
                   "derivation_kind": {
@@ -671,6 +810,11 @@
                   {
                     "required": [
                       "summary_scope"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "navigation_refs"
                     ]
                   }
                 ]
@@ -752,14 +896,15 @@
                 "derived_from",
                 "supersedes",
                 "member_refs",
+                "navigation_refs",
                 "precedes",
                 "causes",
                 "part_of",
                 "relates_to"
               ]
             },
-            "description": "탐색할 확정 참조·사건 관계. 생략하거나 빈 배열이면 7종 모두를 탐색하며 중복을 허용하되 최대 7개다.",
-            "maxItems": 7
+            "description": "탐색할 확정 참조·사건 관계. 생략하거나 빈 배열이면 8종 모두를 탐색하며 중복을 허용하되 최대 8개다.",
+            "maxItems": 8
           }
         },
         "required": [

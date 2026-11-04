@@ -52,6 +52,7 @@ type GraphStore interface {
 	ListGraphs(context.Context, model.ID, model.GraphListFilter, string, int) ([]model.GraphListItem, string, error)
 	Graph(context.Context, model.ID) (model.Graph, error)
 	GraphVisualization(context.Context, model.ID, int, int) (store.HopResult, error)
+	HopContexts(context.Context, model.ID, model.ID, int, string, []string, int) (store.HopResult, error)
 	Context(context.Context, model.ID, model.ID) (model.Context, error)
 	ListActiveContexts(context.Context, model.ID, int) ([]model.Context, bool, error)
 	ListDeletedContexts(context.Context, model.ID, int) ([]model.Context, bool, error)
@@ -428,15 +429,30 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "그래프", Error: "조회 한도를 적용할 수 없습니다."})
 		return
 	}
-	hops, err := server.graphs.GraphVisualization(request.Context(), graphID, depth, maxNodes)
+	var hops store.HopResult
+	var selected model.ID
+	if raw := request.URL.Query().Get("context_id"); raw != "" {
+		selected, err = model.ParseID(raw)
+		if err != nil {
+			server.render(writer, http.StatusBadRequest, "message", pageData{Title: "그래프", Error: "컨텍스트 식별자를 확인해 주십시오."})
+			return
+		}
+		hops, err = server.graphs.HopContexts(request.Context(), graphID, selected, depth, "both", nil, maxNodes)
+	} else {
+		hops, err = server.graphs.GraphVisualization(request.Context(), graphID, depth, maxNodes)
+	}
 	if request.Context().Err() != nil {
+		return
+	}
+	if errors.Is(err, model.ErrNotFound) {
+		server.render(writer, http.StatusNotFound, "message", pageData{Title: "그래프", Error: "컨텍스트를 찾을 수 없습니다."})
 		return
 	}
 	if err != nil {
 		server.render(writer, http.StatusInternalServerError, "message", pageData{Title: "그래프", Error: "시각화 데이터를 읽을 수 없습니다."})
 		return
 	}
-	if !visualizationInGraph(graphID, hops) {
+	if !visualizationInGraph(graphID, hops) || (selected.IsV7() && !slices.ContainsFunc(hops.Contexts, func(node model.Context) bool { return node.ID == selected })) {
 		server.responseScopeError(writer)
 		return
 	}
@@ -446,7 +462,14 @@ func (server *Server) graphDetail(writer http.ResponseWriter, request *http.Requ
 		// 모두 0일 수 있으므로 거리의 최댓값 대신 노드 수를 쓴다.
 		maxHops = max(0, len(hops.Contexts)-1)
 	}
-	value := pageData{Title: graph.Name, AccountID: accountID, Graph: graph, Contexts: hops.Contexts, Edges: hops.Edges, MaxHops: maxHops, GlobalSummaries: globalSummaries(hops.Contexts)}
+	value := pageData{Title: graph.Name, AccountID: accountID, Graph: graph, Contexts: hops.Contexts, Edges: hops.Edges, MaxHops: maxHops, GlobalSummaries: globalSummaries(hops.Contexts), SelectedContextID: selected}
+	if graph.EntryContextID != nil {
+		for _, node := range hops.Contexts {
+			if node.ID == *graph.EntryContextID && node.Derived != nil && node.Derived.Kind == model.DerivationKindSummary {
+				value.EntryContext = new(node)
+			}
+		}
+	}
 	// 상한이 자른 경계는 오류가 아니라 「정상 응답의 부분 상태」의 표시다.
 	if hops.Truncated {
 		value.HopBoundary = &hops.Boundary
@@ -1294,7 +1317,9 @@ type pageData struct {
 	// RestoreTab에는 삭제와 복구 화면이 복구 대상 보기인지를 둔다.
 	RestoreTab bool
 	// GlobalSummaries에는 그래프 상세의 시작점이 된 전역 요약 파생을 둔다.
-	GlobalSummaries []model.Context
+	GlobalSummaries   []model.Context
+	EntryContext      *model.Context
+	SelectedContextID model.ID
 	// AuditFilter에는 감사 기록 양식에 다시 표시할 검증된 필터를 둔다.
 	AuditFilter auditForm
 }
@@ -1302,6 +1327,54 @@ type pageData struct {
 // HasGrade는 현재 등급 필터의 선택 상태를 양식에 반영한다.
 func (data pageData) HasGrade(grade model.GraphGrade) bool {
 	return slices.Contains(data.Grades, grade)
+}
+
+type eventMemberLink struct {
+	ID             model.ID
+	Layer          model.Layer
+	ConversationID string
+	TurnIndex      *int64
+	Loaded         bool
+}
+
+// EventMemberLinks는 같은 명시적 대화의 원천을 턴 순서로 안내한다. 순서가 없는 기존
+// 구성원이나 부분 그래프 밖의 구성원은 식별자순으로 남기고 추정하지 않는다.
+func (data pageData) EventMemberLinks(event model.Context) []eventMemberLink {
+	links := make([]eventMemberLink, 0, len(event.Event.MemberIDs))
+	nodes := make(map[model.ID]model.Context, len(data.Contexts))
+	for _, node := range data.Contexts {
+		nodes[node.ID] = node
+	}
+	for _, id := range event.Event.MemberIDs {
+		node, loaded := nodes[id]
+		link := eventMemberLink{ID: id, Layer: node.Layer, Loaded: loaded}
+		if node.Source != nil {
+			link.ConversationID, link.TurnIndex = node.Source.ConversationID, node.Source.TurnIndex
+		}
+		links = append(links, link)
+	}
+	slices.SortFunc(links, func(a, b eventMemberLink) int {
+		aOrdered, bOrdered := a.ConversationID != "" && a.TurnIndex != nil, b.ConversationID != "" && b.TurnIndex != nil
+		if aOrdered != bOrdered {
+			if aOrdered {
+				return -1
+			}
+			return 1
+		}
+		if aOrdered {
+			if order := strings.Compare(a.ConversationID, b.ConversationID); order != 0 {
+				return order
+			}
+			if *a.TurnIndex < *b.TurnIndex {
+				return -1
+			}
+			if *a.TurnIndex > *b.TurnIndex {
+				return 1
+			}
+		}
+		return a.ID.Compare(b.ID)
+	})
+	return links
 }
 
 type visualizationData struct {
@@ -1315,10 +1388,12 @@ type visualizationNode struct {
 }
 
 type visualizationNodeData struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	Layer string `json:"layer"`
-	Body  string `json:"body"`
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	Layer          string `json:"layer"`
+	Body           string `json:"body"`
+	ConversationID string `json:"conversation_id,omitempty"`
+	TurnIndex      *int64 `json:"turn_index,omitempty"`
 }
 
 type visualizationEdge struct {
@@ -1343,7 +1418,14 @@ func newVisualizationData(contexts []model.Context, edges []store.HopEdge) visua
 		if context.Derived != nil && context.Derived.ConfidenceState == model.ConfidenceStateDisputed {
 			classes += " disputed"
 		}
-		result.Nodes = append(result.Nodes, visualizationNode{Data: visualizationNodeData{ID: context.ID.String(), Label: string(context.Layer), Layer: string(context.Layer), Body: context.Body}, Classes: classes})
+		data := visualizationNodeData{ID: context.ID.String(), Label: string(context.Layer), Layer: string(context.Layer), Body: context.Body}
+		if context.Source != nil {
+			data.ConversationID, data.TurnIndex = context.Source.ConversationID, context.Source.TurnIndex
+		}
+		if context.Event != nil {
+			data.ConversationID = context.Event.ConversationID
+		}
+		result.Nodes = append(result.Nodes, visualizationNode{Data: data, Classes: classes})
 	}
 	for index, edge := range edges {
 		// 「시각 표현 규칙」이 확정된 참조와 사건 관계를 연결선 종류로 나누라고 했다.
@@ -1371,7 +1453,7 @@ const pageTemplates = `{{define "login"}}{{template "head" .}}<h1>로그인</h1>
 </div><p id="grade-filter-help">선택하지 않으면 모든 등급을 조회합니다.</p></fieldset>
 <button type="submit">적용</button></form>
 {{if .Graphs}}<table><thead><tr><th>이름</th><th>설명</th><th>마지막 활동</th><th>내 등급</th></tr></thead><tbody>{{range .Graphs}}<tr><td><a href="/graphs/{{.ID}}">{{.Name}}</a></td><td>{{.Description}}</td><td>{{formatTime .LastActivityAt}}</td><td>{{.Grade}}</td></tr>{{end}}</tbody></table>{{else}}<p>접근 가능한 그래프가 없습니다.</p>{{end}}{{if .NextCursor}}<p><a href="{{.NextPage}}">더 보기</a></p>{{end}}{{if .DeletedGraphs}}<section class="panel"><h2>내가 삭제한 그래프</h2>{{range .DeletedGraphs}}<p><a href="/graphs/{{.ID}}/deletion">{{.Name}} 복구</a></p>{{end}}</section>{{end}}{{if .RestoreGraphs}}<section class="panel"><h2>자동 삭제된 그래프</h2>{{range .RestoreGraphs}}<form class="inline" method="post" action="/graphs"><input type="hidden" name="restore_graph_id" value="{{.ID}}"><button type="submit">{{.Name}} 복구 요청</button></form>{{end}}</section>{{end}}{{template "foot" .}}{{end}}
-{{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p id="scope-help">전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다. 빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다. 국소 보기에서도 목록에서 다른 노드를 선택할 수 있습니다. 목록의 노드 선택 버튼은 Enter 또는 Space로 선택·해제합니다.</p><button id="full-view" type="button">전체 보기</button> <a id="details-link" href="#node-details-heading">선택한 노드 상세로 이동</a><p id="scope-status" role="status" aria-atomic="true">전체 보기</p><label for="hop-range">국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}" aria-valuetext="{{.MaxHops}}홉" aria-describedby="scope-help"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section>{{template "layer-legend" .}}<section class="graph-layout"><aside class="panel"><h2>그래프 속성</h2><dl class="connection-list"><dt>식별자</dt><dd><code>{{.Graph.ID}}</code></dd><dt>설명</dt><dd>{{or .Graph.Description "없음"}}</dd><dt>생성 시각</dt><dd>{{formatTime .Graph.CreatedAt}}</dd><dt>마지막 활동</dt><dd>{{formatTime .Graph.LastActivityAt}}</dd><dt>표시 범위</dt><dd>노드 {{len .Contexts}}개 · 연결 {{len .Edges}}개</dd></dl><h3>전역 요약</h3>{{range .GlobalSummaries}}<article><code>{{.ID}}</code><p>{{.Body}}</p></article>{{else}}<p>전역 요약 파생이 없어 활성 컨텍스트를 시작점으로 표시했습니다.</p>{{end}}</aside><div id="context-graph" role="img" aria-label="컨텍스트 그래프 시각화" aria-describedby="scope-help"></div><aside class="panel"><h2 id="node-details-heading" tabindex="-1">선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p><h3>근거 경로</h3><p class="hint">반환된 부분 그래프 안에서 선택한 노드의 나가는 derived_from 연결을 근거 원천까지 따라갑니다. 국소 홉 범위로 숨겨진 근거도 포함하며, 조회 상한으로 반환되지 않은 근거는 표시할 수 없습니다.</p><p id="node-evidence">노드를 선택하면 표시된 부분 그래프의 근거 연결을 안내합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code> <button type="button" data-context-id="{{.ID}}" aria-label="{{.ID}} 노드 선택" aria-pressed="false" aria-controls="node-details node-evidence" aria-describedby="scope-help">노드 선택 <span class="node-selection-mark" aria-hidden="true">✓ 선택됨</span></button><p>{{.Body}}</p>{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){
+{{define "graph_detail"}}{{template "head" .}}<nav><h1>{{.Graph.Name}}</h1><a href="/graphs">목록</a><a href="/graphs/{{.Graph.ID}}/access">권한과 팀 관리</a><a href="/graphs/{{.Graph.ID}}/deletion">삭제와 복구</a><a href="/graphs/{{.Graph.ID}}/audit">감사 기록</a></nav><section class="panel"><p id="scope-help">전체 보기와, 선택한 노드 중심의 국소 보기를 제공합니다. 빈 영역을 누르거나 Esc를 누르면 전체 보기로 돌아갑니다. 국소 보기에서도 목록에서 다른 노드를 선택할 수 있습니다. 목록의 노드 선택 버튼은 Enter 또는 Space로 선택·해제합니다.</p><button id="full-view" type="button">전체 보기</button> <a id="details-link" href="#node-details-heading">선택한 노드 상세로 이동</a><p id="scope-status" role="status" aria-atomic="true">전체 보기</p><label for="hop-range">국소 보기 홉 범위 <input id="hop-range" type="range" min="0" max="{{.MaxHops}}" value="{{.MaxHops}}" aria-valuetext="{{.MaxHops}}홉" aria-describedby="scope-help"></label>{{if .HopBoundary}}<p class="notice">결과 상한으로 {{.HopBoundary}}홉 경계에서 잘렸습니다. 표시된 범위가 그래프 전체가 아닙니다.</p>{{end}}</section>{{template "layer-legend" .}}<section class="graph-layout"><aside class="panel"><h2>그래프 속성</h2><dl class="connection-list"><dt>식별자</dt><dd><code>{{.Graph.ID}}</code></dd><dt>설명</dt><dd>{{or .Graph.Description "없음"}}</dd><dt>생성 시각</dt><dd>{{formatTime .Graph.CreatedAt}}</dd><dt>마지막 활동</dt><dd>{{formatTime .Graph.LastActivityAt}}</dd><dt>표시 범위</dt><dd>노드 {{len .Contexts}}개 · 연결 {{len .Edges}}개</dd></dl><h3>대표 요약</h3>{{if .EntryContext}}<article><a href="/graphs/{{.Graph.ID}}?context_id={{.EntryContext.ID}}">{{.EntryContext.ID}}</a><p>{{.EntryContext.Body}}</p></article>{{else}}<p>{{if .Graph.EntryContextID}}<a href="/graphs/{{.Graph.ID}}?context_id={{.Graph.EntryContextID}}">대표 요약 열기 · {{.Graph.EntryContextID}}</a>{{else}}지정된 대표 요약이 없습니다.{{end}}</p>{{end}}<h3>전역 요약</h3>{{range .GlobalSummaries}}<article><a href="/graphs/{{$.Graph.ID}}?context_id={{.ID}}">{{.ID}}</a><p>{{.Body}}</p></article>{{else}}<p>전역 요약 파생이 없어 활성 컨텍스트를 시작점으로 표시했습니다.</p>{{end}}</aside><div id="context-graph" role="img" aria-label="컨텍스트 그래프 시각화" aria-describedby="scope-help"></div><aside class="panel"><h2 id="node-details-heading" tabindex="-1">선택한 노드</h2><p id="node-details">노드를 선택하면 본문과 근거 경로를 표시합니다.</p><h3>근거 경로</h3><p class="hint">반환된 부분 그래프 안에서 선택한 노드의 나가는 derived_from 연결을 근거 원천까지 따라갑니다. 국소 홉 범위로 숨겨진 근거도 포함하며, 조회 상한으로 반환되지 않은 근거는 표시할 수 없습니다.</p><p id="node-evidence">노드를 선택하면 표시된 부분 그래프의 근거 연결을 안내합니다.</p></aside></section><section class="panel"><h2>목록 보기</h2>{{range .Contexts}}<article><strong>{{.Layer}}</strong> <code>{{.ID}}</code> <button type="button" data-context-id="{{.ID}}" aria-label="{{.ID}} 노드 선택" aria-pressed="false" aria-controls="node-details node-evidence" aria-describedby="scope-help">노드 선택 <span class="node-selection-mark" aria-hidden="true">✓ 선택됨</span></button><p>{{.Body}}</p>{{if .Source}}{{if .Source.ConversationID}}<p>대화 <code>{{.Source.ConversationID}}</code> · 턴 {{.Source.TurnIndex}}</p>{{end}}{{end}}{{if .Event}}{{if .Event.ConversationID}}<p>대화 <code>{{.Event.ConversationID}}</code></p>{{end}}<h3>사건 구성원</h3><p>명시적 대화 원천은 대화별 턴 순서로 표시합니다. 순서 정보가 없는 기존 구성원의 순서는 추정하지 않습니다.</p><ul>{{range $.EventMemberLinks .}}<li><a href="/graphs/{{$.Graph.ID}}?context_id={{.ID}}">{{.ID}}</a>{{if .TurnIndex}} · 대화 {{.ConversationID}} · 턴 {{.TurnIndex}}{{else if not .Loaded}} · 조회 범위 밖: 순서 확인 불가{{else if eq .Layer "source"}} · 대화 순서 정보 없음{{else}} · {{.Layer}}{{end}}</li>{{end}}</ul>{{end}}{{if .Derived}}{{if .Derived.NavigationRefs}}<h3>안내 참조</h3><p>탐색 대상이며 파생 근거와 구분합니다.</p><ul>{{range .Derived.NavigationRefs}}<li><a href="/graphs/{{$.Graph.ID}}?context_id={{.}}">{{.}}</a></li>{{end}}</ul>{{end}}{{end}}{{if and .Derived .Derived.EvidenceInvalidated}}<span>근거 무효</span>{{end}}{{if and .Derived (eq .Derived.ConfidenceState "disputed")}}<span>상충</span>{{end}}</article>{{else}}<p>표시할 활성 컨텍스트가 없습니다.</p>{{end}}</section><script src="/assets/cytoscape.min.js"></script><script>(function(){
 const elements={{.VisualizationJSON}};
 const details=document.getElementById('node-details');
 const emptyDetails=details.textContent;
@@ -1439,7 +1521,10 @@ function showDetails(node){
   const marks=[];
   if(node.hasClass('disputed'))marks.push('상충');
   if(node.hasClass('evidence-invalidated'))marks.push('근거 무효');
-  details.textContent=node.data('layer')+' · '+node.id()+(marks.length?' · '+marks.join(' · '):'')+'\n'+node.data('body');
+  const conversation=node.data('conversation_id');
+  const turn=node.data('turn_index');
+  const order=conversation?'\n대화 '+conversation+(turn!==undefined?' · 턴 '+turn:''):'';
+  details.textContent=node.data('layer')+' · '+node.id()+(marks.length?' · '+marks.join(' · '):'')+'\n'+node.data('body')+order;
   const links=cy.edges('.evidence').map(function(edge){
     return '파생 '+edge.source().id()+' → 근거 '+edge.target().id()+' (derived_from)';
   });
@@ -1462,6 +1547,8 @@ choices.forEach(function(button){
   });
 });
 range.addEventListener('input',applyScope);
+const initial={{.SelectedContextID.String}};
+if(initial&&cy.getElementById(initial).length)showDetails(cy.getElementById(initial));
 })();</script>{{template "foot" .}}{{end}}
 {{define "access"}}{{template "head" .}}
 <nav><h1>권한과 팀 관리</h1>{{if .GraphID.IsV7}}<a href="/graphs/{{.GraphID}}">그래프 상세</a>{{end}}<a href="/graphs">그래프 목록</a></nav>

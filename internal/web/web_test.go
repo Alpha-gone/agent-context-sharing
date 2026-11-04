@@ -190,6 +190,10 @@ func (fake fakeGraphStore) ListGraphs(context.Context, model.ID, model.GraphList
 func (store fakeGraphStore) Graph(_ context.Context, graphID model.ID) (model.Graph, error) {
 	return model.Graph{ID: graphID, Name: "테스트 그래프"}, nil
 }
+func (fake fakeGraphStore) HopContexts(ctx context.Context, graphID, start model.ID, hops int, direction string, filter []string, maximum int) (store.HopResult, error) {
+	return fake.GraphVisualization(ctx, graphID, hops, maximum)
+}
+
 func (fake fakeGraphStore) GraphVisualization(_ context.Context, graphID model.ID, _, _ int) (store.HopResult, error) {
 	if graphID != fake.graphID {
 		return store.HopResult{}, nil

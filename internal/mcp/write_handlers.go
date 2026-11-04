@@ -145,7 +145,14 @@ func applyWrite(ctx context.Context, d Dependencies, principal Principal, tool s
 			if v, ok := args["description"]; ok {
 				graph.Description = v.(string)
 			}
-			graph, err = d.GraphWrites.UpdateGraph(ctx, graph, args["expected_version"].(int64), principal.AccountID, limits)
+			if v, ok := args["entry_context_id"]; ok {
+				graph.EntryContextID = nil
+				if v != nil {
+					graph.EntryContextID = new(argumentID(args, "entry_context_id"))
+				}
+			}
+			_, replaceEntry := args["entry_context_id"]
+			graph, err = d.GraphWrites.UpdateGraph(ctx, graph, args["expected_version"].(int64), replaceEntry, principal.AccountID, limits)
 			if err == nil {
 				if graph.ID != graphID {
 					return nil, &DependencyFailure{}

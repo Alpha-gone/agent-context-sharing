@@ -16,7 +16,7 @@ import (
 // 같은 agtype 속성 판독기를 거쳐 시간·계층 판정의 의미를 유지한다.
 func (s *Store) loadGraphAuditContexts(ctx context.Context, queryer cypherQueryer, graphID model.ID, contexts map[string]auditContext) ([]int64, error) {
 	columns := make([]string, 0, 7)
-	for _, key := range []string{"context_id", "graph_id", "layer", "deleted_at", "event_start", "event_end"} {
+	for _, key := range []string{"context_id", "graph_id", "layer", "deleted_at", "event_start", "event_end", "derivation_kind"} {
 		columns = append(columns, auditPropertySQL("c", key))
 	}
 	columns = append(columns, "c.id::text")
@@ -31,7 +31,7 @@ func (s *Store) loadGraphAuditEdges(ctx context.Context, queryer cypherQueryer, 
 		ids = append(ids, sqlString(strconv.FormatInt(id, 10))+"::ag_catalog.graphid")
 	}
 	slices.Sort(ids)
-	labels := []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"}
+	labels := []string{"DERIVED_FROM", "SUPERSEDES", "HAS_MEMBER", "NAVIGATES_TO", "PRECEDES", "CAUSES", "PART_OF", "RELATES_TO"}
 	// 계약 밖 label도 기존 endpoint_layer 검사로 넘긴다. 부모는 ONLY로 자식 중복을 막는다.
 	labelRows, err := queryer.Query(ctx, `SELECT l.name::text FROM ag_catalog.ag_label l
   JOIN ag_catalog.ag_graph g ON g.graphid=l.graph

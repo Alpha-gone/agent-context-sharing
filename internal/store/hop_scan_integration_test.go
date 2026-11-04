@@ -330,7 +330,7 @@ FROM pg_indexes WHERE schemaname = $1 AND (indexname = 'context_active_graph_con
 		count++
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil || count != 8 {
+	if err := rows.Err(); err != nil || count != 9 {
 		t.Fatalf("추가 인덱스 목록: 개수 %d, %v", count, err)
 	}
 	t.Logf("additional-index-bytes=%d", total)

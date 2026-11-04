@@ -90,7 +90,8 @@ func (s *Store) insertDerivedRevision(ctx context.Context, tx pgx.Tx, value mode
 	}
 	value = attachReferences(value, value.Derived.DerivedFrom, nil)
 	slices.SortFunc(value.Derived.DerivedFrom, func(a, b model.ID) int { return strings.Compare(a.String(), b.String()) })
-	raw, err := json.Marshal(value)
+	// 선택 탐색 참조의 nil을 []로 바꾸면 저장 응답과 과거 판이 달라진다.
+	raw, err := json.Marshal(value, json.FormatNilSliceAsNull(true))
 	if err != nil {
 		return fmt.Errorf("파생 판 스냅숏 인코딩: %w", err)
 	}

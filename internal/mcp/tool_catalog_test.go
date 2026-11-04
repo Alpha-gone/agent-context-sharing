@@ -307,7 +307,7 @@ func TestCatalogArrayBounds(t *testing.T) {
 		tool, field, value string
 		max                int
 	}{
-		{"graph_list", "grade_filter", "owner", 3}, {"node_get", "traversal_filter", "member_refs", 7},
+		{"graph_list", "grade_filter", "owner", 3}, {"node_get", "traversal_filter", "member_refs", 8},
 		{"relation_list", "state_filter", "confirmed", 3}, {"relation_list", "type_filter", "causes", 4},
 	} {
 		t.Run(sample.field, func(t *testing.T) {

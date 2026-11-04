@@ -91,7 +91,7 @@ func (runner *WriteRunner) normalizeIDs(tool string, values map[string]any) {
 		}
 		for name, schema := range definition.tool.InputSchema.(*jsonschema.Schema).Properties {
 			value, present := values[name]
-			if !present {
+			if !present || value == nil {
 				continue
 			}
 			if schema.Format == "uuid-v7" {

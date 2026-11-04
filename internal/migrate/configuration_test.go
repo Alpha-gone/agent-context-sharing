@@ -165,34 +165,11 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.CreateGraph(t.Context(), model.Graph{ID: graphID, Name: "합성 시험 그래프", CreatedBy: actor, CreatedAt: now, LastActivityAt: now, Version: 1}); err != nil {
-		t.Fatal(err)
-	}
+	preservationLegacyGraph(t, pool, model.Graph{ID: graphID, Name: "합성 시험 그래프", CreatedBy: actor, CreatedAt: now, LastActivityAt: now, Version: 1})
 	value := model.Context{ID: newID(), GraphID: graphID, Layer: model.LayerSource, Body: "보존할 합성 본문", RecordedAt: now, CreatedBy: actor, CreatedByAgent: actor, Version: 1,
 		Source: &model.SourceAttributes{Reference: model.SourceReference{Channel: model.SourceChannelWeb, Locator: "https://example.test/synthetic"}, OccurredAt: now, OriginKind: model.OriginKindExternalContent}}
-	if _, err := database.CreateContext(t.Context(), graphID, value, nil); err != nil {
-		t.Fatal(err)
-	}
-	// 앱과 DB의 미세한 시계 차이가 작업 확보를 불안정하게 하지 않도록 시험에서만
-	// 현재 그래프의 대기 시각을 앞으로 당긴다.
-	readyTasks := func() {
-		t.Helper()
-		if _, err := pool.Exec(t.Context(), "UPDATE public.index_task SET next_attempt_at=now()-interval '1 minute' WHERE graph_id=$1", graphID.String()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	readyTasks()
-	vector := make([]float64, 1024)
-	vector[0] = 1
-	result, err := database.ProcessNextIndexTaskInGraph(t.Context(), graphID, func(context.Context, store.IndexTask) store.IndexTaskResult {
-		return store.IndexTaskResult{Embedding: vector, ModelID: "previous-model:vector:1024"}
-	})
-	if err != nil || !result.Succeeded {
-		t.Fatalf("이전 벡터 저장: %+v, %v", result, err)
-	}
-	if _, err := pool.Exec(t.Context(), "UPDATE public.context_embedding SET storage_tier='cold'"); err != nil {
-		t.Fatal(err)
-	}
+	preservationLegacySource(t, pool, value)
+	preservationLegacyEmbedding(t, pool, value, 1024, "previous-model:vector:1024")
 	assertState := func(dimension, embeddings, tasks int) {
 		t.Helper()
 		if err := database.CheckEmbeddingSchema(t.Context(), "vector", dimension); err != nil {
@@ -204,8 +181,8 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 				t.Fatalf("%s 행 %d, 기대 %d, 오류 %v", table, count, want, err)
 			}
 		}
-		stored, err := database.Context(t.Context(), graphID, value.ID)
-		if err != nil || stored.Body != value.Body {
+		var body string
+		if err := pool.QueryRow(t.Context(), `SELECT properties->>'body'::text FROM agent_context."Context" WHERE properties->>'context_id'::text=$1`, value.ID.String()).Scan(&body); err != nil || body != value.Body {
 			t.Fatalf("원본 본문 보존: %v", err)
 		}
 	}
@@ -247,83 +224,10 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 	if err := database.CheckEmbeddingSchema(t.Context(), "vector", 1024); err == nil {
 		t.Fatal("새 DB와 이전 구성이 맞는 것으로 판정됐다")
 	}
-	vector = make([]float64, 768)
-	vector[0] = 1
-	var providerStatus atomic.Int64
-	providerStatus.Store(200)
-	provider := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Header.Get("x-goog-api-key") != "synthetic-key" {
-			t.Error("Gemini 키 연결이 다르다")
-		}
-		if providerStatus.Load() != 200 {
-			writer.WriteHeader(int(providerStatus.Load()))
-			_, _ = writer.Write([]byte("synthetic-key private-body"))
-			return
-		}
-		body, _ := json.Marshal(map[string]any{"embedding": map[string]any{"values": vector}})
-		_, _ = writer.Write(body)
-	}))
-	defer provider.Close()
-	baseURL, _ := url.Parse(provider.URL)
-	workerConfig := index.Config{Provider: "gemini", APIKey: "synthetic-key", BaseURL: baseURL, Model: "gemini-embedding-2", VectorType: "vector", Dimension: 768}
-	worker, err := index.New(database, workerConfig, provider.Client(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	processed, err := worker.RunOnceInGraph(t.Context(), graphID)
-	if err != nil || !processed {
-		t.Fatalf("768차원 재색인: %v", err)
-	}
+	// 과거 스키마 시험은 당시 벡터와 작업 상태를 직접 준비한다. 현재 작업자·검색의
+	// 실행 계약은 별도 현재 스키마 시험에서 검증한다.
+	preservationLegacyEmbedding(t, pool, value, 768, "gemini:gemini-embedding-2:retrieval-v1:vector:768")
 	assertState(768, 1, 0)
-	var indexes int
-	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexname='context_embedding_embedding_hnsw_idx'").Scan(&indexes); err != nil || indexes != 1 {
-		t.Fatalf("HNSW 재생성: %v", err)
-	}
-	if count, err := database.OutdatedEmbeddingCount(t.Context(), "gemini:gemini-embedding-2:retrieval-v1:vector:768"); err != nil || count != 0 {
-		t.Fatalf("재색인 완료 판정: %v", err)
-	}
-	searcher, err := search.New(database, worker, search.Config{Execution: search.ExecutionParallel, CandidateLimit: 5, FoldThreshold: 0.9, Consistency: search.ConsistencySnapshot}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	input := search.Input{GraphID: graphID, WorkContext: "합성", Budget: 1000, MaxHops: 1, MaxHopNodes: 10}
-	flow, err := searcher.Flow(t.Context(), input)
-	if err != nil || flow.Channels["semantic"].Failure != "" || len(flow.Contexts) != 1 {
-		t.Fatalf("768차원 검색: %v", err)
-	}
-	providerStatus.Store(429)
-	flow, err = searcher.Flow(t.Context(), input)
-	if err != nil || flow.Channels["semantic"].Failure != "embedding_unavailable" || len(flow.Contexts) != 1 {
-		t.Fatalf("Gemini 장애의 부분 검색: %v", err)
-	}
-	for _, status := range []int{429, 400} {
-		providerStatus.Store(int64(status))
-		if err := database.ReindexGraph(t.Context(), graphID); err != nil {
-			t.Fatal(err)
-		}
-		readyTasks()
-		// 429는 그 Worker의 작업 확보를 차단하고 차단 상태는 Worker 메모리에 둔다.
-		// 앞 표본의 차단이 다음 표본의 확보를 막지 않도록 표본마다 새 Worker를 쓴다.
-		sampleWorker, err := index.New(database, workerConfig, provider.Client(), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if processed, err := sampleWorker.RunOnceInGraph(t.Context(), graphID); err != nil || !processed {
-			t.Fatalf("장애의 작업 처리: %v", err)
-		}
-		var attempts int
-		var state, lastError string
-		if err := pool.QueryRow(t.Context(), "SELECT attempts,state,last_error FROM public.index_task WHERE context_id=$1", value.ID.String()).Scan(&attempts, &state, &lastError); err != nil {
-			t.Fatal(err)
-		}
-		want := "pending"
-		if status == 400 {
-			want = "failed"
-		}
-		if attempts != 1 || state != want || strings.Contains(lastError, "synthetic-key") || strings.Contains(lastError, "private-body") {
-			t.Fatalf("장애의 재시도·비밀 경계: 시도 %d 상태 %s", attempts, state)
-		}
-	}
 	// 이전 모델 복귀도 이미 적용한 007을 고치지 않는다. 같은 전환 계약을 다음 번호의
 	// 시험용 파일로 적용해 과거 치환 구성과 checksum이 계속 보존되는지 확인한다.
 	rollbackFiles := make(fstest.MapFS)
@@ -350,33 +254,10 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertState(1024, 0, 1)
-	oldProvider := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1beta/models/gemini-embedding-2:embedContent" || request.Header.Get("x-goog-api-key") != "synthetic-key" {
-			t.Error("차원 복귀의 endpoint·인증 분리가 다르다")
-		}
-		values := make([]float64, 1024)
-		values[0] = 1
-		body, _ := json.Marshal(map[string]any{"embedding": map[string]any{"values": values}})
-		_, _ = writer.Write(body)
-	}))
-	defer oldProvider.Close()
-	oldURL, _ := url.Parse(oldProvider.URL)
-	oldWorker, err := index.New(database, index.Config{Provider: "gemini", APIKey: "synthetic-key", BaseURL: oldURL, Model: "gemini-embedding-2", VectorType: "vector", Dimension: 1024}, oldProvider.Client(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	readyTasks()
-	if processed, err := oldWorker.RunOnceInGraph(t.Context(), graphID); err != nil || !processed {
-		t.Fatalf("차원 복귀 재색인: %v", err)
-	}
+	preservationLegacyEmbedding(t, pool, value, 1024, "gemini:gemini-embedding-2:retrieval-v1:vector:1024")
 	assertState(1024, 1, 0)
-	if count, err := database.OutdatedEmbeddingCount(t.Context(), oldWorker.ModelID()); err != nil || count != 0 {
-		t.Fatalf("차원 복귀 식별자: %v", err)
-	}
 	// 차원 전환이 원천 제외 평가의 등록 계약을 우회하지 않아야 한다.
-	if err := database.ReindexGraph(t.Context(), graphID); err != nil {
-		t.Fatal(err)
-	}
+	preservationLegacyPendingTask(t, pool, value)
 	rollbackFiles["009_without_source_dimensions.sql"] = rollbackFiles["007_embedding_dimensions.sql"]
 	target.IndexTargetLayers = "without_source"
 	err = migrate.WithLock(t.Context(), pool, func(ctx context.Context, locked *pgxpool.Conn) error {
@@ -394,4 +275,139 @@ func TestEmbeddingDimensionMigrationIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertState(768, 0, 0)
+}
+
+// 작업자·제공자·검색은 모든 정식 마이그레이션을 적용한 스키마에서 검증한다.
+// 역사적 001→007 전환 시험에 현재 런타임의 후속 저장 계약을 소급하지 않는다.
+func TestEmbeddingDimensionCurrentRuntimeIntegration(t *testing.T) {
+	for _, dimension := range []int{768, 1024} {
+		t.Run(fmt.Sprintf("vector%d", dimension), func(t *testing.T) {
+			pool, address := isolatedMigrationDatabase(t)
+			cfg := migrate.Config{GraphName: "agent_context", VectorType: "vector", VectorDim: dimension}
+			if _, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil {
+				t.Fatal(err)
+			}
+			database, err := store.New(t.Context(), address, cfg.GraphName, nil, nil, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(database.Close)
+			newID := func() model.ID {
+				id, err := model.NewID()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return id
+			}
+			now := time.Now().UTC()
+			actor, graphID := newID(), newID()
+			if _, err := pool.Exec(t.Context(), `INSERT INTO public.account VALUES ($1,'current_dimensions','synthetic-hash',$2)`, actor.String(), now); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.CreateGraph(t.Context(), model.Graph{ID: graphID, Name: "현재 스키마 차원 시험", CreatedBy: actor, CreatedAt: now, LastActivityAt: now, Version: 1}); err != nil {
+				t.Fatal(err)
+			}
+			value := model.Context{ID: newID(), GraphID: graphID, Layer: model.LayerSource, Body: "보존할 합성 본문", RecordedAt: now, CreatedBy: actor, CreatedByAgent: actor, Version: 1,
+				Source: &model.SourceAttributes{Reference: model.SourceReference{Channel: model.SourceChannelWeb, Locator: "https://example.test/synthetic"}, OccurredAt: now, OriginKind: model.OriginKindExternalContent}}
+			if _, err := database.CreateContext(t.Context(), graphID, value, nil); err != nil {
+				t.Fatal(err)
+			}
+			readyTasks := func() {
+				t.Helper()
+				if _, err := pool.Exec(t.Context(), "UPDATE public.index_task SET next_attempt_at=now()-interval '1 minute' WHERE graph_id=$1", graphID.String()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertState := func(dimension, embeddings, tasks int) {
+				t.Helper()
+				if err := database.CheckEmbeddingSchema(t.Context(), "vector", dimension); err != nil {
+					t.Fatal(err)
+				}
+				for table, want := range map[string]int{"context_embedding": embeddings, "index_task": tasks} {
+					var count int
+					if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM public."+table).Scan(&count); err != nil || count != want {
+						t.Fatalf("%s 행 %d, 기대 %d, 오류 %v", table, count, want, err)
+					}
+				}
+			}
+			readyTasks()
+			vector := make([]float64, dimension)
+			vector[0] = 1
+			var providerStatus atomic.Int64
+			providerStatus.Store(200)
+			provider := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != "/v1beta/models/gemini-embedding-2:embedContent" || request.Header.Get("x-goog-api-key") != "synthetic-key" {
+					t.Error("Gemini 키 연결이 다르다")
+				}
+				if providerStatus.Load() != 200 {
+					writer.WriteHeader(int(providerStatus.Load()))
+					_, _ = writer.Write([]byte("synthetic-key private-body"))
+					return
+				}
+				body, _ := json.Marshal(map[string]any{"embedding": map[string]any{"values": vector}})
+				_, _ = writer.Write(body)
+			}))
+			defer provider.Close()
+			baseURL, _ := url.Parse(provider.URL)
+			workerConfig := index.Config{Provider: "gemini", APIKey: "synthetic-key", BaseURL: baseURL, Model: "gemini-embedding-2", VectorType: "vector", Dimension: dimension}
+			worker, err := index.New(database, workerConfig, provider.Client(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			processed, err := worker.RunOnceInGraph(t.Context(), graphID)
+			if err != nil || !processed {
+				t.Fatalf("%d차원 재색인: %v", dimension, err)
+			}
+			assertState(dimension, 1, 0)
+			var indexes int
+			if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND indexname='context_embedding_embedding_hnsw_idx'").Scan(&indexes); err != nil || indexes != 1 {
+				t.Fatalf("HNSW 재생성: %v", err)
+			}
+			if count, err := database.OutdatedEmbeddingCount(t.Context(), worker.ModelID()); err != nil || count != 0 {
+				t.Fatalf("재색인 완료 판정: %v", err)
+			}
+			searcher, err := search.New(database, worker, search.Config{Execution: search.ExecutionParallel, CandidateLimit: 5, FoldThreshold: 0.9, Consistency: search.ConsistencySnapshot}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := search.Input{GraphID: graphID, WorkContext: "합성", Budget: 1000, MaxHops: 1, MaxHopNodes: 10}
+			flow, err := searcher.Flow(t.Context(), input)
+			if err != nil || flow.Channels["semantic"].Failure != "" || len(flow.Contexts) != 1 {
+				t.Fatalf("%d차원 검색: %v", dimension, err)
+			}
+			providerStatus.Store(429)
+			flow, err = searcher.Flow(t.Context(), input)
+			if err != nil || flow.Channels["semantic"].Failure != "embedding_unavailable" || len(flow.Contexts) != 1 {
+				t.Fatalf("Gemini 장애의 부분 검색: %v", err)
+			}
+			for _, status := range []int{429, 400} {
+				providerStatus.Store(int64(status))
+				if err := database.ReindexGraph(t.Context(), graphID); err != nil {
+					t.Fatal(err)
+				}
+				readyTasks()
+				// 429는 그 Worker의 작업 확보를 차단하고 차단 상태는 Worker 메모리에 둔다.
+				// 앞 표본의 차단이 다음 표본의 확보를 막지 않도록 표본마다 새 Worker를 쓴다.
+				sampleWorker, err := index.New(database, workerConfig, provider.Client(), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if processed, err := sampleWorker.RunOnceInGraph(t.Context(), graphID); err != nil || !processed {
+					t.Fatalf("장애의 작업 처리: %v", err)
+				}
+				var attempts int
+				var state, lastError string
+				if err := pool.QueryRow(t.Context(), "SELECT attempts,state,last_error FROM public.index_task WHERE context_id=$1", value.ID.String()).Scan(&attempts, &state, &lastError); err != nil {
+					t.Fatal(err)
+				}
+				want := "pending"
+				if status == 400 {
+					want = "failed"
+				}
+				if attempts != 1 || state != want || strings.Contains(lastError, "synthetic-key") || strings.Contains(lastError, "private-body") {
+					t.Fatalf("장애의 재시도·비밀 경계: 시도 %d 상태 %s", attempts, state)
+				}
+			}
+		})
+	}
 }

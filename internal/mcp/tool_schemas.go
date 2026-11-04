@@ -5,12 +5,12 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const serverInstructions = `공유 컨텍스트 그래프 검색·기록 도구입니다. graph_list로 그래프를 선택하세요. 여섯 노드·관계 쓰기 전 agent_register에서 agent_id를 받으세요. 등록 키는 계정·OAuth client별 재사용하며 대화 신원·권한을 부여하지 않습니다.
+const serverInstructions = `공유 컨텍스트 그래프 검색·기록 도구. graph_list로 그래프를 선택하세요. 노드·관계 쓰기 전 agent_register에서 agent_id를 받으세요. 등록 키는 계정·OAuth client별 재사용하며 신원·권한을 부여하지 않습니다.
 graph_get.entry_context_id는 대표 요약입니다. navigation_refs는 안내, derived_from은 근거입니다. node_get으로 탐색하고 conversation_id·turn_index·previous_event_id로 대화 순서를 명시하세요.
 graph_update·node_update는 현재 expected_version이 필요합니다. 충돌하면 재조회하세요. 원천 정정은 새 원천, 파생 근거·종류 변경은 새 파생과 supersedes_context_id를 사용하세요.
-여덟 업무 쓰기의 request_id는 선택입니다. 같은 키·인자는 최초 결과를 24시간 재생하며 새 키는 새 쓰기입니다. 키 없는 불확정 결과·키 유실은 재조회하세요. 내부 장애에 반복 로그인하지 마세요.
+등록·재시도 키는 ASCII 영숫자·_·-만 사용하세요. request_id는 선택이며 같은 키·인자는 최초 결과를 24시간 재생하며 새 키는 새 쓰기입니다. 키 없는 불확정 결과·키 유실은 재조회하세요. 내부 장애에 반복 로그인하지 마세요.
 서버는 매 요청 인증·등급·agent 결합을 검사합니다. annotations·호스트 승인이 권한을 대신하지 않습니다. 삭제·권한·팀 관리는 웹 전용입니다. node_restore는 연산 폐기만 복구하며 웹 삭제는 웹에서 복구하세요.
-검색은 context_flow_get입니다. 검색 채널 일부 실패·예산/홉 절단은 정상 부분 결과일 수 있습니다.`
+검색은 context_flow_get이며 일부 채널 실패·절단도 정상 부분 결과일 수 있습니다.`
 
 func toolDefinitions() []*sdk.Tool {
 	read := func() *sdk.ToolAnnotations {
@@ -23,11 +23,11 @@ func toolDefinitions() []*sdk.Tool {
 		return &sdk.Tool{Name: name, Description: description, InputSchema: schema, Annotations: annotations}
 	}
 	graph := func() map[string]*jsonschema.Schema {
-		return map[string]*jsonschema.Schema{"graph_id": idSchema("graph_list에서 선택한 그래프 UUIDv7.")}
+		return map[string]*jsonschema.Schema{"graph_id": idSchema("그래프 UUIDv7.")}
 	}
 	node := func() map[string]*jsonschema.Schema {
 		p := graph()
-		p["context_id"] = idSchema("대상 컨텍스트 UUIDv7.")
+		p["context_id"] = idSchema("컨텍스트 UUIDv7.")
 		return p
 	}
 
@@ -186,11 +186,11 @@ func keySchema(description string) *jsonschema.Schema {
 }
 
 func requestKeySchema() *jsonschema.Schema {
-	return keySchema("선택 재시도 키: ASCII 영숫자·_·- 16~128자. 같은 키·인자는 24시간 최초 결과 재생.")
+	return keySchema("재시도 키.")
 }
 
 func actorFields(properties map[string]*jsonschema.Schema) {
-	properties["agent_id"] = idSchema("agent_register의 활성 agent_id.")
+	properties["agent_id"] = idSchema("활성 agent_id.")
 	properties["request_id"] = requestKeySchema()
 	properties["judgment_input"] = textSchema("판단 입력. 생략 시 검증된 인자를 기록.", 1, 8000)
 }
@@ -205,10 +205,10 @@ func integerSchema(description string, minimum int) *jsonschema.Schema {
 	return &jsonschema.Schema{Type: "integer", Description: description, Minimum: new(float64(minimum))}
 }
 func refsSchema(description string, maximum int) *jsonschema.Schema {
-	return &jsonschema.Schema{Type: "array", Description: description, Items: idSchema("컨텍스트 UUIDv7."), MinItems: new(1), MaxItems: new(maximum)}
+	return &jsonschema.Schema{Type: "array", Description: description, Items: idSchema(""), MinItems: new(1), MaxItems: new(maximum)}
 }
 func enumArray(description string, maximum int, values ...string) *jsonschema.Schema {
-	return &jsonschema.Schema{Type: "array", Description: description, Items: enumSchema("허용값.", values...), MaxItems: new(maximum)}
+	return &jsonschema.Schema{Type: "array", Description: description, Items: enumSchema("", values...), MaxItems: new(maximum)}
 }
 func utcSchema(description string, nullable bool) *jsonschema.Schema {
 	s := &jsonschema.Schema{Type: "string", Description: description, Format: "date-time", Pattern: `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|\+00:00)$`}

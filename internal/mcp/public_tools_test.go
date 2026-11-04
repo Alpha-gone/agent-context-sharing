@@ -98,8 +98,8 @@ func TestPublicToolMetadataBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(wire) > 22000 {
-		t.Fatalf("tools/list metadata bytes=%d, budget=22000", len(wire))
+	if len(wire) > 17500 {
+		t.Fatalf("tools/list metadata bytes=%d, budget=17500", len(wire))
 	}
 	if len(serverInstructions) > 1500 {
 		t.Fatalf("instructions bytes=%d, budget=1500", len(serverInstructions))
@@ -109,8 +109,8 @@ func TestPublicToolMetadataBudget(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(value) > 7000 {
-			t.Fatalf("%s bytes=%d, budget=7000", tool.Name, len(value))
+		if len(value) > 5000 {
+			t.Fatalf("%s bytes=%d, budget=5000", tool.Name, len(value))
 		}
 	}
 	t.Logf("tools=%d bytes=%d instructions=%d", len(tools), len(wire), len(serverInstructions))

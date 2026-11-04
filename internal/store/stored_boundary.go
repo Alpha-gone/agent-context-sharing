@@ -51,6 +51,8 @@ func parseStoredEndpoints(rawEdge, rawSource, rawTarget string, graphID model.ID
 	}
 	valid := false
 	switch edge.Label {
+	case "NAVIGATES_TO":
+		valid = source.Layer == model.LayerDerived && source.ID != target.ID
 	case "DERIVED_FROM":
 		valid = source.Layer == model.LayerDerived && target.Layer != model.LayerEvent
 	case "SUPERSEDES":
@@ -95,9 +97,9 @@ func validateStoredProperties(raw, kind, layer string) error {
 	}
 	common := "context_id graph_id layer body recorded_at created_by created_by_agent version deleted_at"
 	fields := map[string]string{
-		"source":   "source_ref_channel source_ref_locator occurred_at origin_kind",
+		"source":   "source_ref_channel source_ref_locator occurred_at origin_kind conversation_id turn_index",
 		"derived":  "derivation_kind summary_scope evidence_state confidence_state valid_from valid_to evidence_invalidated",
-		"event":    "event_start event_end",
+		"event":    "event_start event_end conversation_id",
 		"relation": "relation_id graph_id relation_type from_context_id to_context_id state proposed_by proposed_at confirmed_by confirmed_by_agent confirmed_at deleted_at",
 	}
 	allowed := fields[layer]

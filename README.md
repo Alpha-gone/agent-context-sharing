@@ -242,6 +242,16 @@ Claude 앱 등 외부 서비스에서 접근하는 클라이언트는 공개 HTT
 
 인증 URL에서 「연결 요청을 처리할 수 없습니다. 클라이언트에서 다시 시작해 주세요.」가 표시되면 고정 client ID 설정이 남아 있는지 확인하고 클라이언트에서 인증을 새로 시작합니다. 계속 실패하면 요청의 `client_id`·`redirect_uri`·`resource`와 서버의 DCR 등록을 대조합니다. 특히 localhost callback은 포트까지 일치해야 하며, 오류 문구만으로 실패 원인을 확정할 수는 없습니다.
 
+### 대화 흐름 기록과 안내 진입점
+
+대화 원천을 만들 때 `source_ref.channel=conversation`과 함께 `conversation_id`·`turn_index`를 지정하면 같은 대화의 턴 순서를 보존할 수 있습니다. 기록 시각이나 사건의 `member_refs` 정렬을 대화 순서로 사용하지 않습니다. 기존 원천에는 순서를 추정해 채우지 않습니다.
+
+같은 대화 구간을 사건으로 묶고, 다음 사건의 `node_create`에 같은 `conversation_id`와 `previous_event_id`를 지정하면 사건 저장과 앞 사건의 `precedes` 확정을 한 번에 처리합니다. 연결이 잘못되면 사건 생성도 함께 거부됩니다. 원천끼리 사건 관계를 연결하지 않습니다.
+
+주제 안내는 기존 요약 파생으로 작성하고, `navigation_refs`로 관련 사건·요약·원천을 연결합니다. `derived_from`은 요약의 근거이며 탐색 링크와 구분합니다. `graph_update`의 `entry_context_id`로 대표 요약을 지정하면 `graph_get`과 웹 상세에서 진입할 수 있습니다. 대표 지정 해제는 명시적 `null`, 기존 지정 유지는 필드 생략입니다. 안내에서 `node_get`의 `navigation_refs` 필터로 사건 흐름과 원천을 탐색할 수 있습니다.
+
+기존 DB에는 서버를 정지한 뒤 [운영 마이그레이션 절차](OPERATIONS.md)에 따라 새 `017_conversation_navigation.sql`을 적용해야 합니다. 이번 변경이 기존 운영 DB에 자동 적용되지는 않습니다. 상세 필드와 갱신 책임은 [대화 흐름과 안내 계약](spec/service/agent-context/SRS.md#대화-흐름과-안내-진입점)을 따릅니다.
+
 ## 개발 환경 재생성
 
 개발 환경을 처음부터 만들 때는 기존 개발 볼륨을 제거한 뒤 기동합니다.

@@ -51,7 +51,9 @@ type agContextProperties struct {
 	// OccurredAt 필드는 원천이 실제 발생한 UTC 시각이다.
 	OccurredAt string `json:"occurred_at"`
 	// OriginKind 필드는 원천 내용을 만든 주체 구분이다.
-	OriginKind string `json:"origin_kind"`
+	OriginKind     string `json:"origin_kind"`
+	ConversationID string `json:"conversation_id"`
+	TurnIndex      *int64 `json:"turn_index"`
 	// DerivationKind 필드는 파생의 생성 목적이다.
 	DerivationKind string `json:"derivation_kind"`
 	// SummaryScope 필드는 요약 파생의 적용 범위다.
@@ -161,8 +163,10 @@ func parseContext(raw string, graphID model.ID) (result model.Context, err error
 				Channel: model.SourceChannel(properties.SourceRefChannel),
 				Locator: properties.SourceRefLocator,
 			},
-			OccurredAt: occurredAt,
-			OriginKind: model.OriginKind(properties.OriginKind),
+			OccurredAt:     occurredAt,
+			OriginKind:     model.OriginKind(properties.OriginKind),
+			ConversationID: properties.ConversationID,
+			TurnIndex:      properties.TurnIndex,
 		}
 	case model.LayerDerived:
 		validFrom, err := parseOptionalUTC(properties.ValidFrom)
@@ -191,7 +195,7 @@ func parseContext(raw string, graphID model.ID) (result model.Context, err error
 		if err != nil {
 			return model.Context{}, fmt.Errorf("event_end: %w", err)
 		}
-		context.Event = &model.EventAttributes{Start: start, End: end}
+		context.Event = &model.EventAttributes{Start: start, End: end, ConversationID: properties.ConversationID}
 	default:
 		return model.Context{}, fmt.Errorf("저장된 컨텍스트 계층 %q가 올바르지 않다", context.Layer)
 	}
@@ -298,6 +302,10 @@ func contextProperties(context model.Context) map[string]any {
 		properties["source_ref_locator"] = context.Source.Reference.Locator
 		properties["occurred_at"] = context.Source.OccurredAt.UTC().Format(time.RFC3339Nano)
 		properties["origin_kind"] = string(context.Source.OriginKind)
+		if context.Source.ConversationID != "" {
+			properties["conversation_id"] = context.Source.ConversationID
+			properties["turn_index"] = *context.Source.TurnIndex
+		}
 	case model.LayerDerived:
 		properties["derivation_kind"] = string(context.Derived.Kind)
 		properties["summary_scope"] = string(context.Derived.SummaryScope)
@@ -311,6 +319,9 @@ func contextProperties(context model.Context) map[string]any {
 			properties["valid_to"] = context.Derived.ValidTo.UTC().Format(time.RFC3339Nano)
 		}
 	case model.LayerEvent:
+		if context.Event.ConversationID != "" {
+			properties["conversation_id"] = context.Event.ConversationID
+		}
 		properties["event_start"] = context.Event.Start.UTC().Format(time.RFC3339Nano)
 		if context.Event.End != nil {
 			properties["event_end"] = context.Event.End.UTC().Format(time.RFC3339Nano)

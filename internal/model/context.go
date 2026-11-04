@@ -111,6 +111,9 @@ type SourceAttributes struct {
 	OccurredAt time.Time
 	// OriginKind 필드는 원천 내용을 만든 주체의 종류다.
 	OriginKind OriginKind
+	// ConversationID와 TurnIndex는 명시적으로 식별한 대화와 0부터 시작하는 턴 순서다.
+	ConversationID string
+	TurnIndex      *int64
 }
 
 // DerivedAttributes는 파생 계층에만 필요한 속성이다.
@@ -122,6 +125,8 @@ type DerivedAttributes struct {
 	// DerivedFrom 필드는 근거가 된 원천 또는 파생 컨텍스트 식별자다.
 	// DERIVED_FROM 간선에서 다시 조립한 응답용 값이다.
 	DerivedFrom []ID
+	// NavigationRefs는 요약에서 사건·원천·파생으로 안내하는 불변 참조다. 근거와 구분한다.
+	NavigationRefs []ID
 	// Supersedes는 대체한 이전 파생을 가리키는 선택 참조다.
 	Supersedes *ID
 	// EvidenceState 필드는 생성 뒤 바꿀 수 없는 근거 성격이다.
@@ -138,6 +143,10 @@ type DerivedAttributes struct {
 
 // EventAttributes는 사건 계층에만 필요한 시간 범위와 구성원을 담는다.
 type EventAttributes struct {
+	// ConversationID는 원천 구성원이 공유하는 선택 대화 식별자이며 생성 후 불변이다.
+	ConversationID string
+	// PreviousEventID는 생성 입력 전용이다. 저장된 PRECEDES 관계가 정본이다.
+	PreviousEventID *ID `json:"-"`
 	// MemberIDs 필드는 사건을 구성하는 원천 또는 파생 컨텍스트 식별자다.
 	MemberIDs []ID
 	// Start 필드는 사건이 시작된 UTC 시각이다.
@@ -182,6 +191,8 @@ type Graph struct {
 	Name string
 	// Description 필드는 그래프를 설명하는 선택 속성이다.
 	Description string
+	// EntryContextID는 그래프의 대표 안내 요약을 가리키는 선택 참조다.
+	EntryContextID *ID
 	// CreatedBy 필드는 그래프를 만든 계정 식별자다.
 	CreatedBy ID
 	// CreatedAt 필드는 그래프 생성 UTC 시각이다.
@@ -248,6 +259,9 @@ func (c Context) Validate() error {
 		return err
 	}
 	if c.Derived != nil {
+		if err := ValidateNavigationReferences(c.ID, c.Derived.Kind, c.Derived.NavigationRefs); err != nil {
+			return err
+		}
 		if err := ValidateDerivedReferences(c.Derived.DerivedFrom); err != nil {
 			return err
 		}
@@ -261,6 +275,9 @@ func (c Context) Validate() error {
 		}
 	}
 	if c.Event != nil {
+		if c.Event.PreviousEventID != nil && *c.Event.PreviousEventID == c.ID {
+			return fieldErrorf("previous_event_id", "사건은 자신을 앞 사건으로 지정할 수 없다")
+		}
 		return c.Event.validate()
 	}
 	return nil
@@ -306,10 +323,16 @@ func ValidateUpdate(previous, next Context) error {
 	}
 	switch previous.Layer {
 	case LayerSource:
+		if previous.Source.ConversationID != next.Source.ConversationID || !sameOptionalTurnIndex(previous.Source.TurnIndex, next.Source.TurnIndex) {
+			return fieldErrorf("conversation_id", "원천의 대화와 턴 순서는 바꿀 수 없다")
+		}
 		if previous.Body != next.Body || previous.Source.Reference != next.Source.Reference || !previous.Source.OccurredAt.Equal(next.Source.OccurredAt) || previous.Source.OriginKind != next.Source.OriginKind || next.Version != 1 {
 			return fieldErrorf("layer", "원천은 deleted_at 표시 외에 바꿀 수 없고 판 번호는 1이다")
 		}
 	case LayerDerived:
+		if !sameIDSet(previous.Derived.NavigationRefs, next.Derived.NavigationRefs) {
+			return fieldErrorf("navigation_refs", "파생의 탐색 참조는 바꿀 수 없다")
+		}
 		if !sameIDSet(previous.Derived.DerivedFrom, next.Derived.DerivedFrom) || !sameOptionalID(previous.Derived.Supersedes, next.Derived.Supersedes) {
 			return fieldErrorf("derived_from", "파생의 근거와 대체 참조는 바꿀 수 없다")
 		}
@@ -320,6 +343,12 @@ func ValidateUpdate(previous, next Context) error {
 			return fieldErrorf("expected_version", "파생 갱신은 판 번호를 하나 증가시켜야 한다")
 		}
 	case LayerEvent:
+		if previous.Event.ConversationID != next.Event.ConversationID {
+			return fieldErrorf("conversation_id", "사건의 대화 식별자는 바꿀 수 없다")
+		}
+		if next.Event.PreviousEventID != nil {
+			return fieldErrorf("previous_event_id", "앞 사건 지정은 생성 입력에서만 허용한다")
+		}
 		if next.Version != previous.Version+1 {
 			return fieldErrorf("expected_version", "사건 갱신은 판 번호를 하나 증가시켜야 한다")
 		}
@@ -346,6 +375,9 @@ func ValidateEvidenceInvalidation(previous, next Context) error {
 	}
 	if previous.Derived.EvidenceInvalidated || !next.Derived.EvidenceInvalidated {
 		return fieldErrorf("evidence_invalidated", "근거 무효 표시는 false에서 true로만 바꿀 수 있다")
+	}
+	if !sameIDSet(previous.Derived.NavigationRefs, next.Derived.NavigationRefs) {
+		return fieldErrorf("navigation_refs", "근거 무효 표시는 탐색 참조를 바꿀 수 없다")
 	}
 	if !sameIDSet(previous.Derived.DerivedFrom, next.Derived.DerivedFrom) || !sameOptionalID(previous.Derived.Supersedes, next.Derived.Supersedes) {
 		return fieldErrorf("derived_from", "근거 무효 표시는 참조를 바꿀 수 없다")
@@ -398,12 +430,18 @@ func ValidateEventMembers(event Context, members []Context) error {
 		if member.Layer == LayerSource && !contains(*event.Event, member.Source.OccurredAt) {
 			return fieldErrorf("member_refs", "원천 구성원 발생 시각이 사건 시간 범위 밖이다")
 		}
+		if member.Layer == LayerSource && event.Event.ConversationID != "" && member.Source.ConversationID != event.Event.ConversationID {
+			return fieldErrorf("member_refs", "원천 구성원은 사건과 같은 명시적 대화에 속해야 한다")
+		}
 	}
 	return nil
 }
 
 // Validate는 그래프 식별자, 시간과 판 번호의 기본 제약을 확인한다.
 func (g Graph) Validate() error {
+	if g.EntryContextID != nil && !g.EntryContextID.IsV7() {
+		return fieldErrorf("entry_context_id", "대표 안내 식별자는 UUIDv7이어야 한다")
+	}
 	if !g.ID.IsV7() || !g.CreatedBy.IsV7() {
 		return fieldErrorf("graph_id", "그래프와 생성 계정은 UUIDv7이어야 한다")
 	}
@@ -477,6 +515,18 @@ func validateText(field, value string) error {
 
 // validate는 원천의 출처 참조, 발생 시각과 출처 구분을 확인한다.
 func (attributes SourceAttributes) validate() error {
+	if err := validateConversationID(attributes.ConversationID); err != nil {
+		return err
+	}
+	if (attributes.ConversationID == "") != (attributes.TurnIndex == nil) {
+		return fieldErrorf("turn_index", "conversation_id와 turn_index는 함께 지정해야 한다")
+	}
+	if attributes.ConversationID != "" && attributes.Reference.Channel != SourceChannelConversation {
+		return fieldErrorf("conversation_id", "대화 식별자와 턴 순서는 conversation 출처에만 허용한다")
+	}
+	if attributes.TurnIndex != nil && *attributes.TurnIndex < 0 {
+		return fieldErrorf("turn_index", "턴 순서는 0 이상이어야 한다")
+	}
 	if !slices.Contains([]SourceChannel{SourceChannelConversation, SourceChannelFile, SourceChannelWeb, SourceChannelAPI, SourceChannelOther}, attributes.Reference.Channel) {
 		return fieldErrorf("source_channel", "원천 수집 경로 %q가 허용된 값이 아니다", attributes.Reference.Channel)
 	}
@@ -554,6 +604,15 @@ func (attributes EventAttributes) validate() error {
 }
 
 func (attributes EventAttributes) validateTimes() error {
+	if err := validateConversationID(attributes.ConversationID); err != nil {
+		return err
+	}
+	if err := validateOptionalID("previous_event_id", attributes.PreviousEventID); err != nil {
+		return err
+	}
+	if attributes.PreviousEventID != nil && attributes.ConversationID == "" {
+		return fieldErrorf("previous_event_id", "앞 사건 지정에는 명시적 대화 식별자가 필요하다")
+	}
 	if !isUTC(attributes.Start) || attributes.End != nil && !isUTC(*attributes.End) {
 		return fieldErrorf("start", "사건 시간 범위는 UTC여야 한다")
 	}
@@ -561,6 +620,20 @@ func (attributes EventAttributes) validateTimes() error {
 		return fieldErrorf("end", "사건 종료 시각이 시작 시각보다 빠르다")
 	}
 	return nil
+}
+
+func validateConversationID(value string) error {
+	if err := validateText("conversation_id", value); err != nil {
+		return err
+	}
+	if value != "" && (strings.TrimSpace(value) == "" || utf8.RuneCountInString(value) > 128) {
+		return fieldErrorf("conversation_id", "대화 식별자는 공백만으로 구성할 수 없으며 1~128자여야 한다")
+	}
+	return nil
+}
+
+func sameOptionalTurnIndex(left, right *int64) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 // isUTC는 비어 있지 않은 UTC 시각인지 확인한다.

@@ -49,7 +49,7 @@ func preservationQuery(t *testing.T, pool *pgxpool.Pool, query string) string {
 const preservationOriginals = `SELECT jsonb_build_object(
 	'nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM agent_context."Context" n),
 	'edges',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM agent_context._ag_label_edge e),
-	'graphs',(SELECT jsonb_agg(to_jsonb(g)-'content_revision' ORDER BY graph_id) FROM public.context_graph g),
+	'graphs',(SELECT jsonb_agg(to_jsonb(g)-'content_revision'-'entry_context_id' ORDER BY graph_id) FROM public.context_graph g),
 	'operations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY operation_id) FROM public.operation_log o),
 	'accounts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY account_id) FROM public.account a),
 	'grants',(SELECT jsonb_agg(to_jsonb(g) ORDER BY grant_id) FROM public.oauth_grant g),
@@ -62,10 +62,75 @@ const preservationOriginals = `SELECT jsonb_build_object(
 const preservationMutable = `SELECT jsonb_build_object(
 	'embeddings',(SELECT jsonb_agg(to_jsonb(e) ORDER BY context_id,storage_tier) FROM public.context_embedding e),
 	'tasks',(SELECT jsonb_agg(to_jsonb(t) ORDER BY task_id) FROM public.index_task t),
-	'graphs',(SELECT jsonb_agg(to_jsonb(g) ORDER BY graph_id) FROM public.context_graph g),
+	'graphs',(SELECT jsonb_agg(to_jsonb(g)-'entry_context_id' ORDER BY graph_id) FROM public.context_graph g),
 	'type',(SELECT format_type(atttypid,atttypmod) FROM pg_attribute WHERE attrelid='public.context_embedding'::regclass AND attname='embedding'),
 	'indexes',(SELECT jsonb_agg(indexdef ORDER BY indexname) FROM pg_indexes WHERE tablename IN ('context_embedding','context_embedding_hot','context_embedding_cold'))
 	)::text`
+
+// 과거 형상은 당시 열과 속성으로 준비한다. 현재 런타임의 후속 열·간선 계약을
+// 추가하지 않아 마이그레이션 전후의 실제 데이터 보존을 검증한다.
+func preservationLegacyGraph(t *testing.T, pool *pgxpool.Pool, graph model.Graph) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `INSERT INTO public.context_graph
+		(graph_id,name,created_by,created_at,last_activity_at,version)
+		VALUES ($1,$2,$3,$4,$5,$6)`, graph.ID.String(), graph.Name, graph.CreatedBy.String(), graph.CreatedAt, graph.LastActivityAt, graph.Version); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func preservationLegacySource(t *testing.T, pool *pgxpool.Pool, value model.Context) {
+	t.Helper()
+	if err := value.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	properties := map[string]any{
+		"context_id": value.ID.String(), "graph_id": value.GraphID.String(),
+		"layer": "source", "body": value.Body, "recorded_at": value.RecordedAt.Format(time.RFC3339Nano),
+		"created_by": value.CreatedBy.String(), "created_by_agent": value.CreatedByAgent.String(), "version": value.Version,
+		"source_ref_channel": string(value.Source.Reference.Channel), "source_ref_locator": value.Source.Reference.Locator,
+		"occurred_at": value.Source.OccurredAt.Format(time.RFC3339Nano), "origin_kind": string(value.Source.OriginKind),
+	}
+	raw, err := json.Marshal(properties)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `INSERT INTO agent_context."Context" (properties) VALUES ($1::ag_catalog.agtype)`, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	preservationLegacyPendingTask(t, pool, value)
+	if _, err := pool.Exec(t.Context(), `UPDATE public.context_graph SET stored_chars=stored_chars+$1,
+		content_revision=content_revision+1,last_activity_at=$2 WHERE graph_id=$3`,
+		utf8.RuneCountInString(value.Body), value.RecordedAt, value.GraphID.String()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func preservationLegacyPendingTask(t *testing.T, pool *pgxpool.Pool, value model.Context) {
+	t.Helper()
+	id, err := model.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `INSERT INTO public.index_task (task_id,context_id,graph_id,state,enqueued_at,next_attempt_at)
+		VALUES ($1,$2,$3,'pending',$4,$4) ON CONFLICT (context_id) DO UPDATE SET
+		state='pending',attempts=0,last_error=NULL,enqueued_at=EXCLUDED.enqueued_at,next_attempt_at=EXCLUDED.next_attempt_at`,
+		id.String(), value.ID.String(), value.GraphID.String(), value.RecordedAt); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func preservationLegacyEmbedding(t *testing.T, pool *pgxpool.Pool, value model.Context, dimension int, modelID string) {
+	t.Helper()
+	vector := "[1" + strings.Repeat(",0", dimension-1) + "]"
+	if _, err := pool.Exec(t.Context(), `INSERT INTO public.context_embedding
+		(context_id,graph_id,embedding,model_id,indexed_at,last_accessed_at,storage_tier)
+		VALUES ($1,$2,$3,$4,$5,$5,'cold')`, value.ID.String(), value.GraphID.String(), vector, modelID, value.RecordedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `DELETE FROM public.index_task WHERE context_id=$1`, value.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // 013 이전 파생 표본은 당시 스키마에 직접 넣는다. 현재 저장 API로 준비하면
 // 아직 없는 context_revision에 기록하려 하므로 이행할 이전 형상을 재현할 수 없다.
@@ -148,14 +213,10 @@ func preservationFixture(t *testing.T, typ string) (*pgxpool.Pool, *store.Store,
 	}
 	for i := range 2 {
 		graph := newID()
-		if _, err := database.CreateGraph(t.Context(), model.Graph{ID: graph, Name: "합성 보존 표본", CreatedBy: actor, CreatedAt: now, LastActivityAt: now, Version: 1}); err != nil {
-			t.Fatal(err)
-		}
+		preservationLegacyGraph(t, pool, model.Graph{ID: graph, Name: "합성 보존 표본", CreatedBy: actor, CreatedAt: now, LastActivityAt: now, Version: 1})
 		source := model.Context{ID: newID(), GraphID: graph, Layer: model.LayerSource, Body: "보존할 합성 원천", RecordedAt: now, CreatedBy: actor, CreatedByAgent: actor, Version: 1,
 			Source: &model.SourceAttributes{Reference: model.SourceReference{Channel: model.SourceChannelWeb, Locator: "https://example.test/data09"}, OccurredAt: now, OriginKind: model.OriginKindExternalContent}}
-		if _, err := database.CreateContext(t.Context(), graph, source, nil); err != nil {
-			t.Fatal(err)
-		}
+		preservationLegacySource(t, pool, source)
 		derived := model.Context{ID: newID(), GraphID: graph, Layer: model.LayerDerived, Body: "보존할 합성 파생", RecordedAt: now, CreatedBy: actor, CreatedByAgent: actor, Version: 1,
 			Derived: &model.DerivedAttributes{Kind: model.DerivationKindProposition, EvidenceState: model.EvidenceStateObservation, DerivedFrom: []model.ID{source.ID}}}
 		preservationLegacyDerived(t, pool, derived)
@@ -209,7 +270,7 @@ func TestData09ShapeTransitionAndPreservationIntegration(t *testing.T) {
 				if preservationQuery(t, pool, preservationMutable) != mutable || preservationQuery(t, pool, preservationOriginals) != before {
 					t.Fatal("실패한 전환이 기존 상태를 변경했다")
 				}
-				if count, err := applyTarget(t.Context(), pool, migrations.FS, target); err != nil || count != 5 {
+				if count, err := applyTarget(t.Context(), pool, migrations.FS, target); err != nil || count != 6 {
 					t.Fatalf("전환=%d: %v", count, err)
 				}
 				if preservationQuery(t, pool, preservationOriginals) != before || preservationQuery(t, pool, historySQL) != history {
@@ -309,7 +370,7 @@ func TestData09LegacyConfigurationBackfillAtomicIntegration(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), `UPDATE public.schema_migration SET checksum=$1 WHERE version=9`, loaded[1].Checksum); err != nil {
 		t.Fatal(err)
 	}
-	if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != 7 {
+	if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != 8 {
 		t.Fatalf("보충 후 적용=%d: %v", count, err)
 	}
 	if preservationQuery(t, pool, `SELECT count(*)::text FROM public.schema_migration WHERE render_config IS NULL`) != "0" {

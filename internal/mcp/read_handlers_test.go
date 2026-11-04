@@ -186,7 +186,7 @@ func TestReadHandlersRejectBeforeStorage(t *testing.T) {
 			case "fractional hops":
 				args["hops"] = 1.5
 			case "too many filters":
-				args["traversal_filter"] = []string{"causes", "causes", "causes", "causes", "causes", "causes", "causes", "causes"}
+				args["traversal_filter"] = []string{"causes", "causes", "causes", "causes", "causes", "causes", "causes", "causes", "causes"}
 			case "missing principal":
 				p.ClientID = ""
 				code = "internal"

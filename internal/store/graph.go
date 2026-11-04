@@ -22,13 +22,13 @@ func (s *Store) CreateGraph(ctx context.Context, graph model.Graph) (model.Graph
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO public.context_graph (
 			graph_id, name, description, created_by, created_at, last_activity_at,
-			grace_started_at, stored_chars, version, deleted_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			grace_started_at, stored_chars, version, deleted_at, entry_context_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING graph_id, name, description, created_by, created_at, last_activity_at,
-		          grace_started_at, stored_chars, version, deleted_at`,
+		          grace_started_at, stored_chars, version, deleted_at, entry_context_id`,
 		graph.ID.String(), graph.Name, nullableString(graph.Description), graph.CreatedBy.String(),
 		graph.CreatedAt, graph.LastActivityAt, graph.GraceStartedAt, graph.StoredChars, graph.Version,
-		graph.DeletedAt,
+		graph.DeletedAt, nullableID(graph.EntryContextID),
 	)
 	stored, err := scanGraph(row)
 	if err != nil {
@@ -52,6 +52,9 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 	}
 	if err := graph.Validate(); err != nil {
 		return model.Graph{}, fmt.Errorf("그래프 검증: %w", err)
+	}
+	if graph.EntryContextID != nil {
+		return model.Graph{}, model.FieldError{Field: "entry_context_id", Message: "새 그래프에는 대표 안내를 지정할 수 없다"}
 	}
 	if graph.Version != 1 {
 		return model.Graph{}, model.FieldError{Field: "version", Message: "새 그래프의 판 번호는 1이어야 한다"}
@@ -93,13 +96,13 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 	row := tx.QueryRow(ctx, `
 		INSERT INTO public.context_graph (
 			graph_id, name, description, created_by, created_at, last_activity_at,
-			grace_started_at, stored_chars, version, deleted_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			grace_started_at, stored_chars, version, deleted_at, entry_context_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING graph_id, name, description, created_by, created_at, last_activity_at,
-		          grace_started_at, stored_chars, version, deleted_at`,
+		          grace_started_at, stored_chars, version, deleted_at, entry_context_id`,
 		graph.ID.String(), graph.Name, nullableString(graph.Description), graph.CreatedBy.String(),
 		graph.CreatedAt, graph.LastActivityAt, graph.GraceStartedAt, graph.StoredChars, graph.Version,
-		graph.DeletedAt,
+		graph.DeletedAt, nullableID(graph.EntryContextID),
 	)
 	stored, err := scanGraph(row)
 	if err != nil {
@@ -117,13 +120,22 @@ func (s *Store) CreateGraphWithOwner(ctx context.Context, graph model.Graph, lim
 }
 
 // Graph는 graph_id에 해당하는 그래프 메타데이터를 읽는다.
-func (s *Store) Graph(ctx context.Context, graphID model.ID) (model.Graph, error) {
+func (s *Store) Graph(ctx context.Context, graphID model.ID) (result model.Graph, err error) {
 	if !graphID.IsV7() {
 		return model.Graph{}, fmt.Errorf("그래프 식별자가 UUIDv7이 아니다")
 	}
-	row := s.pool.QueryRow(ctx, `
+	ctx, release, err := s.enterHopReadScope(ctx)
+	if err != nil {
+		return model.Graph{}, err
+	}
+	defer func() {
+		if closeErr := release(); closeErr != nil {
+			result, err = model.Graph{}, errors.Join(err, closeErr)
+		}
+	}()
+	row := s.reader(ctx).QueryRow(ctx, `
 		SELECT graph_id, name, description, created_by, created_at, last_activity_at,
-		       grace_started_at, stored_chars, version, deleted_at
+		       grace_started_at, stored_chars, version, deleted_at, entry_context_id
 		FROM public.context_graph
 		WHERE graph_id = $1`, graphID.String())
 	graph, err := scanGraph(row)
@@ -132,6 +144,10 @@ func (s *Store) Graph(ctx context.Context, graphID model.ID) (model.Graph, error
 			return model.Graph{}, ErrNotFound
 		}
 		return model.Graph{}, fmt.Errorf("그래프 조회: %w", err)
+	}
+	graph.EntryContextID, err = s.validGraphEntry(ctx, s.reader(ctx), graph.ID, graph.EntryContextID)
+	if err != nil {
+		return model.Graph{}, err
 	}
 	return graph, nil
 }
@@ -254,7 +270,18 @@ func likeContains(value string) any {
 }
 
 // UpdateGraph는 활성 그래프를 잠근 뒤 현재 판을 비교하고 이름·설명만 갱신한다.
-func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersion int64, name, description string) (result model.Graph, err error) {
+func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersion int64, name, description string) (model.Graph, error) {
+	return s.updateGraphMetadata(ctx, model.Graph{ID: graphID, Name: name, Description: description}, expectedVersion, false)
+}
+
+// UpdateGraphMetadata는 이름·설명·대표 안내 지정을 같은 기대 판 아래 원자적으로 갱신한다.
+// EntryContextID가 nil이면 지정을 해제한다. 권한 확인은 호출 진입점이 담당한다.
+func (s *Store) UpdateGraphMetadata(ctx context.Context, graph model.Graph, expectedVersion int64) (model.Graph, error) {
+	return s.updateGraphMetadata(ctx, graph, expectedVersion, true)
+}
+
+func (s *Store) updateGraphMetadata(ctx context.Context, metadata model.Graph, expectedVersion int64, replaceEntry bool) (result model.Graph, err error) {
+	graphID, name, description := metadata.ID, metadata.Name, metadata.Description
 	ctx, observation := beginManagement(ctx, "graph_update")
 	defer func() {
 		if result.ID.IsV7() {
@@ -278,7 +305,7 @@ func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersi
 
 	previous, err := scanGraph(tx.QueryRow(ctx, `
 		SELECT graph_id, name, description, created_by, created_at, last_activity_at,
-		       grace_started_at, stored_chars, version, deleted_at
+		       grace_started_at, stored_chars, version, deleted_at, entry_context_id
 		FROM public.context_graph
 		WHERE graph_id = $1 AND deleted_at IS NULL FOR UPDATE`, graphID.String()))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -292,18 +319,30 @@ func (s *Store) UpdateGraph(ctx context.Context, graphID model.ID, expectedVersi
 	}
 	next := previous
 	next.Name, next.Description = name, description
+	if replaceEntry {
+		next.EntryContextID = metadata.EntryContextID
+	}
 	next.Version++
 	if err := model.ValidateGraphUpdate(previous, next); err != nil {
 		return model.Graph{}, err
 	}
 
+	if replaceEntry && next.EntryContextID != nil {
+		valid, err := s.validGraphEntry(ctx, tx, graphID, next.EntryContextID)
+		if err != nil {
+			return model.Graph{}, err
+		}
+		if valid == nil {
+			return model.Graph{}, model.FieldError{Field: "entry_context_id", Message: "대표 안내는 같은 그래프의 활성·유효·미대체 요약이어야 한다"}
+		}
+	}
 	row := tx.QueryRow(ctx, `
 		UPDATE public.context_graph
-		SET name = $1, description = $2, version = version + 1
+		SET name = $1, description = $2, version = version + 1, entry_context_id = $5
 		WHERE graph_id = $3 AND version = $4 AND deleted_at IS NULL
 		RETURNING graph_id, name, description, created_by, created_at, last_activity_at,
-		          grace_started_at, stored_chars, version, deleted_at`,
-		name, nullableString(description), graphID.String(), expectedVersion,
+		          grace_started_at, stored_chars, version, deleted_at, entry_context_id`,
+		name, nullableString(description), graphID.String(), expectedVersion, nullableID(next.EntryContextID),
 	)
 	graph, err := scanGraph(row)
 	if err != nil {
@@ -320,10 +359,10 @@ func scanGraph(row pgx.Row) (result model.Graph, err error) {
 	defer func() { err = storageError("graph_decode", err) }()
 	var graphID, createdBy string
 	var graph model.Graph
-	var description *string
+	var description, entryID *string
 	if err := row.Scan(
 		&graphID, &graph.Name, &description, &createdBy, &graph.CreatedAt, &graph.LastActivityAt,
-		&graph.GraceStartedAt, &graph.StoredChars, &graph.Version, &graph.DeletedAt,
+		&graph.GraceStartedAt, &graph.StoredChars, &graph.Version, &graph.DeletedAt, &entryID,
 	); err != nil {
 		return model.Graph{}, err
 	}
@@ -337,6 +376,13 @@ func scanGraph(row pgx.Row) (result model.Graph, err error) {
 	}
 	if description != nil {
 		graph.Description = *description
+	}
+	if entryID != nil {
+		id, err := model.ParseID(*entryID)
+		if err != nil {
+			return model.Graph{}, fmt.Errorf("entry_context_id: %w", err)
+		}
+		graph.EntryContextID = new(id)
 	}
 	graph.CreatedAt = graph.CreatedAt.UTC()
 	graph.LastActivityAt = graph.LastActivityAt.UTC()

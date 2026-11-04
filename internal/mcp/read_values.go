@@ -37,7 +37,7 @@ func edgeObjects(ids map[model.ID]bool, edges []model.HopEdge) ([]map[string]any
 		}
 		value := map[string]any{"from_context_id": edge.FromID.String(), "to_context_id": edge.ToID.String()}
 		switch edge.Kind {
-		case "derived_from", "supersedes", "member_refs":
+		case "derived_from", "supersedes", "member_refs", "navigation_refs":
 			value["reference_type"] = edge.Kind
 			references = append(references, value)
 		case "has_member":

@@ -89,7 +89,8 @@ func TestRelationProposalInputBoundIntegration(t *testing.T) {
 	queries, args := slices.Clone(tracer.queries), slices.Clone(tracer.args)
 	tracer.queries, tracer.args = nil, nil
 	tracer.mu.Unlock()
-	if len(queries) != 5 {
+	// 정점·기존 참조 셋과 별도 NAVIGATES_TO 묶음 조회를 포함한다.
+	if len(queries) != 6 {
 		t.Fatalf("상한 뒤 본문·참조 조립 질의=%d", len(queries))
 	}
 	plan := explainHop(t, database, queries[0], args[0]...)

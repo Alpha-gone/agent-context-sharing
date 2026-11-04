@@ -7,6 +7,7 @@ import (
 
 const serverInstructions = `공유 컨텍스트 그래프를 사용하는 도구입니다. graph_list로 접근 가능한 그래프를 확인하고 graph_id를 선택하세요.
 노드·관계 쓰기 전에 agent_register에 16~128자의 ASCII 등록 키를 보내 agent_id를 받으세요. 같은 계정·OAuth client에서 같은 등록 키를 재사용하고 반환한 agent_id를 후속 여섯 쓰기에 전달하세요. 등록은 개별 모델·대화의 신원 증명이나 그래프 권한 부여가 아닙니다.
+graph_get의 entry_context_id는 대표 요약입니다. 요약의 navigation_refs는 안내 참조이며 derived_from 근거와 구분합니다. node_get의 traversal_filter=navigation_refs로 사건·요약·원천을 탐색할 수 있습니다. source의 conversation_id·turn_index는 원문 순서이고 event의 conversation_id·previous_event_id는 명시적 대화 흐름을 연결합니다.
 graph_update·node_update는 조회한 현재 expected_version이 필요합니다. 충돌하면 재조회하고 변경을 검토하세요. 원천은 불변이며 정정은 새 원천, 파생의 근거·종류 변경은 새 파생과 supersedes_context_id로 표현하세요.
 여덟 업무 쓰기의 request_id는 선택이며 16~128자의 ASCII 키입니다. 같은 논리 요청은 같은 키·인자로 재시도할 수 있고 최초 결과는 24시간 보존됩니다. 새 키는 새 쓰기입니다. 키 없는 쓰기의 결과가 불명확하거나 키를 잃었다면 현재 상태를 재조회하세요.
 인증·현재 등급·agent 결합은 서버가 매 요청 확인합니다. annotations와 호스트 승인은 서버 권한 검사를 대신하지 않습니다. 내부 장애를 반복 로그인으로 해결하려 하지 마세요.
@@ -46,6 +47,9 @@ func toolDefinitions() []*sdk.Tool {
 	updateGraph["name"] = nonblankSchema("변경할 그래프 이름. 생략하면 유지한다.", 200)
 	updateGraph["description"] = textSchema("변경할 설명. 빈 문자열이면 설명을 비운다. 생략하면 유지한다.", 0, 2000)
 	updateGraph["request_id"] = requestKeySchema()
+	updateGraph["entry_context_id"] = idSchema("활성 요약 파생인 대표 진입점. 생략하면 유지하고 null이면 해제한다.")
+	updateGraph["entry_context_id"].Type = ""
+	updateGraph["entry_context_id"].Types = []string{"string", "null"}
 
 	createNode := graph()
 	createNode["layer"] = enumSchema("생성할 계층. source(원천 기록)는 source_ref·occurred_at·origin_kind, derived(파생)는 derived_from·derivation_kind·evidence_state, event(사건)는 member_refs·event_start가 필수다. 다른 계층의 필드는 거부한다.", "source", "derived", "event")
@@ -58,6 +62,12 @@ func toolDefinitions() []*sdk.Tool {
 	createNode["source_ref"].Description = "원천의 자연 키인 출처 참조. 같은 그래프에서 같은 참조는 폐기·삭제 상태도 포함해 기존 원천을 반환한다. 삭제 시각과 creation_status=existing_deleted를 확인하며 자동 복구하지 않는다."
 	createNode["occurred_at"] = utcSchema("source 전용 필수 필드. 원본 내용이 발생한 UTC 시각이며 시스템 기록 시각과 구분한다.", false)
 	createNode["origin_kind"] = enumSchema("source 전용 필수 필드. 원천 내용의 생성 주체이며 생성 후 불변이다.", "user_utterance", "agent_output", "external_content")
+	createNode["conversation_id"] = nonblankSchema("source·event의 명시적 대화 식별자. 1~128자이며 생성 후 불변이다. source에서는 conversation 출처와 turn_index를 함께 지정한다.", 128)
+	createNode["turn_index"] = integerSchema("conversation 원천의 0 이상 턴 순서. conversation_id와 한 쌍이며 생성 후 불변이다.", 0)
+	createNode["previous_event_id"] = idSchema("event 생성 전용 앞 사건. 같은 그래프·같은 명시적 conversation_id의 활성 사건을 지정하며 confirmed precedes를 함께 생성한다. 속성으로 저장하지 않는다.")
+	createNode["navigation_refs"] = refsSchema("summary 파생의 선택 안내 참조. 같은 그래프의 사건·요약·원천 최대 100개이며 근거가 아니다. 자기 참조·중복은 거부하고 생성 후 불변이다.", 100)
+	createNode["navigation_refs"].MinItems = new(0)
+	createNode["navigation_refs"].UniqueItems = true
 	createNode["derived_from"] = refsSchema("derived 전용 필수 필드. 이 파생이 근거로 삼는 기존 원천·파생 UUIDv7 1~100개이며 생성 후 불변이다. 근거 참조이며 사건 관계가 아니다.", 100)
 	createNode["derivation_kind"] = enumSchema("derived 전용 필수 필드. 파생의 생성 목적이며 생성 후 변경할 수 없다.", "proposition", "summary", "reflection")
 	createNode["summary_scope"] = enumSchema("summary일 때만 필수인 요약 범위. 다른 파생에는 지정하지 않는다.", "local", "global")
@@ -71,22 +81,26 @@ func toolDefinitions() []*sdk.Tool {
 	createNode["event_end"] = utcSchema("event 전용 선택 필드. 사건 종료 UTC 시각이며 생략하면 진행 중이다.", false)
 	creation := objectSchema(createNode, "graph_id", "layer", "body", "agent_id")
 	sourceFields := []string{"source_ref", "occurred_at", "origin_kind"}
-	derivedFields := []string{"derived_from", "derivation_kind", "summary_scope", "evidence_state", "confidence_state", "valid_from", "valid_to", "supersedes_context_id"}
-	eventFields := []string{"member_refs", "event_start", "event_end"}
+	sourceOnlyFields := append(append([]string{}, sourceFields...), "turn_index")
+	derivedFields := []string{"derived_from", "derivation_kind", "summary_scope", "evidence_state", "confidence_state", "valid_from", "valid_to", "supersedes_context_id", "navigation_refs"}
+	eventFields := []string{"member_refs", "event_start", "event_end", "previous_event_id"}
 	creation.AllOf = []*jsonschema.Schema{
 		conditional("layer", "source", sourceFields, append(append([]string{}, derivedFields...), eventFields...)),
-		conditional("layer", "derived", []string{"derived_from", "derivation_kind", "evidence_state"}, append(append([]string{}, sourceFields...), eventFields...)),
-		conditional("layer", "event", []string{"member_refs", "event_start"}, append(append([]string{}, sourceFields...), derivedFields...)),
+		conditional("layer", "derived", []string{"derived_from", "derivation_kind", "evidence_state"}, append(append(append([]string{}, sourceOnlyFields...), eventFields...), "conversation_id")),
+		conditional("layer", "event", []string{"member_refs", "event_start"}, append(append([]string{}, sourceOnlyFields...), derivedFields...)),
 		conditional("derivation_kind", "summary", []string{"summary_scope"}, nil),
 		conditional("evidence_state", "opinion", []string{"confidence_state"}, nil),
-		{If: &jsonschema.Schema{Not: requiredValue("derivation_kind", "summary")}, Then: forbidFields("summary_scope")},
+		{If: &jsonschema.Schema{Required: []string{"turn_index"}}, Then: &jsonschema.Schema{Required: []string{"conversation_id"}}},
+		{If: &jsonschema.Schema{AllOf: []*jsonschema.Schema{requiredValue("layer", "source"), {Required: []string{"conversation_id"}}}}, Then: &jsonschema.Schema{Required: []string{"turn_index"}, Properties: map[string]*jsonschema.Schema{"source_ref": {Properties: map[string]*jsonschema.Schema{"channel": {Const: new(any("conversation"))}}}}}},
+		{If: &jsonschema.Schema{Required: []string{"previous_event_id"}}, Then: &jsonschema.Schema{Required: []string{"conversation_id"}}},
+		{If: &jsonschema.Schema{Not: requiredValue("derivation_kind", "summary")}, Then: forbidFields("summary_scope", "navigation_refs")},
 		{If: &jsonschema.Schema{Not: requiredValue("evidence_state", "opinion")}, Then: forbidFields("confidence_state")},
 	}
 
 	getNode := node()
 	getNode["hops"] = integerSchema("탐색 깊이(간선 수). 0은 시작 노드만 반환하며 최대 홉 수는 계정 플랜이 제한한다.", 0)
 	getNode["direction"] = enumSchema("저장된 간선 방향 기준의 탐색 방향. out은 시작 노드에서 나가는 간선(파생→근거, 새 파생→이전 파생, 사건→구성원, 관계 시작→대상), in은 들어오는 간선을 따른다. 생략하면 양방향 both다.", "in", "out", "both")
-	getNode["traversal_filter"] = enumArray("탐색할 확정 참조·사건 관계. 생략하거나 빈 배열이면 7종 모두를 탐색하며 중복을 허용하되 최대 7개다.", 7, "derived_from", "supersedes", "member_refs", "precedes", "causes", "part_of", "relates_to")
+	getNode["traversal_filter"] = enumArray("탐색할 확정 참조·사건 관계. 생략하거나 빈 배열이면 8종 모두를 탐색하며 중복을 허용하되 최대 8개다.", 8, "derived_from", "supersedes", "member_refs", "navigation_refs", "precedes", "causes", "part_of", "relates_to")
 	updateNode := node()
 	actorFields(updateNode)
 	updateNode["expected_version"] = versionSchema()
@@ -125,7 +139,7 @@ func toolDefinitions() []*sdk.Tool {
 		tool("graph_list", "현재 등급을 가진 활성 그래프를 최근 활동순으로 조회한다. 받은 불투명 커서를 그대로 사용하고 응답 등급으로 가능한 작업을 판단한다.", list, read()),
 		tool("graph_create", "새 그래프를 만들고 인증 계정이 소유자가 된다. request_id 없는 불확정 결과는 재조회하며 새 키는 새 그래프를 만들 수 있다.", createGraph, write(false, false)),
 		tool("graph_get", "선택한 graph_id의 현재 메타데이터·version을 조회한다. 현재 등급은 서버가 검사한다.", objectSchema(graph(), "graph_id"), read()),
-		tool("graph_update", "현재 expected_version으로 이름·설명을 갱신한다. 충돌하면 재조회한다. 같은 request_id·인자의 24시간 최초 결과 재생과 새 키의 판 검사를 구분한다.", objectSchema(updateGraph, "graph_id", "expected_version"), write(true, false)),
+		tool("graph_update", "현재 expected_version으로 이름·설명·대표 entry_context_id를 갱신한다. 충돌하면 재조회한다. 같은 request_id·인자의 24시간 최초 결과 재생과 새 키의 판 검사를 구분한다.", objectSchema(updateGraph, "graph_id", "expected_version"), write(true, false)),
 		tool("node_create", "등록한 agent_id로 원천·파생·사건을 만든다. 계층별 필수 속성을 채운다. 원천은 source_ref로 중복 판정한다. 폐기·삭제된 기존 원천은 creation_status=existing_deleted와 warning을 반환하며 활성 근거로 사용할 수 없다. MCP 폐기는 node_restore로, 웹 삭제는 웹에서 복구한다. 파생 대체는 supersedes_context_id를 사용한다. 기존 노드와의 연결은 생성 때 파생의 derived_from이나 사건의 member_refs로 지정하며, 사건 사이 관계만 생성 뒤 relation_confirm으로 확정한다. request_id 재시도와 새 생성을 구분한다.", creation, write(true, false)),
 		tool("node_get", "graph_id 안에서 시작 노드와 확정 간선의 부분 그래프를 조회한다. 0홉은 시작점만이며 정상 절단은 오류가 아니다.", objectSchema(getNode, "graph_id", "context_id"), read()),
 		tool("node_update", "등록한 agent_id·현재 expected_version으로 파생/사건의 가변 필드만 갱신한다. 원천은 불변이고 keep은 가변 필드 없이 유지 판단을 기록한다. 충돌·불확정 결과는 재조회한다.", updating, write(true, false)),

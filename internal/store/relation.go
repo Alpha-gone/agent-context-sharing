@@ -270,15 +270,24 @@ func (s *Store) ProposeEventRelations(ctx context.Context, graphID, eventID mode
 
 	precedes := make([]rankedRelationCandidate, 0)
 	partOf := make([]rankedRelationCandidate, 0)
+	precedesEvents := events
+	if target.Event.ConversationID != "" {
+		precedesEvents, err = s.nearestConversationEvents(ctx, s.reader(ctx), graphID, target)
+		if err != nil {
+			return err
+		}
+	}
+	for _, other := range precedesEvents {
+		if relation, gap, ok := adjacentPrecedesCandidate(graphID, target, other, s.relationProposals.AdjacencyWindow); ok {
+			precedes = append(precedes, rankedRelationCandidate{relation: relation, rank: int64(gap)})
+		}
+	}
 	for _, other := range events {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if other.ID == target.ID {
 			continue
-		}
-		if relation, gap, ok := adjacentPrecedesCandidate(graphID, target, other, s.relationProposals.AdjacencyWindow); ok {
-			precedes = append(precedes, rankedRelationCandidate{relation: relation, rank: int64(gap)})
 		}
 		if relation, memberCount, ok := memberSubsetCandidate(graphID, target, other); ok {
 			partOf = append(partOf, rankedRelationCandidate{relation: relation, rank: int64(memberCount)})
@@ -393,6 +402,60 @@ func (s *Store) activeEventContexts(ctx context.Context, graphID, excludedID mod
 	return s.contextsByIDs(ctx, s.reader(ctx), graphID, ids)
 }
 
+// nearestConversationEvents는 명시적 대화 안에서 시간 범위가 겹치지 않는
+// 직전·직후 사건을 각각 하나씩 읽는다. 이전 사건의 입력 상한과 무관하게 두 개만 적재한다.
+func (s *Store) nearestConversationEvents(ctx context.Context, queryer cypherQueryer, graphID model.ID, target model.Context) ([]model.Context, error) {
+	var end *time.Time
+	if target.Event.End != nil {
+		end = target.Event.End
+	}
+	base := ` FROM ` + s.contextTable() + ` WHERE properties ->> 'graph_id'::text = $1
+		AND properties ->> 'layer'::text = 'event' AND properties ->> 'deleted_at'::text IS NULL
+		AND properties ->> 'context_id'::text <> $2 AND properties ->> 'conversation_id'::text = $3`
+	rows, err := queryer.Query(ctx, `(SELECT properties ->> 'context_id'::text`+base+`
+		AND (properties ->> 'event_end'::text)::timestamptz <= $4
+		ORDER BY (properties ->> 'event_end'::text)::timestamptz DESC,
+		(properties ->> 'context_id'::text) COLLATE "C" LIMIT 1)
+		UNION (SELECT properties ->> 'context_id'::text`+base+`
+		AND (properties ->> 'event_start'::text)::timestamptz >= $5
+		ORDER BY (properties ->> 'event_start'::text)::timestamptz,
+		(properties ->> 'context_id'::text) COLLATE "C" LIMIT 1)`,
+		graphID.String(), target.ID.String(), target.Event.ConversationID, target.Event.Start, end)
+	if err != nil {
+		return nil, fmt.Errorf("대화의 인접 사건 조회: %w", err)
+	}
+	ids, err := searchCandidateIDs(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.contextsByIDs(ctx, queryer, graphID, ids)
+}
+
+// 그래프 잠금을 얻은 뒤 양 끝에서 더 가까운 사건과 확정 연결을 다시 확인한다.
+// 이미 확정한 앞/뒤 방향에는 새 지름길 후보를 만들지 않는다.
+func (s *Store) validConversationPrecedes(ctx context.Context, tx pgx.Tx, relation model.Relation, from, to model.Context) (bool, error) {
+	var confirmed bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM "`+s.graphName+`"."PRECEDES"
+		WHERE properties ->> 'graph_id'::text = $1 AND properties ->> 'state'::text = 'confirmed'
+		AND (properties ->> 'from_context_id'::text = $2 OR properties ->> 'to_context_id'::text = $3))`,
+		relation.GraphID.String(), from.ID.String(), to.ID.String()).Scan(&confirmed); err != nil {
+		return false, fmt.Errorf("대화의 확정 연결 조회: %w", err)
+	}
+	if confirmed {
+		return false, nil
+	}
+	for _, pair := range [][2]model.Context{{from, to}, {to, from}} {
+		neighbors, err := s.nearestConversationEvents(ctx, tx, relation.GraphID, pair[0])
+		if err != nil {
+			return false, err
+		}
+		if !slices.ContainsFunc(neighbors, func(value model.Context) bool { return value.ID == pair[1].ID }) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // adjacentPrecedesCandidate는 시간 범위가 겹치지 않고 간격이 임계값 안인 두 사건에서
 // 앞선 쪽을 시작으로 하는 precedes 후보를 만든다.
 //
@@ -401,6 +464,9 @@ func (s *Store) activeEventContexts(ctx context.Context, graphID, excludedID mod
 // 요구하면 가장 최근 사건이 직전 사건의 후속 후보로 올라오지 않는다.
 func adjacentPrecedesCandidate(graphID model.ID, left, right model.Context, window time.Duration) (model.Relation, time.Duration, bool) {
 	if left.Event == nil || right.Event == nil {
+		return model.Relation{}, 0, false
+	}
+	if (left.Event.ConversationID != "" || right.Event.ConversationID != "") && left.Event.ConversationID != right.Event.ConversationID {
 		return model.Relation{}, 0, false
 	}
 	var from, to model.Context
@@ -607,6 +673,12 @@ func (s *Store) validProposalSignal(ctx context.Context, tx pgx.Tx, relation mod
 	switch relation.Type {
 	case model.RelationTypePrecedes:
 		current, _, valid = adjacentPrecedesCandidate(relation.GraphID, from, to, s.relationProposals.AdjacencyWindow)
+		if valid && from.Event.ConversationID != "" {
+			valid, err := s.validConversationPrecedes(ctx, tx, relation, from, to)
+			if err != nil || !valid {
+				return false, err
+			}
+		}
 	case model.RelationTypePartOf:
 		current, _, valid = memberSubsetCandidate(relation.GraphID, from, to)
 	case model.RelationTypeRelatesTo:

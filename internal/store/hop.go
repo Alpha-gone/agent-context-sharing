@@ -295,7 +295,14 @@ func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, context
 	if err != nil {
 		return 0, err
 	}
+	navigation, err := s.edgeTargetsBySource(ctx, s.reader(ctx), graphID, "NAVIGATES_TO", list)
+	if err != nil {
+		return 0, err
+	}
 	rows := 0
+	for _, targets := range navigation {
+		rows += len(targets)
+	}
 	for _, targets := range references {
 		rows += len(targets)
 	}
@@ -306,6 +313,9 @@ func (s *Store) fillHopReferences(ctx context.Context, graphID model.ID, context
 		rows += len(targets)
 	}
 	for index, value := range contexts {
+		if value.Derived != nil {
+			value.Derived.NavigationRefs = navigation[value.ID]
+		}
 		value, err = assembleStoredContext(value, references[value.ID], members[value.ID], supersedes[value.ID])
 		if err != nil {
 			return 0, err
@@ -323,7 +333,7 @@ type traversalLabel struct {
 
 func traversalLabels(filter []string) ([]traversalLabel, error) {
 	all := []traversalLabel{
-		{label: "DERIVED_FROM", kind: "derived_from"}, {label: "SUPERSEDES", kind: "supersedes"}, {label: "HAS_MEMBER", kind: "has_member"},
+		{label: "NAVIGATES_TO", kind: "navigation_refs"}, {label: "DERIVED_FROM", kind: "derived_from"}, {label: "SUPERSEDES", kind: "supersedes"}, {label: "HAS_MEMBER", kind: "has_member"},
 		{label: "PRECEDES", kind: "precedes", confirmed: true}, {label: "CAUSES", kind: "causes", confirmed: true}, {label: "PART_OF", kind: "part_of", confirmed: true}, {label: "RELATES_TO", kind: "relates_to", confirmed: true},
 	}
 	if len(filter) == 0 {

@@ -56,7 +56,8 @@ type Actor struct {
 // 처리기에는 트랜잭션이나 DB 실행기를 내보내지 않는다.
 type GraphWriter interface {
 	CreateGraph(context.Context, model.Graph, plan.Limits) (model.Graph, error)
-	UpdateGraph(context.Context, model.Graph, int64, model.ID, plan.Limits) (model.Graph, error)
+	// bool은 entry_context_id 입력의 존재 여부다. false이면 숨긴 무효 지정도 보존한다.
+	UpdateGraph(context.Context, model.Graph, int64, bool, model.ID, plan.Limits) (model.Graph, error)
 }
 
 type NodeWriter interface {

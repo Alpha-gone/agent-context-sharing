@@ -42,13 +42,20 @@ func newNode(args map[string]any, principal Principal) (model.Context, error) {
 	case model.LayerSource:
 		ref := args["source_ref"].(map[string]any)
 		node.Source = &model.SourceAttributes{Reference: model.SourceReference{Channel: model.SourceChannel(ref["channel"].(string)), Locator: ref["locator"].(string)}, OccurredAt: *argumentTime(args, "occurred_at"), OriginKind: model.OriginKind(argumentString(args, "origin_kind"))}
+		if value, ok := args["turn_index"].(int64); ok {
+			node.Source.TurnIndex = new(value)
+		}
+		node.Source.ConversationID = argumentString(args, "conversation_id")
 	case model.LayerDerived:
-		node.Derived = &model.DerivedAttributes{Kind: model.DerivationKind(argumentString(args, "derivation_kind")), SummaryScope: model.SummaryScope(argumentString(args, "summary_scope")), DerivedFrom: argumentIDs(args, "derived_from"), EvidenceState: model.EvidenceState(argumentString(args, "evidence_state")), ConfidenceState: model.ConfidenceState(argumentString(args, "confidence_state")), ValidFrom: argumentTime(args, "valid_from"), ValidTo: argumentTime(args, "valid_to")}
+		node.Derived = &model.DerivedAttributes{Kind: model.DerivationKind(argumentString(args, "derivation_kind")), SummaryScope: model.SummaryScope(argumentString(args, "summary_scope")), DerivedFrom: argumentIDs(args, "derived_from"), NavigationRefs: argumentIDs(args, "navigation_refs"), EvidenceState: model.EvidenceState(argumentString(args, "evidence_state")), ConfidenceState: model.ConfidenceState(argumentString(args, "confidence_state")), ValidFrom: argumentTime(args, "valid_from"), ValidTo: argumentTime(args, "valid_to")}
 		if _, ok := args["supersedes_context_id"]; ok {
 			node.Derived.Supersedes = new(argumentID(args, "supersedes_context_id"))
 		}
 	case model.LayerEvent:
-		node.Event = &model.EventAttributes{MemberIDs: argumentIDs(args, "member_refs"), Start: *argumentTime(args, "event_start"), End: argumentTime(args, "event_end")}
+		node.Event = &model.EventAttributes{ConversationID: argumentString(args, "conversation_id"), MemberIDs: argumentIDs(args, "member_refs"), Start: *argumentTime(args, "event_start"), End: argumentTime(args, "event_end")}
+		if _, ok := args["previous_event_id"]; ok {
+			node.Event.PreviousEventID = new(argumentID(args, "previous_event_id"))
+		}
 	}
 	return node, nil
 }
@@ -94,7 +101,11 @@ func patchNode(previous model.Context, args map[string]any) (model.Context, erro
 }
 
 func graphObject(graph model.Graph) map[string]any {
-	return map[string]any{"graph_id": graph.ID.String(), "name": graph.Name, "description": graph.Description, "created_by": graph.CreatedBy.String(), "created_at": graph.CreatedAt, "last_activity_at": graph.LastActivityAt, "stored_chars": graph.StoredChars, "version": graph.Version, "deleted_at": graph.DeletedAt}
+	value := map[string]any{"graph_id": graph.ID.String(), "name": graph.Name, "description": graph.Description, "created_by": graph.CreatedBy.String(), "created_at": graph.CreatedAt, "last_activity_at": graph.LastActivityAt, "stored_chars": graph.StoredChars, "version": graph.Version, "deleted_at": graph.DeletedAt}
+	if graph.EntryContextID != nil {
+		value["entry_context_id"] = graph.EntryContextID.String()
+	}
+	return value
 }
 
 func idStrings(ids []model.ID) []string {
@@ -110,10 +121,16 @@ func nodeObject(node model.Context) map[string]any {
 	if source := node.Source; source != nil {
 		value["source_ref"] = map[string]any{"channel": source.Reference.Channel, "locator": source.Reference.Locator}
 		value["occurred_at"], value["origin_kind"] = source.OccurredAt, source.OriginKind
+		if source.ConversationID != "" {
+			value["conversation_id"], value["turn_index"] = source.ConversationID, source.TurnIndex
+		}
 	}
 	if derived := node.Derived; derived != nil {
 		value["derivation_kind"], value["derived_from"] = derived.Kind, idStrings(derived.DerivedFrom)
 		value["evidence_state"], value["evidence_invalidated"] = derived.EvidenceState, derived.EvidenceInvalidated
+		if len(derived.NavigationRefs) > 0 {
+			value["navigation_refs"] = idStrings(derived.NavigationRefs)
+		}
 		if derived.SummaryScope != "" {
 			value["summary_scope"] = derived.SummaryScope
 		}
@@ -127,6 +144,9 @@ func nodeObject(node model.Context) map[string]any {
 	}
 	if event := node.Event; event != nil {
 		value["member_refs"], value["event_start"], value["event_end"] = idStrings(event.MemberIDs), event.Start, event.End
+		if event.ConversationID != "" {
+			value["conversation_id"] = event.ConversationID
+		}
 	}
 	return value
 }

@@ -67,8 +67,14 @@ func (s mcpWriteStorage) CreateGraph(ctx context.Context, graph model.Graph, lim
 	value, err := s.Store.CreateGraphWithOwner(ctx, graph, mcpWriteLimits(graph.CreatedBy, limits))
 	return value, mcpWriteError(err)
 }
-func (s mcpWriteStorage) UpdateGraph(ctx context.Context, graph model.Graph, expected int64, account model.ID, limits plan.Limits) (model.Graph, error) {
-	value, err := s.Store.UpdateGraph(ctx, graph.ID, expected, graph.Name, graph.Description)
+func (s mcpWriteStorage) UpdateGraph(ctx context.Context, graph model.Graph, expected int64, replaceEntry bool, account model.ID, limits plan.Limits) (model.Graph, error) {
+	if !replaceEntry {
+		value, err := s.Store.UpdateGraph(ctx, graph.ID, expected, graph.Name, graph.Description)
+		// 조회에서 숨긴 무효 지정은 응답에서도 숨기되 DB의 원래 지정은 보존한다.
+		value.EntryContextID = graph.EntryContextID
+		return value, mcpWriteError(err)
+	}
+	value, err := s.Store.UpdateGraphMetadata(ctx, graph, expected)
 	return value, mcpWriteError(err)
 }
 func (s mcpWriteStorage) CreateNode(ctx context.Context, graph model.ID, node model.Context, actor mcp.Actor, limits plan.Limits) (model.Context, error) {

@@ -582,3 +582,22 @@
 ## 커밋 후 관계 제안 예산 (#260, 2026-11-02)
 
 - [Go 1.27.3 context 공식 문서](https://pkg.go.dev/context#WithTimeout): WithTimeout은 부모 취소·더 짧은 마감을 유지하며 반환한 CancelFunc로 타이머를 정리한다. WithoutCancel은 부모 취소와 마감을 제거하므로 관계 제안에는 사용하지 않는다. 2026-11-02 조회. 수명주기·제안 실행 경계에 반영하며 트랜잭션 정리의 독립 유한 예산은 유지한다.
+
+## MCP 도구 컨텍스트 비용 분석 (#305, 2026-11-04)
+
+- [tiktoken](https://github.com/openai/tiktoken)의 공개 o200k_base·cl100k_base 인코딩을 비교 기준으로 사용했다. 실제 호스트나 Claude 과금량으로 해석하지 않는다.
+- [MCP 2026-07-28 tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)의 목록/호출 구분과 구조화 결과의 호환 text 권고, [caching](https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching)의 재조회 신선도 의미를 확인했다.
+- [Claude Code MCP](https://code.claude.com/docs/en/mcp#scale-with-mcp-tool-search)와 [제공자 토큰 계산](https://platform.claude.com/docs/en/build-with-claude/token-counting)을 기준으로 지연 적재·호스트 변환·모델별 측정을 구분했다. 조회일 2026-11-04 KST.
+- 최초 조사에서는 위 근거를 [#305 분석](reviews/2026-11-04-issue-305.md)에만 반영했다. 후속 구현은 [공개 도구 정의](sdd/mcp.md#공개-도구-정의의-크기-예산)와 [검증](sdd/testing.md)에 반영하며 실제 호스트 지원·사용량 판정과 구분한다.
+- [Go MCP SDK v1.8.0 Server.AddTool](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/server.go)의 공급자 주석·구현에서 입력 인자 해석/검증이 호출자 책임임을 확인했다. [jsonschema-go v0.4.3 CloneSchemas](https://github.com/google/jsonschema-go/blob/v0.4.3/jsonschema/schema.go)는 스키마 이외의 map·slice를 공유하므로 공개 메타데이터는 JSON 왕복으로 독립시켰다. 로컬 적용 판 모듈 소스 확인 2026-11-04 KST.
+- [Claude Code의 루트 조합식 처리](https://code.claude.com/docs/en/mcp#tool-input-schemas-with-a-root-level-combinator)는 Claude API의 최상위 allOf/anyOf/oneOf 제약과 호스트 변환 미적용 시 도구 제외를 설명한다. 공개 루트 allOf 생략·내부 엄격 검증 유지의 근거로 반영했다. [Tool Search 설정](https://code.claude.com/docs/en/mcp#configure-tool-search)은 기본 지연 적재·alwaysLoad·ToolSearch 제외 시 전체 적재를 구분하며 [비용 안내](https://code.claude.com/docs/en/costs#reduce-mcp-server-overhead)는 /context로 확인하도록 안내한다. 조회 2026-11-04 KST. 분리 CLI의 실패한 토큰 계산 요청과 대체 추정치를 제공자 실사용량으로 해석하지 않는다.
+
+## 실제 Codex 모델을 통한 MCP 인수 (#305, 2026-11-05)
+
+- [Codex 비대화 실행](https://learn.chatgpt.com/docs/non-interactive-mode): 기존 로그인 재사용, exec의 ephemeral·ignore-user-config·JSONL 결과와 usage를 확인했다. [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli): bearer_token_env_var·서버별 도구 승인·시간 제한을 확인했다. 공식 문서와 설치 Codex CLI 0.165.0의 help를 대조했다. 조회 2026-11-05 KST. [시험 설계](sdd/testing.md)와 [실제 모델 검증 기록](reviews/2026-11-05-issue-305-codex-live.md)에 반영했다. 합성 시험 서버 승인 설정은 운영 권한을 변경하지 않는다.
+
+## #305 추가 제안의 스키마·호스트 의미 재검토 (2026-11-05)
+
+- [JSON Schema 객체의 properties/required](https://json-schema.org/understanding-json-schema/reference/object), [조합식](https://json-schema.org/understanding-json-schema/reference/combining), [2020-12 검증 어휘](https://json-schema.org/draft/2020-12/draft-bhutton-json-schema-validation-01): 선택 객체의 하위 required만으로 정확히 한 객체의 존재를 강제하지 못하며 minLength/minItems 생략 하한과 형식 힌트를 구분했다. 제안 JSON은 적용 jsonschema-go v0.4.3의 로컬 공급자 소스 Resolve/Validate로 검사했다.
+- [MCP ToolAnnotations](https://modelcontextprotocol.io/specification/2026-07-28/schema#toolannotations)와 [구조화 결과](https://modelcontextprotocol.io/specification/2026-07-28/server/tools#structured-content): 가산적 갱신 힌트와 권한 정책을 구분하고 텍스트 사본의 호환 권고를 확인했다.
+- [Claude의 중첩 조합식](https://code.claude.com/docs/en/mcp#tool-input-schemas-with-a-root-level-combinator), [승인용 메타데이터](https://code.claude.com/docs/en/mcp#require-approval-for-a-specific-tool), [재호출·읽기 힌트](https://code.claude.com/docs/en/mcp#mark-tools-that-are-safe-to-call-twice), [MCP 승인 규칙](https://code.claude.com/docs/en/permissions#mcp): 구조·승인·재시도의 호스트 영향을 구분했다. 모두 2026-11-05 KST 조회. [추가 코멘트 분석](reviews/2026-11-05-issue-305-comments.md)에만 반영하며 제품 계약은 바꾸지 않았다.

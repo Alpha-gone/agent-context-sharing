@@ -10,10 +10,14 @@ import (
 
 // OPS-08의 배포 목록이다. 실제 호스트·도구 결과 인수는 MCP-09에서 별도로 수행한다.
 func TestOPS08ToolSnapshot(t *testing.T) {
+	tools, err := mustCatalog(t).publicTools()
+	if err != nil {
+		t.Fatal(err)
+	}
 	data, err := json.Marshal(map[string]any{
 		"protocolVersion": protocolRevision,
 		"instructions":    serverInstructions,
-		"tools":           toolDefinitions(),
+		"tools":           tools,
 	}, json.Deterministic(true), jsontext.WithIndent("  "))
 	if err != nil {
 		t.Fatal(err)

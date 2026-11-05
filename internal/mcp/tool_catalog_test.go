@@ -125,7 +125,7 @@ func TestCatalogToolSetAndAnnotations(t *testing.T) {
 				t.Fatal("서비스 전용 필수 헤더가 있다")
 			}
 			for field, property := range tool.InputSchema.(*jsonschema.Schema).Properties {
-				if property.Description == "" {
+				if property.Description == "" && !slices.Contains([]string{"graph_id", "context_id", "agent_id", "request_id", "expected_version"}, field) {
 					t.Fatalf("%s 설명 누락", field)
 				}
 			}
@@ -135,7 +135,7 @@ func TestCatalogToolSetAndAnnotations(t *testing.T) {
 			validateCatalogSample(t, catalog, tool.Name, sample, "unexpected")
 		})
 	}
-	for _, required := range []string{"agent_register", "graph_list", "expected_version", "request_id", "24시간", "웹", "annotations"} {
+	for _, required := range []string{"agent_register", "graph_list", "expected_version", "request_id", "24 hours", "web", "annotations"} {
 		if !strings.Contains(serverInstructions, required) {
 			t.Fatalf("instructions 안내 누락: %s", required)
 		}
@@ -433,7 +433,11 @@ func TestCatalogSDKRegistrationAndValidationBeforeHandler(t *testing.T) {
 		if !seen[name] {
 			t.Fatalf("도구 누락: %s", name)
 		}
-		encoded, err := json.Marshal(definition.tool)
+		public, err := publicTool(definition.tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(public)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -27,8 +27,8 @@ type toolDefinition struct {
 	properties map[string]*jsonschema.Resolved
 }
 
-// toolCatalog의 스키마는 생성 후 읽기 전용이다. 서버 목록과 입력 검증이 같은
-// 정의를 사용하며, 상태·등급·행위자 결합 판정은 주입한 업무 처리기의 책임이다.
+// toolCatalog는 내부 엄격 스키마를 읽기 전용으로 보존한다. 공개 목록은 별도 복사본이며,
+// 상태·등급·행위자 결합 판정은 주입한 업무 처리기의 책임이다.
 type toolCatalog struct {
 	definitions []toolDefinition
 }
@@ -92,11 +92,14 @@ func (catalog *toolCatalog) register(server *sdk.Server, handlers map[string]sdk
 			return fmt.Errorf("%s 업무 처리기가 필요하다", definition.tool.Name)
 		}
 	}
-	for _, definition := range catalog.definitions {
+	published, err := catalog.publicTools()
+	if err != nil {
+		return err
+	}
+	for index, definition := range catalog.definitions {
 		handler := handlers[definition.tool.Name]
-		tool := *definition.tool
-		tool.InputSchema = tool.InputSchema.(*jsonschema.Schema).CloneSchemas()
-		server.AddTool(&tool, func(ctx context.Context, request *sdk.CallToolRequest) (result *sdk.CallToolResult, err error) {
+		tool := published[index]
+		server.AddTool(tool, func(ctx context.Context, request *sdk.CallToolRequest) (result *sdk.CallToolResult, err error) {
 			// SDK는 HTTP 복구 경계 밖의 goroutine에서 호출한다. panic 값은 보관하지 않는다.
 			defer func() {
 				if recover() != nil {
@@ -168,7 +171,7 @@ func (definition toolDefinition) validateValues(arguments []byte) (map[string]an
 		values[name] = value
 	}
 	if definition.resolved.Validate(values) != nil {
-		// 조건부 필수 필드도 공개 스키마에서 찾아 안내한다.
+		// 조건부 필수 필드도 내부 엄격 스키마에서 찾아 안내한다.
 		for _, condition := range schema.AllOf {
 			if condition.If == nil || condition.Then == nil {
 				continue

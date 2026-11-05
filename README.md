@@ -228,6 +228,8 @@ claude mcp login agent-context
 
 Claude Code 2.1.316의 발견→자동 등록→인증 URL 생성까지 격리 환경에서 확인했습니다. 실제 CLI의 브라우저 로그인·callback 수신·토큰 저장·도구 호출 전체 인수는 대기입니다. 서버의 동의·코드 교환 시험과 실제 CLI 시험의 범위는 [#300 검토](spec/service/agent-context/reviews/2026-11-02-issue-300.md)를 확인합니다.
 
+도구 정의의 컨텍스트 사용량은 `/context`에서 확인합니다. 지원되는 모델·환경에서는 Tool Search가 정의를 지연 적재하며, `MCP tools (loaded on-demand)`와 도구 수를 함께 확인합니다. `ENABLE_TOOL_SEARCH=false` 또는 서버의 `alwaysLoad: true`는 전체 정의를 미리 적재할 수 있습니다. CLI에서 지연 적재를 명시하려면 `ENABLE_TOOL_SEARCH=true claude`로 시작하며 `ToolSearch`를 차단하거나 기본 도구 목록에서 제외하지 않습니다. `/context all`의 도구별 예상 비용은 실제로 모든 정의가 적재됐다는 뜻이 아닙니다. 분리 CLI의 확인 범위·추정치와 실제 모델 사용량의 차이는 [#305 검토](spec/service/agent-context/reviews/2026-11-04-issue-305.md#커밋-이후-호스트-확인과-호환성-보완)를 확인합니다.
+
 ### 3. 다른 MCP 클라이언트
 
 클라이언트가 DCR을 지원해야 하며 서버 주소를 설정하고 자동 OAuth 연결을 시작합니다. HTTP callback은 유효한 포트가 있는 literal loopback IP 또는 정확한 소문자 localhost만 허용합니다. HTTPS·localhost callback은 등록 원문과 완전 일치시키고, 같은 HTTP loopback IP·경로·query에서는 포트 변경을 허용합니다.

@@ -5,12 +5,9 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const serverInstructions = `Shared context graph search and recording. Select a graph with graph_list. Before node/relation writes, get agent_id from agent_register. Reuse registration keys per account/OAuth client; registration does not prove identity or grant access.
-graph_get.entry_context_id is the entry summary. navigation_refs are navigation; derived_from is evidence. Traverse with node_get and express conversation order through conversation_id, turn_index and previous_event_id.
-graph_update/node_update require the current expected_version; reread on conflict. Correct sources with new sources. Change derived evidence/kind with a new derived node and supersedes_context_id.
-Registration/retry keys use only ASCII letters, digits, _ or -. request_id is optional; the same key and arguments replay the first result for 24 hours, while a new key is a new write. Reread state if an unkeyed result is uncertain or the key is lost. Do not repeatedly log in for internal failures.
-The server checks authentication, grade and agent binding per request; annotations/host approval do not replace authorization. Deletion, permissions and teams are web-only. node_restore restores operation discards; restore web deletions on the web.
-Search with context_flow_get. Partial channel failures and truncation may yield normal partial results.`
+const serverInstructions = `Shared context graphs: search with context_flow_get; choose graph_list. Before node/relation writes, get agent_id via agent_register; reuse registration keys per account/OAuth client. Registration grants no identity proof/access.
+graph_update/node_update need current expected_version; reread on conflict. Keys use only ASCII letters, digits, _ or -. request_id is an optional per-write key: same key+args replay for 24 hours; new key=new write. Lost key/uncertain unkeyed result: reread. Internal failure: no relogin.
+Server auth/grade/agent checks apply; annotations/host approval grant no access. Delete/permissions/teams are web-only.`
 
 func toolDefinitions() []*sdk.Tool {
 	read := func() *sdk.ToolAnnotations {
@@ -137,11 +134,11 @@ func toolDefinitions() []*sdk.Tool {
 		tool("agent_register", "Register an agent. Reusing an active key returns the same ID; revoked keys stay revoked.", registration, write(false, true)),
 		tool("graph_list", "List accessible active graphs by recent activity.", list, read()),
 		tool("graph_create", "Create a graph owned by the authenticated account.", createGraph, write(false, false)),
-		tool("graph_get", "Get graph metadata, current version and entry point.", objectSchema(graph(), "graph_id"), read()),
+		tool("graph_get", "Get graph metadata, current version and entry summary.", objectSchema(graph(), "graph_id"), read()),
 		tool("graph_update", "Update name, description or entry summary using the current expected_version.", objectSchema(updateGraph, "graph_id", "expected_version"), write(true, false)),
 		tool("node_create", "Create a source, derived node or event. A creation_status=existing_deleted result cannot be active evidence. Connect events with previous_event_id or relation_confirm.", creation, write(true, false)),
 		tool("node_get", "Get a subgraph via confirmed edges. Truncation is a normal partial result.", objectSchema(getNode, "graph_id", "context_id"), read()),
-		tool("node_update", "Update mutable derived/event fields or record a keep judgment. Sources are immutable. Omitted fields stay unchanged.", updating, write(true, false)),
+		tool("node_update", "Update mutable derived/event fields or record a keep judgment. Sources are immutable; correct them with new sources. To change derived evidence/kind, create a replacement with supersedes_context_id. Omitted fields stay unchanged.", updating, write(true, false)),
 		tool("node_discard", "Soft-discard a node. Reject repeated discard; no cascade.", objectSchema(discard, "graph_id", "context_id", "agent_id"), write(true, false)),
 		tool("node_restore", "Restore an operation-discarded node. Restore web deletions on the web. Reject already active nodes.", objectSchema(restore, "graph_id", "context_id", "agent_id"), write(true, false)),
 		tool("context_flow_get", "Retrieve a flat context flow for a task. Channel failures and budget/hop truncation may produce normal partial results.", objectSchema(flow, "graph_id", "work_context"), read()),

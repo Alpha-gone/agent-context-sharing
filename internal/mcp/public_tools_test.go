@@ -101,8 +101,8 @@ func TestPublicToolMetadataBudget(t *testing.T) {
 	if len(wire) > 17500 {
 		t.Fatalf("tools/list metadata bytes=%d, budget=17500", len(wire))
 	}
-	if len(serverInstructions) > 1500 {
-		t.Fatalf("instructions bytes=%d, budget=1500", len(serverInstructions))
+	if len(serverInstructions) > 700 {
+		t.Fatalf("instructions bytes=%d, budget=700", len(serverInstructions))
 	}
 	for _, tool := range tools {
 		value, err := json.Marshal(tool)

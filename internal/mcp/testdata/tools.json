@@ -1,5 +1,5 @@
 {
-  "instructions": "Shared context graph search and recording. Select a graph with graph_list. Before node/relation writes, get agent_id from agent_register. Reuse registration keys per account/OAuth client; registration does not prove identity or grant access.\ngraph_get.entry_context_id is the entry summary. navigation_refs are navigation; derived_from is evidence. Traverse with node_get and express conversation order through conversation_id, turn_index and previous_event_id.\ngraph_update/node_update require the current expected_version; reread on conflict. Correct sources with new sources. Change derived evidence/kind with a new derived node and supersedes_context_id.\nRegistration/retry keys use only ASCII letters, digits, _ or -. request_id is optional; the same key and arguments replay the first result for 24 hours, while a new key is a new write. Reread state if an unkeyed result is uncertain or the key is lost. Do not repeatedly log in for internal failures.\nThe server checks authentication, grade and agent binding per request; annotations/host approval do not replace authorization. Deletion, permissions and teams are web-only. node_restore restores operation discards; restore web deletions on the web.\nSearch with context_flow_get. Partial channel failures and truncation may yield normal partial results.",
+  "instructions": "Shared context graphs: search with context_flow_get; choose graph_list. Before node/relation writes, get agent_id via agent_register; reuse registration keys per account/OAuth client. Registration grants no identity proof/access.\ngraph_update/node_update need current expected_version; reread on conflict. Keys use only ASCII letters, digits, _ or -. request_id is an optional per-write key: same key+args replay for 24 hours; new key=new write. Lost key/uncertain unkeyed result: reread. Internal failure: no relogin.\nServer auth/grade/agent checks apply; annotations/host approval grant no access. Delete/permissions/teams are web-only.",
   "protocolVersion": "2026-07-28",
   "tools": [
     {
@@ -118,7 +118,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Get graph metadata, current version and entry point.",
+      "description": "Get graph metadata, current version and entry summary.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -475,7 +475,7 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "Update mutable derived/event fields or record a keep judgment. Sources are immutable. Omitted fields stay unchanged.",
+      "description": "Update mutable derived/event fields or record a keep judgment. Sources are immutable; correct them with new sources. To change derived evidence/kind, create a replacement with supersedes_context_id. Omitted fields stay unchanged.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

@@ -51,6 +51,27 @@ func TestPublicToolProjection(t *testing.T) {
 					}
 					removePatterns(child)
 				}
+				for _, key := range []string{"minLength", "minItems"} {
+					if x[key] == float64(0) {
+						delete(x, key)
+					}
+				}
+				if terms, ok := x["allOf"].([]any); ok {
+					var meaningful []any
+					for _, term := range terms {
+						if term == true {
+							continue
+						}
+						if object, ok := term.(map[string]any); !ok || len(object) != 0 {
+							meaningful = append(meaningful, term)
+						}
+					}
+					if len(meaningful) == 0 {
+						delete(x, "allOf")
+					} else {
+						x["allOf"] = meaningful
+					}
+				}
 			case []any:
 				for _, child := range x {
 					removePatterns(child)
@@ -60,7 +81,7 @@ func TestPublicToolProjection(t *testing.T) {
 		removePatterns(want["inputSchema"])
 		delete(want["inputSchema"].(map[string]any), "allOf")
 		if !reflect.DeepEqual(want, got) {
-			t.Fatalf("%s: changed more than pattern and root allOf", original.Name)
+			t.Fatalf("%s: changed more than patterns, root allOf and redundant constraints", original.Name)
 		}
 		schema := published.InputSchema.(map[string]any)
 		if required, ok := schema["required"].([]any); ok && len(required) > 0 {
@@ -89,6 +110,69 @@ func TestPublicToolProjection(t *testing.T) {
 	}
 }
 
+func TestPublicCompactionKeepsSchemaMeaning(t *testing.T) {
+	const definition = `{"type":"object","properties":{
+		"all":{"type":"string","allOf":[{},{"minLength":1},{}]},
+		"any":{"anyOf":[{},{"type":"integer"}]},
+		"one":{"oneOf":[{},{"type":"integer"}]},
+		"never":{"not":{}},
+		"impossible":{"allOf":[{},false]},
+		"text":{"type":"string","minLength":0},
+		"array":{"type":"array","minItems":0},
+		"literal":{"const":{"allOf":[{}],"minLength":0,"minItems":0},"default":{"allOf":[{}],"minLength":0,"minItems":0}}
+	}}`
+	var original jsonschema.Schema
+	if err := json.Unmarshal([]byte(definition), &original); err != nil {
+		t.Fatal(err)
+	}
+	tool, err := publicTool(&sdk.Tool{Name: "compaction", InputSchema: &original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(tool.InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compact jsonschema.Schema
+	if err := json.Unmarshal(data, &compact); err != nil {
+		t.Fatal(err)
+	}
+	if len(compact.Properties["all"].AllOf) != 1 || compact.Properties["text"].MinLength != nil || compact.Properties["array"].MinItems != nil {
+		t.Fatal("public schema still includes redundant constraints")
+	}
+	if !reflect.DeepEqual(original.Properties["literal"], compact.Properties["literal"]) {
+		t.Fatal("compaction changed literal/default data")
+	}
+	for _, schema := range []*jsonschema.Schema{&original, &compact} {
+		resolved, err := schema.Resolve(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, sample := range []struct {
+			value string
+			valid bool
+		}{
+			{`{"all":"x","text":"","array":[]}`, true},
+			{`{"all":""}`, false},
+			{`{"any":"x"}`, true},
+			{`{"one":"x"}`, true},
+			{`{"one":1}`, false},
+			{`{"never":null}`, false},
+			{`{"impossible":"x"}`, false},
+			{`{"literal":{"allOf":[{}],"minLength":0,"minItems":0}}`, true},
+			{`{"literal":{}}`, false},
+		} {
+			var value any
+			if err := json.Unmarshal([]byte(sample.value), &value); err != nil {
+				t.Fatal(err)
+			}
+			if valid := resolved.Validate(value) == nil; valid != sample.valid {
+				t.Fatalf("compaction changed validation for %s", sample.value)
+			}
+		}
+	}
+}
+
 func TestPublicToolMetadataBudget(t *testing.T) {
 	tools, err := mustCatalog(t).publicTools()
 	if err != nil {
@@ -98,8 +182,8 @@ func TestPublicToolMetadataBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(wire) > 17500 {
-		t.Fatalf("tools/list metadata bytes=%d, budget=17500", len(wire))
+	if len(wire) > 16000 {
+		t.Fatalf("tools/list metadata bytes=%d, budget=16000", len(wire))
 	}
 	if len(serverInstructions) > 700 {
 		t.Fatalf("instructions bytes=%d, budget=700", len(serverInstructions))
@@ -109,8 +193,8 @@ func TestPublicToolMetadataBudget(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(value) > 5000 {
-			t.Fatalf("%s bytes=%d, budget=5000", tool.Name, len(value))
+		if len(value) > 4500 {
+			t.Fatalf("%s bytes=%d, budget=4500", tool.Name, len(value))
 		}
 	}
 	t.Logf("tools=%d bytes=%d instructions=%d", len(tools), len(wire), len(serverInstructions))

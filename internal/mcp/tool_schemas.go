@@ -20,11 +20,11 @@ func toolDefinitions() []*sdk.Tool {
 		return &sdk.Tool{Name: name, Description: description, InputSchema: schema, Annotations: annotations}
 	}
 	graph := func() map[string]*jsonschema.Schema {
-		return map[string]*jsonschema.Schema{"graph_id": idSchema("Graph UUIDv7.")}
+		return map[string]*jsonschema.Schema{"graph_id": idSchema("")}
 	}
 	node := func() map[string]*jsonschema.Schema {
 		p := graph()
-		p["context_id"] = idSchema("Context UUIDv7.")
+		p["context_id"] = idSchema("")
 		return p
 	}
 
@@ -183,11 +183,11 @@ func keySchema(description string) *jsonschema.Schema {
 }
 
 func requestKeySchema() *jsonschema.Schema {
-	return keySchema("Retry key.")
+	return keySchema("")
 }
 
 func actorFields(properties map[string]*jsonschema.Schema) {
-	properties["agent_id"] = idSchema("Active agent_id.")
+	properties["agent_id"] = idSchema("")
 	properties["request_id"] = requestKeySchema()
 	properties["judgment_input"] = textSchema("Judgment input; omit to record validated arguments.", 1, 8000)
 }
@@ -196,7 +196,7 @@ func bodySchema() *jsonschema.Schema {
 	return textSchema("Body; no NUL, whitespace-only allowed. Stored and indexed verbatim.", 1, 8000)
 }
 func versionSchema() *jsonschema.Schema {
-	return integerSchema("Current retrieved version; reread on conflict.", 1)
+	return integerSchema("", 1)
 }
 func integerSchema(description string, minimum int) *jsonschema.Schema {
 	return &jsonschema.Schema{Type: "integer", Description: description, Minimum: new(float64(minimum))}

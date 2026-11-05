@@ -22,20 +22,25 @@ func publicTool(original *sdk.Tool) (*sdk.Tool, error) {
 	if !ok {
 		return nil, fmt.Errorf("공개 도구 입력은 객체 스키마여야 한다")
 	}
-	omitPublicPatterns(schema)
+	compactPublicSchema(schema)
 	// Claude API는 루트 allOf를 받지 않는다. 조건은 설명과 내부 검증에 유지한다.
 	delete(schema, "allOf")
 	return &published, nil
 }
 
 // 스키마 값을 가진 키만 순회한다. const·enum·examples는 데이터다.
-func omitPublicPatterns(schema map[string]any) {
+func compactPublicSchema(schema map[string]any) {
 	delete(schema, "pattern")
+	for _, key := range []string{"minLength", "minItems"} {
+		if schema[key] == float64(0) {
+			delete(schema, key)
+		}
+	}
 	for _, key := range []string{"properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"} {
 		children, _ := schema[key].(map[string]any)
 		for _, child := range children {
 			if nested, ok := child.(map[string]any); ok {
-				omitPublicPatterns(nested)
+				compactPublicSchema(nested)
 			}
 		}
 	}
@@ -43,21 +48,39 @@ func omitPublicPatterns(schema map[string]any) {
 		children, _ := schema[key].([]any)
 		for _, child := range children {
 			if nested, ok := child.(map[string]any); ok {
-				omitPublicPatterns(nested)
+				compactPublicSchema(nested)
 			}
 		}
 	}
 	for _, key := range []string{"items", "additionalItems", "contains", "unevaluatedItems", "additionalProperties", "propertyNames", "unevaluatedProperties", "not", "if", "then", "else", "contentSchema"} {
 		if nested, ok := schema[key].(map[string]any); ok {
-			omitPublicPatterns(nested)
+			compactPublicSchema(nested)
 		}
 	}
 	// Draft-07의 items는 tuple 스키마 배열도 허용한다.
 	if children, ok := schema["items"].([]any); ok {
 		for _, child := range children {
 			if nested, ok := child.(map[string]any); ok {
-				omitPublicPatterns(nested)
+				compactPublicSchema(nested)
 			}
+		}
+	}
+	// 빈 스키마는 {} 또는 true로 직렬화된다. 다른 조합식의 참 분기는 유지한다.
+	if terms, ok := schema["allOf"].([]any); ok {
+		kept := terms[:0]
+		for _, term := range terms {
+			if term == true {
+				continue
+			}
+			if nested, ok := term.(map[string]any); ok && len(nested) == 0 {
+				continue
+			}
+			kept = append(kept, term)
+		}
+		if len(kept) == 0 {
+			delete(schema, "allOf")
+		} else {
+			schema["allOf"] = kept
 		}
 	}
 }

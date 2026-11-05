@@ -1553,7 +1553,6 @@
                   "type": "integer"
                 },
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -1567,9 +1566,6 @@
                   "type": "string"
                 },
                 "work_context": {
-                  "allOf": [
-                    {}
-                  ],
                   "description": "Current task text; nonblank.",
                   "maxLength": 8000,
                   "minLength": 1,
@@ -1598,20 +1594,15 @@
                 "description": {
                   "description": "Description; may be empty.",
                   "maxLength": 2000,
-                  "minLength": 0,
                   "type": "string"
                 },
                 "name": {
-                  "allOf": [
-                    {}
-                  ],
                   "description": "Display name; nonblank, duplicates allowed.",
                   "maxLength": 200,
                   "minLength": 1,
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -1636,7 +1627,6 @@
               "additionalProperties": false,
               "properties": {
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 }
@@ -1679,7 +1669,6 @@
                 },
                 "name_filter": {
                   "description": "Case-insensitive name substring.",
-                  "minLength": 0,
                   "type": "string"
                 },
                 "page_size": {
@@ -1706,7 +1695,6 @@
                 "description": {
                   "description": "New description; omit to keep, empty to clear.",
                   "maxLength": 2000,
-                  "minLength": 0,
                   "type": "string"
                 },
                 "entry_context_id": {
@@ -1718,26 +1706,20 @@
                   ]
                 },
                 "expected_version": {
-                  "description": "Current retrieved version; reread on conflict.",
                   "minimum": 1,
                   "type": "integer"
                 },
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "name": {
-                  "allOf": [
-                    {}
-                  ],
                   "description": "New nonblank name; omit to keep.",
                   "maxLength": 200,
                   "minLength": 1,
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -1763,7 +1745,6 @@
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -1783,9 +1764,6 @@
                   "type": "string"
                 },
                 "conversation_id": {
-                  "allOf": [
-                    {}
-                  ],
                   "description": "Immutable nonblank conversation ID for sources and events. Sources require channel=conversation and turn_index.",
                   "maxLength": 128,
                   "minLength": 1,
@@ -1830,7 +1808,6 @@
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -1866,7 +1843,6 @@
                     "type": "string"
                   },
                   "maxItems": 100,
-                  "minItems": 0,
                   "type": "array",
                   "uniqueItems": true
                 },
@@ -1890,7 +1866,6 @@
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -1975,17 +1950,14 @@
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "context_id": {
-                  "description": "Context UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -1996,7 +1968,6 @@
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -2023,7 +1994,6 @@
               "additionalProperties": false,
               "properties": {
                 "context_id": {
-                  "description": "Context UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2037,7 +2007,6 @@
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2085,17 +2054,14 @@
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "context_id": {
-                  "description": "Context UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2106,7 +2072,6 @@
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -2133,7 +2098,6 @@
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2153,7 +2117,6 @@
                   "type": "string"
                 },
                 "context_id": {
-                  "description": "Context UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2171,12 +2134,10 @@
                   "type": "string"
                 },
                 "expected_version": {
-                  "description": "Current retrieved version; reread on conflict.",
                   "minimum": 1,
                   "type": "integer"
                 },
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2205,7 +2166,6 @@
                   "type": "array"
                 },
                 "request_id": {
-                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -2249,7 +2209,6 @@
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2259,7 +2218,6 @@
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2280,7 +2238,6 @@
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -2314,12 +2271,10 @@
               "additionalProperties": false,
               "properties": {
                 "agent_id": {
-                  "description": "Active agent_id.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2335,7 +2290,6 @@
                   "type": "string"
                 },
                 "request_id": {
-                  "description": "Retry key.",
                   "maxLength": 128,
                   "minLength": 16,
                   "type": "string"
@@ -2362,7 +2316,6 @@
               "additionalProperties": false,
               "properties": {
                 "context_id": {
-                  "description": "Context UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },
@@ -2372,7 +2325,6 @@
                   "type": "string"
                 },
                 "graph_id": {
-                  "description": "Graph UUIDv7.",
                   "format": "uuid-v7",
                   "type": "string"
                 },

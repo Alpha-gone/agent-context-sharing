@@ -125,7 +125,7 @@ func TestCatalogToolSetAndAnnotations(t *testing.T) {
 				t.Fatal("서비스 전용 필수 헤더가 있다")
 			}
 			for field, property := range tool.InputSchema.(*jsonschema.Schema).Properties {
-				if property.Description == "" {
+				if property.Description == "" && !slices.Contains([]string{"graph_id", "context_id", "agent_id", "request_id", "expected_version"}, field) {
 					t.Fatalf("%s 설명 누락", field)
 				}
 			}

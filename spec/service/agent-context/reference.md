@@ -595,3 +595,9 @@
 ## 실제 Codex 모델을 통한 MCP 인수 (#305, 2026-11-05)
 
 - [Codex 비대화 실행](https://learn.chatgpt.com/docs/non-interactive-mode): 기존 로그인 재사용, exec의 ephemeral·ignore-user-config·JSONL 결과와 usage를 확인했다. [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli): bearer_token_env_var·서버별 도구 승인·시간 제한을 확인했다. 공식 문서와 설치 Codex CLI 0.165.0의 help를 대조했다. 조회 2026-11-05 KST. [시험 설계](sdd/testing.md)와 [실제 모델 검증 기록](reviews/2026-11-05-issue-305-codex-live.md)에 반영했다. 합성 시험 서버 승인 설정은 운영 권한을 변경하지 않는다.
+
+## #305 추가 제안의 스키마·호스트 의미 재검토 (2026-11-05)
+
+- [JSON Schema 객체의 properties/required](https://json-schema.org/understanding-json-schema/reference/object), [조합식](https://json-schema.org/understanding-json-schema/reference/combining), [2020-12 검증 어휘](https://json-schema.org/draft/2020-12/draft-bhutton-json-schema-validation-01): 선택 객체의 하위 required만으로 정확히 한 객체의 존재를 강제하지 못하며 minLength/minItems 생략 하한과 형식 힌트를 구분했다. 제안 JSON은 적용 jsonschema-go v0.4.3의 로컬 공급자 소스 Resolve/Validate로 검사했다.
+- [MCP ToolAnnotations](https://modelcontextprotocol.io/specification/2026-07-28/schema#toolannotations)와 [구조화 결과](https://modelcontextprotocol.io/specification/2026-07-28/server/tools#structured-content): 가산적 갱신 힌트와 권한 정책을 구분하고 텍스트 사본의 호환 권고를 확인했다.
+- [Claude의 중첩 조합식](https://code.claude.com/docs/en/mcp#tool-input-schemas-with-a-root-level-combinator), [승인용 메타데이터](https://code.claude.com/docs/en/mcp#require-approval-for-a-specific-tool), [재호출·읽기 힌트](https://code.claude.com/docs/en/mcp#mark-tools-that-are-safe-to-call-twice), [MCP 승인 규칙](https://code.claude.com/docs/en/permissions#mcp): 구조·승인·재시도의 호스트 영향을 구분했다. 모두 2026-11-05 KST 조회. [추가 코멘트 분석](reviews/2026-11-05-issue-305-comments.md)에만 반영하며 제품 계약은 바꾸지 않았다.

@@ -12,9 +12,9 @@
 
 각 요청의 `params._meta`에는 `io.modelcontextprotocol/protocolVersion`과 `io.modelcontextprotocol/clientCapabilities`를 필수로 받고 `io.modelcontextprotocol/clientInfo`는 선택으로 받는다. [기본 프로토콜](https://modelcontextprotocol.io/specification/2026-07-28/basic/index)에 따라 필수 메타데이터 누락은 HTTP `400`·JSON-RPC `-32602`다. 호스트가 선언한 client 정보는 인증 주체나 `agent_id`의 근거로 쓰지 않는다.
 
-[Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)에 따라 `/mcp`는 단일 요청 POST에 `application/json` 결과를 반환한다. 요청 `Accept`는 JSON·SSE를 모두 포함하며 `Content-Type`은 JSON이다. 첫 구현은 SSE·`MCP-Session-Id`를 사용하지 않고 GET·DELETE는 `405`다. JSON-RPC 응답 POST는 거부한다. 접수 가능한 알림의 transport 응답은 `202` 빈 본문이나 이 revision의 HTTP core에는 클라이언트 알림이 없으며 `notifications/initialized`·`notifications/cancelled`를 수명주기로 제공하지 않는다.
+[Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)에 따라 `/mcp`는 단일 요청 POST에 `application/json` 결과를 반환한다. 요청 `Accept`는 JSON·SSE를 모두 포함하며 `Content-Type`은 JSON이다. 첫 구현은 SSE·`MCP-Session-Id`를 사용하지 않고 GET·DELETE는 `405`다. JSON-RPC 응답 POST는 거부한다. 접수 가능한 알림의 transport 응답은 `202` 빈 본문이나 이 revision의 HTTP core에는 클라이언트 알림이 없다. 전환기 호환을 위해 인증된 `notifications/roots/list_changed`만 상태 변경 없이 수용하고 `notifications/initialized`·`notifications/cancelled`는 거부한다.
 
-`Origin`이 있으면 허용 출처를 검사하고 부적합하면 `403`이다. 모든 요청에 `MCP-Protocol-Version`·`Mcp-Method`, `tools/call`에는 `Mcp-Name`을 검증한다. 각각 본문 revision·method·`params.name`과 일치해야 하며 헤더 누락·형식 오류·불일치는 HTTP `400`·`HeaderMismatch(-32020)`다. 헤더 이름은 대소문자를 구분하지 않고 값은 구분한다. 표준 Base64 sentinel은 이름 값인 `Mcp-Name`에서 해독 후 비교하며 revision·method에는 적용하지 않는다. 도구에는 `x-mcp-header`를 지정하지 않으며 서비스 전용 필수 헤더를 추가하지 않는다.
+`Origin`이 있으면 허용 출처를 검사하고 부적합하면 `403`이다. RPC 요청에 `MCP-Protocol-Version`·`Mcp-Method`, `tools/call`에는 `Mcp-Name`을 검증한다. 각각 본문 revision·method·`params.name`과 일치해야 하며 헤더 누락·형식 오류·불일치는 HTTP `400`·`HeaderMismatch(-32020)`다. 헤더 이름은 대소문자를 구분하지 않고 값은 구분한다. 표준 Base64 sentinel은 이름 값인 `Mcp-Name`에서 해독 후 비교하며 revision·method에는 적용하지 않는다. 예외적으로 roots 변경 알림은 두 헤더가 모두 없거나 둘 다 현재 revision과 알림 method에 일치해야 한다. 알림은 id·result·error가 없어야 하며 params는 생략하거나 객체여야 한다. `_meta`가 있으면 객체여야 하고 그 `io.modelcontextprotocol/protocolVersion`이 있으면 현재 revision과 일치해야 한다. SDK에 전달하지 않고 빈 `202`로 종료한다. 도구에는 `x-mcp-header`를 지정하지 않으며 서비스 전용 필수 헤더를 추가하지 않는다.
 
 미지원 revision은 HTTP `400`·`UnsupportedProtocolVersion(-32022)`와 `data.supported: ["2026-07-28"]`·`data.requested`를 반환한다. 유효한 revision·외피의 미지원 RPC는 HTTP `404`·`-32601`이다. 이전 `initialize` 요청은 필수 외피 누락 또는 미지원 메서드로 거부하고 지원 revision을 진단에 표시한다. 요청 본문 상한과 업무·조회 시간 예산은 유지한다.
 
@@ -22,7 +22,7 @@
 
 ### 보호 HTTP 구현 경계
 
-`mcp.NewHandler`는 검증된 허용 Origin·Bearer 보호 함수와 완전한 14종 처리기를 받는다. Origin 원문 대조→POST·미디어 타입·표준 헤더 형식→제한된 바이트 읽기→Bearer 검증→JSON·메타데이터·헤더/본문 대조→SDK·도구 입력 검증 순서다. Origin이 없으면 허용하며 빈 값·복수·목록은 거부한다. 단일 JSON Content-Type은 매개변수를 허용하고, Accept는 JSON과 SSE의 유효한 양수 품질 범위를 요구한다. 구체적인 q=0 거부는 wildcard보다 우선한다.
+`mcp.NewHandler`는 검증된 허용 Origin·Bearer 보호 함수와 완전한 14종 처리기를 받는다. Origin 원문 대조→POST·미디어 타입·제공된 표준 헤더 형식→제한된 바이트 읽기→Bearer 검증→JSON·메타데이터·헤더/본문 대조→SDK·도구 입력 검증 순서다. Origin이 없으면 허용하며 빈 값·복수·목록은 거부한다. 단일 JSON Content-Type은 매개변수를 허용하고, Accept는 JSON과 SSE의 유효한 양수 품질 범위를 요구한다. 구체적인 q=0 거부는 wildcard보다 우선한다.
 
 전송 본문은 고정 SDK의 기본값인 4 MiB로 제한한다. 선언 길이가 초과하면 읽기 전에, 길이 미상·chunked·축소 선언은 제한된 읽기로 413·JSON-RPC -32600을 반환한다. 초과 요청은 인증·업무를 호출하지 않고 JSON 해석은 Bearer 뒤에 수행한다. 헤더로 확인할 수 있는 선행 거부는 본문을 읽지 않는다. 단일 JSON 이외의 Content-Type은 415, JSON·SSE를 함께 허용하지 않는 Accept는 400이다.
 

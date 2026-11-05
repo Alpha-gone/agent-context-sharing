@@ -529,3 +529,56 @@ func TestMCPHTTPInFlightCancellation(t *testing.T) {
 		t.Fatal("취소 뒤 전송 처리기가 반환되지 않음")
 	}
 }
+
+func TestMCPHTTPRootsNotification(t *testing.T) {
+	for _, sample := range []struct {
+		name     string
+		body     string
+		revision string
+		method   string
+		bearer   bool
+		status   int
+	}{
+		{"omitted headers", `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`, "", "", true, 202},
+		{"matching headers", `{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{}}`, protocolRevision, "notifications/roots/list_changed", true, 202},
+		{"no bearer", `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`, "", "", false, 401},
+		{"wrong revision", `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`, "2025-11-25", "notifications/roots/list_changed", true, 400},
+		{"wrong method", `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`, protocolRevision, "tools/list", true, 400},
+		{"partial headers", `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`, protocolRevision, "", true, 400},
+		{"id null", `{"jsonrpc":"2.0","id":null,"method":"notifications/roots/list_changed"}`, "", "", true, 400},
+		{"response field", `{"jsonrpc":"2.0","method":"notifications/roots/list_changed","result":{}}`, "", "", true, 400},
+		{"invalid metadata", `{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{"_meta":null}}`, "", "", true, 400},
+		{"mismatched metadata", `{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25"}}}`, protocolRevision, "notifications/roots/list_changed", true, 400},
+		{"invalid params", `{"jsonrpc":"2.0","method":"notifications/roots/list_changed","params":null}`, "", "", true, 400},
+		{"other notification", `{"jsonrpc":"2.0","method":"notifications/initialized"}`, "", "", true, 400},
+		{"request without headers", `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`, "", "", true, 400},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			var authenticate, calls atomic.Int64
+			handler, err := NewHandler(httpTestConfig(t, &authenticate, &calls))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "https://resource.test/mcp", strings.NewReader(sample.body))
+			request.Header.Set("Accept", "application/json, text/event-stream")
+			request.Header.Set("Content-Type", "application/json")
+			if sample.bearer {
+				request.Header.Set("Authorization", "client-a")
+			}
+			if sample.revision != "" {
+				request.Header.Set("MCP-Protocol-Version", sample.revision)
+			}
+			if sample.method != "" {
+				request.Header.Set("Mcp-Method", sample.method)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != sample.status || response.Header().Get("Cache-Control") != "no-store" || calls.Load() != 0 {
+				t.Fatalf("status=%d body=%s cache=%s calls=%d", response.Code, response.Body, response.Header().Get("Cache-Control"), calls.Load())
+			}
+			if sample.status == 202 && (response.Body.Len() != 0 || authenticate.Load() != 1) {
+				t.Fatal("알림 응답 또는 인증 경계 오류")
+			}
+		})
+	}
+}

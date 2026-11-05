@@ -601,3 +601,7 @@
 - [JSON Schema 객체의 properties/required](https://json-schema.org/understanding-json-schema/reference/object), [조합식](https://json-schema.org/understanding-json-schema/reference/combining), [2020-12 검증 어휘](https://json-schema.org/draft/2020-12/draft-bhutton-json-schema-validation-01): 선택 객체의 하위 required만으로 정확히 한 객체의 존재를 강제하지 못하며 minLength/minItems 생략 하한과 형식 힌트를 구분했다. 제안 JSON은 적용 jsonschema-go v0.4.3의 로컬 공급자 소스 Resolve/Validate로 검사했다.
 - [MCP ToolAnnotations](https://modelcontextprotocol.io/specification/2026-07-28/schema#toolannotations)와 [구조화 결과](https://modelcontextprotocol.io/specification/2026-07-28/server/tools#structured-content): 가산적 갱신 힌트와 권한 정책을 구분하고 텍스트 사본의 호환 권고를 확인했다.
 - [Claude의 중첩 조합식](https://code.claude.com/docs/en/mcp#tool-input-schemas-with-a-root-level-combinator), [승인용 메타데이터](https://code.claude.com/docs/en/mcp#require-approval-for-a-specific-tool), [재호출·읽기 힌트](https://code.claude.com/docs/en/mcp#mark-tools-that-are-safe-to-call-twice), [MCP 승인 규칙](https://code.claude.com/docs/en/permissions#mcp): 구조·승인·재시도의 호스트 영향을 구분했다. 모두 2026-11-05 KST 조회. [추가 코멘트 분석](reviews/2026-11-05-issue-305-comments.md)에만 반영하며 제품 계약은 바꾸지 않았다.
+
+## 전환기 roots 알림 (#308, 2026-11-05)
+
+- [MCP 전송 명세](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)는 알림 접수에 빈 202와 요청 메타데이터 헤더를 요구한다. [SDK v1.8.0 헤더 구현](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/streamable_headers.go)은 revision 헤더가 없으면 표준 헤더를 추가하지 않는다. 조회 2026-11-05 KST. 인증 후 roots 변경 알림 하나의 호환 예외를 SRS와 sdd/mcp.md에 반영한다. 실제 호스트 인수는 별도다.

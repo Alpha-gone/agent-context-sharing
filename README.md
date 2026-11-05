@@ -234,6 +234,8 @@ Claude Code 2.1.316의 발견→자동 등록→인증 URL 생성까지 격리 �
 
 클라이언트가 DCR을 지원해야 하며 서버 주소를 설정하고 자동 OAuth 연결을 시작합니다. HTTP callback은 유효한 포트가 있는 literal loopback IP 또는 정확한 소문자 localhost만 허용합니다. HTTPS·localhost callback은 등록 원문과 완전 일치시키고, 같은 HTTP loopback IP·경로·query에서는 포트 변경을 허용합니다.
 
+Antigravity CLI(`agy`)도 공개 HTTPS 주소와 OAuth 연결을 사용합니다. 인증 후 프롬프트를 보내 도구 목록과 읽기·쓰기 호출이 유지되는지 확인합니다. `notifications/roots/list_changed`는 전환기 호환을 위해 상태 변경 없이 접수합니다. 실제 Antigravity CLI의 전체 연결과 도구 호출은 아직 인수되지 않았습니다.
+
 Claude 앱 등 외부 서비스에서 접근하는 클라이언트는 공개 HTTPS 주소가 필요합니다. DCR 제공만으로 해당 클라이언트의 실제 연결 지원을 선언하지 않습니다. 첫 연결 때 공개 discovery·`/oauth/register`·`/authorize`·`/token`의 요청과 서버 로그를 확인합니다.
 
 ### 4. 연결 뒤 사용과 관리

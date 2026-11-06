@@ -58,11 +58,47 @@ func sdkTransport(server *sdk.Server, maxBodyBytes int64, publicProxy bool) http
 			return
 		}
 		id := wire["id"]
+		var version, method string
+		if _, hasID := wire["id"]; !hasID && json.Unmarshal(wire["jsonrpc"], &version) == nil && version == "2.0" &&
+			json.Unmarshal(wire["method"], &method) == nil && method == "notifications/roots/list_changed" && wire["result"] == nil && wire["error"] == nil {
+			if params, present := wire["params"]; present && params.Kind() != '{' {
+				writeTransportError(w, http.StatusBadRequest, nil, -32602, "invalid notification params", nil)
+				return
+			}
+			if rawParams, present := wire["params"]; present {
+				var params map[string]jsontext.Value
+				_ = json.Unmarshal(rawParams, &params)
+				if rawMeta, present := params["_meta"]; present {
+					var meta map[string]jsontext.Value
+					if json.Unmarshal(rawMeta, &meta) != nil || meta == nil {
+						writeTransportError(w, http.StatusBadRequest, nil, -32602, "invalid notification metadata", nil)
+						return
+					}
+					if rawRevision, present := meta[sdk.MetaKeyProtocolVersion]; present {
+						var revision string
+						if json.Unmarshal(rawRevision, &revision) != nil || revision != protocolRevision {
+							writeTransportError(w, http.StatusBadRequest, nil, -32020, "mismatched notification revision", nil)
+							return
+						}
+					}
+				}
+			}
+			revisions, methods := request.Header.Values("MCP-Protocol-Version"), request.Header.Values("Mcp-Method")
+			if len(revisions) != 0 || len(methods) != 0 {
+				revision, revisionOK := transportHeader(request.Header, "MCP-Protocol-Version")
+				headerMethod, methodOK := transportHeader(request.Header, "Mcp-Method")
+				if !revisionOK || !methodOK || revision != protocolRevision || headerMethod != method {
+					writeTransportError(w, http.StatusBadRequest, nil, -32020, "missing or mismatched MCP headers", nil)
+					return
+				}
+			}
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 		if !validTransportID(id) {
 			writeTransportError(w, http.StatusBadRequest, nil, -32600, "a string or integer request id is required", nil)
 			return
 		}
-		var version, method string
 		if json.Unmarshal(wire["jsonrpc"], &version) != nil || version != "2.0" ||
 			json.Unmarshal(wire["method"], &method) != nil || method == "" || wire["result"] != nil || wire["error"] != nil {
 			writeTransportError(w, http.StatusBadRequest, id, -32600, "invalid JSON-RPC request", nil)

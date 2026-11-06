@@ -140,7 +140,9 @@ func NewHandler(config HTTPConfig) (http.Handler, error) {
 			_, decoded := decodeTransportName(name)
 			nameOK = ok && decoded
 		}
-		if !revisionOK || !methodOK || !nameOK {
+		// 양쪽 헤더가 모두 생략된 전환기 알림은 인증 후 본문으로 판별한다.
+		headersAbsent := len(request.Header.Values("MCP-Protocol-Version")) == 0 && len(request.Header.Values("Mcp-Method")) == 0
+		if (!revisionOK || !methodOK || !nameOK) && !headersAbsent {
 			writeTransportError(w, 400, nil, -32020, "missing or invalid MCP headers", nil)
 			return
 		}

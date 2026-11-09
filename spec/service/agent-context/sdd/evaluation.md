@@ -344,4 +344,4 @@ summary는 기존 모드의 전체 지표·신뢰구간·개선/악화와 최종
 
 ### 실행 기록
 
-manifest는 비교 전에 유형별 합격선(`TBD-AGENT_CONTEXT-065`), 프로필 목록과 각 지문, 표본 판·checksum, 반복 수, 단가 판을 고정한다. 합격선이 없는 manifest는 판정 없이 측정만 기록한다. 결과는 기존 산출물 묶음에 `relation_inference.json`을 더하며 프로필별 지표·보류 사유·채택 후보를 담고 `default_activation`은 항상 false다. 채택은 결과를 근거로 운영 구성의 `RELATION_INFERENCE_ACCEPTED_PROFILE`과 자동 확정 유형을 바꾸는 별도 운영 결정이다. 결과 파일에는 본문·발췌·근거 인용·모델 원시 응답을 남기지 않는다.
+판정 대상은 채택 모델 `gpt-6-luna`의 프로필이며 다른 모델 프로필은 참고 결과로만 싣는다. manifest는 비교 전에 유형별 합격선(`TBD-AGENT_CONTEXT-065`), 프로필 목록과 각 지문, 표본 판·checksum, 반복 수, 단가 판을 고정한다. 합격선이 없는 manifest는 판정 없이 측정만 기록한다. 결과는 기존 산출물 묶음에 `relation_inference.json`을 더하며 프로필별 지표·보류 사유·채택 후보를 담고 `default_activation`은 항상 false다. 채택은 결과를 근거로 운영 구성의 `RELATION_INFERENCE_ACCEPTED_PROFILE`과 자동 확정 유형을 바꾸는 별도 운영 결정이다. 결과 파일에는 본문·발췌·근거 인용·모델 원시 응답을 남기지 않는다.

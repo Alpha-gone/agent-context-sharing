@@ -357,7 +357,7 @@ DIAGNOSTIC_LOG_LEVEL
 | 키 | 값·검증 | 상태 |
 |---|---|---|
 | `RELATION_INFERENCE_MODE` | `off`(기본)·`shadow`·`propose`·`apply` | 설계 반영 |
-| `RELATION_INFERENCE_PROVIDER`, `RELATION_INFERENCE_MODEL` | `off`가 아니면 필수. 제공자 값 집합은 첫 어댑터 구현 때 정한다 | 설계 반영 |
+| `RELATION_INFERENCE_PROVIDER`, `RELATION_INFERENCE_MODEL` | `off`가 아니면 필수. 채택 모델은 `gpt-6-luna`이며 제공자 값과 API 모델 식별자는 공식 문서 확인 뒤 정한다 | 설계 반영 |
 | `RELATION_INFERENCE_BASE_URL`, `RELATION_INFERENCE_API_KEY` | 제공자 엔드포인트와 비밀. 임베딩 키와 공유하지 않으며 로그·오류에 출력하지 않는다 | 설계 반영 |
 | `RELATION_INFERENCE_TIMEOUT` | 호출 상한. 시작값 30초. 리스는 그 두 배다 | 설계 반영 |
 | `RELATION_INFERENCE_CANDIDATE_LIMIT` | 1~20. 시작값 8 | 설계 반영 |

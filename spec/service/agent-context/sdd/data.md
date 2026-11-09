@@ -35,7 +35,9 @@ AGE 그래프는 하나만 만든다. 이름은 배포 구성으로 두되 인�
 | `team_member`        | 팀 구성원                        | `team_id`, `account_id`                  |                                                  |
 | `context_embedding`  | 컨텍스트 본문의 임베딩           | 파티션별 `context_id` 유일               | [임베딩 스키마](data.md#임베딩-스키마)가 정의한다                     |
 | `index_task`         | 색인 대기 작업과 재시도 상태     | `task_id`                                | [색인 작업 큐](indexing.md#색인-작업-큐)가 정의한다                      |
-| `operation_log`      | 적용·거부된 컨텍스트 관리 연산   | `operation_id`                           | [SRS 기록 항목](../SRS.md#기록-항목)의 7개 항목을 열로 쓴다             |
+| `relation_inference_task` | 관계 추론 대기 작업과 재시도 상태 | `task_id` | [추론 작업 큐](relation-inference.md#추론-작업-큐)가 정의한다. 목표 추가 |
+| `relation_inference_run`, `relation_inference_decision` | 추론 회차와 쌍×유형 판정 기록 | `run_id`, `decision_id` | [판정 기록](relation-inference.md#판정-기록)이 정의한다. 목표 추가 |
+| `operation_log`      | 적용·거부된 컨텍스트 관리 연산   | `operation_id`                           | [SRS 기록 항목](../SRS.md#기록-항목)의 8개 항목을 열로 쓴다             |
 | `idempotency_record` | 선택 `request_id`가 있는 쓰기 요청의 지문과 결과   | `actor_account_id`, `idempotency_key`    | 최초 접수부터 24시간 뒤 만료한다                 |
 | `web_audit_log`      | 권한·팀·삭제·복구의 웹 감사 기록 | `audit_id`                               | `FR-AGENT_CONTEXT-109`의 여섯 대상을 담는다      |
 | `signing_key`        | 토큰 서명 키와 JWKS 공개 자료    | `key_id`                                 | [인스턴스 무상태성](architecture.md#인스턴스-무상태성)                            |
@@ -89,7 +91,7 @@ AGE 그래프는 하나만 만든다. 이름은 배포 구성으로 두되 인�
 
 `name`을 두는 이유는 [SRS 권한과 팀 관리 화면](../SRS.md#권한과-팀-관리-화면)이 등급 행마다 대상을 보여주기 때문이다. 대상이 팀일 때 식별자만으로는 어느 팀인지 화면에서 구분할 수 없다. `manager_account_id`는 [SRS 권한과 팀 관리 절차](../SRS.md#권한과-팀-관리-절차)가 "생성한 계정이 그 팀의 팀 관리자가 된다"로 확정한 값이며, 구성원 관리 권한을 판정할 때 읽는다.
 
-`operation_log`는 [SRS 기록 항목](../SRS.md#기록-항목)의 7개 항목을 열로 편다.
+`operation_log`는 [SRS 기록 항목](../SRS.md#기록-항목)의 8개 항목을 열로 편다.
 
 | 열                 | 타입            | 대응 항목                                                     |
 |--------------------|-----------------|---------------------------------------------------------------|
@@ -208,7 +210,7 @@ AGE 그래프는 하나만 만든다. 이름은 배포 구성으로 두되 인�
 | `context_embedding` | `context_id/graph_id: uuid`, `embedding: vector(n) 또는 halfvec(n)`, `model_id/storage_tier: text`, `indexed_at/last_accessed_at: timestamptz` | 없음 | `storage_tier` LIST 파티션과 값 CHECK. 두 자식에서 각각 UNIQUE `context_id`. 그래프·HNSW 조회와 전역 중복 책임은 [임베딩 스키마](#임베딩-스키마) |
 | `index_task` | `task_id/context_id/graph_id: uuid`, `attempts: integer`, `state/last_error/correlation_id: text`, `enqueued_at/next_attempt_at: timestamptz` | `last_error`, `correlation_id` | PK `task_id`, UNIQUE `context_id`, 시도 횟수 기본 0·음수 금지, 상태 CHECK. 확보는 상태·다음 시도 시각, 세대는 [큐 계약](indexing.md#색인-작업-큐) |
 | `context_revision` | `graph_id/context_id/supersedes_context_id: uuid`, `version/previous_version/supersedes_version: bigint`, `snapshot: jsonb` | `previous_version`, `supersedes_context_id`, `supersedes_version` | 복합 PK·이전/대체 FK·판/쌍/JSON object CHECK. 상세는 [파생 판 이력](#파생-판-이력) |
-| `operation_log` | `operation_id/graph_id/context_id/relation_id/actor_account_id/actor_agent_id: uuid`, `operation_kind/judgment_input/result/reject_reason: text`, `target_version: bigint`, `applied_at: timestamptz` | `context_id`, `relation_id`, `target_version`, `reject_reason` | PK `operation_id`. 연산·결과·대상 조합 CHECK는 아래 표. 컨텍스트·관계별 이력과 그래프별 감사·보존 조회 |
+| `operation_log` | `operation_id/graph_id/context_id/relation_id/actor_account_id/actor_agent_id: uuid`, `operation_kind/judgment_source/judgment_input/result/reject_reason: text`, `target_version: bigint`, `applied_at: timestamptz` | `context_id`, `relation_id`, `target_version`, `reject_reason` | PK `operation_id`. 연산·결과·대상 조합 CHECK는 아래 표. 컨텍스트·관계별 이력과 그래프별 감사·보존 조회 |
 | `idempotency_record` | `actor_account_id: uuid`, `idempotency_key/tool_name: text`, `request_fingerprint: bytea`, `tool_result: jsonb`, `received_at/expires_at: timestamptz` | `tool_result`는 트랜잭션 내부 예약 중에만 허용 | PK `(actor_account_id, idempotency_key)`. 키 형식과 32바이트 지문 CHECK. 결과 없는 커밋은 저장소가 금지하며 [멱등성 경계](mcp.md#멱등성-저장과-경합)에서 검증. 만료 인덱스 |
 | `web_audit_log` | `audit_id/actor_account_id/graph_id/subject_id/team_id/member_account_id/target_context_id/requester_account_id: uuid`, `target_kind/action/subject_type/before_grade/after_grade: text`, `occurred_at: timestamptz` | 공통 5개 열 `audit_id/target_kind/action/actor_account_id/occurred_at` 이외 | PK `audit_id`, 종류·행위·선택 등급 CHECK와 운영자 복구 요청자 필수 CHECK. 종류별 필수·금지 조합은 저장소 검증. 그래프 없는 팀 감사도 계정·시각으로 조회 |
 | `signing_key` | `key_id/algorithm/public_key/private_key/state: text`, `created_at: timestamptz` | 없음 | PK `key_id`, 상태 CHECK, `state = 'active'`의 단일 상수 부분 UNIQUE. 키 형식·알고리즘·공개 응답 비밀 제외는 인증 경계 |
@@ -324,10 +326,10 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 | `SUPERSEDES`   | 새 판 → 이전 판           | `graph_id`                |
 | `HAS_MEMBER`   | 사건 → 구성원             | `graph_id`                |
 | `NAVIGATES_TO` | 안내 요약 → 탐색 대상 | `graph_id` |
-| `PRECEDES`     | 앞선 사건 → 뒤따르는 사건 | [SRS 관계 속성](../SRS.md#관계-속성)의 12개 항목 |
-| `CAUSES`       | 원인 사건 → 결과 사건     | [SRS 관계 속성](../SRS.md#관계-속성)의 12개 항목 |
-| `PART_OF`      | 부분 사건 → 전체 사건     | [SRS 관계 속성](../SRS.md#관계-속성)의 12개 항목 |
-| `RELATES_TO`   | 정규화한 순서의 앞 → 뒤   | [SRS 관계 속성](../SRS.md#관계-속성)의 12개 항목 |
+| `PRECEDES`     | 앞선 사건 → 뒤따르는 사건 | [SRS 관계 속성](../SRS.md#관계-속성)의 14개 항목 |
+| `CAUSES`       | 원인 사건 → 결과 사건     | [SRS 관계 속성](../SRS.md#관계-속성)의 14개 항목 |
+| `PART_OF`      | 부분 사건 → 전체 사건     | [SRS 관계 속성](../SRS.md#관계-속성)의 14개 항목 |
+| `RELATES_TO`   | 정규화한 순서의 앞 → 뒤   | [SRS 관계 속성](../SRS.md#관계-속성)의 14개 항목 |
 
 앞의 네 참조 간선이 `graph_id`만 갖는 이유는 참조가 컨텍스트의 속성이기 때문이다. 참조에는 상태도 확정 절차도 없으므로 [SRS 관계 속성](../SRS.md#관계-속성)이 정한 값들이 적용되지 않는다. `graph_id`를 두는 것은 [SRS 간선 사상](../SRS.md#간선-사상)이 확정한 탐색 중 대조 때문이다.
 
@@ -368,7 +370,7 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 | `event_start` | 사건의 `event_start`, UTC 문자열 | 모델 필수·범위. 저장소가 실제 원천 구성원 시각과 대조 |
 | `event_end` | 사건의 `event_end`, 선택 UTC 문자열 | 모델 시작과의 순서·미지정이면 진행 중. 구성원과 관계 시간 제약은 저장소 |
 
-네 참조 간선은 위 `graph_id`만 property로 가지며 참조 목록·별도 관계 테이블·관계 이력을 중복 저장하지 않는다. 관계 간선의 12개 논리 속성은 다음과 같이 모두 property로 보존한다. `from_context_id/to_context_id`와 실제 `start_id/end_id`의 대조를 생략하지 않는다.
+네 참조 간선은 위 `graph_id`만 property로 가지며 참조 목록·별도 관계 테이블·관계 이력을 중복 저장하지 않는다. 관계 간선의 14개 논리 속성은 다음과 같이 모두 property로 보존한다. `from_context_id/to_context_id`와 실제 `start_id/end_id`의 대조를 생략하지 않는다.
 
 | SRS 관계 속성 | AGE 표현 | 검증 책임 |
 |---|---|---|
@@ -377,7 +379,8 @@ AGE의 label은 스키마 검증을 제공하지 않으므로 계층별 필수 �
 | `from_context_id`, `to_context_id` | UUIDv7 문자열과 AGE의 시작/끝 정점 | 모델 서로 다른 ID·정규 방향. 저장소가 같은 그래프의 사건 존재와 실제 방향 확인 |
 | `state`, `proposed_by` | 문자열 | 모델 상태/제안 출처 값 집합. 저장소 상태 전이와 탐색 시 confirmed 필터 |
 | `proposed_at` | UTC 문자열 | 모델 필수·불변 |
-| `confirmed_by`, `confirmed_by_agent`, `confirmed_at` | 조건부 UUIDv7·UTC 문자열 | 모델 confirmed에서 필수. 저장소가 검증 계정·등록 결합과 전이 시각을 적용 |
+| `confirmed_by`, `confirmed_by_agent`, `confirmed_at` | 조건부 UUIDv7·UTC 문자열 | 모델 confirmed에서 `confirmed_by`·`confirmed_at` 필수, `confirmed_by_agent`는 에이전트 확정에서만 필수. 저장소가 검증 계정·등록 결합과 전이 시각을 적용 |
+| `confirmed_source`, `inference_decision_id` | 조건부 문자열·UUIDv7 문자열 | 모델 확정 주체 값과 추론 출처의 조건부 필수. 저장소가 판정 기록의 그래프·끝점·유형 일치를 확인. 기존 간선은 `confirmed_source` 없음을 `agent`로 읽고 재작성하지 않는다 |
 | `deleted_at` | 선택 UTC 문자열 | 모델 discarded 상태와 일치. 저장소 폐기·재확정 경계 |
 
 `RELATES_TO`는 두 사건 UUID의 정규 문자열 오름차순으로 끝점을 정하고, 다른 세 관계는 의미상의 방향을 보존한다. 같은 정체성의 재확정은 현재 관계를 재사용한다. 관계에는 `version`·`valid_from`·`valid_to`를 추가하지 않는다. 정체성·순환·시간·상태의 실제 판정은 [그래프 불변식](#그래프-불변식-규칙과-감사)과 [관계 확정](context-lifecycle.md#관계-후보-제안과-확정)이 소유한다.

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/store"
 	"github.com/go-jose/go-jose/v4"
@@ -191,7 +192,7 @@ func TestOAuthRefreshIssuedCredentials(t *testing.T) {
 }
 
 func TestOAuthRefreshHTTPBoundary(t *testing.T) {
-	for _, mode := range []string{"success", "same scope", "empty scope", "scope expansion", "missing refresh", "missing client", "missing resource", "duplicate refresh", "duplicate scope", "header credential", "client secret", "query", "wrong content type", "announced over limit", "chunked over limit", "exact limit", "below limit", "invalid grant", "storage failure", "cancelled"} {
+	for _, mode := range []string{"success", "same scope", "empty scope", "scope expansion", "missing refresh", "missing client", "missing resource", "empty resource", "wrong resource", "duplicate refresh", "duplicate scope", "header credential", "client secret", "query", "wrong content type", "announced over limit", "chunked over limit", "exact limit", "below limit", "invalid grant", "storage failure", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
 			form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {strings.Repeat("A", 43)}, "client_id": {"first"}, "resource": {"https://resource.test/mcp"}}
 			status, code, calls := 200, "", 0
@@ -212,7 +213,12 @@ func TestOAuthRefreshHTTPBoundary(t *testing.T) {
 				status, code = 400, "invalid_request"
 			case "missing resource":
 				form.Del("resource")
+			case "empty resource":
+				form.Set("resource", "")
 				status, code = 400, "invalid_request"
+			case "wrong resource":
+				form.Set("resource", "https://other.test/mcp")
+				status, code = 400, "invalid_grant"
 			case "duplicate refresh":
 				form.Add("refresh_token", "other")
 				status, code = 400, "invalid_request"
@@ -255,6 +261,9 @@ func TestOAuthRefreshHTTPBoundary(t *testing.T) {
 			binding := refreshBinding(t)
 			config.RefreshTokens = refreshStoreFunc(func(ctx context.Context, input store.OAuthRefreshExchange, clock func() time.Time, issue func(store.OAuthGrantBinding, time.Time) ([32]byte, error)) error {
 				calls++
+				if mode == "missing resource" && input.Resource != "https://resource.test/mcp" {
+					t.Fatal("생략된 resource의 계열 결합 오류")
+				}
 				if code == "invalid_grant" {
 					return store.ErrInvalidOAuthGrant
 				}
@@ -269,7 +278,12 @@ func TestOAuthRefreshHTTPBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 			handler, _ := NewHandler(service)
+			sink := &obs05Events{}
+			source, _ := diagnostic.NewSource("token-validation")
+			reporter, _ := diagnostic.NewReporter(diagnostic.Auth, sink, source)
+			service.SetDiagnostics(reporter)
 			request := httptest.NewRequest("POST", "https://issuer.test/token"+query, strings.NewReader(body))
+			request = request.WithContext(diagnostic.WithTrace(request.Context(), diagnostic.NewRequestTrace()))
 			request.Header.Set("Content-Type", contentType)
 			if header != "" {
 				request.Header.Set("Authorization", header)
@@ -287,6 +301,12 @@ func TestOAuthRefreshHTTPBoundary(t *testing.T) {
 			}
 			writer := httptest.NewRecorder()
 			handler.Token(writer, request)
+			wantReason := map[string]string{"missing refresh": "token_missing_refresh_token", "missing client": "token_missing_client_id", "empty resource": "token_missing_resource", "duplicate refresh": "token_duplicate", "query": "token_query", "wrong content type": "token_content_type"}[mode]
+			if wantReason != "" {
+				if len(sink.events) != 1 || sink.events[0].ReasonCode != wantReason || sink.events[0].Validate() != nil || sink.events[0].IdentityVerified {
+					t.Fatalf("토큰 형식 진단 오류: %+v", sink.events)
+				}
+			}
 			if writer.Code != status {
 				t.Fatalf("갱신 HTTP 상태=%d", writer.Code)
 			}

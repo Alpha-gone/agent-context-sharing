@@ -4,7 +4,7 @@
 
 ## 목표와 구현 범위
 
-확정 요구사항 188건을 신규 개발 작업과 인수 작업에 연결하고 누락·미정·완료 근거를 관리한다. 이 문서의 작업 표는 설계 추적표를 대체하지 않는다. TRACE-01의 기준·범위, TRACE-02의 요구사항·작업·선행 관계, TRACE-03의 미정·조건부 채택, TRACE-04의 실행 증거 연결과 TRACE-05의 최종 문서·DOX·안내 점검을 완료했다. 전체 124개 계획 작업은 완료했으며 코드/서버 계약·실제 호스트·파일·정량 효과·운영의 판정은 분리한다.
+확정 요구사항 196건을 신규 개발 작업과 인수 작업에 연결하고 누락·미정·완료 근거를 관리한다. 이 문서의 작업 표는 설계 추적표를 대체하지 않는다. TRACE-01의 기준·범위, TRACE-02의 요구사항·작업·선행 관계, TRACE-03의 미정·조건부 채택, TRACE-04의 실행 증거 연결과 TRACE-05의 최종 문서·DOX·안내 점검을 완료했다. 전체 124개 계획 작업은 완료했으며 코드/서버 계약·실제 호스트·파일·정량 효과·운영의 판정은 분리한다.
 
 - 설계 입력: [요구사항 추적표](../sdd/traceability.md#요구사항-추적표), [설계 미정](../sdd/traceability.md#설계-미정-사항), [해소 선택](../sdd/traceability.md#해소한-설계-선택), [SRS 미정](../SRS.md#미정-사항).
 - 예정 산출물: 요구사항→SDD→개발 작업→인수 증거의 대응, 미정 해소 조건과 상태·DOX 점검.
@@ -299,6 +299,14 @@ TRACE-05 완료로 전체 124개 완료·0개 진행·0개 미착수다. 선정 
 | `FR-AGENT_CONTEXT-177` | [대화·안내 시험](../sdd/testing.md#대화-흐름과-안내-진입점-시험) | [LIFE-10](context-lifecycle.md#life-10) | [LIFE-10](context-lifecycle.md#life-10) |
 | `FR-AGENT_CONTEXT-178` | [대화·안내 시험](../sdd/testing.md#대화-흐름과-안내-진입점-시험) | [LIFE-10](context-lifecycle.md#life-10) | [LIFE-10](context-lifecycle.md#life-10) |
 | `FR-AGENT_CONTEXT-179` | [대화·안내 시험](../sdd/testing.md#대화-흐름과-안내-진입점-시험) | [LIFE-10](context-lifecycle.md#life-10) | [LIFE-10](context-lifecycle.md#life-10) |
+| `FR-AGENT_CONTEXT-180` | [처리 흐름](../sdd/relation-inference.md#처리-흐름) | [RINF-02](relation-inference.md#rinf-02), [RINF-05](relation-inference.md#rinf-05) | [RINF-05](relation-inference.md#rinf-05) |
+| `FR-AGENT_CONTEXT-181` | [후보 검색](../sdd/relation-inference.md#후보-검색) | [RINF-03](relation-inference.md#rinf-03) | [RINF-05](relation-inference.md#rinf-05) |
+| `FR-AGENT_CONTEXT-182` | [판정 계약](../sdd/relation-inference.md#판정-계약) | [RINF-03](relation-inference.md#rinf-03), [RINF-04](relation-inference.md#rinf-04) | [RINF-05](relation-inference.md#rinf-05) |
+| `FR-AGENT_CONTEXT-183` | [반영 검증](../sdd/relation-inference.md#반영-검증) | [RINF-04](relation-inference.md#rinf-04) | [RINF-05](relation-inference.md#rinf-05) |
+| `FR-AGENT_CONTEXT-184` | [행위자와 감사](../sdd/relation-inference.md#행위자와-감사) | [RINF-01](relation-inference.md#rinf-01), [RINF-04](relation-inference.md#rinf-04) | [RINF-05](relation-inference.md#rinf-05) |
+| `FR-AGENT_CONTEXT-185` | [추론 작업 큐](../sdd/relation-inference.md#추론-작업-큐) | [RINF-02](relation-inference.md#rinf-02) | [RINF-05](relation-inference.md#rinf-05) |
+| `FR-AGENT_CONTEXT-186` | [관계 추론 모델 비교](../sdd/evaluation.md#관계-추론-모델-비교) | [RINF-06](relation-inference.md#rinf-06) | [RINF-06](relation-inference.md#rinf-06) |
+| `FR-AGENT_CONTEXT-187` | [외부 전송과 구성](../sdd/relation-inference.md#외부-전송과-구성) | [RINF-02](relation-inference.md#rinf-02), [RINF-05](relation-inference.md#rinf-05) | [RINF-05](relation-inference.md#rinf-05) |
 | `NFR-AGENT_CONTEXT-001` | [버전 요구](../sdd/architecture.md#버전-요구) | [ARCH-01](architecture.md#arch-01), [DATA-10](data.md#data-10) | [DATA-10](data.md#data-10), [TEST-09](testing.md#test-09) |
 | `NFR-AGENT_CONTEXT-002` | [비기능 요구사항의 성립 근거](../sdd/architecture.md#비기능-요구사항의-성립-근거) | [LIFE-03](context-lifecycle.md#life-03), [LIFE-08](context-lifecycle.md#life-08) | [TEST-03](testing.md#test-03), [TEST-09](testing.md#test-09) |
 | `NFR-AGENT_CONTEXT-003` | [설명 가능성](../sdd/evaluation.md#설명-가능성) | [SEARCH-07](search.md#search-07), [EVAL-04](evaluation.md#eval-04) | [EVAL-13](evaluation.md#eval-13), [TEST-09](testing.md#test-09) |

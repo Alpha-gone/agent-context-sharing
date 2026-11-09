@@ -100,7 +100,7 @@ func validateStoredProperties(raw, kind, layer string) error {
 		"source":   "source_ref_channel source_ref_locator occurred_at origin_kind conversation_id turn_index",
 		"derived":  "derivation_kind summary_scope evidence_state confidence_state valid_from valid_to evidence_invalidated",
 		"event":    "event_start event_end conversation_id",
-		"relation": "relation_id graph_id relation_type from_context_id to_context_id state proposed_by proposed_at confirmed_by confirmed_by_agent confirmed_at deleted_at",
+		"relation": "relation_id graph_id relation_type from_context_id to_context_id state proposed_by proposed_at confirmed_by confirmed_by_agent confirmed_at confirmed_source inference_decision_id deleted_at",
 	}
 	allowed := fields[layer]
 	if layer != "relation" {

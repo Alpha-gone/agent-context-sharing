@@ -53,7 +53,7 @@ func (s *Store) OperationHistory(ctx context.Context, graphID, actorID model.ID,
 	}
 	rows, err := s.reader(ctx).Query(ctx, `SELECT operation_id::text, graph_id::text, operation_kind,
 		context_id::text, relation_id::text, target_version, judgment_input, actor_account_id::text,
-		actor_agent_id::text, applied_at, result, COALESCE(reject_reason,'')
+		actor_agent_id::text, applied_at, result, COALESCE(reject_reason,''), COALESCE(judgment_source,'agent')
 		FROM public.operation_log WHERE graph_id=$1 AND `+column+`=$2 ORDER BY applied_at, operation_id`, graphID.String(), id.String())
 	if err != nil {
 		return nil, storageError("operation_history_query", err)
@@ -62,17 +62,17 @@ func (s *Store) OperationHistory(ctx context.Context, graphID, actorID model.ID,
 	result = make([]OperationEntry, 0)
 	for rows.Next() {
 		var entry OperationEntry
-		var rawID, rawGraph, rawAccount, rawAgent string
-		var rawContext, rawRelation *string
+		var rawID, rawGraph, rawAccount string
+		var rawContext, rawRelation, rawAgent *string
 		var version *int64
 		if err := rows.Scan(&rawID, &rawGraph, &entry.Kind, &rawContext, &rawRelation, &version, &entry.JudgmentInput,
-			&rawAccount, &rawAgent, &entry.AppliedAt, &entry.Result, &entry.RejectionReason); err != nil {
+			&rawAccount, &rawAgent, &entry.AppliedAt, &entry.Result, &entry.RejectionReason, &entry.JudgmentSource); err != nil {
 			return nil, storageError("operation_history_scan", err)
 		}
 		for _, field := range []struct {
 			raw *string
 			id  *model.ID
-		}{{&rawID, &entry.ID}, {&rawGraph, &entry.GraphID}, {&rawAccount, &entry.AccountID}, {&rawAgent, &entry.AgentID}, {rawContext, &entry.ContextID}, {rawRelation, &entry.RelationID}} {
+		}{{&rawID, &entry.ID}, {&rawGraph, &entry.GraphID}, {&rawAccount, &entry.AccountID}, {rawAgent, &entry.AgentID}, {rawContext, &entry.ContextID}, {rawRelation, &entry.RelationID}} {
 			if field.raw != nil {
 				*field.id, err = model.ParseID(*field.raw)
 				if err != nil {

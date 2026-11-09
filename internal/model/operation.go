@@ -32,6 +32,7 @@ type ManagementOperation struct {
 	JudgmentInput   string
 	AccountID       ID
 	AgentID         ID
+	JudgmentSource  ConfirmationSource
 	AppliedAt       time.Time
 	Result          OperationResult
 	RejectionReason string
@@ -50,10 +51,22 @@ func (operation ManagementOperation) Validate() error {
 	for _, item := range []struct {
 		field string
 		id    ID
-	}{{"graph_id", operation.GraphID}, {"account_id", operation.AccountID}, {"agent_id", operation.AgentID}} {
+	}{{"graph_id", operation.GraphID}, {"account_id", operation.AccountID}} {
 		if err := validateID(item.field, item.id); err != nil {
 			return err
 		}
+	}
+	switch operation.JudgmentSource {
+	case "", ConfirmationSourceAgent:
+		if err := validateID("agent_id", operation.AgentID); err != nil {
+			return err
+		}
+	case ConfirmationSourceInference:
+		if !operation.AgentID.IsZero() {
+			return fieldErrorf("agent_id", "추론 판정에는 에이전트를 지정할 수 없다")
+		}
+	default:
+		return fieldErrorf("judgment_source", "허용된 판정 주체가 아니다")
 	}
 	if !operation.ContextID.IsZero() {
 		if err := validateID("context_id", operation.ContextID); err != nil {

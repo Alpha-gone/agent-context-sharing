@@ -28,6 +28,9 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		return model.Relation{}, fmt.Errorf("요청 graph_id와 관계 graph_id가 일치하지 않는다")
 	}
 	relation = normalizeRelation(relation)
+	// 이 경로는 에이전트 확정이며 판정 출처는 저장된 후보에서만 보존한다.
+	relation.ConfirmedSource = model.ConfirmationSourceAgent
+	relation.InferenceDecisionID = model.ID{}
 	if relation.State != model.RelationStateConfirmed {
 		return model.Relation{}, model.FieldError{Field: "state", Message: "관계 확정 입력은 confirmed 상태여야 한다"}
 	}
@@ -135,6 +138,7 @@ func (s *Store) ConfirmRelation(ctx context.Context, graphID model.ID, relation 
 		existing.DeletedAt = nil
 		existing.ConfirmedBy = relation.ConfirmedBy
 		existing.ConfirmedByAgent = relation.ConfirmedByAgent
+		existing.ConfirmedSource = model.ConfirmationSourceAgent
 		existing.ConfirmedAt = relation.ConfirmedAt
 		observation.stage = "write"
 		stored, err := s.updateRelation(ctx, tx, graphID, existing)
@@ -203,6 +207,7 @@ func (s *Store) DiscardRelation(ctx context.Context, graphID, relationID model.I
 	stored.ConfirmedBy = model.ID{}
 	stored.ConfirmedByAgent = model.ID{}
 	stored.ConfirmedAt = nil
+	stored.ConfirmedSource = ""
 	stored, err = s.updateRelation(ctx, tx, graphID, stored)
 	if err != nil {
 		return model.Relation{}, err
@@ -789,6 +794,9 @@ func (s *Store) relationLabelPage(ctx context.Context, queryer cypherQueryer, gr
 }
 
 func (s *Store) createRelation(ctx context.Context, tx pgx.Tx, graphID model.ID, relation model.Relation) (model.Relation, error) {
+	if err := validateRelationDecision(ctx, tx, graphID, relation); err != nil {
+		return model.Relation{}, err
+	}
 	properties, err := encodeProperties(relationProperties(relation))
 	if err != nil {
 		return model.Relation{}, err
@@ -810,6 +818,9 @@ func (s *Store) createRelation(ctx context.Context, tx pgx.Tx, graphID model.ID,
 }
 
 func (s *Store) updateRelation(ctx context.Context, tx pgx.Tx, graphID model.ID, relation model.Relation) (model.Relation, error) {
+	if err := validateRelationDecision(ctx, tx, graphID, relation); err != nil {
+		return model.Relation{}, err
+	}
 	properties, err := encodeProperties(relationProperties(relation))
 	if err != nil {
 		return model.Relation{}, err
@@ -834,6 +845,31 @@ func (s *Store) updateRelation(ctx context.Context, tx pgx.Tx, graphID model.ID,
 		return model.Relation{}, fmt.Errorf("사건 관계 갱신: %w", err)
 	}
 	return stored, nil
+}
+
+// 판정과 관계는 같은 그래프·사건 쌍·유형을 가리켜야 한다. 새 관계의 ID는 판정에
+// 아직 기록되지 않았을 수 있으며 결과 트랜잭션에서 함께 연결한다.
+func validateRelationDecision(ctx context.Context, queryer cypherQueryer, graphID model.ID, relation model.Relation) error {
+	if relation.InferenceDecisionID.IsZero() {
+		return nil
+	}
+	var matches bool
+	err := queryer.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM public.relation_inference_decision d
+		JOIN public.relation_inference_run r ON r.run_id = d.run_id
+		WHERE d.decision_id = $1 AND r.graph_id = $2 AND d.relation_type = $3
+		  AND ((r.context_id = $4 AND d.candidate_context_id = $5)
+		    OR (r.context_id = $5 AND d.candidate_context_id = $4))
+		  AND (d.relation_id IS NULL OR d.relation_id = $6)
+	)`, relation.InferenceDecisionID.String(), graphID.String(), string(relation.Type),
+		relation.FromContextID.String(), relation.ToContextID.String(), relation.ID.String()).Scan(&matches)
+	if err != nil {
+		return storageError("relation_decision_lookup", err)
+	}
+	if !matches {
+		return storageError("relation_decision_mismatch", ErrInvariantViolation)
+	}
+	return nil
 }
 
 func (s *Store) relationByID(ctx context.Context, queryer cypherQueryer, graphID, relationID model.ID) (model.Relation, error) {
@@ -903,6 +939,7 @@ func (s *Store) discardConfirmedRelationsForContext(ctx context.Context, tx pgx.
 		relation.ConfirmedBy = model.ID{}
 		relation.ConfirmedByAgent = model.ID{}
 		relation.ConfirmedAt = nil
+		relation.ConfirmedSource = ""
 		if _, err := s.updateRelation(ctx, tx, graphID, relation); err != nil {
 			return fmt.Errorf("폐기 사건 관계 상태 전이: %w", err)
 		}

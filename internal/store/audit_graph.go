@@ -67,7 +67,9 @@ func (s *Store) loadGraphAuditEdges(ctx context.Context, queryer cypherQueryer, 
 		queries = append(queries, `SELECT `+sqlString(name)+`, `+auditPropertySQL("e", "graph_id")+`, `+
 			auditPropertySQL("e", "relation_id")+`, `+auditPropertySQL("e", "state")+`,
    CASE WHEN a.id IS NULL THEN to_json('age:' || e.start_id::text)::text::ag_catalog.agtype ELSE `+auditPropertySQL("a", "context_id")+` END,
-   CASE WHEN b.id IS NULL THEN to_json('age:' || e.end_id::text)::text::ag_catalog.agtype ELSE `+auditPropertySQL("b", "context_id")+` END
+   CASE WHEN b.id IS NULL THEN to_json('age:' || e.end_id::text)::text::ag_catalog.agtype ELSE `+auditPropertySQL("b", "context_id")+` END, `+
+			auditPropertySQL("e", "proposed_by")+`, `+auditPropertySQL("e", "confirmed_source")+`, `+
+			auditPropertySQL("e", "inference_decision_id")+`, `+auditPropertySQL("e", "confirmed_by_agent")+`
    FROM (`+strings.Join(selections, " UNION ")+` OFFSET 0) e
    LEFT JOIN LATERAL (SELECT id, properties FROM `+s.contextTable()+` WHERE id=e.start_id OFFSET 0) a ON true
    LEFT JOIN LATERAL (SELECT id, properties FROM `+s.contextTable()+` WHERE id=e.end_id OFFSET 0) b ON true`)
@@ -80,8 +82,8 @@ func (s *Store) loadGraphAuditEdges(ctx context.Context, queryer cypherQueryer, 
 	defer rows.Close()
 	for rows.Next() {
 		var label string
-		var raw, values [5]string
-		if err := rows.Scan(&label, &raw[0], &raw[1], &raw[2], &raw[3], &raw[4]); err != nil {
+		var raw, values [9]string
+		if err := rows.Scan(&label, &raw[0], &raw[1], &raw[2], &raw[3], &raw[4], &raw[5], &raw[6], &raw[7], &raw[8]); err != nil {
 			return fmt.Errorf("불변식 그래프 간선 행 해석: %w", err)
 		}
 		for i := range raw {
@@ -89,7 +91,7 @@ func (s *Store) loadGraphAuditEdges(ctx context.Context, queryer cypherQueryer, 
 				return fmt.Errorf("불변식 그래프 간선 값 해석: %w", err)
 			}
 		}
-		edge := auditEdge{label: label, graphID: values[0], relationID: values[1], state: values[2], from: values[3], to: values[4]}
+		edge := auditEdge{label: label, graphID: values[0], relationID: values[1], state: values[2], from: values[3], to: values[4], proposedBy: values[5], confirmedSource: values[6], decisionID: values[7], confirmedAgent: values[8], inferenceProperties: true}
 		snapshot.edges = append(snapshot.edges, edge)
 		endpoints[edge.from], endpoints[edge.to] = struct{}{}, struct{}{}
 	}

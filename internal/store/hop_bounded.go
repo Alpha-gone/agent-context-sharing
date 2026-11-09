@@ -184,7 +184,9 @@ func (s *Store) hopCandidateSQL(graphID model.ID, frontier, visited []model.ID, 
 		if incoming {
 			from, to = to, from
 		}
-		return "SELECT 1 FROM " + edgeTable + " AS edge WHERE edge.start_id = " + from + " AND edge.end_id = " + to + edgePredicate
+		// 오래된 통계에서 graph_id 인덱스로 후보마다 허브 전체를 훑지 않도록
+		// 두 끝점을 먼저 제한하고 그래프·상태 조건은 그 결과에 적용한다.
+		return "SELECT 1 FROM (SELECT properties FROM " + edgeTable + " WHERE start_id = " + from + " AND end_id = " + to + " OFFSET 0) AS edge WHERE true" + edgePredicate
 	}
 	edgeQuery := between(direction == "in")
 	if direction != "in" && direction != "out" {

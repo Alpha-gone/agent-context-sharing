@@ -4,7 +4,7 @@
 
 ## 목표와 구현 범위
 
-#311의 서버 관계 추론을 구현하고 모델별 비교로 자동 확정 활성화 여부를 판정한다. 기존 124개 작업과 LIFE-10의 인수 이력을 승계하지 않으며 모든 작업은 미착수에서 시작한다.
+#311의 서버 관계 추론을 구현하고 모델별 비교로 자동 확정 활성화 여부를 판정한다. 기존 124개 작업과 LIFE-10의 인수 이력을 승계하지 않는다. RINF-01은 완료했고 나머지는 미착수다.
 
 - 설계 입력: [처리 흐름](../sdd/relation-inference.md#처리-흐름), [유형별 정책](../sdd/relation-inference.md#관계-유형별-정책), [후보 검색](../sdd/relation-inference.md#후보-검색), [판정 계약](../sdd/relation-inference.md#판정-계약), [반영 검증](../sdd/relation-inference.md#반영-검증), [추론 작업 큐](../sdd/relation-inference.md#추론-작업-큐), [모델 비교](../sdd/evaluation.md#관계-추론-모델-비교).
 - 예정 구현 영역: `internal/model`의 관계 속성·판정 값, `internal/store`의 큐·판정 기록·반영 트랜잭션, 새 `internal/relinfer`, `cmd/server`·`cmd/indexer` 조립, `internal/mcp` 응답·안내, `cmd/eval` 비교 모드, `migrations/`.
@@ -15,7 +15,8 @@
 
 ### RINF-01
 
-- [ ] **관계 속성·판정 주체와 추론 저장 스키마를 추가한다.**
+- [x] **관계 속성·판정 주체와 추론 저장 스키마를 추가한다.**
+- 완료 근거: [RINF-01 검증](../reviews/2026-11-09-rinf-01.md). 합성 DB 신규·반복 적용과 기존 기록 보존, 모델·저장소·마이그레이션 패키지 전체 시험을 확인했다.
 - 선행: [LIFE-10](context-lifecycle.md#life-10), [DATA-10](data.md#data-10).
 
 1. 모델에 `proposed_by=inference`, `confirmed_source`, `inference_decision_id`와 조건부 필수 규칙을 추가하고 `operation_log`에 판정 주체 열을 더한다.

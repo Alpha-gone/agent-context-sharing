@@ -54,6 +54,16 @@ const (
 	ProposalSourceSystem ProposalSource = "system"
 	// ProposalSourceAgent는 에이전트가 직접 만든 후보를 뜻한다.
 	ProposalSourceAgent ProposalSource = "agent"
+	// ProposalSourceInference는 서버 추론이 만든 후보를 뜻한다.
+	ProposalSourceInference ProposalSource = "inference"
+)
+
+// ConfirmationSource는 관계 확정의 판정 주체다.
+type ConfirmationSource string
+
+const (
+	ConfirmationSourceAgent     ConfirmationSource = "agent"
+	ConfirmationSourceInference ConfirmationSource = "inference"
 )
 
 // Relation은 같은 그래프 안의 사건 컨텍스트 사이 관계다.
@@ -72,6 +82,10 @@ type Relation struct {
 	State RelationState
 	// ProposedBy 필드는 후보를 만든 시스템 또는 에이전트다.
 	ProposedBy ProposalSource
+	// ConfirmedSource가 비어 있으면 기존 에이전트 확정으로 해석한다.
+	ConfirmedSource ConfirmationSource
+	// InferenceDecisionID는 추론 제안 또는 확정의 출처다.
+	InferenceDecisionID ID
 	// ProposedAt 필드는 후보가 기록된 UTC 시각이다.
 	ProposedAt time.Time
 	// ConfirmedBy 필드는 확정한 계정 식별자이며 confirmed에서 필수다.
@@ -101,12 +115,25 @@ func (relation Relation) Validate() error {
 	if !slices.Contains([]RelationState{RelationStateProposed, RelationStateConfirmed, RelationStateDiscarded}, relation.State) {
 		return fieldErrorf("state", "관계 상태 %q가 허용된 값이 아니다", relation.State)
 	}
-	if !slices.Contains([]ProposalSource{ProposalSourceSystem, ProposalSourceAgent}, relation.ProposedBy) {
+	if !slices.Contains([]ProposalSource{ProposalSourceSystem, ProposalSourceAgent, ProposalSourceInference}, relation.ProposedBy) {
 		return fieldErrorf("proposed_by", "관계 후보 출처 %q가 허용된 값이 아니다", relation.ProposedBy)
 	}
-	hasConfirmation := !relation.ConfirmedBy.IsZero() || !relation.ConfirmedByAgent.IsZero() || relation.ConfirmedAt != nil
+	if !slices.Contains([]ConfirmationSource{"", ConfirmationSourceAgent, ConfirmationSourceInference}, relation.ConfirmedSource) {
+		return fieldErrorf("confirmed_source", "관계 확정 주체가 허용된 값이 아니다")
+	}
+	if !relation.InferenceDecisionID.IsZero() && !relation.InferenceDecisionID.IsV7() {
+		return fieldErrorf("inference_decision_id", "추론 판정 식별자는 UUIDv7이어야 한다")
+	}
+	if (relation.ProposedBy == ProposalSourceInference || relation.ConfirmedSource == ConfirmationSourceInference) && relation.InferenceDecisionID.IsZero() {
+		return fieldErrorf("inference_decision_id", "추론 관계에는 판정 식별자가 필요하다")
+	}
+	hasConfirmation := !relation.ConfirmedBy.IsZero() || !relation.ConfirmedByAgent.IsZero() || relation.ConfirmedAt != nil || relation.ConfirmedSource != ""
 	if relation.State == RelationStateConfirmed || relation.State == RelationStateDiscarded && hasConfirmation {
-		if !relation.ConfirmedBy.IsV7() || !relation.ConfirmedByAgent.IsV7() || relation.ConfirmedAt == nil || !isUTC(*relation.ConfirmedAt) {
+		validAgent := relation.ConfirmedByAgent.IsV7()
+		if relation.ConfirmedSource == ConfirmationSourceInference {
+			validAgent = relation.ConfirmedByAgent.IsZero()
+		}
+		if !relation.ConfirmedBy.IsV7() || !validAgent || relation.ConfirmedAt == nil || !isUTC(*relation.ConfirmedAt) {
 			return fieldErrorf("created_by_agent", "확정 관계에는 계정, 에이전트와 UTC 확정 시각이 필요하다")
 		}
 	} else if hasConfirmation {

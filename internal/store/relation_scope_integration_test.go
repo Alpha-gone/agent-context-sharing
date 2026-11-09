@@ -233,6 +233,7 @@ func TestRelationQueryScopeIntegration(t *testing.T) {
 						case "cleanup":
 							relation.State = model.RelationStateProposed
 							relation.ConfirmedBy, relation.ConfirmedByAgent, relation.ConfirmedAt = model.ID{}, model.ID{}, nil
+							relation.ConfirmedSource = ""
 							_, err = database.updateRelation(t.Context(), tx, graph, relation)
 							if err == nil {
 								var deleted bool

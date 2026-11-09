@@ -1,10 +1,6 @@
 package migrate_test
 
-import (
-	"testing"
-
-	"agent_context_sharing/migrations"
-)
+import "testing"
 
 func TestNavigationMigrationPreservesHistoryIntegration(t *testing.T) {
 	pool, _ := isolatedMigrationDatabase(t)
@@ -26,7 +22,7 @@ func TestNavigationMigrationPreservesHistoryIntegration(t *testing.T) {
 	graphsSQL := `SELECT jsonb_agg(to_jsonb(g)-'entry_context_id' ORDER BY graph_id)::text FROM public.context_graph g`
 	history, nodes, graphs := preservationQuery(t, pool, historySQL), preservationQuery(t, pool, nodesSQL), preservationQuery(t, pool, graphsSQL)
 	for _, want := range []int{1, 0} {
-		if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != want {
+		if count, err := applyTarget(t.Context(), pool, migrationFilesBefore(t, 18), cfg); err != nil || count != want {
 			t.Fatalf("017 적용·반복=%d, want=%d: %v", count, want, err)
 		}
 		if preservationQuery(t, pool, historySQL) != history || preservationQuery(t, pool, nodesSQL) != nodes || preservationQuery(t, pool, graphsSQL) != graphs {

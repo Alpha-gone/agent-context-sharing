@@ -42,7 +42,11 @@ func TestAccessRelationCodecStates(t *testing.T) {
 					t.Fatal(err)
 				}
 				got, err := parseRelation(string(raw)+"::edge", graph)
-				if err != nil || !reflect.DeepEqual(got, relation) {
+				want := relation
+				if want.ConfirmedAt != nil {
+					want.ConfirmedSource = model.ConfirmationSourceAgent
+				}
+				if err != nil || !reflect.DeepEqual(got, want) {
 					t.Fatalf("관계 왕복 = %+v, %v", got, err)
 				}
 			})

@@ -325,6 +325,10 @@ FR-176~179의 논리 계약은 [SRS](../SRS.md#대화-흐름과-안내-진입점
 - graph_update: 선택 entry_context_id, null 해제·생략 유지. graph_get 응답은 유효 대표만 노출한다. 기존 기대 판·현재 권한·행위자·멱등 지문 검사에 새 입력도 포함한다.
 - server instructions에 원천 구성원→사건→precedes와 대표→탐색 참조의 구조를 짧게 안내한다. 개인 수집 절차는 강제하지 않는다. previous_event_id는 입력만으로 확정을 요청하는 행위이며 자동 추론 확정이 아니다. 공개 응답은 정점에 입력을 되풀이하지 않고 관계 조회로 확인한다.
 
+## 서버 관계 추론의 노출
+
+#311의 [서버 관계 추론](relation-inference.md)은 도구 이름·입력을 바꾸지 않는다. `relation_list`의 관계 항목은 `proposed_by`에 `inference` 값을, 확정 관계에 `confirmed_source`를, 추론 출처가 있으면 `inference_decision_id`를 담는다. 근거 인용·판정 사유·추론 작업 상태는 응답에 싣지 않는다. 고정 instructions는 기동 구성의 모드가 `propose`·`apply`일 때만 관계 탐색을 서버가 맡으며 명시 근거가 있는 관계만 직접 확정하라는 한 문장을 추가한다. 모드 변경은 재기동 뒤의 instructions에만 반영한다.
+
 ## 공개 도구 정의의 크기 예산
 
 #305에 따라 도구 이름·필드·호출 계약을 유지하며 공개 스키마의 반복 pattern과 최상위 allOf를 생략한다. 공개 메타데이터는 JSON 왕복으로 원본과 분리하므로 SDK 등록·직렬화나 복사본 조작이 내부 검증 정의를 바꾸지 않는다. 스키마 위치만 순회하고 const·enum·examples·default의 사용자 데이터는 변경하지 않는다. 공개 복사본에서 minLength/minItems의 0과 allOf의 빈 참 스키마({} 또는 true)를 생략하고, 남은 allOf 항목이 없으면 조합식도 생략한다. 다른 조합식의 빈 분기는 제거하지 않으며 내부 엄격 스키마는 유지한다. 공개 schema의 format을 호스트가 검증한다고 가정하지 않으며 서버의 별도 형식/도메인 검사는 유지한다.

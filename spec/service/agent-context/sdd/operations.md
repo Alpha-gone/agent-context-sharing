@@ -350,6 +350,24 @@ DIAGNOSTIC_INSTANCE_ID
 DIAGNOSTIC_LOG_LEVEL
 ```
 
+### 서버 관계 추론 구성
+
+#311의 [서버 관계 추론](relation-inference.md) 목표 구성이다. 구현 전이므로 위 허용 목록과 두 환경 예시에는 아직 없으며, 구현 작업에서 허용 목록·검증·`.env.example`·`.env.prod.example`·실행 안내를 함께 갱신한다. 수치는 측정 근거가 없는 시작값이며 [관계 추론 모델 비교](evaluation.md#관계-추론-모델-비교)로 다시 정한다.
+
+| 키 | 값·검증 | 상태 |
+|---|---|---|
+| `RELATION_INFERENCE_MODE` | `off`(기본)·`shadow`·`propose`·`apply` | 설계 반영 |
+| `RELATION_INFERENCE_PROVIDER`, `RELATION_INFERENCE_MODEL` | `off`가 아니면 필수. 제공자 값 집합은 첫 어댑터 구현 때 정한다 | 설계 반영 |
+| `RELATION_INFERENCE_BASE_URL`, `RELATION_INFERENCE_API_KEY` | 제공자 엔드포인트와 비밀. 임베딩 키와 공유하지 않으며 로그·오류에 출력하지 않는다 | 설계 반영 |
+| `RELATION_INFERENCE_TIMEOUT` | 호출 상한. 시작값 30초. 리스는 그 두 배다 | 설계 반영 |
+| `RELATION_INFERENCE_CANDIDATE_LIMIT` | 1~20. 시작값 8 | 설계 반영 |
+| `RELATION_INFERENCE_TARGET_CHARS`, `RELATION_INFERENCE_CANDIDATE_CHARS`, `RELATION_INFERENCE_INPUT_CHARS` | 발췌·전체 입력 문자 상한. 시작값 2000·800·9000이며 전체는 대상 상한 이상 | 설계 반영 |
+| `RELATION_INFERENCE_INDEX_WAIT` | 대상 색인 대기 상한. 시작값 10분 | 설계 반영 |
+| `RELATION_INFERENCE_AUTO_CONFIRM_TYPES` | `relates_to`·`part_of`의 쉼표 목록. 기본 빈 값, 다른 유형은 기동 거부 | 설계 반영 |
+| `RELATION_INFERENCE_ACCEPTED_PROFILE` | 합격 추론 프로필 지문(SHA-256 소문자 16진). 비어 있거나 현재 지문과 다르면 자동 확정하지 않는다 | 설계 반영 |
+
+`off`이면 나머지 키가 있어도 제공자를 만들지 않고 작업을 등록하지 않는다. `off`가 아닌데 필수 키가 없으면 기동을 거부한다. 기동 시 현재 프로필 지문과 자동 확정 활성 여부를 시스템 진단에 남기고 비밀·엔드포인트 경로는 남기지 않는다.
+
 ## 진단 정리의 실행 범위
 
 진단 정리 회차도 자문 잠금으로 중복 실행을 막는다. 실행권의 범위는 로그 저장소와 대상 인스턴스 디렉터리이며 공유 업무 DB의 전역 정리 작업과 구분한다. 같은 저장소의 물리 정리·쓰기 상한은 [기록기의 공유 파일 잠금](observability.md#경로권한다중-인스턴스)으로 추가 보호한다. 저장소·인스턴스 범위가 다른 서버의 로그 정리를 하나의 전역 DB 잠금으로 영구 건너뛰게 하지 않는다. 기록기의 새 기록·회전·기동 검사도 계속 적용한다.

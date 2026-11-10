@@ -17,6 +17,12 @@ type queueStub struct {
 	retryable        bool
 	outputFailures   int
 	reason           string
+	deferred         int
+}
+
+func (q *queueStub) DeferRelationInferenceTask(_ context.Context, _ model.RelationInferenceTask, _ time.Time) (bool, error) {
+	q.deferred++
+	return true, nil
 }
 
 func (q *queueStub) ClaimRelationInferenceTask(_ context.Context, lease time.Duration) (model.RelationInferenceTask, bool, error) {
@@ -242,5 +248,33 @@ func TestWorkerBusyAndCanceled(t *testing.T) {
 	cancel()
 	if _, err := worker.RunOnce(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("취소=%v", err)
+	}
+}
+
+type waitingProcessor struct {
+	until time.Time
+	calls int
+}
+
+func (p *waitingProcessor) Prepare(context.Context, model.RelationInferenceTask) ([]byte, *Failure, error) {
+	return nil, &Failure{WaitUntil: &p.until}, nil
+}
+func (p *waitingProcessor) Process(context.Context, model.RelationInferenceTask, []byte, int) (*Failure, error) {
+	p.calls++
+	return nil, nil
+}
+func (*waitingProcessor) Probe(context.Context) (time.Duration, error) { return 0, nil }
+func TestWorkerDefersIndexWaitWithoutFailure(t *testing.T) {
+	q := &queueStub{}
+	p := &waitingProcessor{until: time.Now().Add(time.Minute)}
+	worker, err := New(q, p, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = worker.RunOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if q.deferred != 1 || q.failures != 0 || p.calls != 0 {
+		t.Fatalf("대기 처리: %+v calls=%d", q, p.calls)
 	}
 }

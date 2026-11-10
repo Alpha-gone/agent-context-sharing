@@ -18,6 +18,7 @@ import (
 type Queue interface {
 	ClaimRelationInferenceTask(context.Context, time.Duration) (model.RelationInferenceTask, bool, error)
 	FailRelationInferenceTask(context.Context, model.RelationInferenceTask, string, bool, int) (bool, error)
+	DeferRelationInferenceTask(context.Context, model.RelationInferenceTask, time.Time) (bool, error)
 }
 
 // Failure는 저장 가능한 고정 사유와 제공자 장애 여부를 구분한다.
@@ -26,6 +27,7 @@ type Failure struct {
 	Retryable, OutputInvalid, ProviderWide bool
 	RetryAfter                             time.Duration
 	ProviderStatus                         int
+	WaitUntil                              *time.Time
 }
 
 type processingError struct{ cause error }
@@ -132,6 +134,13 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	}
 	if failure == nil {
 		return true, nil
+	}
+	if failure.WaitUntil != nil {
+		if attempted || processErr != nil {
+			return true, fmt.Errorf("추론 색인 대기 상태가 올바르지 않다")
+		}
+		_, err := w.queue.DeferRelationInferenceTask(ctx, task, *failure.WaitUntil)
+		return true, err
 	}
 	classified := *failure
 	failure = &classified

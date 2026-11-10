@@ -26,6 +26,21 @@ func (s *Store) FailRelationInferenceTask(ctx context.Context, task RelationInfe
 	return s.failInferenceTask(ctx, task, reason, retryable, outputFailures)
 }
 
+// DeferRelationInferenceTask는 색인 대기 중인 확보분을 시도 횟수 소모 없이 연기한다.
+func (s *Store) DeferRelationInferenceTask(ctx context.Context, task RelationInferenceTask, until time.Time) (bool, error) {
+	if !task.ID.IsV7() || task.Generation.IsZero() || task.LeasedUntil.IsZero() || until.IsZero() {
+		return false, fmt.Errorf("추론 작업 대기 인자가 올바르지 않다")
+	}
+	result, err := s.pool.Exec(ctx, `UPDATE public.relation_inference_task
+		SET next_attempt_at=GREATEST($4::timestamptz,statement_timestamp())
+		WHERE task_id=$1 AND enqueued_at=$2 AND next_attempt_at=$3 AND state='pending'`,
+		task.ID.String(), task.Generation, task.LeasedUntil, until)
+	if err != nil {
+		return false, fmt.Errorf("추론 작업 색인 대기: %w", err)
+	}
+	return result.RowsAffected() == 1, nil
+}
+
 // registerInferenceTask는 사건 쓰기 트랜잭션과 같은 커밋 경계를 사용한다.
 func (s *Store) registerInferenceTask(ctx context.Context, tx pgx.Tx, graphID, contextID, accountID model.ID, version int64) error {
 	if !graphID.IsV7() || !contextID.IsV7() || !accountID.IsV7() || version < 1 {

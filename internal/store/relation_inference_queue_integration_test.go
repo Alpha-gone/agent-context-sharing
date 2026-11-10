@@ -174,3 +174,31 @@ func TestRelationInferenceQueueRegistrationAndGenerationIntegration(t *testing.T
 		t.Fatal("실패한 사건 저장이 남았다")
 	}
 }
+
+func TestRelationInferenceIndexDeferIntegration(t *testing.T) {
+	db := newIsolatedIntegrationStore(t)
+	graph, actor, member := lifeProposalFixture(t, db)
+	db.inferenceEnabled = true
+	event := testEventContext(t, graph, actor, member.ID)
+	if _, err := db.CreateContextWithOperation(t.Context(), graph, event, nil, inferenceCreateOperation(event), WriteLimits{}); err != nil {
+		t.Fatal(err)
+	}
+	task, found, err := db.ClaimRelationInferenceTask(t.Context(), time.Minute)
+	if err != nil || !found {
+		t.Fatalf("작업 확보: %v %v", found, err)
+	}
+	until := time.Now().Add(2 * time.Minute)
+	matched, err := db.DeferRelationInferenceTask(t.Context(), task, until)
+	if err != nil || !matched {
+		t.Fatalf("작업 연기: %v %v", matched, err)
+	}
+	matched, err = db.DeferRelationInferenceTask(t.Context(), task, until)
+	if err != nil || matched {
+		t.Fatalf("이전 리스 연기: %v %v", matched, err)
+	}
+	var attempts int
+	var next time.Time
+	if err := db.pool.QueryRow(t.Context(), `SELECT attempts,next_attempt_at FROM public.relation_inference_task WHERE task_id=$1`, task.ID.String()).Scan(&attempts, &next); err != nil || attempts != 0 || next.Before(until.Add(-time.Microsecond)) {
+		t.Fatalf("연기 상태: %d %v %v", attempts, next, err)
+	}
+}

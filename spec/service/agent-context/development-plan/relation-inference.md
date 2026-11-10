@@ -4,7 +4,7 @@
 
 ## 목표와 구현 범위
 
-#311의 서버 관계 추론을 구현하고 모델별 비교로 자동 확정 활성화 여부를 판정한다. 기존 124개 작업과 LIFE-10의 인수 이력을 승계하지 않는다. RINF-01은 완료했고 나머지는 미착수다.
+#311의 서버 관계 추론을 구현하고 모델별 비교로 자동 확정 활성화 여부를 판정한다. 기존 124개 작업과 LIFE-10의 인수 이력을 승계하지 않는다. RINF-01·02는 완료했고 나머지는 미착수다.
 
 - 설계 입력: [처리 흐름](../sdd/relation-inference.md#처리-흐름), [유형별 정책](../sdd/relation-inference.md#관계-유형별-정책), [후보 검색](../sdd/relation-inference.md#후보-검색), [판정 계약](../sdd/relation-inference.md#판정-계약), [반영 검증](../sdd/relation-inference.md#반영-검증), [추론 작업 큐](../sdd/relation-inference.md#추론-작업-큐), [모델 비교](../sdd/evaluation.md#관계-추론-모델-비교).
 - 예정 구현 영역: `internal/model`의 관계 속성·판정 값, `internal/store`의 큐·판정 기록·반영 트랜잭션, 새 `internal/relinfer`, `cmd/server`·`cmd/indexer` 조립, `internal/mcp` 응답·안내, `cmd/eval` 비교 모드, `migrations/`.
@@ -28,7 +28,8 @@
 
 ### RINF-02
 
-- [ ] **추론 작업 등록·확보·재시도와 구성 검증을 구현한다.**
+- [x] **추론 작업 등록·확보·재시도와 구성 검증을 구현한다.**
+- 완료 근거: [RINF-02 검증](../reviews/2026-11-10-rinf-02.md). 동일 입력 재시도와 큐·회차의 일반·race 시험이 통과했다. 실제 판정 및 작업자 조립은 RINF-03~05에서 연결한다.
 - 선행: [RINF-01](#rinf-01), [IDX-08](indexing.md#idx-08), [OPS-09](operations.md#ops-09).
 
 1. 사건 생성·구성원/시간/본문 갱신·복구 트랜잭션에서 모드가 `off`가 아닐 때만 upsert 등록한다.

@@ -136,6 +136,8 @@ curl --fail --show-error https://localhost:8080/readyz
 
 기존 DB의 벡터 타입·차원은 환경 변수만 바꿔 전환할 수 없습니다. [임베딩 전환·복귀 설계](spec/service/agent-context/sdd/indexing.md#전환복귀-경계)를 따르십시오.
 
+서버 관계 추론은 개발 중입니다. `.env.example`과 `.env.prod.example`의 `RELATION_INFERENCE_MODE=off`를 유지하십시오. 작업자 조립과 제공자 연동은 아직 완료되지 않았습니다.
+
 ### 색인 작업자 분리 실행
 
 기본값 `INDEX_WORKER_PLACEMENT=embedded`에서는 서버 안의 작업자가 큐를 소비합니다. 분리하려면 같은 DB·제공자·대상 계층 구성의 환경 변수를 준비한 두 터미널에서 각각 실행합니다.

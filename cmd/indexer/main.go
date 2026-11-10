@@ -35,6 +35,9 @@ func configureAndRun(ctx context.Context, env config.Environment, start func(con
 	if err != nil {
 		return fmt.Errorf("배포 구성 검증: %w", err)
 	}
+	if cfg.RelationInference.Mode != "off" {
+		return fmt.Errorf("관계 추론 작업자 조립이 완료되기 전에는 RELATION_INFERENCE_MODE=off가 필요하다")
+	}
 	if cfg.IndexWorkerPlacement != config.PlacementExternal {
 		return fmt.Errorf("별도 색인 실행기는 INDEX_WORKER_PLACEMENT=external이 필요하다")
 	}

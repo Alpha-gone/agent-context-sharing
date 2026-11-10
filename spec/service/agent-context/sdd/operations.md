@@ -338,6 +338,19 @@ BCRYPT_COST
 RELATION_ADJACENCY_WINDOW
 RELATION_SIMILARITY_THRESHOLD
 RELATION_PROPOSAL_LIMIT
+RELATION_INFERENCE_MODE
+RELATION_INFERENCE_PROVIDER
+RELATION_INFERENCE_MODEL
+RELATION_INFERENCE_BASE_URL
+RELATION_INFERENCE_API_KEY
+RELATION_INFERENCE_TIMEOUT
+RELATION_INFERENCE_CANDIDATE_LIMIT
+RELATION_INFERENCE_TARGET_CHARS
+RELATION_INFERENCE_CANDIDATE_CHARS
+RELATION_INFERENCE_INPUT_CHARS
+RELATION_INFERENCE_INDEX_WAIT
+RELATION_INFERENCE_AUTO_CONFIRM_TYPES
+RELATION_INFERENCE_ACCEPTED_PROFILE
 ACCOUNT_PLAN_LIMITS
 TLS_TERMINATION
 TRUSTED_PROXY_CIDRS
@@ -352,7 +365,7 @@ DIAGNOSTIC_LOG_LEVEL
 
 ### 서버 관계 추론 구성
 
-#311의 [서버 관계 추론](relation-inference.md) 목표 구성이다. 구현 전이므로 위 허용 목록과 두 환경 예시에는 아직 없으며, 구현 작업에서 허용 목록·검증·`.env.example`·`.env.prod.example`·실행 안내를 함께 갱신한다. 수치는 측정 근거가 없는 시작값이며 [관계 추론 모델 비교](evaluation.md#관계-추론-모델-비교)로 다시 정한다.
+#311의 [서버 관계 추론](relation-inference.md) 구성이다. 허용 목록과 두 환경 예시의 설정 검증은 구현됐으며, 작업자 조립과 실제 제공자는 아직 준비되지 않았다. 수치는 측정 근거가 없는 시작값이며 [관계 추론 모델 비교](evaluation.md#관계-추론-모델-비교)로 다시 정한다.
 
 | 키 | 값·검증 | 상태 |
 |---|---|---|

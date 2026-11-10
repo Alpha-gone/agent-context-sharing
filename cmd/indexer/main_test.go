@@ -15,7 +15,7 @@ func TestIndexerConfigurationBeforeStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"valid", "embedded", "invalid_provider", "invalid_placement"} {
+	for _, mode := range []string{"valid", "embedded", "invalid_provider", "invalid_placement", "inference_unavailable"} {
 		t.Run(mode, func(t *testing.T) {
 			values := map[string]string{}
 			for line := range strings.SplitSeq(string(data), "\n") {
@@ -31,6 +31,12 @@ func TestIndexerConfigurationBeforeStartup(t *testing.T) {
 				values["EMBEDDING_PROVIDER"] = "private-invalid-provider"
 			case "invalid_placement":
 				values["INDEX_WORKER_PLACEMENT"] = "private-invalid-placement"
+			case "inference_unavailable":
+				values["RELATION_INFERENCE_MODE"] = "shadow"
+				values["RELATION_INFERENCE_PROVIDER"] = "provider"
+				values["RELATION_INFERENCE_MODEL"] = "gpt-6-luna"
+				values["RELATION_INFERENCE_BASE_URL"] = "https://provider.test/v1"
+				values["RELATION_INFERENCE_API_KEY"] = "synthetic-secret"
 			}
 			calls := 0
 			expected := errors.New("synthetic startup failure")

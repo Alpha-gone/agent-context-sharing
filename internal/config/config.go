@@ -145,6 +145,8 @@ type Config struct {
 	MCPAllowedOrigins []string
 	// Diagnostic은 파일 준비 전에 검증할 진단 구성이다.
 	Diagnostic DiagnosticConfig
+	// RelationInference는 서버 관계 추론의 구성이다. 비밀값은 진단에 전달하지 않는다.
+	RelationInference RelationInferenceConfig
 }
 
 // graphNamePattern은 SQL 식별자 자리에 치환되는 AGE 그래프 이름을 제한한다.
@@ -346,6 +348,9 @@ func load(env Environment) (Config, error) {
 		return Config{}, err
 	}
 	if err := loadDiagnostic(&cfg, env); err != nil {
+		return Config{}, err
+	}
+	if err := loadRelationInference(&cfg, env); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil

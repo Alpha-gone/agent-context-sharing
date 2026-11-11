@@ -2,12 +2,15 @@
 package relinfer
 
 import (
+	"agent_context_sharing/internal/diagnostic"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -44,13 +47,19 @@ type Processor interface {
 }
 
 type Worker struct {
-	queue     Queue
-	processor Processor
-	timeout   time.Duration
-	mu        sync.Mutex
-	failures  int
-	retryAt   time.Time
-	now       func() time.Time
+	queue               Queue
+	processor           Processor
+	timeout             time.Duration
+	mu                  sync.Mutex
+	failures            int
+	retryAt             time.Time
+	now                 func() time.Time
+	startOnce, stopOnce sync.Once
+	cancel              context.CancelFunc
+	done                chan struct{}
+	client              *http.Client
+	logger              *slog.Logger
+	diagnostics         diagnostic.Observer
 }
 
 // New는 실제 제공자나 작업을 만들지 않고 회차 의존성만 검증한다.
@@ -58,7 +67,7 @@ func New(queue Queue, processor Processor, timeout time.Duration) (*Worker, erro
 	if queue == nil || processor == nil || timeout <= 0 || timeout > time.Duration(1<<62-1) {
 		return nil, fmt.Errorf("관계 추론 작업자 구성이 올바르지 않다")
 	}
-	return &Worker{queue: queue, processor: processor, timeout: timeout, now: time.Now}, nil
+	return &Worker{queue: queue, processor: processor, timeout: timeout, now: time.Now, done: make(chan struct{})}, nil
 }
 
 // RunOnce는 차단 중 탐침을 먼저 확인하고 사용 가능한 작업을 최대 하나 처리한다.
@@ -85,11 +94,14 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 			return false, nil
 		}
 		w.failures, w.retryAt = 0, time.Time{}
+		diagnostic.Observe(w.diagnostics, ctx, "INFO", "relation_inference_retry", "completed", "provider_resumed", false, diagnostic.Fields{})
 	}
 	task, found, err := w.queue.ClaimRelationInferenceTask(ctx, w.timeout*2)
 	if err != nil || !found {
 		return false, err
 	}
+	ctx = diagnostic.ResumeJob(ctx, task.CorrelationID)
+	diagnostic.Observe(w.diagnostics, ctx, "INFO", "relation_inference_acquire", "completed", "completed", true, diagnostic.Fields{Identity: diagnostic.IdentityFields{GraphID: task.GraphID.String(), ContextID: task.ContextID.String()}, Index: diagnostic.IndexFields{TaskID: task.ID.String(), Generation: uint64(task.Generation.UnixMicro()), Attempts: uint64(task.Attempts), LeaseResult: "acquired"}})
 	prepareCtx, cancel := context.WithTimeout(ctx, w.timeout)
 	input, failure, processErr := w.processor.Prepare(prepareCtx, task)
 	cancel()
@@ -159,8 +171,22 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	}
 	if failure.ProviderWide {
 		w.block(failure.RetryAfter)
+		diagnostic.Observe(w.diagnostics, ctx, "WARN", "relation_inference_retry", "pending", "provider_blocked", false, diagnostic.Fields{})
 	}
-	_, err = w.queue.FailRelationInferenceTask(ctx, task, failure.Reason, failure.Retryable, outputFailures)
+	matched, err := w.queue.FailRelationInferenceTask(ctx, task, failure.Reason, failure.Retryable, outputFailures)
+	reason := "store_unavailable"
+	switch failure.Reason {
+	case "provider_unavailable":
+		reason = "provider_unavailable"
+	case "provider_rejected":
+		reason = "provider_contract_violation"
+	case "output_invalid":
+		reason = "output_invalid"
+	}
+	if err == nil && !matched {
+		reason = "stale_generation"
+	}
+	diagnostic.Observe(w.diagnostics, ctx, "WARN", "relation_inference_retry", "failed", reason, true, diagnostic.Fields{Identity: diagnostic.IdentityFields{GraphID: task.GraphID.String(), ContextID: task.ContextID.String()}, Index: diagnostic.IndexFields{TaskID: task.ID.String(), Attempts: uint64(task.Attempts)}})
 	if err != nil {
 		if processErr != nil {
 			return true, errors.Join(processingError{processErr}, err)

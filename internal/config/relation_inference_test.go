@@ -13,7 +13,7 @@ func TestRelationInferenceConfiguration(t *testing.T) {
 		t.Fatalf("기본 추론 구성=%+v, %v", cfg.RelationInference, err)
 	}
 	values["RELATION_INFERENCE_MODE"] = "shadow"
-	values["RELATION_INFERENCE_PROVIDER"] = "provider"
+	values["RELATION_INFERENCE_PROVIDER"] = "openai"
 	values["RELATION_INFERENCE_MODEL"] = "gpt-6-luna"
 	values["RELATION_INFERENCE_BASE_URL"] = "https://provider.test/v1"
 	values["RELATION_INFERENCE_API_KEY"] = "synthetic-secret"

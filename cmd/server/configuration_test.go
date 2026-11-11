@@ -67,17 +67,17 @@ func TestConfigurationPassesValidatedInputsOnce(t *testing.T) {
 	}
 }
 
-func TestInferenceUnavailableBeforeStartup(t *testing.T) {
+func TestInferenceConfigurationBeforeStartup(t *testing.T) {
 	values := serverConfiguration(t)
 	values["RELATION_INFERENCE_MODE"] = "shadow"
-	values["RELATION_INFERENCE_PROVIDER"] = "provider"
+	values["RELATION_INFERENCE_PROVIDER"] = "openai"
 	values["RELATION_INFERENCE_MODEL"] = "gpt-6-luna"
 	values["RELATION_INFERENCE_BASE_URL"] = "https://provider.test/v1"
 	values["RELATION_INFERENCE_API_KEY"] = "synthetic-secret"
 	starts := 0
 	err := configureAndRun(func(key string) string { return values[key] }, func(config.Config) error { starts++; return nil })
-	if err == nil || starts != 0 || strings.Contains(err.Error(), "synthetic-secret") {
-		t.Fatalf("추론 미조립 기동=%d, %v", starts, err)
+	if err != nil || starts != 1 {
+		t.Fatalf("추론 구성 기동=%d, %v", starts, err)
 	}
 }
 

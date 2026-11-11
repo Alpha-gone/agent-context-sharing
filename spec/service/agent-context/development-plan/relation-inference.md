@@ -4,7 +4,7 @@
 
 ## 목표와 구현 범위
 
-#311의 서버 관계 추론을 구현하고 모델별 비교로 자동 확정 활성화 여부를 판정한다. 기존 124개 작업과 LIFE-10의 인수 이력을 승계하지 않는다. RINF-01·02는 완료했고 나머지는 미착수다.
+#311의 서버 관계 추론을 구현하고 모델별 비교로 자동 확정 활성화 여부를 판정한다. 기존 124개 작업과 LIFE-10의 인수 이력을 승계하지 않는다. RINF-01~05는 완료했고 RINF-06은 미착수다.
 
 - 설계 입력: [처리 흐름](../sdd/relation-inference.md#처리-흐름), [유형별 정책](../sdd/relation-inference.md#관계-유형별-정책), [후보 검색](../sdd/relation-inference.md#후보-검색), [판정 계약](../sdd/relation-inference.md#판정-계약), [반영 검증](../sdd/relation-inference.md#반영-검증), [추론 작업 큐](../sdd/relation-inference.md#추론-작업-큐), [모델 비교](../sdd/evaluation.md#관계-추론-모델-비교).
 - 예정 구현 영역: `internal/model`의 관계 속성·판정 값, `internal/store`의 큐·판정 기록·반영 트랜잭션, 새 `internal/relinfer`, `cmd/server`·`cmd/indexer` 조립, `internal/mcp` 응답·안내, `cmd/eval` 비교 모드, `migrations/`.
@@ -67,7 +67,8 @@
 
 ### RINF-05
 
-- [ ] **MCP 노출·진단·조립을 연결하고 분야 통합 시험을 수행한다.**
+- [x] **MCP 노출·진단·조립을 연결하고 분야 통합 시험을 수행한다.**
+- 완료 근거: [RINF-05 검증](../reviews/2026-11-11-rinf-05.md). 내장·분리 작업자 배치와 실제 MCP·대역 판정·DB 반영·조회, 진단·격리 및 관련 패키지 전체 시험이 통과했다.
 - 선행: [RINF-04](#rinf-04), [MCP-09](mcp.md#mcp-09), [OBS-08](observability.md#obs-08).
 
 1. `relation_list`의 출처 필드와 모드별 instructions 한 문장을 추가하고 공개 도구 정의 크기 예산을 다시 확인한다.

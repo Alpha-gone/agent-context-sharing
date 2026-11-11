@@ -33,8 +33,8 @@ func loadRelationInference(cfg *Config, env Environment) error {
 	value.Model = strings.TrimSpace(env("RELATION_INFERENCE_MODEL"))
 	value.APIKey = strings.TrimSpace(env("RELATION_INFERENCE_API_KEY"))
 	if value.Mode != "off" {
-		if value.Provider == "" || hasControl(value.Provider) {
-			return invalid("RELATION_INFERENCE_PROVIDER", "제공자가 필요하다", nil)
+		if value.Provider != "openai" || hasControl(value.Provider) {
+			return invalid("RELATION_INFERENCE_PROVIDER", "지원하는 제공자는 openai다", nil)
 		}
 		if value.Model == "" || hasControl(value.Model) {
 			return invalid("RELATION_INFERENCE_MODEL", "모델이 필요하다", nil)

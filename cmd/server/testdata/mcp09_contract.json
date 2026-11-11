@@ -1460,7 +1460,7 @@
         },
         "content": [
           {
-            "text": "{\"next_cursor\":\"\",\"relations\":[{\"confirmed_at\":\"<utc-time>\",\"confirmed_by\":\"<owner>\",\"confirmed_by_agent\":\"<agent>\",\"deleted_at\":null,\"from_context_id\":\"<first_event>\",\"graph_id\":\"<graph>\",\"proposed_at\":\"<utc-time>\",\"proposed_by\":\"system\",\"relation_id\":\"<relation>\",\"relation_type\":\"precedes\",\"state\":\"confirmed\",\"to_context_id\":\"<second_event>\"}]}",
+            "text": "{\"next_cursor\":\"\",\"relations\":[{\"confirmed_at\":\"<utc-time>\",\"confirmed_by\":\"<owner>\",\"confirmed_by_agent\":\"<agent>\",\"confirmed_source\":\"agent\",\"deleted_at\":null,\"from_context_id\":\"<first_event>\",\"graph_id\":\"<graph>\",\"proposed_at\":\"<utc-time>\",\"proposed_by\":\"system\",\"relation_id\":\"<relation>\",\"relation_type\":\"precedes\",\"state\":\"confirmed\",\"to_context_id\":\"<second_event>\"}]}",
             "type": "text"
           }
         ],
@@ -1472,6 +1472,7 @@
               "confirmed_at": "<utc-time>",
               "confirmed_by": "<owner>",
               "confirmed_by_agent": "<agent>",
+              "confirmed_source": "agent",
               "deleted_at": null,
               "from_context_id": "<first_event>",
               "graph_id": "<graph>",

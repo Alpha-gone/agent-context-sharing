@@ -136,7 +136,7 @@ curl --fail --show-error https://localhost:8080/readyz
 
 기존 DB의 벡터 타입·차원은 환경 변수만 바꿔 전환할 수 없습니다. [임베딩 전환·복귀 설계](spec/service/agent-context/sdd/indexing.md#전환복귀-경계)를 따르십시오.
 
-서버 관계 추론은 개발 중입니다. `.env.example`과 `.env.prod.example`의 `RELATION_INFERENCE_MODE=off`를 유지하십시오. 작업자 조립과 제공자 연동은 아직 완료되지 않았습니다.
+서버 관계 추론은 기본적으로 비활성입니다. 활성화하려면 `RELATION_INFERENCE_MODE`와 `openai` 제공자, 모델, HTTPS `/v1` 주소 및 별도 API 키를 구성합니다. 작업자는 색인 작업자와 같은 배치에서 실행됩니다. 실제 모델 호출에는 비용이 발생하며, 자동 확정은 [모델 비교](spec/service/agent-context/sdd/evaluation.md#관계-추론-모델-비교)의 합격 기준과 검증이 준비된 뒤 승인된 프로필 지문으로 설정합니다.
 
 ### 색인 작업자 분리 실행
 

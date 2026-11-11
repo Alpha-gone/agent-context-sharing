@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	json "encoding/json/v2"
 	"github.com/jackc/pgx/v5"
@@ -74,6 +75,7 @@ func (s *Store) ApplyInferenceResult(ctx context.Context, request model.Inferenc
 		if err := tx.Commit(ctx); err != nil {
 			return false, err
 		}
+		s.observeInferenceResult(ctx, task, request.RunID)
 		return true, nil
 	}
 	graphActive := true
@@ -113,7 +115,50 @@ func (s *Store) ApplyInferenceResult(ctx context.Context, request model.Inferenc
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("추론 결과 커밋: %w", err)
 	}
+	s.observeInferenceResult(ctx, task, request.RunID)
 	return false, nil
+}
+
+func (s *Store) observeInferenceResult(ctx context.Context, task model.RelationInferenceTask, runID model.ID) {
+	if s.managementDiagnostics == nil {
+		return
+	}
+	rows, err := s.pool.Query(ctx, `SELECT decision_id::text,relation_type,decision,validation_result,COALESCE(validation_reason,''),relation_id::text FROM public.relation_inference_decision WHERE run_id=$1 ORDER BY decision_id`, runID.String())
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var decisionID, kind, decision, resultCode, reasonCode string
+		var relationID *string
+		if err := rows.Scan(&decisionID, &kind, &decision, &resultCode, &reasonCode, &relationID); err != nil {
+			return
+		}
+		if !slices.Contains([]string{"relation", "none", "abstain"}, decision) {
+			decision = "invalid"
+		}
+		stage, result, reason := "relation_inference_apply", "completed", "completed"
+		if resultCode != "valid" {
+			stage, result, reason = "relation_inference_reject", "rejected", inferenceDiagnosticReason(reasonCode)
+		} else if reasonCode == "policy_downgraded" {
+			reason = "policy_downgraded"
+		}
+		fields := diagnostic.Fields{Identity: diagnostic.IdentityFields{GraphID: task.GraphID.String(), ContextID: task.ContextID.String(), InferenceDecisionID: decisionID}, Management: diagnostic.ManagementFields{Operation: "relation_inference", RelationType: kind, InferenceDecision: decision, CommitState: "committed"}}
+		if relationID != nil {
+			fields.Identity.RelationID = *relationID
+		}
+		diagnostic.Observe(s.managementDiagnostics, ctx, "INFO", stage, result, reason, true, fields)
+	}
+}
+
+func inferenceDiagnosticReason(reason string) string {
+	if reason == "stale" {
+		return "stale_generation"
+	}
+	if slices.Contains([]string{"output_invalid", "evidence_unverified", "target_changed", "candidate_changed", "endpoint_inactive", "delegation_invalid", "identity_settled", "identity_proposed", "relation_constraint", "policy_downgraded"}, reason) {
+		return reason
+	}
+	return "constraint_violation"
 }
 
 func validInferenceFingerprint(value string) bool {

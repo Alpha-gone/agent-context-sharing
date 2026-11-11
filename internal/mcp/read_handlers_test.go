@@ -429,3 +429,22 @@ func TestReadHandlersSDKCompleteResults(t *testing.T) {
 		})
 	}
 }
+
+func TestRelationListInferenceProvenance(t *testing.T) {
+	s, p, h := readFixture(t)
+	other, _ := model.NewID()
+	relationID, _ := model.NewID()
+	decisionID, _ := model.NewID()
+	s.relations = func(model.ID, model.ID, []model.RelationState, []model.RelationType, string, int) ([]model.Relation, string, error) {
+		return []model.Relation{{ID: relationID, GraphID: s.graph.ID, FromContextID: s.node.ID, ToContextID: other, Type: model.RelationTypeRelatesTo, State: model.RelationStateConfirmed, ProposedBy: model.ProposalSourceInference, ConfirmedSource: model.ConfirmationSourceInference, InferenceDecisionID: decisionID}}, "", nil
+	}
+	result := readCall(t, t.Context(), h, p, "relation_list", map[string]any{"graph_id": s.graph.ID.String(), "context_id": s.node.ID.String()}, "")
+	values := result["relations"].([]any)
+	item := values[0].(map[string]any)
+	if item["proposed_by"] != "inference" || item["confirmed_source"] != "inference" || item["inference_decision_id"] != decisionID.String() {
+		t.Fatalf("관계 출처 %+v", item)
+	}
+	if _, ok := item["evidence"]; ok {
+		t.Fatal("근거 인용이 노출됐다")
+	}
+}

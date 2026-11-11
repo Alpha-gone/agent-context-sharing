@@ -15,7 +15,7 @@ func TestIndexerConfigurationBeforeStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"valid", "embedded", "invalid_provider", "invalid_placement", "inference_unavailable"} {
+	for _, mode := range []string{"valid", "embedded", "invalid_provider", "invalid_placement", "inference_enabled"} {
 		t.Run(mode, func(t *testing.T) {
 			values := map[string]string{}
 			for line := range strings.SplitSeq(string(data), "\n") {
@@ -31,9 +31,9 @@ func TestIndexerConfigurationBeforeStartup(t *testing.T) {
 				values["EMBEDDING_PROVIDER"] = "private-invalid-provider"
 			case "invalid_placement":
 				values["INDEX_WORKER_PLACEMENT"] = "private-invalid-placement"
-			case "inference_unavailable":
+			case "inference_enabled":
 				values["RELATION_INFERENCE_MODE"] = "shadow"
-				values["RELATION_INFERENCE_PROVIDER"] = "provider"
+				values["RELATION_INFERENCE_PROVIDER"] = "openai"
 				values["RELATION_INFERENCE_MODEL"] = "gpt-6-luna"
 				values["RELATION_INFERENCE_BASE_URL"] = "https://provider.test/v1"
 				values["RELATION_INFERENCE_API_KEY"] = "synthetic-secret"
@@ -47,7 +47,7 @@ func TestIndexerConfigurationBeforeStartup(t *testing.T) {
 				}
 				return expected
 			})
-			if mode == "valid" {
+			if mode == "valid" || mode == "inference_enabled" {
 				if calls != 1 || !errors.Is(err, expected) {
 					t.Fatalf("조립 호출·원인 보존=%d: %v", calls, err)
 				}

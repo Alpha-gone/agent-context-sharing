@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	json "encoding/json/v2"
 )
@@ -23,6 +25,7 @@ type DecisionProcessor struct {
 	Sink                  ResultSink
 	Mode, AcceptedProfile string
 	AutoConfirmTypes      []model.RelationType
+	diagnostics           diagnostic.Observer
 }
 
 // Prepare는 모델 전송 데이터와 서버 전용 대응을 작업자 내부 버퍼에 함께 보관한다.
@@ -64,6 +67,36 @@ func (p *DecisionProcessor) Process(ctx context.Context, task model.RelationInfe
 	if len(prepared.Candidates) > 0 {
 		var err error
 		result, err = p.Judge.Judge(ctx, prepared.Data)
+		fields := diagnostic.Fields{Identity: diagnostic.IdentityFields{GraphID: task.GraphID.String(), ContextID: task.ContextID.String()}, Index: diagnostic.IndexFields{TaskID: task.ID.String(), LatencyMS: uint64(time.Since(started).Milliseconds())}}
+		if result.InputTokens != nil && *result.InputTokens >= 0 {
+			fields.Index.InputTokens = uint64(*result.InputTokens)
+		}
+		if result.OutputTokens != nil && *result.OutputTokens >= 0 {
+			fields.Index.OutputTokens = uint64(*result.OutputTokens)
+		}
+		fields.Index.TokenUsageMeasured = result.InputTokens != nil && result.OutputTokens != nil && *result.InputTokens >= 0 && *result.OutputTokens >= 0
+		outcome, reason, level := "completed", "completed", "INFO"
+		if err != nil {
+			outcome, reason, level = "failed", "provider_unavailable", "WARN"
+			if errors.Is(err, ErrInvalidOutput) {
+				reason = "provider_contract_violation"
+			}
+			if errors.Is(err, context.Canceled) {
+				reason = "canceled"
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				reason = "deadline_exceeded"
+			}
+		}
+		if provider, ok := errors.AsType[ProviderError](err); ok && provider.Status >= 100 && provider.Status <= 599 {
+			fields.Index.ProviderStatus = uint16(provider.Status)
+		}
+		if result.ProviderStatus != nil {
+			if status, parseErr := strconv.ParseUint(*result.ProviderStatus, 10, 16); parseErr == nil && status >= 100 && status <= 599 {
+				fields.Index.ProviderStatus = uint16(status)
+			}
+		}
+		diagnostic.Observe(p.diagnostics, ctx, level, "relation_inference_provider", outcome, reason, true, fields)
 		if err != nil {
 			if errors.Is(err, ErrInvalidOutput) {
 				return &Failure{OutputInvalid: true}, nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"github.com/jackc/pgx/v5"
 )
@@ -55,6 +56,7 @@ func (s *Store) registerInferenceTask(ctx context.Context, tx pgx.Tx, graphID, c
 		correlation = id.String()
 	}
 	var stored string
+	var generation time.Time
 	err = tx.QueryRow(ctx, `INSERT INTO public.relation_inference_task
 		(task_id,graph_id,context_id,target_version,trigger_account_id,attempts,output_attempts,state,enqueued_at,next_attempt_at,correlation_id)
 		VALUES ($1,$2,$3,$4,$5,0,0,'pending',statement_timestamp(),statement_timestamp(),$6)
@@ -63,12 +65,38 @@ func (s *Store) registerInferenceTask(ctx context.Context, tx pgx.Tx, graphID, c
 		  attempts=0, output_attempts=0, state='pending', last_error=NULL,
 		  enqueued_at=GREATEST(EXCLUDED.enqueued_at,relation_inference_task.enqueued_at + interval '1 microsecond'),
 		  next_attempt_at=statement_timestamp(), correlation_id=EXCLUDED.correlation_id
-		WHERE relation_inference_task.graph_id=EXCLUDED.graph_id RETURNING task_id::text`,
-		id.String(), graphID.String(), contextID.String(), version, accountID.String(), correlation).Scan(&stored)
+		WHERE relation_inference_task.graph_id=EXCLUDED.graph_id RETURNING task_id::text,enqueued_at`,
+		id.String(), graphID.String(), contextID.String(), version, accountID.String(), correlation).Scan(&stored, &generation)
 	if err != nil {
 		return fmt.Errorf("추론 작업 등록: %w", err)
 	}
+	storedID, err := model.ParseID(stored)
+	if err != nil {
+		return storageError("relation_inference_task_id", err)
+	}
+	fields := diagnostic.Fields{Identity: diagnostic.IdentityFields{GraphID: graphID.String(), ContextID: contextID.String()}, Index: diagnostic.IndexFields{TaskID: storedID.String(), Generation: uint64(generation.UnixMicro())}}
+	if observed, ok := tx.(*observedWriteTx); ok {
+		observed.callbacks = append(observed.callbacks, func(state string) {
+			result, reason := "pending", "completed"
+			if state != "committed" {
+				result, reason = "skipped", "commit_unknown"
+			}
+			diagnostic.Observe(s.indexDiagnostics, ctx, "INFO", "relation_inference_enqueue", result, reason, true, fields)
+		})
+	} else {
+		diagnostic.Observe(s.indexDiagnostics, ctx, "INFO", "relation_inference_enqueue", "pending", "completed", true, fields)
+	}
 	return nil
+}
+
+// RelationInferenceQueueCounts는 추론 대기·실패 작업 수를 제공한다.
+func (s *Store) RelationInferenceQueueCounts(ctx context.Context) (int64, int64, error) {
+	var pending, failed int64
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE state='pending'), count(*) FILTER (WHERE state='failed') FROM public.relation_inference_task`).Scan(&pending, &failed)
+	if err != nil {
+		return 0, 0, storageError("relation_inference_progress", err)
+	}
+	return pending, failed, nil
 }
 
 // claimInferenceTask는 작업 행만 잠그고 리스를 커밋한 뒤 연결을 돌려준다.

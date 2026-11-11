@@ -74,9 +74,6 @@ func configureAndRun(env config.Environment, start func(config.Config) error) er
 	if err != nil {
 		return fmt.Errorf("배포 구성 검증: %w", err)
 	}
-	if cfg.RelationInference.Mode != "off" {
-		return fmt.Errorf("관계 추론 작업자 조립이 완료되기 전에는 RELATION_INFERENCE_MODE=off가 필요하다")
-	}
 	return start(cfg)
 }
 

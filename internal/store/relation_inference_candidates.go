@@ -252,7 +252,8 @@ func (s *Store) inferenceAllowed(ctx context.Context, tx pgx.Tx, request Inferen
 	value := model.InferenceCandidate{Event: candidate}
 	rows, err := tx.Query(ctx, `SELECT DISTINCT d.relation_type FROM public.relation_inference_decision d
 		JOIN public.relation_inference_run r ON r.run_id=d.run_id WHERE r.graph_id=$1 AND r.context_id=$2 AND r.target_version=$3
-		AND r.profile_fingerprint=$4 AND d.candidate_context_id=$5 AND d.candidate_version=$6`, target.GraphID.String(), target.ID.String(), target.Version, request.ProfileFingerprint, candidate.ID.String(), candidate.Version)
+		AND r.profile_fingerprint=$4 AND d.candidate_context_id=$5 AND d.candidate_version=$6
+		AND d.validation_result='valid'`, target.GraphID.String(), target.ID.String(), target.Version, request.ProfileFingerprint, candidate.ID.String(), candidate.Version)
 	if err != nil {
 		return value, err
 	}

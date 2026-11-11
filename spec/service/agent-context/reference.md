@@ -605,3 +605,7 @@
 ## 전환기 roots 알림 (#308, 2026-11-05)
 
 - [MCP 전송 명세](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)는 알림 접수에 빈 202와 요청 메타데이터 헤더를 요구한다. [SDK v1.8.0 헤더 구현](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/streamable_headers.go)은 revision 헤더가 없으면 표준 헤더를 추가하지 않는다. 조회 2026-11-05 KST. 인증 후 roots 변경 알림 하나의 호환 예외를 SRS와 sdd/mcp.md에 반영한다. 실제 호스트 인수는 별도다.
+
+## 관계 추론 제공자 계약 (#311, 2026-11-11)
+
+- [GPT-6 Luna 모델](https://developers.openai.com/api/docs/models/gpt-6-luna)은 모델 식별자 `gpt-6-luna`, Responses API와 구조화 출력 지원을 명시한다. [Responses 생성 API](https://developers.openai.com/api/reference/resources/responses/methods/create)는 `text.format` JSON Schema와 `usage.input_tokens`·`usage.output_tokens`를 정의한다. [구조화 출력 지침](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)은 strict JSON Schema와 거절 응답을 설명한다. 2026-11-11 KST 조회. RINF-04 어댑터 계약에 적용하며 계정 접근 권한이나 실제 호출 성공을 가정하지 않는다.

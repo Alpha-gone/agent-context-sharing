@@ -161,8 +161,8 @@ func takeInferenceTask(ctx context.Context, tx pgx.Tx, task inferenceTask) (bool
 	}
 	result, err := tx.Exec(ctx, `DELETE FROM public.relation_inference_task
 		WHERE task_id=$1 AND graph_id=$2 AND context_id=$3 AND target_version=$4
-		AND enqueued_at=$5 AND next_attempt_at=$6 AND state='pending'`,
-		task.ID.String(), task.GraphID.String(), task.ContextID.String(), task.TargetVersion, task.Generation, task.LeasedUntil)
+		AND enqueued_at=$5 AND next_attempt_at=$6 AND trigger_account_id=$7 AND state='pending'`,
+		task.ID.String(), task.GraphID.String(), task.ContextID.String(), task.TargetVersion, task.Generation, task.LeasedUntil, task.TriggerAccountID.String())
 	if err != nil {
 		return false, fmt.Errorf("추론 결과 작업 세대 확인: %w", err)
 	}

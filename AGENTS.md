@@ -39,8 +39,8 @@
 
 ## Go 기준
 
-- `go.mod`의 `go 1.27.3`과 개발·CI·검증 도구 체인을 유지한다. [Effective Go](https://go.dev/doc/effective_go), Modern Go Guidelines의 대상 버전 지침과 `gofmt`를 따른다.
-- 기본 PATH에 Go 1.27.3이 없으면 IntelliJ IDEA의 프로젝트 Go SDK를 선택한 실행 구성·통합 터미널을 사용한다. 셸에서 go를 찾지 못한 것만으로 검증 불가로 판단하지 않는다.
+- `go.mod`의 `go 1.27.4`과 개발·CI·검증 도구 체인을 유지한다. [Effective Go](https://go.dev/doc/effective_go), Modern Go Guidelines의 대상 버전 지침과 `gofmt`를 따른다.
+- 기본 PATH에 Go 1.27.4이 없으면 IntelliJ IDEA의 프로젝트 Go SDK를 선택한 실행 구성·통합 터미널을 사용한다. 셸에서 go를 찾지 못한 것만으로 검증 불가로 판단하지 않는다.
 
 ## 루트 실행 구성
 

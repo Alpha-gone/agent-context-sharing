@@ -606,6 +606,12 @@
 
 - [MCP 전송 명세](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)는 알림 접수에 빈 202와 요청 메타데이터 헤더를 요구한다. [SDK v1.8.0 헤더 구현](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/streamable_headers.go)은 revision 헤더가 없으면 표준 헤더를 추가하지 않는다. 조회 2026-11-05 KST. 인증 후 roots 변경 알림 하나의 호환 예외를 SRS와 sdd/mcp.md에 반영한다. 실제 호스트 인수는 별도다.
 
+## 대화 수집 클라이언트의 호스트 훅 입력 (2026-11-14)
+
+- [Claude Code 훅 참조](https://code.claude.com/docs/en/hooks): 공통 입력 `session_id`·`transcript_path`·`cwd`·`hook_event_name`, `Stop`의 `last_assistant_message`, `async` 명령 훅과 `SessionEnd`의 1.5초 기본 예산을 확인했다. 대화 기록 파일의 행 형식은 문서에 없고 훅 시점에 최신 턴이 빠질 수 있다고 적혀 있다. `UserPromptSubmit`의 프롬프트 필드 이름은 이번 조회에서 확인하지 못했다.
+- [Codex 훅](https://learn.chatgpt.com/docs/hooks)과 [고급 구성](https://learn.chatgpt.com/docs/config-file/config-advanced): `notify`의 `agent-turn-complete`가 인자로 `thread-id`·`turn-id`·`cwd`·`input-messages`·`last-assistant-message`를 전달하고, 대화 기록 형식은 훅의 안정된 인터페이스가 아니라고 명시한다. `developers.openai.com/codex`의 주소는 이 문서로 이동한다.
+- 조회 2026-11-14 KST. 긴 문서는 일부 구간만 원문으로 확인했다. 두 호스트 모두 세션을 이어 열 때의 식별자 유지를 문서화하지 않았다. 이 근거로 [수집 클라이언트](sdd/conversation-ingestion.md#수집-클라이언트)가 대화 기록 파일을 해석하지 않도록 설계했으며 실제 실행 확인은 INGEST-04의 범위다.
+
 ## #317 Go 1.27.4 보안 판올림 (2026-11-14)
 
 - [Go 공식 릴리스 이력](https://go.dev/doc/devel/release#go1.27.4): Go 1.27.4(2026-11-10)는 cgo·`go` 명령·컴파일러·링커와 `net/http`의 보안 수정을 포함한다. 조회 시점에 더 새로운 1.27 판은 없었다.

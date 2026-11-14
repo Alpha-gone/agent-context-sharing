@@ -211,6 +211,8 @@ POST는 계열 폐기 또는 등록 폐기의 구분된 동작과 본인 대상 
 
 모든 응답에 no-store·no-cache·no-referrer·프레임 차단을 적용한다. POST는 출처→웹 세션→8 KiB URL-encoded 본문→저장소 순서로 처리하며 `action=revoke_grant|revoke_agent`와 단일 UUIDv7 `target_id`만 받는다. query를 폐기 인자로 합치지 않고 중복·알 수 없는 필드·잘못된 형식을 400, 초과 본문을 413으로 거부한다. 다른 계정 대상과 없는 대상은 같은 404이며 내부 장애는 고정 안내의 500이다. 성공은 `/connections`로 303 이동하고 쿠키를 변경하지 않는다. 반복 폐기는 최초 폐기 시각·사유를 유지한다. 실제 브라우저와 호스트 인수는 별도 증거가 필요하다.
 
+대화 수집을 활성화한 배포는 이 화면에 [수집 자격](conversation-ingestion.md#수집-자격)의 발급·목록·폐기를 더한다. 목표 동작이며 구현 전이다. POST의 `action`에 `issue_ingest`와 `revoke_ingest`를 추가하고 발급은 1~64자의 구분용 이름을, 폐기는 본인 자격의 UUIDv7 `target_id`를 받는다. 발급 성공 응답만 원문을 한 번 표시하며 이동 없이 no-store 본문으로 반환한다. 목록은 이름·발급·마지막 사용·만료·폐기 상태를 보여주고 원문과 해시는 표시하지 않는다. 다른 계정의 자격과 없는 자격은 같은 404다.
+
 ## 공통 프레임·쿠키 경계
 
 내장 공개 자산을 제외한 모든 동적 응답은 출처·세션 판정 전에 `X-Frame-Options: DENY`와 `Content-Security-Policy: frame-ancestors 'none'`을 적용한다. 오류·리디렉션·로그인·관리·복구 양식에도 같은 경계를 적용한다.

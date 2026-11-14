@@ -216,6 +216,8 @@ AGE가 돌려주는 `agtype`은 PostgreSQL 기본 타입이 아니다. `store`�
 
 공통 본문 읽기는 기존 Go 양식 해석 기본값과 같은 10 MiB로 제한하고 먼저 읽거나 JSON·폼을 해석하지 않는다. 로그인·등록·동의·연결 관리의 [8 KiB 양식](authentication.md#공개-로그인가입-자원-보호), [64 KiB 토큰](authentication.md#목표-oauth-http-경로), [4 MiB MCP](mcp.md#보호-http-구현-경계) 제한이 더 좁은 경계에서 우선하며 채널별 출처·인증·초과 오류의 순서를 유지한다. 일반 관리 양식의 초과는 기존 입력 오류 400이고 자격 양식·토큰·MCP의 바이트 초과는 각 채널의 413이다. 미등록·미지원 메서드의 본문은 애플리케이션에서 읽지 않는다.
 
+대화 수집을 활성화한 배포는 `POST /ingest/conversation`을 추가한다. 목표 경로이며 구현 전이다. 수집 자격으로만 인증하고 JSON 본문 상한은 4 MiB이며 계약은 [수집 경로](conversation-ingestion.md#수집-경로)를 따른다.
+
 보호 MCP의 경로 계약은 [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계)를 따른다. 인가 화면은 웹 인터페이스와 서버 어댑터를 통해 authz를 호출하며 `web`에서 `authz`를 import하지 않는다. 코드 교환·갱신 회전·Bearer 공유 폐기·본인 연결 관리는 별도의 좁은 저장 인터페이스로 주입하며 DB 핸들을 노출하지 않는다. AUTH-10의 `/connections`는 같은 웹 어댑터를 통해 authz를 호출하고 main에서 공유 저장소와 함께 조립한다. 입력·화면 계약은 [연결 관리 화면](web.md#목표-연결-관리-화면)을 따른다. Bearer 검증 결과 전달과 HTTP 오류 사상은 authz의 ProtectBearer가 제공한다. MCP-02의 newMCPHandler가 이를 MCP Principal로 옮기고 application의 선택 /mcp 슬롯을 TLS 판정 아래에 연결한다. mcp.NewHandler는 14종 처리기를 모두 요구하므로 ARCH-06의 기동 조립은 실제 등록·읽기·쓰기 14종과 보호 전송을 연결하며 MCP-06의 newMCPWriteHandlers는 여덟 쓰기에 현재 등급·플랜·저장/거부 기록·재생 실행기를 주입한다. MCP-07의 newMCPReadHandlers는 다섯 읽기에 현재 등급·플랜·그래프/노드/홉/관계와 검색기를 주입하고 저장 오류·구성원 참조 이름을 맞춘다. MCP-08의 서버 조립 어댑터는 본문·인증·도구 실행의 [요청 시간 예산과 오류 경계](mcp.md#요청-시간-예산과-오류-경계)를 적용한다. 기동 경로의 전체 의존 조립은 [ARCH-06 모듈 인수](../reviews/2026-10-23-arch-06.md)에서 확인했다. 전체 HTTP 경로·메서드·공통 보호는 [ARCH-07 모듈 인수](../reviews/2026-10-23-arch-07.md)에서 확인했으며 전체 MCP 서버 계약은 MCP-09에서 인수했고 실제 호스트는 TEST-08에서 별도로 확인한다. 등록하지 않은 경로도 TLS 검사를 거치고 `404`를 반환한다.
 
 ## 버전 요구

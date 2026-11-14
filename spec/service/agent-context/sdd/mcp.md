@@ -59,6 +59,8 @@
 
 UNIQUE `(account_id, client_id, registration_key)`는 폐기된 행에도 적용한다. 활성 행만의 부분 UNIQUE로 만들면 폐기 키를 새 활성 ID로 암묵 복구할 수 있으므로 사용하지 않는다. 계정·client별 목록과 활성 128개 한도 판정에는 `(account_id, client_id, created_at, agent_id)`와 `account_id WHERE revoked_at IS NULL` 인덱스를 둔다. 상한은 CHECK로 세지 않고 계정 범위 잠금 아래 재검사하며, UUID 타입·유일 제약만으로 활성·계정/client 결합이 검증되었다고 간주하지 않는다.
 
+[대화 수집](conversation-ingestion.md#결합-에이전트-등록)은 수집 자격에 결합한 등록을 위해 이 표에 `ingest_credential_id` 선택 열을 더하고 `client_id`를 선택 열로 바꾸는 목표 변경을 둔다. 두 열 중 정확히 하나만 값을 가지며 구현 전이다. `client_id`가 없는 등록은 `agent_register`와 행위자 필요 6종에서 쓰이지 않는다.
+
 ### 등록 구현 경계
 
 [MCP-04 모듈 인수](../reviews/2026-10-20-mcp-04.md)에서 등록·현재 결합 검사·소유자 폐기 API를 구현했다. `store.RegisterAgent`와 `RevokeAgent`는 계정 행을 같은 순서로 잠그고 Read Committed의 별도 명령으로 현재 등록·개수를 대조한다. 활성 재조회는 상한에서도 ID·생성 시각을 유지하며 폐기 키는 복구하지 않는다. 모든 client의 활성 개수를 계정당 128개로 제한하고 소유 폐기로 빈자리를 회복한다. 폐기는 반복해도 최초 시각을 유지하며 다른 계정·없는 등록은 같은 오류다.

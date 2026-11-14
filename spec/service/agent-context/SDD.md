@@ -26,7 +26,7 @@ AI 에이전트 제텔카스텐을 위한 공유 컨텍스트 그래프의 확�
 | 검색 | [search.md](sdd/search.md) | 채널·스냅숏, 홉 조회 보호, 라우팅·순위·접기·경로·예산·흐름 |
 | 색인 | [indexing.md](sdd/indexing.md) | 큐·세대·리스·재시도·결과 반영, 제공자 검증·재색인 |
 | 관계 추론 | [relation-inference.md](sdd/relation-inference.md) | 모드·유형별 반영 상한, 후보 검색, 교체 가능 판정·반영 검증, 추론 큐·판정 기록 |
-| 대화 수집 | [conversation-ingestion.md](sdd/conversation-ingestion.md) | 수집 경로·수집 자격·서버 구간화의 경계와 설계 대기 항목 |
+| 대화 수집 | [conversation-ingestion.md](sdd/conversation-ingestion.md) | 수집 경로·수집 자격·결합 등록, 구간화 규칙·큐·본문 구성, 수집 클라이언트 |
 | 웹 | [web.md](sdd/web.md) | 출처·세션·등급 처리, 화면·목록·팀·선택·시각화·연결 관리 |
 | 운영 | [operations.md](sdd/operations.md) | 기동·종료, 주기 작업, 배포 구성·개발/운영·터널, 백업·복구 |
 | 관측성 | [observability.md](sdd/observability.md) | 지표·감사 조회, 여섯 진단 파일·상관·회전·보존·총상한·실패 |
@@ -53,7 +53,7 @@ AI 에이전트 제텔카스텐을 위한 공유 컨텍스트 그래프의 확�
 
 2026-11-09 #311의 서버 관계 추론 8개 요구사항과 [분야 설계](sdd/relation-inference.md)를 추가했다. 구현·모델 호출·비교 측정은 미착수이며 `TBD-AGENT_CONTEXT-065`가 정해질 때까지 자동 확정을 활성화하지 않는다.
 
-2026-11-14 사용자 결정으로 대화 수집 3개 요구사항과 [분야 설계](sdd/conversation-ingestion.md)를 추가했다. 확정 요구사항에서 따르는 경계만 반영한 설계 대기 상태이며 구현은 미착수다. 구간화 기준, 사건 본문 구성, 실행 에이전트와 수집 자격의 수명·범위는 확정했으며 설계 대기 항목이 정해질 때까지 나머지 상세 계약을 확정하지 않는다.
+2026-11-14 사용자 결정으로 대화 수집 3개 요구사항과 [분야 설계](sdd/conversation-ingestion.md)를 추가했다. 수집 경로·자격·구간화·수집 클라이언트의 상세 설계를 반영했으며 구현과 검증은 미착수다. 수집 클라이언트의 호스트 훅 입력 일부는 검증 대기이고 수치는 측정 근거가 없는 시작값이다.
 
 ## 읽기와 변경 순서
 

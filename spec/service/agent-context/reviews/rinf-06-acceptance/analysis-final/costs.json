@@ -1,0 +1,60 @@
+{
+  "currency": "USD",
+  "pricing": {
+    "model": "gpt-6-luna",
+    "per_million_tokens": {
+      "ordinary_input": 0.1,
+      "cached_input": 0.01,
+      "write_30m": 0.125,
+      "write_12h": 0.25,
+      "output": 0.5
+    },
+    "embedding_input_per_million": 0.2,
+    "context_max": 272000
+  },
+  "classification": "actual response usage times frozen tariff, not supplier invoice",
+  "quality": {
+    "terminal_calls": 4000,
+    "actual_usage_at_tariff_total_usd": 1.0070284999999997,
+    "known_usage_subtotal_usd": 1.0070284999999997,
+    "unknown_usage_calls": 0,
+    "conservative_upper_usd": 1.0070284999999997,
+    "sum_pre_call_reservations_usd": 6.737987500000002
+  },
+  "embedding": {
+    "input_tokens": 39185,
+    "actual_usage_at_tariff_total_usd": 0.007837,
+    "known_usage_subtotal_usd": 0.007837,
+    "unknown_or_retained_reservation_usd": 6.938893903907228e-18,
+    "conservative_upper_usd": 0.007837000000000007
+  },
+  "flow": {
+    "actual_usage_at_tariff_total_usd": 0.046053900000000085,
+    "known_usage_subtotal_usd": 0.046053900000000085,
+    "unknown_usage_calls": 0,
+    "conservative_upper_usd": 0.046053900000000085,
+    "total_including_local_allocation_under_tariff_usd": 0.07671528195092432
+  },
+  "campaign_known_usage_subtotal_usd": 1.0609193999999997,
+  "campaign_actual_usage_at_tariff_total_usd": 1.0609193999999997,
+  "prior_conservative_usd": 0.0231057,
+  "cumulative_actual_usage_at_tariff_total_usd": null,
+  "prior_charge_classification": "historical conservative conversion; no reverified itemized usage supplied",
+  "observed_components_conservative_upper_including_prior_usd": 1.0840250999999996,
+  "complete_cumulative_upper_usd": 1.0840250999999996,
+  "budget_usd": 10,
+  "observed_components_within_budget": true,
+  "missing_scope": [],
+  "default_activation": false,
+  "analysis_version": "rinf06-offline-v1",
+  "input_sha256": {
+    "samples.json": "4011859de090ed8d4e0c893134a897ce0d766df879af4b18d3cb2f077ce6b8f7",
+    "gold.json": "65239750e7d2fc78b77ddda3474bc9e926268fd2b7f5784ae08d3564612c7d59",
+    "prepared.jsonl": "ad39b4e3e62dcd047a10e1cbc2516262201d8e8af257a99d968db56fe6e103f9",
+    "judgments.jsonl": "e105c40375e2e88547533f1ffb413f1c1a8b54cc5cfe05605555469958696f1d",
+    "validated.json": "43d440b9e94b6d2e3829f3ee6cef81335e0a44fcfd24f0d912b3b78a3c29bf20",
+    "quality-execution.json": "ca75e8d64155ff30dbc7dd248ba566a4da9ac8d9a5ef8fedda90d8ce62057b82",
+    "vectors.json": "1b163577cc68f3e8364d74637a1fa86371c15a8056623c61a0968724c22e8b9a",
+    "flow.jsonl": "09a21000d930b1a1339887bbe2c1ec6135344bacb8e7348af1277887e583f494"
+  }
+}

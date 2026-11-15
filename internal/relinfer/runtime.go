@@ -23,6 +23,9 @@ type RuntimeStore interface {
 // RuntimeConfig는 실행기에서 검증한 관계 추론 구성이다.
 type RuntimeConfig struct {
 	Mode, Provider, Model, APIKey, BaseURL, EmbeddingModel, AcceptedProfile string
+	PromptVersion                                                           string
+	MaxOutputTokens                                                         int
+	ServiceTier                                                             string
 	Timeout, IndexWait, AdjacencyWindow                                     time.Duration
 	CandidateLimit, TargetChars, CandidateChars, InputChars                 int
 	AutoConfirmTypes                                                        []model.RelationType
@@ -60,11 +63,24 @@ func NewRuntime(store RuntimeStore, cfg RuntimeConfig, client *http.Client, logg
 	} else if copied.Transport == nil {
 		copied.Transport = http.DefaultTransport.(*http.Transport).Clone()
 	}
-	judge, err := NewOpenAIJudge(&copied, cfg.BaseURL, cfg.APIKey, cfg.Model)
+	prompt := cfg.PromptVersion
+	if prompt == "" {
+		prompt = "1"
+	}
+	judge, err := NewOpenAIJudgeWithOptions(&copied, cfg.BaseURL, cfg.APIKey, cfg.Model, prompt, cfg.MaxOutputTokens, cfg.ServiceTier)
 	if err != nil {
 		return nil, "", err
 	}
-	profile := Profile{Provider: cfg.Provider, Model: cfg.Model, PromptVersion: "1", SchemaVersion: "1", EmbeddingModel: cfg.EmbeddingModel, IndexWait: cfg.IndexWait, AdjacencyWindow: cfg.AdjacencyWindow, Channels: []string{"semantic", "keyword", "member", "rule", "conversation"}, CandidateLimit: cfg.CandidateLimit, TargetChars: cfg.TargetChars, CandidateChars: cfg.CandidateChars, InputChars: cfg.InputChars}
+	profile := Profile{Provider: cfg.Provider, Model: cfg.Model, PromptVersion: prompt, SchemaVersion: "1", EmbeddingModel: cfg.EmbeddingModel, IndexWait: cfg.IndexWait, AdjacencyWindow: cfg.AdjacencyWindow, Channels: []string{"semantic", "keyword", "member", "rule", "conversation"}, CandidateLimit: cfg.CandidateLimit, TargetChars: cfg.TargetChars, CandidateChars: cfg.CandidateChars, InputChars: cfg.InputChars}
+	if cfg.MaxOutputTokens > 0 || cfg.ServiceTier != "" {
+		profile.Parameters = map[string]string{}
+		if cfg.MaxOutputTokens > 0 {
+			profile.Parameters["max_output_tokens"] = fmt.Sprint(cfg.MaxOutputTokens)
+		}
+		if cfg.ServiceTier != "" {
+			profile.Parameters["service_tier"] = cfg.ServiceTier
+		}
+	}
 	fingerprint, err := profile.Fingerprint()
 	if err != nil {
 		return nil, "", err

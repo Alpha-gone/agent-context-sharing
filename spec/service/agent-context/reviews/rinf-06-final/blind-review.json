@@ -1,0 +1,76 @@
+{
+  "purpose": "blind_model_gold_review",
+  "model": "gpt-6-luna",
+  "max_output_tokens": 3000,
+  "input_sha256": "a09b811b5d90cfaada035d6e508969a4f5649ae00f6f5091c47847b9b44615b5",
+  "status": "completed",
+  "latency_ms": 13086,
+  "usage": {
+    "input_tokens": 1416,
+    "input_tokens_details": {
+      "cache_write_tokens": 1413,
+      "cache_write_tokens_details": {
+        "ttl_12h_tokens": 0,
+        "ttl_30m_tokens": 1413
+      },
+      "cached_tokens": 0
+    },
+    "output_tokens": 939,
+    "output_tokens_details": {
+      "reasoning_tokens": 778
+    },
+    "total_tokens": 2355
+  },
+  "review": {
+    "reviews": [
+      {
+        "id": "n01",
+        "decision": "relation",
+        "direction": "undirected",
+        "ambiguity": false
+      },
+      {
+        "id": "n02",
+        "decision": "none",
+        "direction": null,
+        "ambiguity": false
+      },
+      {
+        "id": "n03",
+        "decision": "relation",
+        "direction": "T_to_C",
+        "ambiguity": false
+      },
+      {
+        "id": "n04",
+        "decision": "none",
+        "direction": null,
+        "ambiguity": false
+      },
+      {
+        "id": "n05",
+        "decision": "relation",
+        "direction": "T_to_C",
+        "ambiguity": false
+      },
+      {
+        "id": "n06",
+        "decision": "none",
+        "direction": null,
+        "ambiguity": false
+      },
+      {
+        "id": "n07",
+        "decision": "none",
+        "direction": null,
+        "ambiguity": false
+      },
+      {
+        "id": "n08",
+        "decision": "relation",
+        "direction": "undirected",
+        "ambiguity": false
+      }
+    ]
+  }
+}

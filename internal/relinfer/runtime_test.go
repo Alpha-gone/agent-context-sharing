@@ -11,6 +11,23 @@ import (
 
 type idleRuntimeStore struct{}
 
+func TestRuntimePromptVersions(t *testing.T) {
+	cfg := RuntimeConfig{Mode: "propose", Provider: "openai", Model: "gpt-6-luna", APIKey: "synthetic", BaseURL: "https://provider.test/v1", EmbeddingModel: "e", Timeout: time.Second, IndexWait: time.Minute, AdjacencyWindow: time.Hour, CandidateLimit: 4, TargetChars: 20, CandidateChars: 20, InputChars: 1000}
+	_, first, err := NewRuntime(idleRuntimeStore{}, cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.PromptVersion = "2"
+	_, second, err := NewRuntime(idleRuntimeStore{}, cfg, nil, nil)
+	if err != nil || first == second {
+		t.Fatal("프롬프트 판의 조립과 지문 구분 실패")
+	}
+	cfg.PromptVersion = "3"
+	if _, _, err := NewRuntime(idleRuntimeStore{}, cfg, nil, nil); err == nil {
+		t.Fatal("지원하지 않는 판 허용")
+	}
+}
+
 func (idleRuntimeStore) ClaimRelationInferenceTask(context.Context, time.Duration) (model.RelationInferenceTask, bool, error) {
 	return model.RelationInferenceTask{}, false, nil
 }

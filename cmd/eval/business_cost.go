@@ -10,6 +10,7 @@ import (
 )
 
 var businessComponents = []string{"agent", "embedding", "summary", "search", "storage"}
+var relationBusinessComponents = []string{"agent", "embedding", "summary", "search", "storage", "relation_inference"}
 var businessPhases = []string{"preparation", "reindex", "execution"}
 var businessTokenCategories = []string{"input", "output", "cache_read", "cache_write"}
 
@@ -56,7 +57,7 @@ type businessCostObservation struct {
 }
 
 func businessCategories(component string) []string {
-	if slices.Contains(businessComponents[:3], component) {
+	if slices.Contains(businessComponents[:3], component) || component == "relation_inference" {
 		return businessTokenCategories
 	}
 	return []string{"usage"}
@@ -64,7 +65,7 @@ func businessCategories(component string) []string {
 
 func validateBusinessPricing(p businessPricing) error {
 	invalid := fmt.Errorf("업무 과업 단가 판/통화/산정일/과금 단위가 올바르지 않다")
-	if !manifestCode.MatchString(p.Version) || !manifestCode.MatchString(p.Allocation) || len(p.Currency) != 3 || strings.Trim(p.Currency, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != "" || len(p.Rates) != len(businessComponents) {
+	if !manifestCode.MatchString(p.Version) || !manifestCode.MatchString(p.Allocation) || len(p.Currency) != 3 || strings.Trim(p.Currency, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != "" || (len(p.Rates) != len(businessComponents) && len(p.Rates) != len(relationBusinessComponents)) {
 		return invalid
 	}
 	if _, err := time.Parse(time.DateOnly, p.AsOf); err != nil {
@@ -72,11 +73,11 @@ func validateBusinessPricing(p businessPricing) error {
 	}
 	seen := map[string]bool{}
 	for _, rate := range p.Rates {
-		if !slices.Contains(businessComponents, rate.Component) || seen[rate.Component] || !manifestCode.MatchString(rate.Unit) || !validMetric(rate.UnitSize) || rate.UnitSize <= 0 || rate.UnitSize > 1e12 {
+		if !slices.Contains(relationBusinessComponents, rate.Component) || seen[rate.Component] || !manifestCode.MatchString(rate.Unit) || !validMetric(rate.UnitSize) || rate.UnitSize <= 0 || rate.UnitSize > 1e12 {
 			return invalid
 		}
 		seen[rate.Component] = true
-		if slices.Contains(businessComponents[:3], rate.Component) && rate.Unit != "tokens" {
+		if len(businessCategories(rate.Component)) == len(businessTokenCategories) && rate.Unit != "tokens" {
 			return invalid
 		}
 		categories := businessCategories(rate.Component)
@@ -90,18 +91,23 @@ func validateBusinessPricing(p businessPricing) error {
 			}
 		}
 	}
+	for _, component := range businessComponents {
+		if !seen[component] {
+			return invalid
+		}
+	}
 	return nil
 }
 
 func validateBusinessCosts(items []businessCostItem, pricing businessPricing) error {
 	invalid := fmt.Errorf("업무 과업 비용의 구간/항목/상태/필수 사용량/배분율이 올바르지 않다")
-	if len(items) != len(businessPhases)*len(businessComponents) {
+	if len(items) != len(businessPhases)*len(pricing.Rates) {
 		return invalid
 	}
 	seen := map[string]bool{}
 	for _, item := range items {
 		key := item.Phase + "/" + item.Component
-		if !slices.Contains(businessPhases, item.Phase) || !slices.Contains(businessComponents, item.Component) || seen[key] || !slices.Contains([]string{"measured", "unmeasured", "not_applicable"}, item.Status) {
+		if !slices.Contains(businessPhases, item.Phase) || !slices.ContainsFunc(pricing.Rates, func(r businessRate) bool { return r.Component == item.Component }) || seen[key] || !slices.Contains([]string{"measured", "unmeasured", "not_applicable"}, item.Status) {
 			return invalid
 		}
 		seen[key] = true
@@ -198,7 +204,7 @@ func businessRunTokens(run businessTaskRun, phase string) map[string]float64 {
 	result := map[string]float64{}
 	complete := true
 	for _, item := range run.Costs {
-		if (phase != "" && item.Phase != phase) || !slices.Contains(businessComponents[:3], item.Component) {
+		if (phase != "" && item.Phase != phase) || len(businessCategories(item.Component)) != len(businessTokenCategories) {
 			continue
 		}
 		if item.Status == "unmeasured" {

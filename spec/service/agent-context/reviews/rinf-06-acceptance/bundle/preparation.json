@@ -1,0 +1,70 @@
+{
+  "actual_store_candidates_and_build_input": true,
+  "candidate_retrieval": {
+    "channels": {
+      "conversation": {
+        "cases_observed": 400,
+        "distractor_found": 0,
+        "pair_found": 38,
+        "positive_primary_cases": 200,
+        "positive_primary_found_type_eligible": 20
+      },
+      "keyword": {
+        "cases_observed": 400,
+        "distractor_found": 299,
+        "pair_found": 354,
+        "positive_primary_cases": 200,
+        "positive_primary_found_type_eligible": 200
+      },
+      "member": {
+        "cases_observed": 400,
+        "distractor_found": 0,
+        "pair_found": 200,
+        "positive_primary_cases": 200,
+        "positive_primary_found_type_eligible": 100
+      },
+      "rule": {
+        "cases_observed": 400,
+        "distractor_found": 0,
+        "pair_found": 200,
+        "positive_primary_cases": 200,
+        "positive_primary_found_type_eligible": 100
+      },
+      "semantic": {
+        "cases_observed": 400,
+        "distractor_found": 400,
+        "pair_found": 400,
+        "positive_primary_cases": 200,
+        "positive_primary_found_type_eligible": 200
+      }
+    },
+    "positive_union_recall_by_type": {
+      "part_of": 1.0,
+      "relates_to": 1.0
+    },
+    "source": "actual prepared DB channels; not predicted gold channel output"
+  },
+  "counts": {
+    "part_of": {
+      "negative": 100,
+      "positive": 100
+    },
+    "relates_to": {
+      "negative": 100,
+      "positive": 100
+    }
+  },
+  "default_activation": false,
+  "embedding_documents": 1200,
+  "flow_independent_tasks": 6,
+  "flow_repeats_per_condition": 10,
+  "format": "relation_acceptance_preparation_v1",
+  "independent_review": {
+    "approved": true,
+    "review_sha256": "40bb746099d8990ebab0f778fd6d9897c28f3eed9999362f2c8b2cb1c408ff63"
+  },
+  "independent_scenarios": 400,
+  "profile_fingerprint": "04131576c443ad21c5aa3d72a8f54db7b3a5fe730ab11a9a4dfaa51b7b473c79",
+  "repeats": 10,
+  "source_manifest_sha256": "d20ce3086e9de69855e1eac487f75edcb49e0892c0b495093942c2429d37cb76"
+}

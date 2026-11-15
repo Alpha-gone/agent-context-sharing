@@ -3,6 +3,7 @@ package relinfer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -103,6 +104,37 @@ func TestDecisionProcessorUsesPreparedData(t *testing.T) {
 type judgmentRoundTrip func(*http.Request) (*http.Response, error)
 
 func (f judgmentRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestOpenAIJudgePromptVersion(t *testing.T) {
+	client := &http.Client{Transport: judgmentRoundTrip(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil || !strings.Contains(string(body), "For none or abstain, both evidence strings must be empty.") {
+			t.Error("판 2 지시가 요청에 없다")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{}"}]}]}`))}, nil
+	})}
+	judge, err := NewOpenAIJudgeWithPrompt(client, "https://provider.test/v1", "key", "model", "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := inferenceTestProfile()
+	profile.Provider, profile.Model, profile.PromptVersion = "openai", "model", "2"
+	profile.Parameters = nil
+	if err := judge.ValidateProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	profile.PromptVersion = "1"
+	if err := judge.ValidateProfile(profile); err == nil {
+		t.Fatal("다른 프롬프트 판 허용")
+	}
+	if _, err := judge.Judge(t.Context(), []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewOpenAIJudgeWithPrompt(client, "https://provider.test/v1", "key", "model", "3"); err == nil {
+		t.Fatal("미지원 판 허용")
+	}
+}
+
 func TestOpenAIJudgeStructuredOutputAndFailure(t *testing.T) {
 	output := `{"schema_version":"1","decisions":[]}`
 	status := http.StatusOK
@@ -183,5 +215,48 @@ func TestDecisionProcessorClassifiesProviderFailure(t *testing.T) {
 	}
 	if q.failures != 1 || q.reason != "provider_unavailable" || !q.retryable || worker.retryAt.IsZero() {
 		t.Fatalf("제공자 오류 분류 %+v", q)
+	}
+}
+
+func TestOpenAIJudgeOutputLimitProfileContract(t *testing.T) {
+	var request map[string]any
+	client := &http.Client{Transport: judgmentRoundTrip(func(r *http.Request) (*http.Response, error) {
+		raw, e := io.ReadAll(r.Body)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = json.Unmarshal(raw, &request); e != nil {
+			t.Fatal(e)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"schema_version\":\"1\",\"decisions\":[]}"}]}]}`)), Header: http.Header{}}, nil
+	})}
+	judge, e := NewOpenAIJudgeWithOptions(client, "https://example.test/v1", "unused", "gpt-6-luna", "2", 1536, "default")
+	if e != nil {
+		t.Fatal(e)
+	}
+	profile := inferenceTestProfile()
+	profile.Provider = "openai"
+	profile.Model = "gpt-6-luna"
+	profile.PromptVersion = "2"
+	profile.Parameters = map[string]string{"max_output_tokens": "1536", "service_tier": "default"}
+	if e = judge.ValidateProfile(profile); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = judge.Judge(t.Context(), []byte(`{"schema_version":"1"}`)); e != nil {
+		t.Fatal(e)
+	}
+	if fmt.Sprint(request["max_output_tokens"]) != "1536" || request["service_tier"] != "default" {
+		t.Fatalf("bounded request mismatch: %v", request)
+	}
+	profile.Parameters["max_output_tokens"] = "1024"
+	if judge.ValidateProfile(profile) == nil {
+		t.Fatal("mismatched output cap accepted")
+	}
+	profile.Parameters = map[string]string{"max_output_tokens": "1536", "service_tier": "default", "temperature": "0"}
+	if judge.ValidateProfile(profile) == nil {
+		t.Fatal("unsupported generation parameter accepted")
+	}
+	if _, e = NewOpenAIJudgeWithOptions(client, "https://example.test/v1", "unused", "gpt-6-luna", "2", -1, "default"); e == nil {
+		t.Fatal("negative output cap accepted")
 	}
 }

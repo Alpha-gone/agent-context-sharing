@@ -1,0 +1,878 @@
+{
+  "independent_scenarios": 400,
+  "repeats_per_scenario": 10,
+  "terminal_observations": 4000,
+  "repetitions_are_not_independent_samples": true,
+  "rounds": [
+    {
+      "repeat": 1,
+      "types": {
+        "relates_to": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        },
+        "part_of": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        }
+      },
+      "causes_abstention_diagnostics": {
+        "independent_negative_scenarios": 400,
+        "explicit_abstention_tagged_cases": 20,
+        "applyable_false_causes_outputs": 0,
+        "cases_with_false_causes_output": 0,
+        "positive_scenarios": 0,
+        "automatic_confirmation_qualified": false
+      }
+    },
+    {
+      "repeat": 2,
+      "types": {
+        "relates_to": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        },
+        "part_of": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 2,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        }
+      },
+      "causes_abstention_diagnostics": {
+        "independent_negative_scenarios": 400,
+        "explicit_abstention_tagged_cases": 20,
+        "applyable_false_causes_outputs": 1,
+        "cases_with_false_causes_output": 1,
+        "positive_scenarios": 0,
+        "automatic_confirmation_qualified": false
+      }
+    },
+    {
+      "repeat": 3,
+      "types": {
+        "relates_to": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        },
+        "part_of": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        }
+      },
+      "causes_abstention_diagnostics": {
+        "independent_negative_scenarios": 400,
+        "explicit_abstention_tagged_cases": 20,
+        "applyable_false_causes_outputs": 1,
+        "cases_with_false_causes_output": 1,
+        "positive_scenarios": 0,
+        "automatic_confirmation_qualified": false
+      }
+    },
+    {
+      "repeat": 4,
+      "types": {
+        "relates_to": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        },
+        "part_of": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 99,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 1,
+          "primary_invalid_decisions": 1,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        }
+      },
+      "causes_abstention_diagnostics": {
+        "independent_negative_scenarios": 400,
+        "explicit_abstention_tagged_cases": 20,
+        "applyable_false_causes_outputs": 0,
+        "cases_with_false_causes_output": 0,
+        "positive_scenarios": 0,
+        "automatic_confirmation_qualified": false
+      }
+    },
+    {
+      "repeat": 5,
+      "types": {
+        "relates_to": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        },
+        "part_of": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 1,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        }
+      },
+      "causes_abstention_diagnostics": {
+        "independent_negative_scenarios": 400,
+        "explicit_abstention_tagged_cases": 20,
+        "applyable_false_causes_outputs": 1,
+        "cases_with_false_causes_output": 1,
+        "positive_scenarios": 0,
+        "automatic_confirmation_qualified": false
+      }
+    },
+    {
+      "repeat": 6,
+      "types": {
+        "relates_to": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        },
+        "part_of": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 4,
+          "primary_blocked_relation_decisions": 1,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        }
+      },
+      "causes_abstention_diagnostics": {
+        "independent_negative_scenarios": 400,
+        "explicit_abstention_tagged_cases": 20,
+        "applyable_false_causes_outputs": 1,
+        "cases_with_false_causes_output": 1,
+        "positive_scenarios": 0,
+        "automatic_confirmation_qualified": false
+      }
+    },
+    {
+      "repeat": 7,
+      "types": {
+        "relates_to": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        },
+        "part_of": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 1,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        }
+      },
+      "causes_abstention_diagnostics": {
+        "independent_negative_scenarios": 400,
+        "explicit_abstention_tagged_cases": 20,
+        "applyable_false_causes_outputs": 1,
+        "cases_with_false_causes_output": 1,
+        "positive_scenarios": 0,
+        "automatic_confirmation_qualified": false
+      }
+    },
+    {
+      "repeat": 8,
+      "types": {
+        "relates_to": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        },
+        "part_of": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 99,
+            "fp": 0,
+            "fn": 1,
+            "precision": 1.0,
+            "recall": 0.99,
+            "one_sided_95_wilson_lower": 0.9733982695317235,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 99,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9733982695317235,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 2,
+          "primary_blocked_relation_decisions": 2,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        }
+      },
+      "causes_abstention_diagnostics": {
+        "independent_negative_scenarios": 400,
+        "explicit_abstention_tagged_cases": 20,
+        "applyable_false_causes_outputs": 1,
+        "cases_with_false_causes_output": 1,
+        "positive_scenarios": 0,
+        "automatic_confirmation_qualified": false
+      }
+    },
+    {
+      "repeat": 9,
+      "types": {
+        "relates_to": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        },
+        "part_of": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 0,
+          "primary_blocked_relation_decisions": 0,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        }
+      },
+      "causes_abstention_diagnostics": {
+        "independent_negative_scenarios": 400,
+        "explicit_abstention_tagged_cases": 20,
+        "applyable_false_causes_outputs": 0,
+        "cases_with_false_causes_output": 0,
+        "positive_scenarios": 0,
+        "automatic_confirmation_qualified": false
+      }
+    },
+    {
+      "repeat": 10,
+      "types": {
+        "relates_to": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 99,
+            "fp": 0,
+            "fn": 1,
+            "precision": 1.0,
+            "recall": 0.99,
+            "one_sided_95_wilson_lower": 0.9733982695317235,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 99,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9733982695317235,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 100,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 0,
+          "primary_invalid_decisions": 1,
+          "primary_blocked_relation_decisions": 1,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        },
+        "part_of": {
+          "independent_primary_cases": 200,
+          "primary_positive": 100,
+          "primary_negative": 100,
+          "maximum_independent_units_including_distractor_controls": 400,
+          "micro": {
+            "tp": 100,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "wilson_interpretation": "additional defensive prediction-count gate; prediction rows within a case are not independent",
+            "direction_errors": 0,
+            "distractor_fp": 0
+          },
+          "conservative_case_precision": {
+            "tp_units": 100,
+            "fp_units": 0,
+            "one_sided_95_wilson_lower": 0.9736572792168257,
+            "z": 1.6448536269514722,
+            "rule": "any scored false prediction makes the case FP, otherwise a correct primary prediction makes it TP"
+          },
+          "primary_abstain": 0,
+          "primary_none": 99,
+          "primary_provider_invalid": 0,
+          "primary_envelope_invalid": 1,
+          "primary_invalid_decisions": 1,
+          "primary_blocked_relation_decisions": 1,
+          "injection_false_relations_all_known_types": 0,
+          "qualification": "met_observed_round_thresholds",
+          "reasons": []
+        }
+      },
+      "causes_abstention_diagnostics": {
+        "independent_negative_scenarios": 400,
+        "explicit_abstention_tagged_cases": 20,
+        "applyable_false_causes_outputs": 0,
+        "cases_with_false_causes_output": 0,
+        "positive_scenarios": 0,
+        "automatic_confirmation_qualified": false
+      }
+    }
+  ],
+  "type_results": {
+    "relates_to": {
+      "qualified_rounds": 10,
+      "failed_rounds": 0,
+      "insufficient_rounds": 0
+    },
+    "part_of": {
+      "qualified_rounds": 10,
+      "failed_rounds": 0,
+      "insufficient_rounds": 0
+    }
+  },
+  "quality_thresholds_met_every_round": true,
+  "default_activation": false,
+  "interpretation": "synthetic holdout only; applyable predictions are server-validated, not proof of committed database state",
+  "candidate_retrieval": {
+    "channels": {
+      "semantic": {
+        "cases_observed": 400,
+        "pair_found": 400,
+        "distractor_found": 400,
+        "positive_primary_cases": 200,
+        "positive_primary_found_type_eligible": 200
+      },
+      "keyword": {
+        "cases_observed": 400,
+        "pair_found": 354,
+        "distractor_found": 299,
+        "positive_primary_cases": 200,
+        "positive_primary_found_type_eligible": 200
+      },
+      "member": {
+        "cases_observed": 400,
+        "pair_found": 200,
+        "distractor_found": 0,
+        "positive_primary_cases": 200,
+        "positive_primary_found_type_eligible": 100
+      },
+      "rule": {
+        "cases_observed": 400,
+        "pair_found": 200,
+        "distractor_found": 0,
+        "positive_primary_cases": 200,
+        "positive_primary_found_type_eligible": 100
+      },
+      "conversation": {
+        "cases_observed": 400,
+        "pair_found": 38,
+        "distractor_found": 0,
+        "positive_primary_cases": 200,
+        "positive_primary_found_type_eligible": 20
+      }
+    },
+    "positive_union_recall_by_type": {
+      "relates_to": 1.0,
+      "part_of": 1.0
+    },
+    "source": "actual prepared DB channels; not predicted gold channel output"
+  },
+  "measurement_complete": true,
+  "quality_qualified": true,
+  "operational_adoption": false,
+  "all_flow_runs_succeeded": false,
+  "assessment": "negative_qualification",
+  "assessment_reasons": [
+    "paired_total_cost_reduction_not_supported"
+  ],
+  "automatic_activation_performed": false,
+  "causes_automatic_confirmation": false,
+  "analysis_version": "rinf06-offline-v1",
+  "input_sha256": {
+    "samples.json": "4011859de090ed8d4e0c893134a897ce0d766df879af4b18d3cb2f077ce6b8f7",
+    "gold.json": "65239750e7d2fc78b77ddda3474bc9e926268fd2b7f5784ae08d3564612c7d59",
+    "prepared.jsonl": "ad39b4e3e62dcd047a10e1cbc2516262201d8e8af257a99d968db56fe6e103f9",
+    "judgments.jsonl": "e105c40375e2e88547533f1ffb413f1c1a8b54cc5cfe05605555469958696f1d",
+    "validated.json": "43d440b9e94b6d2e3829f3ee6cef81335e0a44fcfd24f0d912b3b78a3c29bf20",
+    "quality-execution.json": "ca75e8d64155ff30dbc7dd248ba566a4da9ac8d9a5ef8fedda90d8ce62057b82",
+    "vectors.json": "1b163577cc68f3e8364d74637a1fa86371c15a8056623c61a0968724c22e8b9a",
+    "flow.jsonl": "09a21000d930b1a1339887bbe2c1ec6135344bacb8e7348af1277887e583f494"
+  }
+}

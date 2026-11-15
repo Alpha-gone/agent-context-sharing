@@ -103,7 +103,7 @@ func validateBusinessTasks(input businessTaskInput) error {
 	invalid := func(field string) error {
 		return fmt.Errorf("업무 과업의 %s 항목이 누락되었거나 올바르지 않다", field)
 	}
-	if input.SchemaVersion != 1 || !manifestCode.MatchString(input.Version) || !slices.Contains([]string{"synthetic", "agent_trace"}, input.Provenance) {
+	if !((input.SchemaVersion == 1 && input.Experiment != "relation_inference") || (input.SchemaVersion == 2 && input.Experiment == "relation_inference")) || !manifestCode.MatchString(input.Version) || !slices.Contains([]string{"synthetic", "agent_trace"}, input.Provenance) {
 		return invalid("판/출처")
 	}
 	c := input.Controls
@@ -117,6 +117,9 @@ func validateBusinessTasks(input businessTaskInput) error {
 	}
 	if err := validateBusinessPricing(input.Pricing); err != nil {
 		return err
+	}
+	if (input.SchemaVersion == 2) != (len(input.Pricing.Rates) == len(relationBusinessComponents)) {
+		return invalid("추론 비용 항목")
 	}
 	names := businessConditionNames(input.Experiment)
 	if len(names) == 0 || len(input.Conditions) != len(names) || len(input.Tasks) == 0 {
@@ -191,6 +194,13 @@ func validateBusinessTasks(input businessTaskInput) error {
 			if err := validateBusinessCosts(run.Costs, input.Pricing); err != nil {
 				return err
 			}
+			if input.Experiment == "relation_inference" {
+				for _, item := range run.Costs {
+					if item.Component == "relation_inference" && ((run.Condition == "agent_relations" && item.Status != "not_applicable") || (run.Condition == "server_apply" && item.Phase == "execution" && item.Status == "not_applicable")) {
+						return invalid("추론 비용 조건")
+					}
+				}
+			}
 			if run.Condition == "summary" {
 				found := false
 				for _, item := range run.Costs {
@@ -213,6 +223,8 @@ func businessConditionNames(experiment string) []string {
 		return []string{"relevant", "irrelevant"}
 	case "reduction":
 		return []string{"original", "summary", "masked"}
+	case "relation_inference":
+		return []string{"agent_relations", "server_apply"}
 	default:
 		return nil
 	}

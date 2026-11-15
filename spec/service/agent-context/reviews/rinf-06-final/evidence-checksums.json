@@ -1,0 +1,23 @@
+{
+  "scope": "postexecution_evidence",
+  "files": {
+    "spec/service/agent-context/reviews/rinf-06-final/candidates.json": "de878e5e7867eb748746d228c919dbe4636ed00224c3c2e873654b1e0a101e91",
+    "spec/service/agent-context/reviews/rinf-06-final/summary.json": "1819a6d63c06f54b7f2ca107fabc931be488e04ee0765143c077a515c90f92d2",
+    "spec/service/agent-context/reviews/rinf-06-final/candidates-before-member-fix.json": "027c4966b51f7a84b80efbf6ce793a66d64e88136e5978c42a1d724e9332a19d",
+    "spec/service/agent-context/reviews/rinf-06-final/generated-quality.json": "e37aefbd2eb78ab3ec0ba0445489f907ba5d135dbc909c6bc322ff82ac6b6d13",
+    "spec/service/agent-context/reviews/rinf-06-final/candidates-empty-invalid.json": "803d03c8de2a7e9961aec3844e6b073f48f7569e49c68037401773acea7656cb",
+    "spec/service/agent-context/reviews/rinf-06-final/blind-review.json": "aeb59c5d95f0f46fd2abc0c36efc593ea41fed49efb74af4be5064741c3526b2",
+    "spec/service/agent-context/reviews/rinf-06-final/candidates-semantic.json": "743c383e94823565995c0b513b154df741cbe2321f5b8d34e789c1a300382701",
+    "spec/service/agent-context/reviews/rinf-06-final/flow.json": "54fbdddc09d8ae50946f7c08cb4d0fcdee62d9b4c0b55670f1e2cbfe6fa7bdca",
+    "spec/service/agent-context/reviews/rinf-06-final/vectors.json": "ea309376a140986fecfc841ad4a477cba90fbf8c97428c47bc0dd90002662b55",
+    "spec/service/agent-context/reviews/rinf-06-final/inputs.json": "513adb53a47b05b4560221199fff35b2ea19525e303cecd4ac947abed33c8ba5",
+    "spec/service/agent-context/reviews/rinf-06-final/manifest.json": "0ef485553901c24168270fc7b25f669a3c66bfad82ec520a5b53ef403bc85db2",
+    "spec/service/agent-context/reviews/rinf-06-final/generated-inputs.json": "50b4d48b656a6808eecd6aa2097b3c9a7930d9aa986e22e0f8272f69b3095ef2",
+    "spec/service/agent-context/reviews/rinf-06-final/ground-truth.json": "2f12a306f5acd5cf9b0848d5c03d6363a20a5fc13d883c80aa751945b44bd214",
+    "spec/service/agent-context/reviews/rinf-06-final/candidates-replay.json": "7d49d1460b0228227c42d25a6dfbd8554b5b27a180b3a938a118c2c8805b2535",
+    "spec/service/agent-context/reviews/rinf-06-final/measure-p2-10.jsonl": "55949436d9c0684aa44d0e15e69f167191ddf89c1744c8d3291d9cd0464f10e1",
+    "internal/store/relation_evaluation_integration_test.go": "9c595279f8c862f125a528833513c411d2220872dafff5e7646eca88c9ec229f",
+    "internal/store/relation_evaluation_flow_test.go": "646037f77d51124aae42b82a018f4e662a4c31e9450fa4ffca86d481e8fbcd81",
+    "cmd/eval/relation_measure.go": "9184bcf329caac1ad12f5bc341dc026cf5c8580b50a657cf1b6b0d676aa7b565"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "version": "rinf-06-final-1",
+  "status": "premeasurement_fixed",
+  "evaluation_units": 6,
+  "excluded_units": [
+    "n04",
+    "n08"
+  ],
+  "exclusion_reason": "blind_review_disagreement_before_measurement",
+  "prompt_version": "2",
+  "model": "gpt-6-luna",
+  "repeats": 10,
+  "budget_usd": 10,
+  "maximum_calls": 60,
+  "maximum_output_tokens_per_call_model_limit": 128000,
+  "conservative_reservation_usd": 8,
+  "prices_per_million_usd": {
+    "input": 0.1,
+    "output": 0.5,
+    "cache_write_30m": 0.125,
+    "cached_input": 0.01
+  },
+  "price_source": "https://developers.openai.com/api/docs/pricing",
+  "acceptance": {
+    "precision_one_sided_95_wilson_lower": 0.95,
+    "recall": 0.9,
+    "independent_positive_min_per_type": 100,
+    "independent_negative_min_per_type": 100,
+    "injection_false_relation_max": 0,
+    "missing_full_flow": "defer"
+  },
+  "predeclared_sample_sufficiency": "insufficient_for_activation",
+  "default_activation": false,
+  "inputs_sha256": "513adb53a47b05b4560221199fff35b2ea19525e303cecd4ac947abed33c8ba5",
+  "ground-truth_sha256": "2f12a306f5acd5cf9b0848d5c03d6363a20a5fc13d883c80aa751945b44bd214"
+}

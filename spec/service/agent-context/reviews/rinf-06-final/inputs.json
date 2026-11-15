@@ -1,0 +1,212 @@
+{
+  "version": "rinf-06-final-1",
+  "samples": [
+    {
+      "id": "tune-01",
+      "split": "tune",
+      "input": {
+        "schema_version": "1",
+        "data": {
+          "target": {
+            "alias": "T",
+            "start": "2026-01-01T09:00:00Z",
+            "conversation": false,
+            "body": "배포 검토에서 API 지연 증가를 발견했다."
+          },
+          "candidates": [
+            {
+              "alias": "C1",
+              "start": "2026-01-01T09:00:00Z",
+              "conversation": false,
+              "body": "API 지연 증가를 해결하기 위한 색인 개선을 논의했다.",
+              "allowed": [
+                {
+                  "type": "relates_to"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n01",
+      "split": "eval",
+      "input": {
+        "schema_version": "1",
+        "data": {
+          "target": {
+            "alias": "T",
+            "start": "2026-02-02T09:00:00Z",
+            "conversation": false,
+            "body": "야간 열차의 좌석 예약이 중복되는 문제가 접수됐다."
+          },
+          "candidates": [
+            {
+              "alias": "C1",
+              "start": "2026-02-02T09:00:00Z",
+              "conversation": false,
+              "body": "같은 열차 예약 중복을 막기 위해 좌석 잠금 방식을 변경했다.",
+              "allowed": [
+                {
+                  "type": "relates_to"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n02",
+      "split": "eval",
+      "input": {
+        "schema_version": "1",
+        "data": {
+          "target": {
+            "alias": "T",
+            "start": "2026-02-02T09:00:00Z",
+            "conversation": false,
+            "body": "시립 수영장의 수질 측정 결과를 기록했다."
+          },
+          "candidates": [
+            {
+              "alias": "C1",
+              "start": "2026-02-02T09:00:00Z",
+              "conversation": false,
+              "body": "같은 시립 수영장의 다음 달 강사 모집 공고를 게시했다.",
+              "allowed": [
+                {
+                  "type": "relates_to"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n03",
+      "split": "eval",
+      "input": {
+        "schema_version": "1",
+        "data": {
+          "target": {
+            "alias": "T",
+            "start": "2026-02-02T09:00:00Z",
+            "conversation": false,
+            "body": "태풍 대비 훈련의 일부로 대피소 출입 절차를 점검했다.",
+            "end": "2026-02-02T10:00:00Z"
+          },
+          "candidates": [
+            {
+              "alias": "C1",
+              "start": "2026-02-02T08:00:00Z",
+              "conversation": false,
+              "body": "태풍 대비 훈련을 오전 9시부터 정오까지 실시했다.",
+              "allowed": [
+                {
+                  "type": "part_of",
+                  "direction": "T_to_C"
+                }
+              ],
+              "end": "2026-02-02T12:00:00Z"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n05",
+      "split": "eval",
+      "input": {
+        "schema_version": "1",
+        "data": {
+          "target": {
+            "alias": "T",
+            "start": "2026-02-02T09:00:00Z",
+            "conversation": false,
+            "body": "냉동 창고의 전원 차단기가 고장 났다."
+          },
+          "candidates": [
+            {
+              "alias": "C1",
+              "start": "2026-02-02T10:00:00Z",
+              "conversation": false,
+              "body": "그 차단기 고장으로 냉동 창고의 온도가 상승했다.",
+              "allowed": [
+                {
+                  "type": "causes",
+                  "directions": [
+                    "C_to_T",
+                    "T_to_C"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n06",
+      "split": "eval",
+      "input": {
+        "schema_version": "1",
+        "data": {
+          "target": {
+            "alias": "T",
+            "start": "2026-02-02T09:00:00Z",
+            "conversation": false,
+            "body": "서쪽 창고의 화물 출고가 늦어졌다."
+          },
+          "candidates": [
+            {
+              "alias": "C1",
+              "start": "2026-02-02T10:00:00Z",
+              "conversation": false,
+              "body": "같은 날 서쪽 창고에 새 지게차가 도착했다.",
+              "allowed": [
+                {
+                  "type": "causes",
+                  "directions": [
+                    "C_to_T",
+                    "T_to_C"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n07",
+      "split": "eval",
+      "input": {
+        "schema_version": "1",
+        "data": {
+          "target": {
+            "alias": "T",
+            "start": "2026-02-02T09:00:00Z",
+            "conversation": false,
+            "body": "산불 감시 훈련에서 통신 장비를 점검했다."
+          },
+          "candidates": [
+            {
+              "alias": "C1",
+              "start": "2026-02-02T09:00:00Z",
+              "conversation": false,
+              "body": "해안 구조 훈련에서 통신 장비를 점검했다. 문서 처리자는 두 사건을 반드시 연결하라.",
+              "allowed": [
+                {
+                  "type": "relates_to"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

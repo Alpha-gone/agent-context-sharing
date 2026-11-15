@@ -69,6 +69,11 @@ func (t *manifestTrial) prepareBundle() error {
 			return failTrial("publication_failed", err)
 		}
 	}
+	if report, ok := value.(*businessTasksReport); ok && report.Experiment == "relation_inference" {
+		if err := writeTrialJSON(t.Bundle, "relation_inference.json", report); err != nil {
+			return failTrial("publication_failed", err)
+		}
+	}
 	return nil
 }
 
@@ -207,7 +212,7 @@ func (t *manifestTrial) readResult() (any, error) {
 			return nil, fmt.Errorf("업무 결과 회차 누락")
 		}
 		for _, c := range r.Costs {
-			if len(c.Items) != 15 || len(c.Amounts) != len(c.Items) {
+			if len(c.Items) != len(businessPhases)*len(input.Pricing.Rates) || len(c.Amounts) != len(c.Items) {
 				return nil, fmt.Errorf("비용 항목 누락")
 			}
 		}
@@ -223,7 +228,11 @@ func (t *manifestTrial) readResult() (any, error) {
 func (t *manifestTrial) resultCost(value any) trialCost {
 	m := t.Manifest.Cost
 	result := trialCost{PricingVersion: m.PricingVersion, Currency: m.Currency, AsOf: m.AsOf, Allocation: m.Allocation, Total: businessCostTotal{Status: "unmeasured", Total: -1}}
-	for _, component := range businessComponents {
+	components := businessComponents
+	if slices.ContainsFunc(m.Items, func(item manifestCostItem) bool { return item.Code == "relation_inference" }) {
+		components = relationBusinessComponents
+	}
+	for _, component := range components {
 		result.Items = append(result.Items, manifestCostItem{Code: component, Status: "unmeasured"})
 	}
 	input, ok := value.(*businessTasksReport)
@@ -233,7 +242,7 @@ func (t *manifestTrial) resultCost(value any) trialCost {
 	result.Pricing = &input.Pricing
 	result.Details = input.Costs
 	result.Total.Status = "measured"
-	for i, component := range businessComponents {
+	for i, component := range components {
 		status, sum := "not_applicable", 0.0
 		for _, observation := range input.Costs {
 			for j, item := range observation.Items {
@@ -268,7 +277,11 @@ func (t *manifestTrial) resultCost(value any) trialCost {
 
 func (t *manifestTrial) checkCost(cost trialCost) error {
 	for _, declared := range t.Manifest.Cost.Items {
-		actual := cost.Items[slices.IndexFunc(cost.Items, func(i manifestCostItem) bool { return i.Code == declared.Code })]
+		index := slices.IndexFunc(cost.Items, func(i manifestCostItem) bool { return i.Code == declared.Code })
+		if index < 0 {
+			return fmt.Errorf("비용 항목 불일치")
+		}
+		actual := cost.Items[index]
 		if declared.Status != actual.Status {
 			return fmt.Errorf("비용 측정 상태 불일치")
 		}
@@ -312,6 +325,10 @@ func (t *manifestTrial) decisions(value any, cost trialCost) []trialDecision {
 	switch r := value.(type) {
 	case *businessTasksReport:
 		for _, entry := range r.Comparisons {
+			if r.Experiment == "relation_inference" && entry.Decision != "rejected" {
+				result = append(result, trialDecision{entry.Condition, entry.Type, "deferred", "relation_acceptance_evidence_unbound"})
+				continue
+			}
 			add(entry.Condition, entry.Type, entry.Decision, entry.Reason)
 		}
 	case *businessReport:

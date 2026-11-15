@@ -1,0 +1,9 @@
+{"input_sha256":"ca5c2f51fdcc7608653baccd80ed4700d930a899aefca6a9868d02316a3a7b37","profile_fingerprint":"cfc6f2265f0ed06d4c026e2c5fddc49c5a55f424b720619f6dc5b432055cef9e","prompt_version":"2","repeats":1,"status":"exploratory","record":"manifest","gold_sha256":"99c5c3c923bd413c99b1f045414812646ff26c7baed1323eb7ba78e170634265","sample_split":"tune","default_activation":false,"price":"unmeasured"}
+{"sample_id":"tune-01","input_tokens":375,"output_tokens":134,"valid":true,"decision":"relation","record":"sample","latency_ms":2774,"match":true,"invalid_reason":""}
+{"output_tokens":155,"match":true,"decision":"relation","record":"sample","sample_id":"tune-03","valid":true,"invalid_reason":"","latency_ms":2992,"input_tokens":372}
+{"sample_id":"tune-05","latency_ms":3279,"input_tokens":379,"output_tokens":145,"match":false,"invalid_reason":"","record":"sample","valid":true,"decision":"none"}
+{"sample_id":"tune-07","latency_ms":2863,"output_tokens":200,"valid":true,"invalid_reason":"","decision":"relation","input_tokens":373,"match":false,"record":"sample"}
+{"record":"sample","latency_ms":2294,"valid":true,"match":true,"invalid_reason":"","decision":"none","sample_id":"tune-09","input_tokens":378,"output_tokens":141}
+{"sample_id":"tune-11","latency_ms":2794,"input_tokens":371,"output_tokens":194,"invalid_reason":"","record":"sample","valid":true,"match":false,"decision":"relation"}
+{"record":"sample","sample_id":"tune-13","latency_ms":2776,"input_tokens":389,"output_tokens":163,"valid":true,"match":true,"invalid_reason":"","decision":"none"}
+{"total_cost":"unmeasured","default_activation":false,"record":"complete","status":"deferred","candidate_search":"unmeasured"}

@@ -1,0 +1,68 @@
+{
+  "version": "rinf-06-final-1",
+  "samples": [
+    {
+      "id": "tune-01",
+      "split": "tune",
+      "category": "relates_to",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "relation",
+      "direction": ""
+    },
+    {
+      "id": "n01",
+      "split": "eval",
+      "category": "positive",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "relation",
+      "direction": ""
+    },
+    {
+      "id": "n02",
+      "split": "eval",
+      "category": "negative",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "none",
+      "direction": ""
+    },
+    {
+      "id": "n03",
+      "split": "eval",
+      "category": "positive",
+      "candidate": "C1",
+      "relation_type": "part_of",
+      "expected": "relation",
+      "direction": "T_to_C"
+    },
+    {
+      "id": "n05",
+      "split": "eval",
+      "category": "positive",
+      "candidate": "C1",
+      "relation_type": "causes",
+      "expected": "relation",
+      "direction": "T_to_C"
+    },
+    {
+      "id": "n06",
+      "split": "eval",
+      "category": "causal_negative",
+      "candidate": "C1",
+      "relation_type": "causes",
+      "expected": "abstain_or_none",
+      "direction": ""
+    },
+    {
+      "id": "n07",
+      "split": "eval",
+      "category": "injection",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "none",
+      "direction": ""
+    }
+  ]
+}

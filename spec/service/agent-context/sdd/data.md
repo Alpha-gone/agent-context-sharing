@@ -480,6 +480,7 @@ Row Level Security는 채택하지 않은 채로 둔다. [`SRS.md`](../SRS.md)�
 | `relation_identity` | 같은 유형·정규화한 양 끝의 활성 사건 관계가 중복되지 않고 `RELATES_TO`는 정규 방향으로만 저장된다. |
 | `relation_acyclic` | `PRECEDES`·`CAUSES`·`PART_OF`가 순환을 만들지 않는다. |
 | `relation_time` | 확정된 사건 관계의 시간 순서와 포함 범위가 유형별 제약을 만족한다. 제안·폐기 상태는 검사하지 않는다. |
+| `relation_inference` | 관계의 추론 출처와 확정 주체의 조건부 필수 값, 판정 기록의 그래프·사건 쌍·유형·관계 식별자 일치를 검사한다. 기존 확정 출처의 부재는 에이전트로 해석한다. |
 | `embedding_link` | 임베딩의 `context_id`가 존재하는 같은 그래프 컨텍스트를 가리키고 현재 `model_id`와 차원이 일치한다. |
 | `graph_registration` | 정점·간선·임베딩의 `graph_id`가 `context_graph`에 등록되어 있다. 그래프 단위 감사 범위 밖이므로 전체 감사만 검사한다. |
 

@@ -157,6 +157,11 @@ func (t *manifestTrial) checkInputs(prepared bool) error {
 		if m.Provenance != input.Provenance || m.Models.AgentVersion != c.Agent.Version || m.Models.AgentModel != c.Agent.Model || m.Models.PromptVersion != c.Agent.PromptFamily || *m.Search.Budget != *c.Budget || m.Execution.Preparation != c.Preparation || m.Execution.Cache != c.Cache || m.Execution.TimeoutMS != int(*c.TimeoutMS) || m.Cost.PricingVersion != input.Pricing.Version || m.Cost.Currency != input.Pricing.Currency || m.Cost.AsOf != input.Pricing.AsOf || m.Cost.Allocation != input.Pricing.Allocation {
 			return fmt.Errorf("업무 과업의 모델/예산/준비/단가 판 불일치")
 		}
+		if len(m.Cost.Items) != len(input.Pricing.Rates) || slices.ContainsFunc(input.Pricing.Rates, func(rate businessRate) bool {
+			return !slices.ContainsFunc(m.Cost.Items, func(item manifestCostItem) bool { return item.Code == rate.Component })
+		}) {
+			return fmt.Errorf("업무 과업 비용 항목 불일치")
+		}
 	case "units":
 		role = "unit_comparison"
 		if err := t.requireRoles(role); err != nil {

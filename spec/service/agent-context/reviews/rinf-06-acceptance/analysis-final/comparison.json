@@ -1,0 +1,1231 @@
+{
+  "status": "measured",
+  "independent_tasks": 6,
+  "repeats": 10,
+  "runs": 120,
+  "causes_positive_diagnostics": {
+    "agent_relations": {
+      "independent_positive_tasks": 2,
+      "repeats_per_task": 10,
+      "run_observations": 20,
+      "strict_whole_task_successes": 20,
+      "causes_proposed_relations": 20,
+      "causes_confirmed_relations": 0,
+      "automatic_confirmation_qualified": false,
+      "scope": "two positive causal tasks only; relation states alone do not establish correct direction"
+    },
+    "server_apply": {
+      "independent_positive_tasks": 2,
+      "repeats_per_task": 10,
+      "run_observations": 20,
+      "strict_whole_task_successes": 19,
+      "causes_proposed_relations": 19,
+      "causes_confirmed_relations": 0,
+      "automatic_confirmation_qualified": false,
+      "scope": "two positive causal tasks only; relation states alone do not establish correct direction"
+    }
+  },
+  "conditions": {
+    "agent_relations": {
+      "runs": 60,
+      "task_successes": 41,
+      "task_success_rate": 0.6833333333333333,
+      "provider_cost_components_usd": {
+        "agent_model": 0.0237653,
+        "relation_inference": 0,
+        "embedding_preparation": 0.0017299999999999998,
+        "embedding_followup": 0.000492
+      },
+      "total_cost_under_tariff_usd": 0.042291386247255584,
+      "external_supplier_cost_usd": 0.025987299999999998,
+      "model_input_tokens": 64663,
+      "embedding_input_tokens": 11110
+    },
+    "server_apply": {
+      "runs": 60,
+      "task_successes": 58,
+      "task_success_rate": 0.9666666666666667,
+      "provider_cost_components_usd": {
+        "agent_model": 0,
+        "relation_inference": 0.01784459999999999,
+        "embedding_preparation": 0.0017299999999999998,
+        "embedding_followup": 0.000492
+      },
+      "total_cost_under_tariff_usd": 0.034423895703668765,
+      "external_supplier_cost_usd": 0.020066600000000007,
+      "model_input_tokens": 33621,
+      "embedding_input_tokens": 11110
+    }
+  },
+  "task_means": {
+    "all_runs": {
+      "cold-chain": {
+        "agent_relations": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0007940078255017379,
+          "external_supplier_cost_usd": 0.00049433,
+          "whole_seconds": 12.0021944541,
+          "model_input_tokens": 1076.3,
+          "model_output_tokens": 697,
+          "embedding_input_tokens": 191,
+          "agent_model_input_tokens": 1076.3,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 351
+        },
+        "server_apply": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.00060059135520609,
+          "external_supplier_cost_usd": 0.00035866,
+          "whole_seconds": 9.3545823085,
+          "model_input_tokens": 559.1,
+          "model_output_tokens": 529.1,
+          "embedding_input_tokens": 191,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 376
+        }
+      },
+      "estuary": {
+        "agent_relations": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.000690965989238532,
+          "external_supplier_cost_usd": 0.00042241,
+          "whole_seconds": 10.5878714584,
+          "model_input_tokens": 1081.1,
+          "model_output_tokens": 551.8,
+          "embedding_input_tokens": 192,
+          "agent_model_input_tokens": 1081.1,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 351
+        },
+        "server_apply": {
+          "included_runs": 10,
+          "task_success": 0.9,
+          "total_cost_under_tariff_usd": 0.0006029385049800963,
+          "external_supplier_cost_usd": 0.0003575,
+          "whole_seconds": 9.5150385793,
+          "model_input_tokens": 562,
+          "model_output_tokens": 525.8,
+          "embedding_input_tokens": 192,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 374.5
+        }
+      },
+      "museum": {
+        "agent_relations": {
+          "included_runs": 10,
+          "task_success": 0.3,
+          "total_cost_under_tariff_usd": 0.0007454849197626753,
+          "external_supplier_cost_usd": 0.0004653,
+          "whole_seconds": 11.1279441666,
+          "model_input_tokens": 1082.5,
+          "model_output_tokens": 642.1,
+          "embedding_input_tokens": 180,
+          "agent_model_input_tokens": 1082.5,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 0.3,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 325.7
+        },
+        "server_apply": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0006018187846592901,
+          "external_supplier_cost_usd": 0.00035794,
+          "whole_seconds": 9.4431018291,
+          "model_input_tokens": 566.9,
+          "model_output_tokens": 530.5,
+          "embedding_input_tokens": 180,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 389
+        }
+      },
+      "orchard": {
+        "agent_relations": {
+          "included_runs": 10,
+          "task_success": 0.3,
+          "total_cost_under_tariff_usd": 0.0007826948847137924,
+          "external_supplier_cost_usd": 0.00049305,
+          "whole_seconds": 11.5602136459,
+          "model_input_tokens": 1069,
+          "model_output_tokens": 707.1,
+          "embedding_input_tokens": 163,
+          "agent_model_input_tokens": 1069,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 0.3,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 325.4
+        },
+        "server_apply": {
+          "included_runs": 10,
+          "task_success": 0.9,
+          "total_cost_under_tariff_usd": 0.0006077259796648962,
+          "external_supplier_cost_usd": 0.00035711,
+          "whole_seconds": 9.750378337699999,
+          "model_input_tokens": 557.6,
+          "model_output_tokens": 537.5,
+          "embedding_input_tokens": 163,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 387.1
+        }
+      },
+      "satellite": {
+        "agent_relations": {
+          "included_runs": 10,
+          "task_success": 0.6,
+          "total_cost_under_tariff_usd": 0.0005984554982963108,
+          "external_supplier_cost_usd": 0.00035766,
+          "whole_seconds": 9.3360131586,
+          "model_input_tokens": 1075.1,
+          "model_output_tokens": 423.1,
+          "embedding_input_tokens": 193,
+          "agent_model_input_tokens": 1075.1,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 0.8,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 327.6
+        },
+        "server_apply": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0005215352036429525,
+          "external_supplier_cost_usd": 0.00028777,
+          "whole_seconds": 8.9937973209,
+          "model_input_tokens": 555.7,
+          "model_output_tokens": 387.2,
+          "embedding_input_tokens": 193,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 361
+        }
+      },
+      "bakery": {
+        "agent_relations": {
+          "included_runs": 10,
+          "task_success": 0.9,
+          "total_cost_under_tariff_usd": 0.0006175295072125108,
+          "external_supplier_cost_usd": 0.00036598,
+          "whole_seconds": 9.8248317457,
+          "model_input_tokens": 1082.3,
+          "model_output_tokens": 438.7,
+          "embedding_input_tokens": 192,
+          "agent_model_input_tokens": 1082.3,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 0.9,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 329.8
+        },
+        "server_apply": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0005077797422135525,
+          "external_supplier_cost_usd": 0.00028768,
+          "whole_seconds": 8.372639983200001,
+          "model_input_tokens": 560.8,
+          "model_output_tokens": 386.4,
+          "embedding_input_tokens": 192,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 361
+        }
+      }
+    },
+    "successful_runs_only": {
+      "cold-chain": {
+        "agent_relations": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0007940078255017379,
+          "external_supplier_cost_usd": 0.00049433,
+          "whole_seconds": 12.0021944541,
+          "model_input_tokens": 1076.3,
+          "model_output_tokens": 697,
+          "embedding_input_tokens": 191,
+          "agent_model_input_tokens": 1076.3,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 351
+        },
+        "server_apply": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.00060059135520609,
+          "external_supplier_cost_usd": 0.00035866,
+          "whole_seconds": 9.3545823085,
+          "model_input_tokens": 559.1,
+          "model_output_tokens": 529.1,
+          "embedding_input_tokens": 191,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 376
+        }
+      },
+      "estuary": {
+        "agent_relations": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.000690965989238532,
+          "external_supplier_cost_usd": 0.00042241,
+          "whole_seconds": 10.5878714584,
+          "model_input_tokens": 1081.1,
+          "model_output_tokens": 551.8,
+          "embedding_input_tokens": 192,
+          "agent_model_input_tokens": 1081.1,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 351
+        },
+        "server_apply": {
+          "included_runs": 9,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0006023188093104234,
+          "external_supplier_cost_usd": 0.0003583555555555556,
+          "whole_seconds": 9.446941333444444,
+          "model_input_tokens": 561.7777777777778,
+          "model_output_tokens": 527.5555555555555,
+          "embedding_input_tokens": 192,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 376
+        }
+      },
+      "museum": {
+        "agent_relations": {
+          "included_runs": 3,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.000681536617747215,
+          "external_supplier_cost_usd": 0.00040963333333333333,
+          "whole_seconds": 10.737750166666666,
+          "model_input_tokens": 1083,
+          "model_output_tokens": 530.6666666666666,
+          "embedding_input_tokens": 180,
+          "agent_model_input_tokens": 1083,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 360
+        },
+        "server_apply": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0006018187846592901,
+          "external_supplier_cost_usd": 0.00035794,
+          "whole_seconds": 9.4431018291,
+          "model_input_tokens": 566.9,
+          "model_output_tokens": 530.5,
+          "embedding_input_tokens": 180,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 389
+        }
+      },
+      "orchard": {
+        "agent_relations": {
+          "included_runs": 3,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0006982553422798817,
+          "external_supplier_cost_usd": 0.0004332,
+          "whole_seconds": 10.426480069666667,
+          "model_input_tokens": 1069.3333333333333,
+          "model_output_tokens": 587.3333333333334,
+          "embedding_input_tokens": 163,
+          "agent_model_input_tokens": 1069.3333333333333,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 359
+        },
+        "server_apply": {
+          "included_runs": 9,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0006073947134964233,
+          "external_supplier_cost_usd": 0.00035686666666666665,
+          "whole_seconds": 9.745341018666666,
+          "model_input_tokens": 557.6666666666666,
+          "model_output_tokens": 537,
+          "embedding_input_tokens": 163,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 389.1111111111111
+        }
+      },
+      "satellite": {
+        "agent_relations": {
+          "included_runs": 6,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0005669355915816108,
+          "external_supplier_cost_usd": 0.00033593333333333333,
+          "whole_seconds": 8.889016333499999,
+          "model_input_tokens": 1075,
+          "model_output_tokens": 379.6666666666667,
+          "embedding_input_tokens": 193,
+          "agent_model_input_tokens": 1075,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 332
+        },
+        "server_apply": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0005215352036429525,
+          "external_supplier_cost_usd": 0.00028777,
+          "whole_seconds": 8.9937973209,
+          "model_input_tokens": 555.7,
+          "model_output_tokens": 387.2,
+          "embedding_input_tokens": 193,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 361
+        }
+      },
+      "bakery": {
+        "agent_relations": {
+          "included_runs": 9,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0006168879135647404,
+          "external_supplier_cost_usd": 0.00036385555555555556,
+          "whole_seconds": 9.891412032333333,
+          "model_input_tokens": 1082.3333333333333,
+          "model_output_tokens": 434.44444444444446,
+          "embedding_input_tokens": 192,
+          "agent_model_input_tokens": 1082.3333333333333,
+          "provider_calls": 9,
+          "agent_turns": 2,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 332
+        },
+        "server_apply": {
+          "included_runs": 10,
+          "task_success": 1,
+          "total_cost_under_tariff_usd": 0.0005077797422135525,
+          "external_supplier_cost_usd": 0.00028768,
+          "whole_seconds": 8.372639983200001,
+          "model_input_tokens": 560.8,
+          "model_output_tokens": 386.4,
+          "embedding_input_tokens": 192,
+          "agent_model_input_tokens": 0,
+          "provider_calls": 8,
+          "agent_turns": 0,
+          "incorrect_relation_count": 0,
+          "followup_expected_found": 1,
+          "followup_distractor_found": 0,
+          "application_sql_commands_after_migration": 361
+        }
+      }
+    }
+  },
+  "comparisons": {
+    "all_runs": {
+      "task_success": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          0,
+          -0.09999999999999998,
+          0.7,
+          0.6000000000000001,
+          0.4,
+          0.09999999999999998
+        ],
+        "mean_delta": 0.2833333333333333,
+        "ci95": [
+          -0.06419733134113165,
+          0.6308639980077984
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "total_cost_under_tariff_usd": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -0.00019341647029564799,
+          -8.802748425843572e-05,
+          -0.00014366613510338527,
+          -0.00017496890504889613,
+          -7.692029465335831e-05,
+          -0.0001097497649989583
+        ],
+        "mean_delta": -0.0001311248423931136,
+        "ci95": [
+          -0.0001808203393543041,
+          -8.142934543192315e-05
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "external_supplier_cost_usd": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -0.00013566999999999995,
+          -6.491e-05,
+          -0.00010735999999999997,
+          -0.00013593999999999998,
+          -6.988999999999997e-05,
+          -7.83e-05
+        ],
+        "mean_delta": -9.867833333333331e-05,
+        "ci95": [
+          -0.00013257536925537138,
+          -6.478129741129525e-05
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "whole_seconds": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -2.6476121456,
+          -1.0728328791,
+          -1.684842337500001,
+          -1.8098353082000003,
+          -0.3422158376999995,
+          -1.4521917624999983
+        ],
+        "mean_delta": -1.5015883784333333,
+        "ci95": [
+          -2.3107277095641967,
+          -0.6924490473024697
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "model_input_tokens": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -517.1999999999999,
+          -519.0999999999999,
+          -515.6,
+          -511.4,
+          -519.3999999999999,
+          -521.5
+        ],
+        "mean_delta": -517.3666666666666,
+        "ci95": [
+          -521.0910051816878,
+          -513.6423281516453
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "model_output_tokens": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -167.89999999999998,
+          -26.0,
+          -111.60000000000002,
+          -169.60000000000002,
+          -35.900000000000034,
+          -52.30000000000001
+        ],
+        "mean_delta": -93.88333333333334,
+        "ci95": [
+          -162.25750561052303,
+          -25.50916105614364
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "embedding_input_tokens": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mean_delta": 0,
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "agent_model_input_tokens": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -1076.3,
+          -1081.1,
+          -1082.5,
+          -1069,
+          -1075.1,
+          -1082.3
+        ],
+        "mean_delta": -1077.7166666666667,
+        "ci95": [
+          -1083.2730955718102,
+          -1072.1602377615231
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "provider_calls": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -1,
+          -1,
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "mean_delta": -1,
+        "ci95": [
+          -1.0,
+          -1.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "agent_turns": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -2,
+          -2,
+          -2,
+          -2,
+          -2,
+          -2
+        ],
+        "mean_delta": -2,
+        "ci95": [
+          -2.0,
+          -2.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "incorrect_relation_count": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mean_delta": 0,
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "followup_expected_found": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          0,
+          0,
+          0.7,
+          0.7,
+          0.19999999999999996,
+          0.09999999999999998
+        ],
+        "mean_delta": 0.2833333333333333,
+        "ci95": [
+          -0.06419733134113159,
+          0.6308639980077982
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "followup_distractor_found": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mean_delta": 0,
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "application_sql_commands_after_migration": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          25,
+          23.5,
+          63.30000000000001,
+          61.700000000000045,
+          33.39999999999998,
+          31.19999999999999
+        ],
+        "mean_delta": 39.68333333333334,
+        "ci95": [
+          20.726979458986648,
+          58.639687207680026
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      }
+    },
+    "successful_runs_only": {
+      "task_success": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mean_delta": 0,
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "total_cost_under_tariff_usd": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -0.00019341647029564799,
+          -8.864717992810862e-05,
+          -7.971783308792491e-05,
+          -9.086062878345836e-05,
+          -4.540038793865832e-05,
+          -0.00010910817135118792
+        ],
+        "mean_delta": -0.00010119177856416435,
+        "ci95": [
+          -0.00015346583590654747,
+          -4.8917721221781244e-05
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "external_supplier_cost_usd": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -0.00013566999999999995,
+          -6.405444444444443e-05,
+          -5.169333333333333e-05,
+          -7.633333333333336e-05,
+          -4.816333333333331e-05,
+          -7.617555555555555e-05
+        ],
+        "mean_delta": -7.534833333333332e-05,
+        "ci95": [
+          -0.00010875433803004967,
+          -4.194232863661696e-05
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "whole_seconds": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -2.6476121456,
+          -1.1409301249555561,
+          -1.2946483375666666,
+          -0.6811390510000006,
+          0.10478098740000164,
+          -1.5187720491333323
+        ],
+        "mean_delta": -1.196386786809259,
+        "ci95": [
+          -2.1560594887330966,
+          -0.23671408488542123
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "model_input_tokens": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -517.1999999999999,
+          -519.3222222222221,
+          -516.1,
+          -511.66666666666663,
+          -519.3,
+          -521.5333333333333
+        ],
+        "mean_delta": -517.5203703703703,
+        "ci95": [
+          -521.1223526975704,
+          -513.9183880431702
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "model_output_tokens": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -167.89999999999998,
+          -24.24444444444441,
+          -0.16666666666662877,
+          -50.33333333333337,
+          7.533333333333303,
+          -48.04444444444448
+        ],
+        "mean_delta": -47.1925925925926,
+        "ci95": [
+          -114.08347589314792,
+          19.698290707962734
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "embedding_input_tokens": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mean_delta": 0,
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "agent_model_input_tokens": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -1076.3,
+          -1081.1,
+          -1083,
+          -1069.3333333333333,
+          -1075,
+          -1082.3333333333333
+        ],
+        "mean_delta": -1077.8444444444444,
+        "ci95": [
+          -1083.4023670315505,
+          -1072.2865218573384
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "provider_calls": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -1,
+          -1,
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "mean_delta": -1,
+        "ci95": [
+          -1.0,
+          -1.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "agent_turns": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          -2,
+          -2,
+          -2,
+          -2,
+          -2,
+          -2
+        ],
+        "mean_delta": -2,
+        "ci95": [
+          -2.0,
+          -2.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "incorrect_relation_count": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mean_delta": 0,
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "followup_expected_found": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mean_delta": 0,
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "followup_distractor_found": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mean_delta": 0,
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      },
+      "application_sql_commands_after_migration": {
+        "independent_tasks": 6,
+        "deltas_server_minus_agent": [
+          25,
+          25,
+          29,
+          30.111111111111086,
+          29,
+          29
+        ],
+        "mean_delta": 27.851851851851848,
+        "ci95": [
+          25.49003391601935,
+          30.213669787684346
+        ],
+        "df": 5,
+        "status": "measured_six_task_paired_t"
+      }
+    }
+  },
+  "per_task_quality_all_runs": {
+    "cold-chain": {
+      "agent_relations": {
+        "runs_in_denominator": 10,
+        "successes": 10,
+        "failures": 0,
+        "statuses": {
+          "completed": 10
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 1.0,
+        "followup_expected_missing_runs": 0,
+        "followup_distractor_found_runs": 0
+      },
+      "server_apply": {
+        "runs_in_denominator": 10,
+        "successes": 10,
+        "failures": 0,
+        "statuses": {
+          "completed": 10
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 1.0,
+        "followup_expected_missing_runs": 0,
+        "followup_distractor_found_runs": 0
+      }
+    },
+    "estuary": {
+      "agent_relations": {
+        "runs_in_denominator": 10,
+        "successes": 10,
+        "failures": 0,
+        "statuses": {
+          "completed": 10
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 1.0,
+        "followup_expected_missing_runs": 0,
+        "followup_distractor_found_runs": 0
+      },
+      "server_apply": {
+        "runs_in_denominator": 10,
+        "successes": 9,
+        "failures": 1,
+        "statuses": {
+          "completed": 10
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 0.5,
+        "followup_expected_missing_runs": 0,
+        "followup_distractor_found_runs": 0
+      }
+    },
+    "museum": {
+      "agent_relations": {
+        "runs_in_denominator": 10,
+        "successes": 3,
+        "failures": 7,
+        "statuses": {
+          "agent_output_contract": 7,
+          "completed": 3
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 0.0,
+        "followup_expected_missing_runs": 7,
+        "followup_distractor_found_runs": 0
+      },
+      "server_apply": {
+        "runs_in_denominator": 10,
+        "successes": 10,
+        "failures": 0,
+        "statuses": {
+          "completed": 10
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 1.0,
+        "followup_expected_missing_runs": 0,
+        "followup_distractor_found_runs": 0
+      }
+    },
+    "orchard": {
+      "agent_relations": {
+        "runs_in_denominator": 10,
+        "successes": 3,
+        "failures": 7,
+        "statuses": {
+          "completed": 3,
+          "agent_output_contract": 7
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 0.0,
+        "followup_expected_missing_runs": 7,
+        "followup_distractor_found_runs": 0
+      },
+      "server_apply": {
+        "runs_in_denominator": 10,
+        "successes": 9,
+        "failures": 1,
+        "statuses": {
+          "completed": 10
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 0.5,
+        "followup_expected_missing_runs": 0,
+        "followup_distractor_found_runs": 0
+      }
+    },
+    "satellite": {
+      "agent_relations": {
+        "runs_in_denominator": 10,
+        "successes": 6,
+        "failures": 4,
+        "statuses": {
+          "completed": 6,
+          "agent_evidence_contract": 4
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 0.0,
+        "followup_expected_missing_runs": 2,
+        "followup_distractor_found_runs": 0
+      },
+      "server_apply": {
+        "runs_in_denominator": 10,
+        "successes": 10,
+        "failures": 0,
+        "statuses": {
+          "completed": 10
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 1.0,
+        "followup_expected_missing_runs": 0,
+        "followup_distractor_found_runs": 0
+      }
+    },
+    "bakery": {
+      "agent_relations": {
+        "runs_in_denominator": 10,
+        "successes": 9,
+        "failures": 1,
+        "statuses": {
+          "completed": 9,
+          "agent_evidence_contract": 1
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 0.0,
+        "followup_expected_missing_runs": 1,
+        "followup_distractor_found_runs": 0
+      },
+      "server_apply": {
+        "runs_in_denominator": 10,
+        "successes": 10,
+        "failures": 0,
+        "statuses": {
+          "completed": 10
+        },
+        "worst_incorrect_relation_count": 0,
+        "worst_matched_expected_relation_fraction": 1.0,
+        "followup_expected_missing_runs": 0,
+        "followup_distractor_found_runs": 0
+      }
+    }
+  },
+  "task_quality_comparable_and_non_deteriorating": false,
+  "task_comparability_rule": "each task has baseline successes; server success count is at least baseline, no worse observed incorrect/hop counts or worst matched fraction; missing quality prevents comparability",
+  "all_120_runs_succeeded": false,
+  "total_cost_under_tariff_usd": 0.07671528195092432,
+  "external_supplier_cost_usd": 0.046053900000000085,
+  "paired_total_cost_reduction_supported_in_these_tasks": false,
+  "token_shifting": {
+    "agent_tokens_may_decrease_by_design": true,
+    "assess_total_tariff_and_supplier_cost_not_agent_tokens_alone": true,
+    "model_input_delta": {
+      "independent_tasks": 6,
+      "deltas_server_minus_agent": [
+        -517.1999999999999,
+        -519.0999999999999,
+        -515.6,
+        -511.4,
+        -519.3999999999999,
+        -521.5
+      ],
+      "mean_delta": -517.3666666666666,
+      "ci95": [
+        -521.0910051816878,
+        -513.6423281516453
+      ],
+      "df": 5,
+      "status": "measured_six_task_paired_t"
+    },
+    "agent_input_delta": {
+      "independent_tasks": 6,
+      "deltas_server_minus_agent": [
+        -1076.3,
+        -1081.1,
+        -1082.5,
+        -1069,
+        -1075.1,
+        -1082.3
+      ],
+      "mean_delta": -1077.7166666666667,
+      "ci95": [
+        -1083.2730955718102,
+        -1072.1602377615231
+      ],
+      "df": 5,
+      "status": "measured_six_task_paired_t"
+    }
+  },
+  "scope": "six synthetic store/tool tasks; not MCP interoperability or population generalization",
+  "cost_classification": "supplier usage at fixed tariffs plus scenario local allocation; not invoice",
+  "summary_cost": "not_applicable_no_summary_calls",
+  "default_activation": false,
+  "analysis_version": "rinf06-offline-v1",
+  "input_sha256": {
+    "samples.json": "4011859de090ed8d4e0c893134a897ce0d766df879af4b18d3cb2f077ce6b8f7",
+    "gold.json": "65239750e7d2fc78b77ddda3474bc9e926268fd2b7f5784ae08d3564612c7d59",
+    "prepared.jsonl": "ad39b4e3e62dcd047a10e1cbc2516262201d8e8af257a99d968db56fe6e103f9",
+    "judgments.jsonl": "e105c40375e2e88547533f1ffb413f1c1a8b54cc5cfe05605555469958696f1d",
+    "validated.json": "43d440b9e94b6d2e3829f3ee6cef81335e0a44fcfd24f0d912b3b78a3c29bf20",
+    "quality-execution.json": "ca75e8d64155ff30dbc7dd248ba566a4da9ac8d9a5ef8fedda90d8ce62057b82",
+    "vectors.json": "1b163577cc68f3e8364d74637a1fa86371c15a8056623c61a0968724c22e8b9a",
+    "flow.jsonl": "09a21000d930b1a1339887bbe2c1ec6135344bacb8e7348af1277887e583f494"
+  }
+}

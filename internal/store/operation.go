@@ -32,14 +32,15 @@ const (
 // 대상은 컨텍스트이거나 사건 관계이며 둘을 동시에 가리키지 않는다. 「기록 항목」이 정한
 // 구분이며, 관계에는 판 번호가 없어 RelationID를 쓰는 기록은 TargetVersion을 남기지 않는다.
 type OperationRecord struct {
-	Kind          OperationKind
-	GraphID       model.ID
-	ContextID     model.ID
-	RelationID    model.ID
-	TargetVersion int64
-	JudgmentInput string
-	AccountID     model.ID
-	AgentID       model.ID
+	Kind           OperationKind
+	GraphID        model.ID
+	ContextID      model.ID
+	RelationID     model.ID
+	TargetVersion  int64
+	JudgmentInput  string
+	AccountID      model.ID
+	AgentID        model.ID
+	JudgmentSource model.ConfirmationSource
 }
 
 // forRelation은 대상이 사건 관계인지 알려준다.
@@ -122,7 +123,7 @@ func (operation OperationRecord) managementOperation(at time.Time, result, reaso
 	return model.ManagementOperation{
 		Kind: operation.Kind, GraphID: operation.GraphID, ContextID: operation.ContextID, RelationID: operation.RelationID,
 		TargetVersion: operation.TargetVersion, JudgmentInput: operation.JudgmentInput, AccountID: operation.AccountID,
-		AgentID: operation.AgentID, AppliedAt: at, Result: model.OperationResult(result), RejectionReason: reason,
+		AgentID: operation.AgentID, JudgmentSource: operation.JudgmentSource, AppliedAt: at, Result: model.OperationResult(result), RejectionReason: reason,
 	}
 }
 
@@ -269,13 +270,21 @@ func (s *Store) insertOperation(ctx context.Context, queryer operationQueryer, o
 		version := operation.TargetVersion
 		contextID, targetVersion = &identifier, &version
 	}
+	var agentID any
+	if !operation.AgentID.IsZero() {
+		agentID = operation.AgentID.String()
+	}
+	source := operation.JudgmentSource
+	if source == "" {
+		source = model.ConfirmationSourceAgent
+	}
 	_, err = queryer.Exec(ctx, `
 		INSERT INTO public.operation_log (
 			operation_id, graph_id, operation_kind, context_id, relation_id, target_version,
-			judgment_input, actor_account_id, actor_agent_id, applied_at, result, reject_reason
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+			judgment_input, actor_account_id, actor_agent_id, applied_at, result, reject_reason, judgment_source
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		operationID.String(), operation.GraphID.String(), string(operation.Kind), contextID, relationID, targetVersion,
-		operation.JudgmentInput, operation.AccountID.String(), operation.AgentID.String(), at, result, nullableString(reason),
+		operation.JudgmentInput, operation.AccountID.String(), agentID, at, result, nullableString(reason), string(source),
 	)
 	if err != nil {
 		return fmt.Errorf("관리 연산 기록: %w", err)

@@ -50,7 +50,7 @@ const preservationOriginals = `SELECT jsonb_build_object(
 	'nodes',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM agent_context."Context" n),
 	'edges',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM agent_context._ag_label_edge e),
 	'graphs',(SELECT jsonb_agg(to_jsonb(g)-'content_revision'-'entry_context_id' ORDER BY graph_id) FROM public.context_graph g),
-	'operations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY operation_id) FROM public.operation_log o),
+	'operations',(SELECT jsonb_agg(to_jsonb(o)-'judgment_source' ORDER BY operation_id) FROM public.operation_log o),
 	'accounts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY account_id) FROM public.account a),
 	'grants',(SELECT jsonb_agg(to_jsonb(g) ORDER BY grant_id) FROM public.oauth_grant g),
 	'codes',(SELECT jsonb_agg(to_jsonb(c) ORDER BY code_hash) FROM public.oauth_authorization_code c),
@@ -270,7 +270,7 @@ func TestData09ShapeTransitionAndPreservationIntegration(t *testing.T) {
 				if preservationQuery(t, pool, preservationMutable) != mutable || preservationQuery(t, pool, preservationOriginals) != before {
 					t.Fatal("실패한 전환이 기존 상태를 변경했다")
 				}
-				if count, err := applyTarget(t.Context(), pool, migrations.FS, target); err != nil || count != 6 {
+				if count, err := applyTarget(t.Context(), pool, migrations.FS, target); err != nil || count != 7 {
 					t.Fatalf("전환=%d: %v", count, err)
 				}
 				if preservationQuery(t, pool, preservationOriginals) != before || preservationQuery(t, pool, historySQL) != history {
@@ -370,7 +370,7 @@ func TestData09LegacyConfigurationBackfillAtomicIntegration(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), `UPDATE public.schema_migration SET checksum=$1 WHERE version=9`, loaded[1].Checksum); err != nil {
 		t.Fatal(err)
 	}
-	if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != 8 {
+	if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != 9 {
 		t.Fatalf("보충 후 적용=%d: %v", count, err)
 	}
 	if preservationQuery(t, pool, `SELECT count(*)::text FROM public.schema_migration WHERE render_config IS NULL`) != "0" {

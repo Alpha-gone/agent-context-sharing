@@ -1,0 +1,131 @@
+{
+  "version": "rinf-06-draft-1",
+  "samples": [
+    {
+      "id": "tune-01",
+      "split": "tune",
+      "category": "relates_to",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "relation",
+      "direction": ""
+    },
+    {
+      "id": "eval-02",
+      "split": "eval",
+      "category": "relates_to",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "relation",
+      "direction": ""
+    },
+    {
+      "id": "tune-03",
+      "split": "tune",
+      "category": "part_of",
+      "candidate": "C1",
+      "relation_type": "part_of",
+      "expected": "relation",
+      "direction": "T_to_C"
+    },
+    {
+      "id": "eval-04",
+      "split": "eval",
+      "category": "part_of",
+      "candidate": "C1",
+      "relation_type": "part_of",
+      "expected": "relation",
+      "direction": "T_to_C"
+    },
+    {
+      "id": "tune-05",
+      "split": "tune",
+      "category": "causes",
+      "candidate": "C1",
+      "relation_type": "causes",
+      "expected": "relation",
+      "direction": "T_to_C"
+    },
+    {
+      "id": "eval-06",
+      "split": "eval",
+      "category": "causes",
+      "candidate": "C1",
+      "relation_type": "causes",
+      "expected": "relation",
+      "direction": "T_to_C"
+    },
+    {
+      "id": "tune-07",
+      "split": "tune",
+      "category": "similar_negative",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "none",
+      "direction": ""
+    },
+    {
+      "id": "eval-08",
+      "split": "eval",
+      "category": "similar_negative",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "none",
+      "direction": ""
+    },
+    {
+      "id": "tune-09",
+      "split": "tune",
+      "category": "causal_negative",
+      "candidate": "C1",
+      "relation_type": "causes",
+      "expected": "none",
+      "direction": ""
+    },
+    {
+      "id": "eval-10",
+      "split": "eval",
+      "category": "causal_negative",
+      "candidate": "C1",
+      "relation_type": "causes",
+      "expected": "none",
+      "direction": ""
+    },
+    {
+      "id": "tune-11",
+      "split": "tune",
+      "category": "abstain",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "abstain_or_none",
+      "direction": ""
+    },
+    {
+      "id": "eval-12",
+      "split": "eval",
+      "category": "abstain",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "abstain_or_none",
+      "direction": ""
+    },
+    {
+      "id": "tune-13",
+      "split": "tune",
+      "category": "injection",
+      "candidate": "C1",
+      "relation_type": "causes",
+      "expected": "none",
+      "direction": ""
+    },
+    {
+      "id": "eval-14",
+      "split": "eval",
+      "category": "injection",
+      "candidate": "C1",
+      "relation_type": "relates_to",
+      "expected": "none",
+      "direction": ""
+    }
+  ]
+}

@@ -347,7 +347,10 @@ func (m executionManifest) validate() error {
 		return invalid("cost.as_of")
 	}
 	costCodes := map[string]bool{}
-	allCosts := []string{"agent", "embedding", "summary", "search", "storage"}
+	allCosts := businessComponents
+	if m.Mode == "business_tasks" && slices.ContainsFunc(m.Cost.Items, func(item manifestCostItem) bool { return item.Code == "relation_inference" }) {
+		allCosts = relationBusinessComponents
+	}
 	for _, item := range m.Cost.Items {
 		if !slices.Contains(allCosts, item.Code) || costCodes[item.Code] || !slices.Contains([]string{"measured", "unmeasured", "not_applicable"}, item.Status) ||
 			(item.Status == "measured") != (item.Value != nil) || (item.Value != nil && (math.IsNaN(*item.Value) || math.IsInf(*item.Value, 0) || *item.Value < 0)) {

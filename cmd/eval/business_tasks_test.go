@@ -69,6 +69,67 @@ func businessTasksFixture(experiment string) businessTaskInput {
 	return input
 }
 
+func relationBusinessFixture() businessTaskInput {
+	input := businessTasksFixture("lookup")
+	input.Experiment, input.SchemaVersion = "relation_inference", 2
+	input.Conditions[0].Code, input.Conditions[1].Code = "agent_relations", "server_apply"
+	input.Conditions[0].Lookup = new(true)
+	rate := businessRate{Component: "relation_inference", Unit: "tokens", UnitSize: 1000, Rates: map[string]*float64{}}
+	for _, category := range businessTokenCategories {
+		rate.Rates[category] = new(2.0)
+	}
+	input.Pricing.Rates = append(input.Pricing.Rates, rate)
+	for i := range input.Tasks {
+		for j := range input.Tasks[i].Runs {
+			run := &input.Tasks[i].Runs[j]
+			if run.Condition == "without_context" {
+				run.Condition = "agent_relations"
+			} else {
+				run.Condition = "server_apply"
+			}
+			for _, phase := range businessPhases {
+				status := "not_applicable"
+				if run.Condition == "server_apply" && phase == "execution" {
+					status = "unmeasured"
+				}
+				run.Costs = append(run.Costs, businessCostItem{Phase: phase, Component: "relation_inference", Status: status})
+			}
+		}
+	}
+	sealBusinessTasks(&input)
+	return input
+}
+
+func TestRelationInferenceCostCoverage(t *testing.T) {
+	input := relationBusinessFixture()
+	if err := validateBusinessTasks(input); err != nil {
+		t.Fatal(err)
+	}
+	if cost := businessRunCost("task", input.Tasks[0].Runs[1], input.Pricing); cost.Total.Status != "unmeasured" {
+		t.Fatal("미측정 추론 비용을 완전한 총비용으로 취급했다")
+	}
+	manifest := businessTasksManifest()
+	manifest.Cost.Items = append(manifest.Cost.Items, manifestCostItem{Code: "relation_inference", Status: "unmeasured"})
+	if err := manifest.validate(); err != nil {
+		t.Fatal(err)
+	}
+	trial := manifestTrial{Manifest: manifest}
+	report := summarizeBusinessTasks(input)
+	cost := trial.resultCost(&report)
+	if len(cost.Items) != 6 || cost.Total.Status != "unmeasured" {
+		t.Fatal("추론 비용을 결과에 보존하지 않았다")
+	}
+	for _, decision := range trial.decisions(&report, cost) {
+		if decision.Status != "deferred" {
+			t.Fatal("미정 합격선에서 판정을 보류하지 않았다")
+		}
+	}
+	input.Tasks[0].Runs[1].Costs = input.Tasks[0].Runs[1].Costs[:15]
+	if err := validateBusinessTasks(input); err == nil {
+		t.Fatal("추론 비용 누락 허용")
+	}
+}
+
 func sealBusinessTasks(input *businessTaskInput) {
 	for i, task := range input.Tasks {
 		for j, run := range task.Runs {

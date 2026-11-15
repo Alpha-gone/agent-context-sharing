@@ -61,6 +61,8 @@ type Store struct {
 	// indexTargets 필드는 색인 작업으로 등록할 계층 범위다. 비어 있으면 모든 계층을
 	// 등록한다.
 	indexTargets IndexTargets
+	// inferenceEnabled는 사건 쓰기에 추론 작업을 같은 트랜잭션으로 등록한다.
+	inferenceEnabled bool
 	// reservations 필드는 연결을 쥔 채 연결을 더 기다리는 경계의 연결 예약이다.
 	reservations *semaphore.Weighted
 }
@@ -165,6 +167,11 @@ func (config RelationProposalConfig) validate() error {
 // graceDays도 같은 이유로 생략할 수 없으며 nil이면 유예 만료 시각을 남기지 않는다.
 // indexTargets는 빈 값이면 모든 계층을 색인하는 기본 구성으로 읽는다.
 func New(ctx context.Context, databaseURL, graphName string, relationProposals *RelationProposalConfig, graceDays RetentionDays, indexTargets IndexTargets) (*Store, error) {
+	return NewWithInference(ctx, databaseURL, graphName, relationProposals, graceDays, indexTargets, false)
+}
+
+// NewWithInference는 관계 추론 작업 등록 여부를 명시해 저장소를 연다.
+func NewWithInference(ctx context.Context, databaseURL, graphName string, relationProposals *RelationProposalConfig, graceDays RetentionDays, indexTargets IndexTargets, inferenceEnabled bool) (*Store, error) {
 	if len(graphName) > 63 || !graphNamePattern.MatchString(graphName) {
 		return nil, fmt.Errorf("AGE 그래프 이름 %q가 63바이트 이하의 영문 소문자, 숫자와 밑줄 형식이 아니다", graphName)
 	}
@@ -204,7 +211,7 @@ func New(ctx context.Context, databaseURL, graphName string, relationProposals *
 	if err != nil {
 		return nil, fmt.Errorf("연결 풀 생성: %w", err)
 	}
-	return &Store{pool: pool, graphName: graphName, relationProposals: proposalConfig, graceDays: graceDays, indexTargets: indexTargets, reservations: reservations}, nil
+	return &Store{pool: pool, graphName: graphName, relationProposals: proposalConfig, graceDays: graceDays, indexTargets: indexTargets, inferenceEnabled: inferenceEnabled, reservations: reservations}, nil
 }
 
 // Ping은 데이터베이스 연결과 AGE 준비가 현재 요청을 받을 수 있는지 확인한다.

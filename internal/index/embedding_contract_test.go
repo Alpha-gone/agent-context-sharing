@@ -100,6 +100,40 @@ func TestGeminiResponseContract(t *testing.T) {
 	}
 }
 
+func TestGeminiDocumentUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name, metadata string
+		want           *int64
+	}{
+		{"present", `,"usageMetadata":{"promptTokenCount":12}`, new(int64(12))},
+		{"zero", `,"usageMetadata":{"promptTokenCount":0}`, new(int64(0))},
+		{"absent", "", nil},
+		{"negative", `,"usageMetadata":{"promptTokenCount":-1}`, nil},
+		{"invalid", `,"usageMetadata":{"promptTokenCount":"bad"}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := strings.TrimSuffix(contractVectorJSON(), "}") + tc.metadata + "}"
+			worker, _ := geminiWorker(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, body) })
+			vector, tokens, err := worker.EmbedDocumentWithUsage(t.Context(), "synthetic")
+			if err != nil || len(vector) != 128 || (tokens == nil) != (tc.want == nil) {
+				t.Fatalf("사용량: %v %v", tokens, err)
+			}
+			if tokens != nil && *tokens != *tc.want {
+				t.Fatalf("사용량: %d", *tokens)
+			}
+		})
+	}
+}
+
+func TestGeminiQueryUsage(t *testing.T) {
+	body := strings.TrimSuffix(contractVectorJSON(), "}") + `,"usageMetadata":{"promptTokenCount":9}}`
+	worker, _ := geminiWorker(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, body) })
+	vector, tokens, err := worker.EmbedWithUsage(t.Context(), "synthetic query")
+	if err != nil || len(vector) != 128 || tokens == nil || *tokens != 9 {
+		t.Fatalf("질의 사용량: %v %v", tokens, err)
+	}
+}
+
 type contractRoundTripper func(*http.Request) (*http.Response, error)
 
 func (call contractRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {

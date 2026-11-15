@@ -582,3 +582,28 @@ func TestMCPHTTPRootsNotification(t *testing.T) {
 		})
 	}
 }
+
+func TestRelationInferenceModeInstructions(t *testing.T) {
+	for _, mode := range []string{"off", "shadow", "propose", "apply"} {
+		t.Run(mode, func(t *testing.T) {
+			var auth, calls atomic.Int64
+			cfg := httpTestConfig(t, &auth, &calls)
+			cfg.RelationInferenceMode = mode
+			handler, err := NewHandler(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httpTestRequest(t, "server/discover"))
+			if response.Code != 200 {
+				t.Fatal(response.Code)
+			}
+			result := decodeSDKProbe(t, sdkProbeResponse{response.Code, response.Header(), response.Body.Bytes()})["result"].(map[string]any)
+			instruction := result["instructions"].(string)
+			enabled := mode == "propose" || mode == "apply"
+			if strings.Contains(instruction, "Server finds relations") != enabled || len(instruction) > 700 {
+				t.Fatalf("모드 %s 안내 길이=%d", mode, len(instruction))
+			}
+		})
+	}
+}

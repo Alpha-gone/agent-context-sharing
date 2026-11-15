@@ -215,7 +215,18 @@ func readRelationList(ctx context.Context, d Dependencies, graphID, contextID mo
 		if relation.GraphID != graphID || (relation.FromContextID != contextID && relation.ToContextID != contextID) {
 			return nil, &DependencyFailure{}
 		}
-		items = append(items, relationObject(relation))
+		item := relationObject(relation)
+		if relation.State == model.RelationStateConfirmed {
+			source := relation.ConfirmedSource
+			if source == "" {
+				source = model.ConfirmationSourceAgent
+			}
+			item["confirmed_source"] = source
+		}
+		if !relation.InferenceDecisionID.IsZero() {
+			item["inference_decision_id"] = relation.InferenceDecisionID.String()
+		}
+		items = append(items, item)
 	}
 	return map[string]any{"relations": items, "next_cursor": cursor}, nil
 }

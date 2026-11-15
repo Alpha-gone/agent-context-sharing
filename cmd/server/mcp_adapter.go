@@ -19,6 +19,10 @@ const mcpRequestTimeout = 30 * time.Second
 // newMCPHandler는 패키지 의존을 늘리지 않고 Bearer 결과를 전송 경계에 전달한다.
 // 전체 기동 조립 전에도 인증·업무·수신 본문의 시간 예산을 같은 경계에서 적용한다.
 func newMCPHandler(authorization mcpAuthorization, origins []string, handlers map[string]mcp.ToolHandler, observers ...diagnostic.Observer) (http.Handler, error) {
+	return newMCPHandlerForMode(authorization, origins, handlers, "off", observers...)
+}
+
+func newMCPHandlerForMode(authorization mcpAuthorization, origins []string, handlers map[string]mcp.ToolHandler, mode string, observers ...diagnostic.Observer) (http.Handler, error) {
 	if authorization == nil {
 		return nil, fmt.Errorf("MCP Bearer 인증 경계가 필요하다")
 	}
@@ -27,7 +31,7 @@ func newMCPHandler(authorization mcpAuthorization, origins []string, handlers ma
 		observer = observers[0]
 	}
 	handler, err := mcp.NewHandler(mcp.HTTPConfig{
-		AllowedOrigins: origins, Handlers: handlers, Diagnostics: observer,
+		AllowedOrigins: origins, Handlers: handlers, Diagnostics: observer, RelationInferenceMode: mode,
 		Protect: func(next mcp.AuthenticatedHandler) http.Handler {
 			return authorization.ProtectBearer(func(w http.ResponseWriter, request *http.Request, principal authz.BearerPrincipal) {
 				next(w, request, mcp.Principal{AccountID: principal.AccountID, ClientID: principal.ClientID})

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/index"
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/relinfer"
 	"agent_context_sharing/internal/store"
 )
 
@@ -42,6 +44,10 @@ func configureAndRun(ctx context.Context, env config.Environment, start func(con
 }
 
 func runConfigured(ctx context.Context, cfg config.Config) (resultErr error) {
+	return runConfiguredWithClient(ctx, cfg, nil)
+}
+
+func runConfiguredWithClient(ctx context.Context, cfg config.Config, client *http.Client) (resultErr error) {
 	source, err := diagnostic.NewSource(cfg.Diagnostic.InstanceID)
 	if err != nil {
 		return err
@@ -63,36 +69,50 @@ func runConfigured(ctx context.Context, cfg config.Config) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("진단 종류 준비: %w", err)
 	}
+	managementReporter, err := diagnostic.NewReporter(diagnostic.Management, sink, source)
+	if err != nil {
+		return fmt.Errorf("진단 종류 준비: %w", err)
+	}
 	systemReporter, err := diagnostic.NewReporter(diagnostic.System, sink, source)
 	if err != nil {
 		return fmt.Errorf("진단 종류 준비: %w", err)
 	}
 
-	database, err := store.New(ctx, cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
+	database, err := store.NewWithInference(ctx, cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
 		AdjacencyWindow: cfg.RelationAdjacencyWindow, SimilarityThreshold: cfg.RelationSimilarityThreshold, Limit: cfg.RelationProposalLimit,
-	}, func(account model.ID) int { return cfg.AccountPlans.For(account).GraceDays }, store.IndexTargets(cfg.IndexTargetLayers))
+	}, func(account model.ID) int { return cfg.AccountPlans.For(account).GraceDays }, store.IndexTargets(cfg.IndexTargetLayers), cfg.RelationInference.Mode != "" && cfg.RelationInference.Mode != "off")
 	if err != nil {
 		return fmt.Errorf("색인 DB 준비: %w", err)
 	}
 	database.SetDiagnostics(systemReporter)
-	database.SetOperationDiagnostics(nil, indexReporter)
+	database.SetOperationDiagnostics(managementReporter, indexReporter)
 	var worker *index.Worker
+	var inference *relinfer.Worker
 	defer func() {
+		var workerErr error
+		if inference != nil {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), workerShutdownTimeout)
+			workerErr = inference.Close(cleanup)
+			cancel()
+		}
 		if worker != nil {
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), workerShutdownTimeout)
 			defer cancel()
 			if err := worker.Close(cleanup); err != nil {
 				// 미반환 연결을 기다리는 풀 종료로 실패 보고가 무기한 막히지 않게 한다.
-				resultErr = errors.Join(resultErr, fmt.Errorf("색인 작업자 종료: %w", err))
-				return
+				workerErr = errors.Join(workerErr, fmt.Errorf("색인 작업자 종료: %w", err))
 			}
+		}
+		if workerErr != nil {
+			resultErr = errors.Join(resultErr, workerErr)
+			return
 		}
 		database.Close()
 	}()
 	worker, err = index.New(database, index.Config{
 		Provider: cfg.EmbeddingProvider, APIKey: cfg.GeminiAPIKey, BaseURL: cfg.EmbeddingBaseURL,
 		Model: cfg.EmbeddingModel, VectorType: cfg.EmbeddingVectorType, Dimension: cfg.EmbeddingDimension,
-	}, nil, slog.Default())
+	}, client, slog.Default())
 	if err != nil {
 		return fmt.Errorf("색인 작업자 준비: %w", err)
 	}
@@ -100,6 +120,20 @@ func runConfigured(ctx context.Context, cfg config.Config) (resultErr error) {
 		return fmt.Errorf("임베딩 DB 구성 확인: %w", err)
 	}
 	worker.SetDiagnostics(indexReporter)
+	var inferenceFingerprint string
+	inference, inferenceFingerprint, err = relinfer.NewRuntime(database, inferenceRuntimeConfig(cfg, worker.ModelID()), client, slog.Default())
+	if err != nil {
+		return fmt.Errorf("관계 추론 작업자 준비: %w", err)
+	}
+	if inference != nil {
+		inference.SetDiagnostics(indexReporter)
+		reason, level := "completed", "INFO"
+		if cfg.RelationInference.Mode == "apply" && inferenceFingerprint != cfg.RelationInference.AcceptedProfile {
+			reason, level = "policy_downgraded", "WARN"
+		}
+		systemReporter.RecordFields(diagnostic.ResumeJob(ctx, ""), level, "relation_inference_configuration", "completed", reason, false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup", InferenceProfile: inferenceFingerprint, InferenceMode: cfg.RelationInference.Mode, InferenceAutoConfirm: cfg.RelationInference.Mode == "apply" && inferenceFingerprint == cfg.RelationInference.AcceptedProfile && len(cfg.RelationInference.AutoConfirmTypes) > 0}})
+		inference.Start(ctx)
+	}
 	worker.Start(ctx)
 	<-ctx.Done()
 	return nil

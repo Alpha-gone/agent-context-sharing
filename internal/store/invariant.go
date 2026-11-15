@@ -28,6 +28,7 @@ const (
 	RuleRelationIdentity     = "relation_identity"
 	RuleRelationAcyclic      = "relation_acyclic"
 	RuleRelationTime         = "relation_time"
+	RuleRelationInference    = "relation_inference"
 	RuleEmbeddingLink        = "embedding_link"
 	// RuleGraphRegistration은 그래프 단위 규칙 목록 밖에서 전체 감사만 실행한다. 등록되지 않은
 	// graph_id는 그래프 단위 감사 범위에 들어오지 않기 때문이다.
@@ -73,9 +74,13 @@ type auditContext struct {
 }
 
 type auditEdge struct {
-	label, graphID, relationID, state string
-	from, to                          string
+	label, graphID, relationID, state                       string
+	from, to                                                string
+	proposedBy, confirmedSource, decisionID, confirmedAgent string
+	inferenceProperties                                     bool
 }
+
+type auditInferenceDecision struct{ graphID, target, candidate, relationType, relationID string }
 
 type auditEmbedding struct {
 	contextID, graphID, modelID string
@@ -91,6 +96,7 @@ type auditSnapshot struct {
 	contexts   map[string]auditContext
 	edges      []auditEdge
 	embeddings []auditEmbedding
+	decisions  map[string]auditInferenceDecision
 	expect     EmbeddingExpectation
 	// pathExists는 확정 관계만으로 from에서 to로 닿는지 답한다. 전체 감사는 스냅숏 안에서,
 	// 쓰기 검사는 스냅숏에 없는 경로까지 저장소에 물어 답한다.
@@ -138,7 +144,32 @@ var invariantRules = []invariantRule{
 	{RuleRelationIdentity, checkRelationIdentity},
 	{RuleRelationAcyclic, checkRelationAcyclic},
 	{RuleRelationTime, checkRelationTime},
+	{RuleRelationInference, checkRelationInference},
 	{RuleEmbeddingLink, checkEmbeddingLink},
+}
+
+func checkRelationInference(snapshot auditSnapshot) ([]InvariantViolation, error) {
+	var violations []InvariantViolation
+	for _, edge := range snapshot.edges {
+		kind, relation := relationLabels[edge.label]
+		if !relation || !edge.inferenceProperties {
+			continue
+		}
+		invalid := edge.confirmedSource != "" && edge.confirmedSource != "agent" && edge.confirmedSource != "inference"
+		invalid = invalid || ((edge.proposedBy == "inference" || edge.confirmedSource == "inference") && edge.decisionID == "")
+		invalid = invalid || (edge.confirmedSource == "inference" && edge.confirmedAgent != "")
+		invalid = invalid || (edge.state == "proposed" && edge.confirmedSource != "")
+		if edge.decisionID != "" {
+			d, ok := snapshot.decisions[edge.decisionID]
+			invalid = invalid || !ok || d.graphID != edge.graphID || d.relationType != string(kind) ||
+				!((d.target == edge.from && d.candidate == edge.to) || (d.target == edge.to && d.candidate == edge.from)) ||
+				(d.relationID != "" && d.relationID != edge.relationID)
+		}
+		if invalid {
+			violations = append(violations, snapshot.edgeViolation(RuleRelationInference, edge))
+		}
+	}
+	return violations, nil
 }
 
 // checkGraphMembership은 간선과 두 끝, 임베딩과 그 컨텍스트가 같은 그래프에 속하는지 본다.
@@ -463,7 +494,40 @@ func (s *Store) loadAuditSnapshot(ctx context.Context, queryer cypherQueryer, gr
 			return auditSnapshot{}, err
 		}
 	}
+	if err := loadAuditInferenceDecisions(ctx, queryer, &snapshot); err != nil {
+		return auditSnapshot{}, err
+	}
 	return snapshot, nil
+}
+
+func loadAuditInferenceDecisions(ctx context.Context, queryer cypherQueryer, snapshot *auditSnapshot) error {
+	ids := make([]string, 0)
+	for _, edge := range snapshot.edges {
+		if id, err := model.ParseID(edge.decisionID); err == nil {
+			ids = append(ids, id.String())
+		}
+	}
+	snapshot.decisions = make(map[string]auditInferenceDecision)
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := queryer.Query(ctx, `SELECT d.decision_id::text, r.graph_id::text, r.context_id::text,
+		d.candidate_context_id::text, d.relation_type, COALESCE(d.relation_id::text, '')
+		FROM public.relation_inference_decision d JOIN public.relation_inference_run r ON r.run_id=d.run_id
+		WHERE d.decision_id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return fmt.Errorf("추론 판정 감사 조회: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var d auditInferenceDecision
+		if err := rows.Scan(&id, &d.graphID, &d.target, &d.candidate, &d.relationType, &d.relationID); err != nil {
+			return err
+		}
+		snapshot.decisions[id] = d
+	}
+	return rows.Err()
 }
 
 // openCypher의 양 끝점 MATCH는 직접 SQL 삭제로 끝점이 사라진 간선을 반환하지 않는다.
@@ -692,29 +756,29 @@ func (s *Store) writeInvariantViolationsWithPaths(ctx context.Context, tx pgx.Tx
 // 이미 있는 간선은 건너뛴다.
 func (s *Store) loadAuditEdges(ctx context.Context, queryer cypherQueryer, filter string, snapshot *auditSnapshot, endpoints, seen map[string]struct{}) error {
 	rows, err := queryer.Query(ctx, s.cypherSQL("MATCH (a:Context)-[e]->(b:Context) WHERE "+filter+
-		" RETURN id(e), label(e), coalesce(e.graph_id, ''), coalesce(e.relation_id, ''), coalesce(e.state, ''), a.context_id, b.context_id",
-		"edge agtype, label agtype, graph agtype, relation agtype, state agtype, source agtype, target agtype"), pgx.QueryExecModeExec)
+		" RETURN id(e), label(e), coalesce(e.graph_id, ''), coalesce(e.relation_id, ''), coalesce(e.state, ''), a.context_id, b.context_id, coalesce(e.proposed_by, ''), coalesce(e.confirmed_source, ''), coalesce(e.inference_decision_id, ''), coalesce(e.confirmed_by_agent, '')",
+		"edge agtype, label agtype, graph agtype, relation agtype, state agtype, source agtype, target agtype, proposed agtype, confirmed agtype, decision agtype, agent agtype"), pgx.QueryExecModeExec)
 	if err != nil {
 		return fmt.Errorf("불변식 간선 조회: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var edgeID string
-		var raw [6]string
-		if err := rows.Scan(&edgeID, &raw[0], &raw[1], &raw[2], &raw[3], &raw[4], &raw[5]); err != nil {
+		var raw [10]string
+		if err := rows.Scan(&edgeID, &raw[0], &raw[1], &raw[2], &raw[3], &raw[4], &raw[5], &raw[6], &raw[7], &raw[8], &raw[9]); err != nil {
 			return fmt.Errorf("불변식 간선 행 해석: %w", err)
 		}
 		if _, ok := seen[edgeID]; ok {
 			continue
 		}
 		seen[edgeID] = struct{}{}
-		var values [6]string
+		var values [10]string
 		for index := range raw {
 			if err := json.Unmarshal([]byte(raw[index]), &values[index]); err != nil {
 				return fmt.Errorf("불변식 간선 값 해석: %w", err)
 			}
 		}
-		snapshot.edges = append(snapshot.edges, auditEdge{label: values[0], graphID: values[1], relationID: values[2], state: values[3], from: values[4], to: values[5]})
+		snapshot.edges = append(snapshot.edges, auditEdge{label: values[0], graphID: values[1], relationID: values[2], state: values[3], from: values[4], to: values[5], proposedBy: values[6], confirmedSource: values[7], decisionID: values[8], confirmedAgent: values[9], inferenceProperties: true})
 		endpoints[values[4]], endpoints[values[5]] = struct{}{}, struct{}{}
 	}
 	if err := rows.Err(); err != nil {

@@ -606,6 +606,11 @@
 
 - [MCP 전송 명세](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)는 알림 접수에 빈 202와 요청 메타데이터 헤더를 요구한다. [SDK v1.8.0 헤더 구현](https://github.com/modelcontextprotocol/go-sdk/blob/v1.8.0/mcp/streamable_headers.go)은 revision 헤더가 없으면 표준 헤더를 추가하지 않는다. 조회 2026-11-05 KST. 인증 후 roots 변경 알림 하나의 호환 예외를 SRS와 sdd/mcp.md에 반영한다. 실제 호스트 인수는 별도다.
 
+## 관계 추론 제공자 계약 (#311, 2026-11-11)
+
+- [GPT-6 Luna 모델](https://developers.openai.com/api/docs/models/gpt-6-luna)은 모델 식별자 `gpt-6-luna`, Responses API와 구조화 출력 지원을 명시한다. [Responses 생성 API](https://developers.openai.com/api/reference/resources/responses/methods/create)는 `text.format` JSON Schema와 `usage.input_tokens`·`usage.output_tokens`를 정의한다. [구조화 출력 지침](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)은 strict JSON Schema와 거절 응답을 설명한다. 2026-11-11 KST 조회. RINF-04 어댑터 계약에 적용하며 계정 접근 권한이나 실제 호출 성공을 가정하지 않는다.
+- [Gemini Embeddings API](https://ai.google.dev/api/embeddings)는 `EmbedContentResponse.usageMetadata.promptTokenCount`를 입력 토큰 수로 정의한다. 2026-11-14 KST 조회. 임베딩 사용량 측정에 적용하며 메타데이터가 없으면 사용량을 미측정으로 둔다.
+- [Responses 생성 API](https://developers.openai.com/api/reference/resources/responses/methods/create)는 `max_output_tokens`가 reasoning을 포함한 생성 토큰 상한이며 `service_tier=default`가 표준 처리·단가를 선택함을 정의한다. [프롬프트 캐시](https://developers.openai.com/api/docs/guides/prompt-caching)는 일반 입력·읽기·30분/12시간 쓰기를 구분해 요금을 계산한다. [OpenAI 가격](https://developers.openai.com/api/docs/pricing)·[Gemini 가격](https://ai.google.dev/gemini-api/docs/pricing/)을 2026-11-15 KST 확인해 RINF-06의 고정 가격 판과 출력 상한·내구 비용 예약에 적용했다. 실제 청구서 금액과 사용량×공개 단가 및 로컬 자원 배분 시나리오를 구분한다.
 ## 대화 수집 클라이언트의 호스트 훅 입력 (2026-11-14)
 
 - [Claude Code 훅 참조](https://code.claude.com/docs/en/hooks): 공통 입력 `session_id`·`transcript_path`·`cwd`·`hook_event_name`, `Stop`의 `last_assistant_message`, `async` 명령 훅과 `SessionEnd`의 1.5초 기본 예산을 확인했다. 대화 기록 파일의 행 형식은 문서에 없고 훅 시점에 최신 턴이 빠질 수 있다고 적혀 있다. `UserPromptSubmit`의 프롬프트 필드 이름은 이번 조회에서 확인하지 못했다.

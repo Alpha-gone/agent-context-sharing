@@ -3,6 +3,7 @@ package index
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -85,9 +86,25 @@ func (worker *Worker) Embed(ctx context.Context, input string) ([]float64, error
 	return worker.embed(ctx, input, false)
 }
 
+// EmbedWithUsage는 질의 벡터와 제공자가 반환한 입력 토큰 수를 돌려준다.
+// 사용량이 없거나 올바르지 않으면 토큰 수는 nil이다.
+func (worker *Worker) EmbedWithUsage(ctx context.Context, input string) ([]float64, *int64, error) {
+	var tokens *int64
+	values, _, err := worker.embedResponseWithUsage(ctx, input, false, &tokens)
+	return values, tokens, err
+}
+
 // EmbedDocument는 색인 본문을 문서 형식으로 호출한다.
 func (worker *Worker) EmbedDocument(ctx context.Context, input string) ([]float64, error) {
 	return worker.embed(ctx, input, true)
+}
+
+// EmbedDocumentWithUsage는 문서 벡터와 제공자가 반환한 입력 토큰 수를 돌려준다.
+// 사용량이 없거나 올바르지 않으면 토큰 수는 nil이다.
+func (worker *Worker) EmbedDocumentWithUsage(ctx context.Context, input string) ([]float64, *int64, error) {
+	var tokens *int64
+	values, _, err := worker.embedResponseWithUsage(ctx, input, true, &tokens)
+	return values, tokens, err
 }
 
 func (worker *Worker) embed(ctx context.Context, input string, document bool) ([]float64, error) {
@@ -96,6 +113,10 @@ func (worker *Worker) embed(ctx context.Context, input string, document bool) ([
 }
 
 func (worker *Worker) embedResponse(ctx context.Context, input string, document bool) (values []float64, status uint16, resultErr error) {
+	return worker.embedResponseWithUsage(ctx, input, document, nil)
+}
+
+func (worker *Worker) embedResponseWithUsage(ctx context.Context, input string, document bool, tokens **int64) (values []float64, status uint16, resultErr error) {
 	if !utf8.ValidString(input) || input == "" || (!document && strings.TrimSpace(input) == "") || utf8.RuneCountInString(input) > 8000 {
 		return nil, status, ProviderError{Reason: "임베딩 입력이 비어 있거나 UTF-8·8000자 한도를 위반했다"}
 	}
@@ -139,6 +160,7 @@ func (worker *Worker) embedResponse(ctx context.Context, input string, document 
 		Embedding struct {
 			Values []*float64 `json:"values"`
 		} `json:"embedding"`
+		Usage jsontext.Value `json:"usageMetadata"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return nil, status, ProviderError{Reason: "임베딩 응답 해석 실패"}
@@ -161,6 +183,14 @@ func (worker *Worker) embedResponse(ctx context.Context, input string, document 
 	}
 	if !nonzero {
 		return nil, status, ProviderError{Reason: "임베딩 응답이 영벡터다"}
+	}
+	if tokens != nil && len(decoded.Usage) > 0 {
+		var usage struct {
+			PromptTokenCount *int64 `json:"promptTokenCount"`
+		}
+		if json.Unmarshal(decoded.Usage, &usage) == nil && usage.PromptTokenCount != nil && *usage.PromptTokenCount >= 0 {
+			*tokens = usage.PromptTokenCount
+		}
 	}
 	return embedding, status, nil
 }

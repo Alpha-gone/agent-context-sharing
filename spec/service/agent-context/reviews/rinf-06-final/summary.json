@@ -1,0 +1,54 @@
+{
+  "calls": 60,
+  "review_calls": 1,
+  "independent_evaluation_units": 6,
+  "output_valid": 59,
+  "draft_gold_matches_not_valid_quality_metric": 45,
+  "gold_status": "conflicted_with_canonical_relation_definition",
+  "semantic_quality_verdict": "deferred",
+  "input_tokens_including_review": 24978,
+  "output_tokens_including_review": 10368,
+  "conservative_token_charge_usd": 0.008306250000000001,
+  "actual_billing": "unverified",
+  "latency_p50_ms": 2533.5,
+  "latency_nearest_rank_p95_ms": 3510,
+  "agent_trace": "measured_one_synthetic_task_custom_tool_harness",
+  "total_flow_cost": "unmeasured_infrastructure_and_cache_breakdown",
+  "default_activation": false,
+  "flow": {
+    "agent_relations": {
+      "runs": 10,
+      "input_tokens": 2590,
+      "output_tokens": 924,
+      "followup_expected_found": 10,
+      "followup_distractor_found": 0,
+      "token_charge_upper_usd": 0.00078575
+    },
+    "server_apply": {
+      "runs": 10,
+      "input_tokens": 5383,
+      "output_tokens": 4222,
+      "followup_expected_found": 10,
+      "followup_distractor_found": 0,
+      "token_charge_upper_usd": 0.002783875
+    }
+  },
+  "embedding": {
+    "calls": 13,
+    "input_tokens": 336,
+    "standard_paid_charge_estimate_usd": 6.720000000000001e-05
+  },
+  "campaign_token_charge_upper_usd": 0.0231057,
+  "acceptance": "deferred_insufficient_independent_samples_and_gold_conflicts",
+  "generated_input_evaluation": {
+    "independent_semantic_cases": 4,
+    "repeats": 10,
+    "calls": 40,
+    "input_tokens": 20033,
+    "output_tokens": 17317,
+    "expected_pair_valid": 40,
+    "expected_pair_match": 40,
+    "charge_upper_usd": 0.011162624999999999,
+    "holdout_status": "exploratory_cases_reused_not_new_independent_holdout"
+  }
+}

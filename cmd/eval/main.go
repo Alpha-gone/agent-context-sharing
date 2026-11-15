@@ -77,6 +77,12 @@ func runEvaluation(args []string, trial *trialProgress) (err error) {
 	trialPreparedDirectory := flags.String("trial-prepared", "", "manifest와 대조할 준비 데이터 디렉터리")
 	defaultLimits := plan.Default()
 	manifestPath := flags.String("check-manifest", "", "실행 manifest만 검증한다. 데이터 읽기·DB 접속·평가는 실행하지 않는다")
+	relationSamples := flags.String("check-relation-samples", "", "관계 추론 고정 입력의 구조와 생성 경로를 검사한다")
+	relationGold := flags.String("relation-gold", "", "관계 추론 표본에 대응하는 정답 파일")
+	relationMeasure := flags.String("measure-relation", "", "관계 추론 조정 표본을 측정한다")
+	relationSplit := flags.String("relation-split", "tune", "측정할 관계 표본 분할: tune 또는 eval")
+	relationRepeats := flags.Int("relation-repeats", 1, "관계 표본별 반복 횟수")
+	relationPrompt := flags.String("relation-prompt", "2", "관계 판정 프롬프트 판: 1 또는 2")
 	prepareFormat := flags.String("prepare-data", "", "고정 공개 데이터 또는 자체 보완 세트를 준비한다. longmemeval, locomo, own-supplement")
 	prepareSource := flags.String("prepare-source", "", "고정 checksum을 확인할 로컬 원본 파일")
 	prepareOutput := flags.String("prepare-out", "", "준비 파일을 생성할 새 디렉터리")
@@ -120,6 +126,39 @@ func runEvaluation(args []string, trial *trialProgress) (err error) {
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("위치 인자는 허용하지 않는다")
+	}
+	measureRequested, measureConflict := false, false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "measure-relation" {
+			measureRequested = true
+		}
+		if !slices.Contains([]string{"measure-relation", "relation-gold", "out", "relation-split", "relation-repeats", "relation-prompt"}, f.Name) {
+			measureConflict = true
+		}
+	})
+	if measureRequested {
+		if measureConflict || *relationMeasure == "" || *relationGold == "" || *outPath == "" {
+			return fmt.Errorf("관계 측정에는 measure-relation, relation-gold, out이 필요하다")
+		}
+		return measureRelation(*relationMeasure, *relationGold, *outPath, *relationSplit, *relationPrompt, *relationRepeats)
+	}
+	relationRequested, relationConflict := false, false
+	flags.Visit(func(f *flag.Flag) {
+		if slices.Contains([]string{"check-relation-samples", "relation-gold"}, f.Name) {
+			relationRequested = true
+		} else {
+			relationConflict = true
+		}
+	})
+	if relationRequested {
+		if relationConflict || *relationSamples == "" || *relationGold == "" {
+			return fmt.Errorf("관계 표본 검사에는 check-relation-samples와 relation-gold만 지정해야 한다")
+		}
+		result, err := checkRelationSamples(*relationSamples, *relationGold)
+		if err != nil {
+			return err
+		}
+		return writeReport("", result)
 	}
 	trialRequested := false
 	flags.Visit(func(f *flag.Flag) {

@@ -140,7 +140,16 @@ func TestPublicCompactionKeepsSchemaMeaning(t *testing.T) {
 	if len(compact.Properties["all"].AllOf) != 1 || compact.Properties["text"].MinLength != nil || compact.Properties["array"].MinItems != nil {
 		t.Fatal("public schema still includes redundant constraints")
 	}
-	if !reflect.DeepEqual(original.Properties["literal"], compact.Properties["literal"]) {
+	wantLiteral, gotLiteral := *original.Properties["literal"], *compact.Properties["literal"]
+	var wantDefault, gotDefault any
+	if err := json.Unmarshal(wantLiteral.Default, &wantDefault); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(gotLiteral.Default, &gotDefault); err != nil {
+		t.Fatal(err)
+	}
+	wantLiteral.Default, gotLiteral.Default = nil, nil
+	if !reflect.DeepEqual(wantLiteral, gotLiteral) || !reflect.DeepEqual(wantDefault, gotDefault) {
 		t.Fatal("compaction changed literal/default data")
 	}
 	for _, schema := range []*jsonschema.Schema{&original, &compact} {

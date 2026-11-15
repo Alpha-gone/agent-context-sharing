@@ -74,7 +74,7 @@ type agContextProperties struct {
 	EventEnd *string `json:"event_end"`
 }
 
-// agRelationProperties는 사건 관계 간선의 12개 property를 표현한다.
+// agRelationProperties는 사건 관계 간선의 property를 표현한다.
 type agRelationProperties struct {
 	// RelationID 필드는 관계 UUIDv7 문자열이다.
 	RelationID string `json:"relation_id"`
@@ -89,7 +89,9 @@ type agRelationProperties struct {
 	// State 필드는 제안, 확정 또는 폐기 상태다.
 	State string `json:"state"`
 	// ProposedBy 필드는 관계 후보를 만든 주체 구분이다.
-	ProposedBy string `json:"proposed_by"`
+	ProposedBy          string `json:"proposed_by"`
+	ConfirmedSource     string `json:"confirmed_source"`
+	InferenceDecisionID string `json:"inference_decision_id"`
 	// ProposedAt 필드는 관계 후보 기록 UTC 시각이다.
 	ProposedAt string `json:"proposed_at"`
 	// ConfirmedBy 필드는 관계를 확정한 계정 UUIDv7 문자열이다.
@@ -241,14 +243,15 @@ func parseRelation(raw string, graphID model.ID) (result model.Relation, err err
 		return model.Relation{}, fmt.Errorf("proposed_at: %w", err)
 	}
 	relation := model.Relation{
-		ID:            relationID,
-		GraphID:       storedGraphID,
-		Type:          model.RelationType(properties.RelationType),
-		FromContextID: fromContextID,
-		ToContextID:   toContextID,
-		State:         model.RelationState(properties.State),
-		ProposedBy:    model.ProposalSource(properties.ProposedBy),
-		ProposedAt:    proposedAt,
+		ID:              relationID,
+		GraphID:         storedGraphID,
+		Type:            model.RelationType(properties.RelationType),
+		FromContextID:   fromContextID,
+		ToContextID:     toContextID,
+		State:           model.RelationState(properties.State),
+		ProposedBy:      model.ProposalSource(properties.ProposedBy),
+		ConfirmedSource: model.ConfirmationSource(properties.ConfirmedSource),
+		ProposedAt:      proposedAt,
 	}
 	expectedLabel, err := relationLabel(relation.Type)
 	if err != nil {
@@ -274,6 +277,15 @@ func parseRelation(raw string, graphID model.ID) (result model.Relation, err err
 		if err != nil {
 			return model.Relation{}, fmt.Errorf("confirmed_by_agent: %w", err)
 		}
+	}
+	if properties.InferenceDecisionID != "" {
+		relation.InferenceDecisionID, err = model.ParseID(properties.InferenceDecisionID)
+		if err != nil {
+			return model.Relation{}, fmt.Errorf("inference_decision_id: %w", err)
+		}
+	}
+	if relation.ConfirmedSource == "" && relation.ConfirmedAt != nil {
+		relation.ConfirmedSource = model.ConfirmationSourceAgent
 	}
 	if err := relation.Validate(); err != nil {
 		return model.Relation{}, err
@@ -344,6 +356,12 @@ func relationProperties(relation model.Relation) map[string]any {
 	}
 	if !relation.ConfirmedBy.IsZero() {
 		properties["confirmed_by"] = relation.ConfirmedBy.String()
+	}
+	if relation.ConfirmedSource != "" {
+		properties["confirmed_source"] = string(relation.ConfirmedSource)
+	}
+	if !relation.InferenceDecisionID.IsZero() {
+		properties["inference_decision_id"] = relation.InferenceDecisionID.String()
 	}
 	if !relation.ConfirmedByAgent.IsZero() {
 		properties["confirmed_by_agent"] = relation.ConfirmedByAgent.String()

@@ -264,6 +264,45 @@ func TestManifestTrialAcceptedAndIncompleteCost(t *testing.T) {
 	}
 }
 
+func TestManifestTrialRelationInferenceBundle(t *testing.T) {
+	m, bindings, _ := trialFixture(t, "lookup")
+	input := relationBusinessFixture()
+	bindings["tasks"] = writeBusinessTasks(t, input)
+	raw, err := os.ReadFile(bindings["tasks"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Inputs[0].SHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
+	report := summarizeBusinessTasks(input)
+	m.Cost.Items = append(m.Cost.Items, manifestCostItem{Code: "relation_inference", Status: "unmeasured"})
+	tmp := manifestTrial{Manifest: m}
+	m.Cost.Items = tmp.resultCost(&report).Items
+	root := t.TempDir()
+	if err := runManifestTrial(writeManifestFixture(t, m), root, bindings, ""); err != nil {
+		t.Fatal(err)
+	}
+	var relation businessTasksReport
+	readTrialFile(t, root, m.TrialID, "relation_inference.json", &relation)
+	if relation.Experiment != "relation_inference" || relation.DefaultActivation {
+		t.Fatal("관계 추론 결과 불일치")
+	}
+	var summary trialSummary
+	readTrialFile(t, root, m.TrialID, "summary.json", &summary)
+	if len(summary.Decisions) == 0 {
+		t.Fatal("판정 누락")
+	}
+	for _, d := range summary.Decisions {
+		if d.Status != "deferred" {
+			t.Fatal("판정 보류 누락")
+		}
+	}
+	var cost trialCost
+	readTrialFile(t, root, m.TrialID, "cost.json", &cost)
+	if len(cost.Items) != 6 || cost.Total.Status != "unmeasured" {
+		t.Fatal("추론 비용 누락")
+	}
+}
+
 func TestManifestTrialNeverClobbersExistingID(t *testing.T) {
 	for _, kind := range []string{"empty_directory", "previous_results", "symlink", "file"} {
 		t.Run(kind, func(t *testing.T) {
@@ -471,5 +510,17 @@ func TestManifestTrialPreflightAndFollowup(t *testing.T) {
 	before := reflect.ValueOf(m).Interface()
 	if !reflect.DeepEqual(before, m) {
 		t.Fatal("검사가 입력을 바꿨다")
+	}
+}
+
+func TestManifestRelationInferencePreservesSuccessRegression(t *testing.T) {
+	trial := &manifestTrial{}
+	report := &businessTasksReport{Experiment: "relation_inference", Comparisons: []businessTaskComparison{{Condition: "server_apply", Type: "followup", Decision: "rejected", Reason: "task_success_regression"}, {Condition: "server_apply", Type: "cost", Decision: "candidate", Reason: "improvement"}}}
+	decisions := trial.decisions(report, trialCost{})
+	if len(decisions) != 2 || decisions[0].Status != "not_accepted" || decisions[0].Reason != "task_success_regression" {
+		t.Fatalf("regression decision lost: %+v", decisions)
+	}
+	if decisions[1].Status != "deferred" || decisions[1].Reason != "relation_acceptance_evidence_unbound" {
+		t.Fatalf("unbound acceptance promoted: %+v", decisions)
 	}
 }

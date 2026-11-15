@@ -15,6 +15,7 @@ import (
 	"agent_context_sharing/internal/index"
 	"agent_context_sharing/internal/mcp"
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/relinfer"
 	"agent_context_sharing/internal/search"
 	"agent_context_sharing/internal/store"
 	"agent_context_sharing/internal/web"
@@ -26,6 +27,7 @@ type serverAssembly struct {
 	app        *application
 	database   *store.Store
 	indexer    *index.Worker
+	inference  *relinfer.Worker
 	periodic   *periodicWorker
 	recorder   *diagnostic.Recorder
 	system     *diagnostic.Reporter
@@ -78,9 +80,9 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	a.jobContext = diagnostic.WithTrace(context.Background(), diagnostic.Trace{}.NewJob())
 	a.system.RecordFields(a.jobContext, "INFO", "startup", "pending", "completed", false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup"}})
 	startupReason = "database_unavailable"
-	a.database, err = store.New(ctx, cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
+	a.database, err = store.NewWithInference(ctx, cfg.DatabaseURL, cfg.GraphName, &store.RelationProposalConfig{
 		AdjacencyWindow: cfg.RelationAdjacencyWindow, SimilarityThreshold: cfg.RelationSimilarityThreshold, Limit: cfg.RelationProposalLimit,
-	}, func(id model.ID) int { return cfg.AccountPlans.For(id).GraceDays }, store.IndexTargets(cfg.IndexTargetLayers))
+	}, func(id model.ID) int { return cfg.AccountPlans.For(id).GraceDays }, store.IndexTargets(cfg.IndexTargetLayers), cfg.RelationInference.Mode != "" && cfg.RelationInference.Mode != "off")
 	if err != nil {
 		return nil, fmt.Errorf("데이터베이스 풀 준비: %w", err)
 	}
@@ -109,6 +111,20 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	// external에서도 질의 임베딩 transport를 소유한다. 시작 여부와 별개로 정리한다.
 	a.workers = append(a.workers, a.indexer)
 	a.indexer.SetDiagnostics(reports[diagnostic.Index])
+	var inferenceFingerprint string
+	a.inference, inferenceFingerprint, err = relinfer.NewRuntime(a.database, inferenceRuntimeConfig(cfg, a.indexer.ModelID()), providerClient, logger)
+	if err != nil {
+		return nil, fmt.Errorf("관계 추론 작업자 준비: %w", err)
+	}
+	if a.inference != nil {
+		a.inference.SetDiagnostics(reports[diagnostic.Index])
+		a.workers = append(a.workers, a.inference)
+		reason, level := "completed", "INFO"
+		if cfg.RelationInference.Mode == "apply" && inferenceFingerprint != cfg.RelationInference.AcceptedProfile {
+			reason, level = "policy_downgraded", "WARN"
+		}
+		a.system.RecordFields(a.jobContext, level, "relation_inference_configuration", "completed", reason, false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup", InferenceProfile: inferenceFingerprint, InferenceMode: cfg.RelationInference.Mode, InferenceAutoConfirm: cfg.RelationInference.Mode == "apply" && inferenceFingerprint == cfg.RelationInference.AcceptedProfile && len(cfg.RelationInference.AutoConfirmTypes) > 0}})
+	}
 	startupReason = "embedding_schema_mismatch"
 	if err := a.database.CheckEmbeddingSchema(ctx, cfg.EmbeddingVectorType, cfg.EmbeddingDimension); err != nil {
 		return nil, fmt.Errorf("임베딩 DB 구성 확인: %w", err)
@@ -161,7 +177,7 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	if err != nil {
 		return nil, fmt.Errorf("MCP 등록 준비: %w", err)
 	}
-	mcpHandler, err := newMCPHandler(authorizationHandler, cfg.MCPAllowedOrigins, handlers, reports[diagnostic.Request])
+	mcpHandler, err := newMCPHandlerForMode(authorizationHandler, cfg.MCPAllowedOrigins, handlers, cfg.RelationInference.Mode, reports[diagnostic.Request])
 	if err != nil {
 		return nil, fmt.Errorf("MCP 전송 준비: %w", err)
 	}
@@ -186,6 +202,9 @@ func (maintenance recorderMaintenance) Close(ctx context.Context) error {
 func (a *serverAssembly) startWorkers(ctx context.Context) {
 	if a.placement == config.PlacementEmbedded {
 		a.indexer.Start(ctx)
+		if a.inference != nil {
+			a.inference.Start(ctx)
+		}
 	}
 	a.periodic.Start(ctx)
 }

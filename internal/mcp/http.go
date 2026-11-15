@@ -27,10 +27,11 @@ type ToolHandler func(context.Context, Principal, *sdk.CallToolRequest) (*sdk.Ca
 // HTTPConfig는 cmd/server가 검증한 구성과 인증 경계를 주입한다.
 // Protect는 매 요청의 Bearer·scope·현재 폐기를 검사하고 실패 시 응답을 끝낸다.
 type HTTPConfig struct {
-	Diagnostics    diagnostic.Observer
-	AllowedOrigins []string
-	Protect        func(AuthenticatedHandler) http.Handler
-	Handlers       map[string]ToolHandler
+	Diagnostics           diagnostic.Observer
+	AllowedOrigins        []string
+	RelationInferenceMode string
+	Protect               func(AuthenticatedHandler) http.Handler
+	Handlers              map[string]ToolHandler
 }
 
 type principalKey struct{}
@@ -40,6 +41,14 @@ type principalKey struct{}
 func NewHandler(config HTTPConfig) (http.Handler, error) {
 	if config.Protect == nil || len(config.AllowedOrigins) == 0 {
 		return nil, fmt.Errorf("MCP 인증 경계와 허용 출처가 필요하다")
+	}
+	instructions := serverInstructions
+	switch config.RelationInferenceMode {
+	case "", "off", "shadow":
+	case "propose", "apply":
+		instructions += "\nServer finds relations; confirm only with explicit evidence."
+	default:
+		return nil, fmt.Errorf("관계 추론 모드가 올바르지 않다")
 	}
 	origins := make(map[string]bool, len(config.AllowedOrigins))
 	for _, origin := range config.AllowedOrigins {
@@ -57,7 +66,7 @@ func NewHandler(config HTTPConfig) (http.Handler, error) {
 	}
 	server := sdk.NewServer(&sdk.Implementation{Name: "agent-context", Version: "1"}, &sdk.ServerOptions{
 		SupportedProtocolVersions: []string{protocolRevision},
-		Instructions:              serverInstructions,
+		Instructions:              instructions,
 		Capabilities:              &sdk.ServerCapabilities{Tools: &sdk.ToolCapabilities{}},
 		SetCacheable: func(_ context.Context, _ sdk.Request, cache *sdk.Cacheable) {
 			cache.TTLMs, cache.CacheScope = 0, "private"

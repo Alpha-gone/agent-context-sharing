@@ -1,0 +1,34 @@
+{
+  "analysis_dir": "analysis-final",
+  "default_activation": false,
+  "execution_manifest_sha256": "d20ce3086e9de69855e1eac487f75edcb49e0892c0b495093942c2429d37cb76",
+  "flow_file": "flow-run-2/flow.jsonl",
+  "format": "relation_acceptance_bundle_v1",
+  "outputs": {
+    "cost.json": "05dc77605e19c6c5a88dbc3b6064ea6767a3ea18d90cfa73fcc393ae114d9a6d",
+    "preparation.json": "4b52dd5ea6def8bfa3b01a4c767362553fcbf0e3d340467f0dc854a43774d7f4",
+    "relation_inference.json": "0e2af0ee858ffe3c6be8306c602317ede5ec022682be4bc51569e8ffb3479fad",
+    "summary.json": "2e7a08d319887884bb6d6a127c0ead1772dfc22ba4c9d8174010e7b569749cbf"
+  },
+  "profile_fingerprint": "04131576c443ad21c5aa3d72a8f54db7b3a5fe730ab11a9a4dfaa51b7b473c79",
+  "source_files": {
+    "FLOW_PROTOCOL.md": "2f9226825fe8cc32368a55401c601e3129c651247c21b733dc7ffaf831c9284f",
+    "analysis-final/comparison.json": "1848c76f5768bb6126be1bed2c8397f868db53747430f920ce931981b5f79f61",
+    "analysis-final/costs.json": "dacd011ce43f14bc777ba2ab774e79777efa298f8392149377be71a79563d6e9",
+    "analysis-final/metrics.json": "0c7ac4f2fa89760c134db4b39fbafa436e54b159055e49d0707524802a0dd8c9",
+    "analysis-final/relation_inference.json": "05afd8d23eccc08ca766961e1e059bccf758bb60aaff2c8af63107ea1e775b2d",
+    "analyze_acceptance.py": "f2d32441d3abb813a14f0c9c35c9a788fc51eb0b2e1b587a01617f6301ea3b58",
+    "finish_bundle.py": "9b7ee1a0365fd4be95fffc82a16eddf713012eef32ee68012098c4fbfeae865b",
+    "flow-run-2/flow.jsonl": "09a21000d930b1a1339887bbe2c1ec6135344bacb8e7348af1277887e583f494",
+    "gold.json": "65239750e7d2fc78b77ddda3474bc9e926268fd2b7f5784ae08d3564612c7d59",
+    "judgments.jsonl": "e105c40375e2e88547533f1ffb413f1c1a8b54cc5cfe05605555469958696f1d",
+    "manifest.json": "d20ce3086e9de69855e1eac487f75edcb49e0892c0b495093942c2429d37cb76",
+    "prepared.jsonl": "ad39b4e3e62dcd047a10e1cbc2516262201d8e8af257a99d968db56fe6e103f9",
+    "quality-execution.json": "ca75e8d64155ff30dbc7dd248ba566a4da9ac8d9a5ef8fedda90d8ce62057b82",
+    "review-approval.json": "40bb746099d8990ebab0f778fd6d9897c28f3eed9999362f2c8b2cb1c408ff63",
+    "samples.json": "4011859de090ed8d4e0c893134a897ce0d766df879af4b18d3cb2f077ce6b8f7",
+    "validated.json": "43d440b9e94b6d2e3829f3ee6cef81335e0a44fcfd24f0d912b3b78a3c29bf20",
+    "vectors.json": "1b163577cc68f3e8364d74637a1fa86371c15a8056623c61a0968724c22e8b9a"
+  },
+  "source_root": ".."
+}

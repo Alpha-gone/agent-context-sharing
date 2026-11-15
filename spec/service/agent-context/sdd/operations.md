@@ -338,6 +338,19 @@ BCRYPT_COST
 RELATION_ADJACENCY_WINDOW
 RELATION_SIMILARITY_THRESHOLD
 RELATION_PROPOSAL_LIMIT
+RELATION_INFERENCE_MODE
+RELATION_INFERENCE_PROVIDER
+RELATION_INFERENCE_MODEL
+RELATION_INFERENCE_BASE_URL
+RELATION_INFERENCE_API_KEY
+RELATION_INFERENCE_TIMEOUT
+RELATION_INFERENCE_CANDIDATE_LIMIT
+RELATION_INFERENCE_TARGET_CHARS
+RELATION_INFERENCE_CANDIDATE_CHARS
+RELATION_INFERENCE_INPUT_CHARS
+RELATION_INFERENCE_INDEX_WAIT
+RELATION_INFERENCE_AUTO_CONFIRM_TYPES
+RELATION_INFERENCE_ACCEPTED_PROFILE
 ACCOUNT_PLAN_LIMITS
 TLS_TERMINATION
 TRUSTED_PROXY_CIDRS
@@ -352,19 +365,19 @@ DIAGNOSTIC_LOG_LEVEL
 
 ### 서버 관계 추론 구성
 
-#311의 [서버 관계 추론](relation-inference.md) 목표 구성이다. 구현 전이므로 위 허용 목록과 두 환경 예시에는 아직 없으며, 구현 작업에서 허용 목록·검증·`.env.example`·`.env.prod.example`·실행 안내를 함께 갱신한다. 수치는 측정 근거가 없는 시작값이며 [관계 추론 모델 비교](evaluation.md#관계-추론-모델-비교)로 다시 정한다.
+#311의 [서버 관계 추론](relation-inference.md) 구성이다. 비활성 기본값과 OpenAI 판정 어댑터, 색인 배치를 따르는 작업자 조립을 사용한다. 실제 모델의 품질·비용과 자동 확정은 [관계 추론 모델 비교](evaluation.md#관계-추론-모델-비교)로 별도 판정한다. 수치는 측정 근거가 없는 시작값이다.
 
 | 키 | 값·검증 | 상태 |
 |---|---|---|
-| `RELATION_INFERENCE_MODE` | `off`(기본)·`shadow`·`propose`·`apply` | 설계 반영 |
-| `RELATION_INFERENCE_PROVIDER`, `RELATION_INFERENCE_MODEL` | `off`가 아니면 필수. 채택 모델은 `gpt-6-luna`이며 제공자 값과 API 모델 식별자는 공식 문서 확인 뒤 정한다 | 설계 반영 |
-| `RELATION_INFERENCE_BASE_URL`, `RELATION_INFERENCE_API_KEY` | 제공자 엔드포인트와 비밀. 임베딩 키와 공유하지 않으며 로그·오류에 출력하지 않는다 | 설계 반영 |
-| `RELATION_INFERENCE_TIMEOUT` | 호출 상한. 시작값 30초. 리스는 그 두 배다 | 설계 반영 |
-| `RELATION_INFERENCE_CANDIDATE_LIMIT` | 1~20. 시작값 8 | 설계 반영 |
-| `RELATION_INFERENCE_TARGET_CHARS`, `RELATION_INFERENCE_CANDIDATE_CHARS`, `RELATION_INFERENCE_INPUT_CHARS` | 발췌·전체 입력 문자 상한. 시작값 2000·800·9000이며 전체는 대상 상한 이상 | 설계 반영 |
-| `RELATION_INFERENCE_INDEX_WAIT` | 대상 색인 대기 상한. 시작값 10분 | 설계 반영 |
-| `RELATION_INFERENCE_AUTO_CONFIRM_TYPES` | `relates_to`·`part_of`의 쉼표 목록. 기본 빈 값, 다른 유형은 기동 거부 | 설계 반영 |
-| `RELATION_INFERENCE_ACCEPTED_PROFILE` | 합격 추론 프로필 지문(SHA-256 소문자 16진). 비어 있거나 현재 지문과 다르면 자동 확정하지 않는다 | 설계 반영 |
+| `RELATION_INFERENCE_MODE` | `off`(기본)·`shadow`·`propose`·`apply` | 구현·대역 검증 |
+| `RELATION_INFERENCE_PROVIDER`, `RELATION_INFERENCE_MODEL` | `off`가 아니면 필수. 현재 제공자 값은 `openai`, 채택 모델 식별자는 `gpt-6-luna`다 | 구현·대역 검증 |
+| `RELATION_INFERENCE_BASE_URL`, `RELATION_INFERENCE_API_KEY` | 제공자 엔드포인트와 비밀. 임베딩 키와 공유하지 않으며 로그·오류에 출력하지 않는다 | 구현·대역 검증 |
+| `RELATION_INFERENCE_TIMEOUT` | 호출 상한. 시작값 30초. 리스는 그 두 배다 | 구현·대역 검증 |
+| `RELATION_INFERENCE_CANDIDATE_LIMIT` | 1~20. 시작값 8 | 구현·대역 검증 |
+| `RELATION_INFERENCE_TARGET_CHARS`, `RELATION_INFERENCE_CANDIDATE_CHARS`, `RELATION_INFERENCE_INPUT_CHARS` | 발췌·전체 입력 문자 상한. 시작값 2000·800·9000이며 전체는 대상 상한 이상 | 구현·대역 검증 |
+| `RELATION_INFERENCE_INDEX_WAIT` | 대상 색인 대기 상한. 시작값 10분 | 구현·대역 검증 |
+| `RELATION_INFERENCE_AUTO_CONFIRM_TYPES` | `relates_to`·`part_of`의 쉼표 목록. 기본 빈 값, 다른 유형은 기동 거부 | 구현·대역 검증 |
+| `RELATION_INFERENCE_ACCEPTED_PROFILE` | 합격 추론 프로필 지문(SHA-256 소문자 16진). 비어 있거나 현재 지문과 다르면 자동 확정하지 않는다 | 구현·대역 검증 |
 
 `off`이면 나머지 키가 있어도 제공자를 만들지 않고 작업을 등록하지 않는다. `off`가 아닌데 필수 키가 없으면 기동을 거부한다. 기동 시 현재 프로필 지문과 자동 확정 활성 여부를 시스템 진단에 남기고 비밀·엔드포인트 경로는 남기지 않는다.
 

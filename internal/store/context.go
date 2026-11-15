@@ -213,6 +213,14 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 			return model.Context{}, err
 		}
 	}
+	if s.inferenceEnabled && value.Layer == model.LayerEvent && (previous.Body != value.Body || eventProposalInputChanged(previous, value)) {
+		if operation == nil {
+			return model.Context{}, fmt.Errorf("추론 작업 등록에는 인증된 실행 계정이 필요하다")
+		}
+		if err := s.registerInferenceTask(ctx, tx, graphID, stored.ID, operation.AccountID, stored.Version); err != nil {
+			return model.Context{}, err
+		}
+	}
 	if err := s.updateGraphActivity(ctx, tx, graphID, utf8.RuneCountInString(value.Body)-utf8.RuneCountInString(previous.Body), limits.StoredCharsPerGraph); err != nil {
 		return model.Context{}, err
 	}
@@ -482,6 +490,17 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 		if err := s.enqueueIndexTask(ctx, tx, graphID, stored.ID, stored.Layer); err != nil {
 			return model.Context{}, err
 		}
+		if s.inferenceEnabled && stored.Layer == model.LayerEvent {
+			var account model.ID
+			if operation != nil {
+				account = operation.AccountID
+			} else if webAudit != nil {
+				account = webAudit.ActorID
+			}
+			if err := s.registerInferenceTask(ctx, tx, graphID, stored.ID, account, stored.Version); err != nil {
+				return model.Context{}, err
+			}
+		}
 	}
 	if err := s.recordAppliedOperation(ctx, tx, operation, stored.Version); err != nil {
 		return model.Context{}, err
@@ -716,6 +735,14 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	}
 	if err := s.enqueueIndexTask(ctx, tx, graphID, value.ID, value.Layer); err != nil {
 		return model.Context{}, err
+	}
+	if s.inferenceEnabled && value.Layer == model.LayerEvent {
+		if operation == nil {
+			return model.Context{}, fmt.Errorf("추론 작업 등록에는 인증된 실행 계정이 필요하다")
+		}
+		if err := s.registerInferenceTask(ctx, tx, graphID, stored.ID, operation.AccountID, stored.Version); err != nil {
+			return model.Context{}, err
+		}
 	}
 	if err := s.updateGraphActivity(ctx, tx, graphID, utf8.RuneCountInString(value.Body), limits.StoredCharsPerGraph); err != nil {
 		return model.Context{}, err

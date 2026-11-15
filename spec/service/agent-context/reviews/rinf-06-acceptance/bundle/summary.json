@@ -1,0 +1,41 @@
+{
+  "assessment": "negative_qualification",
+  "assessment_reasons": [
+    "paired_total_cost_reduction_not_supported"
+  ],
+  "automatic_activation_performed": false,
+  "cumulative_provider_upper_usd": 1.0840250999999996,
+  "default_activation": false,
+  "flow_task_successes": {
+    "agent_relations": {
+      "runs": 60,
+      "successes": 41
+    },
+    "server_apply": {
+      "runs": 60,
+      "successes": 58
+    }
+  },
+  "format": "relation_acceptance_summary_v1",
+  "limitations": [
+    "synthetic controlled holdout with shared linguistic templates",
+    "six synthetic store-tool tasks; not MCP host acceptance",
+    "measured provider usage at frozen rates plus preregistered local allocation; not actual invoice"
+  ],
+  "measurement_complete": true,
+  "operational_adoption": false,
+  "profile_fingerprint": "04131576c443ad21c5aa3d72a8f54db7b3a5fe730ab11a9a4dfaa51b7b473c79",
+  "quality_qualified": true,
+  "type_results": {
+    "part_of": {
+      "failed_rounds": 0,
+      "insufficient_rounds": 0,
+      "qualified_rounds": 10
+    },
+    "relates_to": {
+      "failed_rounds": 0,
+      "insufficient_rounds": 0,
+      "qualified_rounds": 10
+    }
+  }
+}

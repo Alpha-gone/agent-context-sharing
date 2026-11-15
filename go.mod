@@ -1,6 +1,6 @@
 module agent_context_sharing
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/go-jose/go-jose/v4 v4.1.7

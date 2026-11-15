@@ -611,3 +611,14 @@
 - [GPT-6 Luna 모델](https://developers.openai.com/api/docs/models/gpt-6-luna)은 모델 식별자 `gpt-6-luna`, Responses API와 구조화 출력 지원을 명시한다. [Responses 생성 API](https://developers.openai.com/api/reference/resources/responses/methods/create)는 `text.format` JSON Schema와 `usage.input_tokens`·`usage.output_tokens`를 정의한다. [구조화 출력 지침](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)은 strict JSON Schema와 거절 응답을 설명한다. 2026-11-11 KST 조회. RINF-04 어댑터 계약에 적용하며 계정 접근 권한이나 실제 호출 성공을 가정하지 않는다.
 - [Gemini Embeddings API](https://ai.google.dev/api/embeddings)는 `EmbedContentResponse.usageMetadata.promptTokenCount`를 입력 토큰 수로 정의한다. 2026-11-14 KST 조회. 임베딩 사용량 측정에 적용하며 메타데이터가 없으면 사용량을 미측정으로 둔다.
 - [Responses 생성 API](https://developers.openai.com/api/reference/resources/responses/methods/create)는 `max_output_tokens`가 reasoning을 포함한 생성 토큰 상한이며 `service_tier=default`가 표준 처리·단가를 선택함을 정의한다. [프롬프트 캐시](https://developers.openai.com/api/docs/guides/prompt-caching)는 일반 입력·읽기·30분/12시간 쓰기를 구분해 요금을 계산한다. [OpenAI 가격](https://developers.openai.com/api/docs/pricing)·[Gemini 가격](https://ai.google.dev/gemini-api/docs/pricing/)을 2026-11-15 KST 확인해 RINF-06의 고정 가격 판과 출력 상한·내구 비용 예약에 적용했다. 실제 청구서 금액과 사용량×공개 단가 및 로컬 자원 배분 시나리오를 구분한다.
+## 대화 수집 클라이언트의 호스트 훅 입력 (2026-11-14)
+
+- [Claude Code 훅 참조](https://code.claude.com/docs/en/hooks): 공통 입력 `session_id`·`transcript_path`·`cwd`·`hook_event_name`, `Stop`의 `last_assistant_message`, `async` 명령 훅과 `SessionEnd`의 1.5초 기본 예산을 확인했다. 대화 기록 파일의 행 형식은 문서에 없고 훅 시점에 최신 턴이 빠질 수 있다고 적혀 있다. `UserPromptSubmit`의 프롬프트 필드 이름은 이번 조회에서 확인하지 못했다.
+- [Codex 훅](https://learn.chatgpt.com/docs/hooks)과 [고급 구성](https://learn.chatgpt.com/docs/config-file/config-advanced): `notify`의 `agent-turn-complete`가 인자로 `thread-id`·`turn-id`·`cwd`·`input-messages`·`last-assistant-message`를 전달하고, 대화 기록 형식은 훅의 안정된 인터페이스가 아니라고 명시한다. `developers.openai.com/codex`의 주소는 이 문서로 이동한다.
+- 조회 2026-11-14 KST. 긴 문서는 일부 구간만 원문으로 확인했다. 두 호스트 모두 세션을 이어 열 때의 식별자 유지를 문서화하지 않았다. 이 근거로 [수집 클라이언트](sdd/conversation-ingestion.md#수집-클라이언트)가 대화 기록 파일을 해석하지 않도록 설계했으며 실제 실행 확인은 INGEST-04의 범위다.
+
+## #317 Go 1.27.4 보안 판올림 (2026-11-14)
+
+- [Go 공식 릴리스 이력](https://go.dev/doc/devel/release#go1.27.4): Go 1.27.4(2026-11-10)는 cgo·`go` 명령·컴파일러·링커와 `net/http`의 보안 수정을 포함한다. 조회 시점에 더 새로운 1.27 판은 없었다.
+- [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859)(CVE-2026-97054, 2026-11-11 공개): HTTP/1 서버에서 `MaxBytesReader` 한도 초과 시의 `Connection: close` 헤더 설정이 동기화되지 않아 처리기가 본문을 읽으며 응답 헤더를 쓰면 panic이 날 수 있다. 영향 범위는 go1.27.0 이상 go1.27.4 미만이다.
+- `golang:1.27.4-trixie`의 다중 아키텍처 index digest는 `docker buildx imagetools inspect`로 레지스트리에서 확인했다. 조회 2026-11-14 KST. [검토 기록](reviews/2026-11-14-issue-317.md)에 적용 범위와 검증을 남긴다.

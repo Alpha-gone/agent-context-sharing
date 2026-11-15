@@ -90,6 +90,6 @@ if [ "$archive_commands" != 'archive_command=/usr/local/bin/agent-context-wal-ar
 fi
 grep -Eq '^COPY --chmod=0755 docker-wal-archive[.]sh /usr/local/bin/agent-context-wal-archive$' "$repo_root/Dockerfile"
 
-grep -Eq '^FROM golang:1[.]27[.]3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS build$' "$repo_root/Dockerfile.server"
+grep -Eq '^FROM golang:1[.]27[.]4-trixie@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9 AS build$' "$repo_root/Dockerfile.server"
 grep -Eq '^FROM alpine:3[.]23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0$' "$repo_root/Dockerfile.server"
 echo "운영 구성 검사 통과: loopback·고정 신뢰·기동 순서·명시적 스키마 적용·진단 볼륨/슬롯·WAL·버전"

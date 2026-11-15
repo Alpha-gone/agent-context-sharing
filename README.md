@@ -52,7 +52,7 @@ AI 에이전트가 작업 중 얻은 지식과 맥락을 저장하고, 관계를
 
 ### 준비 사항
 
-- Go **1.27.3**. 기본 셸에 없다면 IntelliJ IDEA에 등록된 Go 1.27.3 SDK의 통합 터미널이나 실행 구성을 사용합니다.
+- Go **1.27.4**. 기본 셸에 없다면 IntelliJ IDEA에 등록된 Go 1.27.4 SDK의 통합 터미널이나 실행 구성을 사용합니다.
 - Docker와 Docker Compose: 설치된 판이 제공된 Compose 파일의 `config --quiet` 검사를 통과해야 합니다.
 - Gemini API 키: 본문과 검색 질의가 외부 API로 전송되므로 이용 정책과 비용을 확인하십시오.
 - 브라우저가 신뢰하는 `localhost` TLS 인증서와 개인 키
@@ -65,7 +65,7 @@ AI 에이전트가 작업 중 얻은 지식과 맥락을 저장하고, 관계를
 ```sh
 sh ./check-go.sh
 # SDK를 직접 지정하는 예시
-GO_BINARY="$HOME/sdk/go1.27.3/bin/go" sh ./check-go.sh
+GO_BINARY="$HOME/sdk/go1.27.4/bin/go" sh ./check-go.sh
 ```
 
 스크립트는 다음을 차례로 검사하고 임시 산출물을 정리합니다.

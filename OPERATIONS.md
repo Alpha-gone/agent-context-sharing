@@ -14,7 +14,7 @@
 
 ## 1. 운영 전제와 개방 조건
 
-시험 운영 담당자는 호스트·Docker 관리 권한, Cloudflare 도메인·Tunnel 설정과 OCI 네트워크 관리 권한, Gemini API 이용 권한을 준비합니다. `cloudflared`는 Docker와 같은 호스트에서 별도로 실행합니다. 서버에서 Go를 직접 설치할 필요는 없으며 애플리케이션 이미지는 고정된 Go 1.27.3로 빌드합니다. Docker Compose, `curl`, `jq`가 필요하며 원본 서버 인증서·개인 키는 사용하지 않습니다.
+시험 운영 담당자는 호스트·Docker 관리 권한, Cloudflare 도메인·Tunnel 설정과 OCI 네트워크 관리 권한, Gemini API 이용 권한을 준비합니다. `cloudflared`는 Docker와 같은 호스트에서 별도로 실행합니다. 서버에서 Go를 직접 설치할 필요는 없으며 애플리케이션 이미지는 고정된 Go 1.27.4로 빌드합니다. Docker Compose, `curl`, `jq`가 필요하며 원본 서버 인증서·개인 키는 사용하지 않습니다.
 
 - DB 포트는 호스트에 공개하지 않습니다. 애플리케이션은 IPv4 `127.0.0.1:80`에만 HTTP로 연결합니다. 원본 TCP 80·443을 외부에 공개할 필요가 없습니다.
 - 사용자→Cloudflare는 HTTPS, Cloudflare→호스트 커넥터는 암호화된 터널, 커넥터→컨테이너 서버는 로컬 HTTP입니다. 서버는 호스트의 공개 포트 접속 경로인 `10.203.0.1/32`와 단일 `X-Forwarded-Proto: https`를 함께 검증합니다. Cloudflare 공인 대역이나 전체 Docker 대역을 신뢰하지 않습니다.
@@ -244,11 +244,11 @@ pg_verifybackup /secure/backup/base
 
 ### 격리 복구 시험 실행
 
-저장소 루트에서 다음 모듈 시험을 실행할 수 있습니다. Docker 엔진·Compose와 Go 1.27.3이 필요하며 SDK가 PATH에 없으면 `GO_BINARY`에 지정합니다.
+저장소 루트에서 다음 모듈 시험을 실행할 수 있습니다. Docker 엔진·Compose와 Go 1.27.4이 필요하며 SDK가 PATH에 없으면 `GO_BINARY`에 지정합니다.
 
 ```sh
 sh test-wal-archive.sh
-GO_BINARY=/path/to/go1.27.3/bin/go sh test-pitr.sh
+GO_BINARY=/path/to/go1.27.4/bin/go sh test-pitr.sh
 ```
 
 두 실행기는 개발 `.env`와 기존 DB를 사용하지 않고 매번 새 프로젝트를 만듭니다. `test-pitr.sh`는 기본 데이터·별도 cold tablespace·WAL·백업과 복구본을 전용 볼륨에 만들고, 고정된 DB 이미지에서 물리 백업·manifest/손상 거부·이름 있는 복구 지점·목표 일시 정지·승격을 검사합니다. 원본과 복구본의 목표 전후 데이터, AGE·양쪽 HNSW·현재 모델·서명·큐·전체 감사를 대조한 뒤 이 실행의 합성 자원만 정리합니다. 외부 제공자 호출과 호스트 포트 공개는 없습니다. 실제 운영 백업이나 보관본 삭제를 수행하는 명령은 아닙니다.
@@ -321,7 +321,7 @@ curl --fail --show-error http://127.0.0.1:80/readyz
 ### 격리 전환·복귀 리허설
 
 ```sh
-GO_BINARY=/path/to/go1.27.3/bin/go sh test-transition.sh
+GO_BINARY=/path/to/go1.27.4/bin/go sh test-transition.sh
 ```
 
 실행기는 실제 `.env`를 읽지 않고 예시 구성·합성 자격·별도 프로젝트·빈 볼륨을 사용합니다. 호스트 포트 공개와 외부 네트워크를 차단하고 색인은 external로 둡니다. 현재 소스에서 전환 대상 013 이후의 번호를 모두 제외해 만든 합성 이전 이미지는 과거 출시 이미지의 호환성을 보장하는 자료가 아닙니다. 012 기동→정상 정지→물리 백업/manifest 검증→013부터 현재 최신 번호까지 적용/반복 무변경→전체 감사→새 이미지 준비 확인→013을 사용하는 파생 생성/감사와 실패 파일 롤백을 확인합니다. 실패 주입 파일은 현재 최신 번호 뒤의 두 번호를 사용합니다. 이후 별도 볼륨에 백업을 복원하고 자동 적용 없이 보관한 합성 이전 이미지로 감사·이전 세션/권한/원본·준비를 확인합니다. 시험이 만든 자원만 정리하며 실제 운영 배포·Tunnel·외부 제공자·실제 호스트 인수와 구분합니다.

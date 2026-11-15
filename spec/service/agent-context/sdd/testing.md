@@ -361,7 +361,7 @@ macOS/Linux에서 정상 네 파일·완전한 JSON·권한·같은 ID의 동시
 
 ## 첫 Codex CLI 상호운용 시험
 
-`TBD-AGENT_CONTEXT-064`의 선택 기준은 확정되었고 실제 적합성 검증은 대기다. 현재 재검증 대상은 macOS의 Codex CLI `0.160.1`, 서버는 Go `1.27.3`, 공식 MCP Go SDK `v1.8.0`, 초기 revision은 `2026-07-28`다. Codex 앱·IDE 표면으로 지원 완료를 확대하지 않는다. 기존 TEST-08 인수 기록은 Go 1.27.1에서의 결과로 보존하며, Go 1.27.3으로 그 호스트 인수 결과를 자동 승계하지 않는다.
+`TBD-AGENT_CONTEXT-064`의 선택 기준은 확정되었고 실제 적합성 검증은 대기다. 현재 재검증 대상은 macOS의 Codex CLI `0.160.1`, 서버는 Go `1.27.4`, 공식 MCP Go SDK `v1.8.0`, 초기 revision은 `2026-07-28`다. Codex 앱·IDE 표면으로 지원 완료를 확대하지 않는다. 기존 TEST-08 인수 기록은 Go 1.27.1에서의 결과로 보존하며, Go 1.27.3·1.27.4로 그 호스트 인수 결과를 자동 승계하지 않는다.
 
 현재 등록 경로는 DCR 전용이다. Codex 설정에서 고정 `oauth.client_id`를 제거하고 discovery의 `registration_endpoint`로 자동 등록하는지 확인한다. callback은 `http://127.0.0.1:49152/callback`이며 `oauth.callback_url`·`oauth.callback_port`가 같은 URI·포트로 수신해야 한다. 클라이언트가 표시한 실제 URI와 등록한 URI, 고정 issuer·성공/오류 응답 `iss`가 일치해야 한다. HTTP 예외는 literal loopback 또는 완전 일치 localhost callback에 한정한다. 기존 TEST-08의 사전 등록 인수 결과는 역사적 근거이며 DCR CLI 인수 완료를 뜻하지 않는다.
 

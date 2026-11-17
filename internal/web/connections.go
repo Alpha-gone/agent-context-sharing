@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/plan"
 	"agent_context_sharing/internal/store"
 )
 
@@ -16,6 +17,13 @@ import (
 type ConnectionManagement interface {
 	ListConnections(context.Context, model.ID, model.ID) (store.ConnectionPage, error)
 	RevokeConnection(context.Context, model.ID, string, model.ID) error
+}
+
+// IngestCredentialManagement는 웹 세션의 계정에 결합한 수집 자격을 관리한다.
+type IngestCredentialManagement interface {
+	ListIngestCredentials(context.Context, model.ID) ([]store.IngestCredential, error)
+	IssueIngestCredential(context.Context, model.ID, string) (string, error)
+	RevokeIngestCredential(context.Context, model.ID, model.ID) error
 }
 
 func (server *Server) connections(writer http.ResponseWriter, request *http.Request) {
@@ -61,7 +69,18 @@ func (server *Server) connections(writer http.ResponseWriter, request *http.Requ
 		server.connectionError(writer, http.StatusInternalServerError)
 		return
 	}
-	server.render(writer, http.StatusOK, "connections", pageData{Title: "연결 관리", Connections: page})
+	data := pageData{Title: "연결 관리", Connections: page, IngestEnabled: server.config.IngestCredentials != nil}
+	if data.IngestEnabled {
+		data.IngestCredentials, err = server.config.IngestCredentials.ListIngestCredentials(request.Context(), account)
+		if request.Context().Err() != nil {
+			return
+		}
+		if err != nil {
+			server.connectionError(writer, http.StatusInternalServerError)
+			return
+		}
+	}
+	server.render(writer, http.StatusOK, "connections", data)
 }
 
 func (server *Server) revokeConnection(writer http.ResponseWriter, request *http.Request, account model.ID) {
@@ -92,6 +111,13 @@ func (server *Server) revokeConnection(writer http.ResponseWriter, request *http
 		server.connectionError(writer, http.StatusRequestEntityTooLarge)
 		return
 	}
+	if err == nil && singleAuthorizationValues(request.PostForm) && len(request.PostForm) == 2 && len(request.PostForm["action"]) == 1 {
+		action := request.PostForm.Get("action")
+		if action == "issue_ingest" || action == "revoke_ingest" {
+			server.manageIngestCredential(writer, request, account, action)
+			return
+		}
+	}
 	if err != nil || !singleAuthorizationValues(request.PostForm) || len(request.PostForm) != 2 || len(request.PostForm["target_id"]) != 1 || len(request.PostForm["action"]) != 1 {
 		server.connectionError(writer, http.StatusBadRequest)
 		return
@@ -117,6 +143,84 @@ func (server *Server) revokeConnection(writer http.ResponseWriter, request *http
 	http.Redirect(writer, request, "/connections", http.StatusSeeOther)
 }
 
+func (server *Server) manageIngestCredential(writer http.ResponseWriter, request *http.Request, account model.ID, action string) {
+	if server.config.IngestCredentials == nil {
+		server.connectionError(writer, http.StatusNotFound)
+		return
+	}
+	if action == "issue_ingest" {
+		if len(request.PostForm["label"]) != 1 {
+			server.connectionError(writer, http.StatusBadRequest)
+			return
+		}
+		token, err := server.config.IngestCredentials.IssueIngestCredential(request.Context(), account, request.PostForm.Get("label"))
+		if request.Context().Err() != nil {
+			return
+		}
+		if _, ok := errors.AsType[model.FieldError](err); ok {
+			server.connectionError(writer, http.StatusBadRequest)
+			return
+		}
+		if _, ok := errors.AsType[plan.LimitError](err); ok {
+			server.connectionError(writer, http.StatusConflict)
+			return
+		}
+		if err != nil {
+			server.connectionError(writer, http.StatusInternalServerError)
+			return
+		}
+		server.render(writer, http.StatusOK, "ingest-issued", pageData{Title: "수집 자격 발급", IngestToken: token})
+		return
+	}
+	if len(request.PostForm["target_id"]) != 1 {
+		server.connectionError(writer, http.StatusBadRequest)
+		return
+	}
+	target, err := model.ParseID(request.PostForm.Get("target_id"))
+	if err != nil {
+		server.connectionError(writer, http.StatusBadRequest)
+		return
+	}
+	err = server.config.IngestCredentials.RevokeIngestCredential(request.Context(), account, target)
+	if request.Context().Err() != nil {
+		return
+	}
+	if errors.Is(err, model.ErrNotFound) {
+		server.connectionError(writer, http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		server.connectionError(writer, http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(writer, request, "/connections", http.StatusSeeOther)
+}
+
+func ingestExpiry(item store.IngestCredential) time.Time {
+	last := item.IssuedAt
+	if item.LastUsedAt != nil && item.LastUsedAt.After(last) {
+		last = *item.LastUsedAt
+	}
+	idle, absolute := last.Add(30*24*time.Hour), item.IssuedAt.AddDate(1, 0, 0)
+	// PostgreSQL의 1년 간격은 윤일을 다음 해 2월 말로 보정한다.
+	if absolute.Month() != item.IssuedAt.Month() {
+		absolute = absolute.AddDate(0, 0, -1)
+	}
+	if idle.Before(absolute) {
+		return idle
+	}
+	return absolute
+}
+func ingestStatus(item store.IngestCredential) string {
+	if item.RevokedAt != nil {
+		return "폐기됨"
+	}
+	if !time.Now().Before(ingestExpiry(item)) {
+		return "만료됨"
+	}
+	return "활성"
+}
+
 func (server *Server) connectionError(writer http.ResponseWriter, status int) {
 	message := "연결을 처리할 수 없습니다. 잠시 후 다시 시도해 주세요."
 	switch status {
@@ -124,6 +228,8 @@ func (server *Server) connectionError(writer http.ResponseWriter, status int) {
 		message = "대상 연결을 찾을 수 없습니다."
 	case http.StatusBadRequest:
 		message = "연결 요청의 입력을 확인해 주세요."
+	case http.StatusConflict:
+		message = "수집 자격 또는 에이전트 등록 한도에 도달했습니다."
 	case http.StatusRequestEntityTooLarge:
 		message = "연결 요청의 입력이 너무 큽니다."
 	}
@@ -149,6 +255,7 @@ func connectionExpiry(grant store.OAuthGrantSummary) time.Time {
 }
 
 const connectionTemplates = `
+{{define "ingest-issued"}}{{template "head" .}}<h1>수집 자격 발급</h1><p>이 자격은 지금 한 번만 표시됩니다. 안전한 곳에 보관해 주세요.</p><p><code>{{.IngestToken}}</code></p><a href="/connections">연결 관리로 돌아가기</a>{{template "foot" .}}{{end}}
 {{define "connections"}}{{template "head" .}}
 <nav><h1>연결 관리</h1><a href="/graphs">그래프 목록</a><a href="/logout">로그아웃</a></nav>
 <div class="connection-list">
@@ -162,6 +269,9 @@ const connectionTemplates = `
 {{if not .RevokedAt}}<form method="post" action="/connections" aria-describedby="grant-revoke-help"><input type="hidden" name="action" value="revoke_grant"><input type="hidden" name="target_id" value="{{.ID}}"><button type="submit">{{.ClientID}} 연결 폐기 · {{.ID}}</button></form>{{end}}</article>
 {{else}}<p>표시할 연결이 없습니다.</p>{{end}}
 <nav aria-label="연결 목록 페이지"><a href="/connections">첫 페이지</a>{{if .Connections.Next.IsV7}}<a href="/connections?before={{.Connections.Next}}">다음 페이지</a>{{end}}</nav></section>
+{{if .IngestEnabled}}<section><h2 id="ingest-heading">수집 자격</h2>
+<form method="post" action="/connections" aria-labelledby="ingest-heading"><input type="hidden" name="action" value="issue_ingest"><label for="ingest-label">구분용 이름 (1~64자, 필수)</label><input id="ingest-label" name="label" type="text" required><button type="submit">수집 자격 발급</button></form>
+{{range .IngestCredentials}}<article class="panel"><h3>{{.Label}}</h3><dl><dt>상태</dt><dd>{{ingestStatus .}}</dd><dt>발급 시각</dt><dd>{{formatTime .IssuedAt}}</dd>{{if .LastUsedAt}}<dt>마지막 사용</dt><dd>{{formatTime .LastUsedAt}}</dd>{{end}}<dt>만료 시각</dt><dd>{{formatTime (ingestExpiry .)}}</dd>{{if .RevokedAt}}<dt>폐기 시각</dt><dd>{{formatTime .RevokedAt}}</dd>{{end}}</dl>{{if not .RevokedAt}}<form method="post" action="/connections"><input type="hidden" name="action" value="revoke_ingest"><input type="hidden" name="target_id" value="{{.ID}}"><button type="submit">{{.Label}} 수집 자격 폐기</button></form>{{end}}</article>{{else}}<p>수집 자격이 없습니다.</p>{{end}}</section>{{end}}
 <section><h2 id="agent-heading">활성 에이전트 등록</h2><p id="agent-revoke-help">등록을 폐기하면 해당 에이전트의 이후 쓰기를 차단합니다. 기존 기여와 감사 기록은 보존됩니다. 클라이언트 연결은 별도로 관리합니다.</p>
 {{range .Connections.Agents}}<article class="panel"><h3>{{.ClientID}}</h3><p>등록 식별자: <code>{{.ID}}</code></p><p>등록 시각: {{formatTime .CreatedAt}}</p>
 <form method="post" action="/connections" aria-describedby="agent-revoke-help"><input type="hidden" name="action" value="revoke_agent"><input type="hidden" name="target_id" value="{{.ID}}"><button type="submit">{{.ClientID}} 에이전트 등록 폐기 · {{.ID}}</button></form></article>

@@ -95,7 +95,7 @@ flowchart TB
 
 `config`는 드라이버를 직접 참조하거나 DB 핸들을 받지 않고 `store.ValidateDatabaseURL`의 오류만 받는다. 검증은 실제 풀과 같은 pgxpool 해석기를 사용하며 연결·질의·풀 생성은 하지 않는다. pgx의 PG 환경 기본값·서비스/비밀번호/TLS 파일 해석은 접속 때와 같은 규칙을 따른다. 파서 오류는 원문을 보존할 수 있으므로 구성 경계에서는 고정 필드·사유만 반환하고 드라이버 원인을 연결하지 않는다.
 
-기본 업무 패키지 아홉 개와 아래 별도 표의 `mcp`·`diagnostic`·`relinfer`를 합쳐 현재 업무 패키지는 열두 개다. 업무 패키지의 의존은 이 표를 기준으로 하며 [설계 경계 검증](testing.md#테스트-계층)의 테스트가 표와 실제 import를 양방향으로 대조한다. 표에 없는 의존이 생기거나 표에 적은 의존이 사라지면 그 테스트가 실패한다.
+기본 업무 패키지 아홉 개와 아래 별도 표의 `mcp`·`diagnostic`·`relinfer`·`ingest`를 합쳐 현재 업무 패키지는 열세 개다. 업무 패키지의 의존은 이 표를 기준으로 하며 [설계 경계 검증](testing.md#테스트-계층)의 테스트가 표와 실제 import를 양방향으로 대조한다. 표에 없는 의존이 생기거나 표에 적은 의존이 사라지면 그 테스트가 실패한다.
 
 업무 감사 기록 전용 패키지를 따로 두지 않는다. 진단 파일은 목표 `diagnostic` 패키지의 별도 책임이다. 관리 연산 기록과 웹 감사 기록은 그것을 만든 쓰기와 같은 트랜잭션 안에서 남아야 하고, 그 트랜잭션은 `store`가 연다. 기록을 다른 패키지에 두면 그 패키지가 트랜잭션을 넘겨받아야 하는데 그것은 [접근 계층](architecture.md#접근-계층)이 막은 우회 경로다. 보존 기간 정리도 같은 이유로 [주기 작업](operations.md#주기-작업)과 함께 `store`에 둔다.
 
@@ -122,6 +122,14 @@ flowchart TB
     Config[config]
     Diagnostic[diagnostic]
     MCP[mcp]
+    Ingest[ingest]
+    Relinfer[relinfer]
+    Ingest --> Model
+    Ingest --> Plan
+    Ingest --> Store
+    Ingest --> Diagnostic
+    Relinfer --> Model
+    Relinfer --> Diagnostic
     MCP --> Perm
     MCP --> Plan
     MCP --> Model
@@ -216,7 +224,7 @@ AGE가 돌려주는 `agtype`은 PostgreSQL 기본 타입이 아니다. `store`�
 
 공통 본문 읽기는 기존 Go 양식 해석 기본값과 같은 10 MiB로 제한하고 먼저 읽거나 JSON·폼을 해석하지 않는다. 로그인·등록·동의·연결 관리의 [8 KiB 양식](authentication.md#공개-로그인가입-자원-보호), [64 KiB 토큰](authentication.md#목표-oauth-http-경로), [4 MiB MCP](mcp.md#보호-http-구현-경계) 제한이 더 좁은 경계에서 우선하며 채널별 출처·인증·초과 오류의 순서를 유지한다. 일반 관리 양식의 초과는 기존 입력 오류 400이고 자격 양식·토큰·MCP의 바이트 초과는 각 채널의 413이다. 미등록·미지원 메서드의 본문은 애플리케이션에서 읽지 않는다.
 
-대화 수집을 활성화한 배포는 `POST /ingest/conversation`을 추가한다. 목표 경로이며 구현 전이다. 수집 자격으로만 인증하고 JSON 본문 상한은 4 MiB이며 계약은 [수집 경로](conversation-ingestion.md#수집-경로)를 따른다.
+대화 수집을 활성화한 배포는 `POST /ingest/conversation`을 추가한다. 수집 자격으로만 인증하고 JSON 본문 상한은 4 MiB이며 계약은 [수집 경로](conversation-ingestion.md#수집-경로)를 따른다.
 
 보호 MCP의 경로 계약은 [호스트 직접 연결 전환 설계](architecture.md#호스트-직접-연결-전환-설계)를 따른다. 인가 화면은 웹 인터페이스와 서버 어댑터를 통해 authz를 호출하며 `web`에서 `authz`를 import하지 않는다. 코드 교환·갱신 회전·Bearer 공유 폐기·본인 연결 관리는 별도의 좁은 저장 인터페이스로 주입하며 DB 핸들을 노출하지 않는다. AUTH-10의 `/connections`는 같은 웹 어댑터를 통해 authz를 호출하고 main에서 공유 저장소와 함께 조립한다. 입력·화면 계약은 [연결 관리 화면](web.md#목표-연결-관리-화면)을 따른다. Bearer 검증 결과 전달과 HTTP 오류 사상은 authz의 ProtectBearer가 제공한다. MCP-02의 newMCPHandler가 이를 MCP Principal로 옮기고 application의 선택 /mcp 슬롯을 TLS 판정 아래에 연결한다. mcp.NewHandler는 14종 처리기를 모두 요구하므로 ARCH-06의 기동 조립은 실제 등록·읽기·쓰기 14종과 보호 전송을 연결하며 MCP-06의 newMCPWriteHandlers는 여덟 쓰기에 현재 등급·플랜·저장/거부 기록·재생 실행기를 주입한다. MCP-07의 newMCPReadHandlers는 다섯 읽기에 현재 등급·플랜·그래프/노드/홉/관계와 검색기를 주입하고 저장 오류·구성원 참조 이름을 맞춘다. MCP-08의 서버 조립 어댑터는 본문·인증·도구 실행의 [요청 시간 예산과 오류 경계](mcp.md#요청-시간-예산과-오류-경계)를 적용한다. 기동 경로의 전체 의존 조립은 [ARCH-06 모듈 인수](../reviews/2026-10-23-arch-06.md)에서 확인했다. 전체 HTTP 경로·메서드·공통 보호는 [ARCH-07 모듈 인수](../reviews/2026-10-23-arch-07.md)에서 확인했으며 전체 MCP 서버 계약은 MCP-09에서 인수했고 실제 호스트는 TEST-08에서 별도로 확인한다. 등록하지 않은 경로도 TLS 검사를 거치고 `404`를 반환한다.
 
@@ -259,7 +267,7 @@ DB 이미지의 재빌드에서도 같은 pgvector를 사용하도록 `Dockerfil
 
 ## 목표 추가 패키지와 조립
 
-직접 연결과 진단 파일 구현은 다음 두 패키지를 사용한다. MCP와 OBS-01~08의 진단 구현이 존재하며 파일 분야 인수와 ARCH-06의 전체 의존 조립을 완료했다. 공통 HTTP 경계는 ARCH-07에서 인수했으며 전체 운영·호스트 인수는 각 개발 항목에서 별도로 판정한다. 기존 아홉 업무 패키지와 아래 `relinfer`를 포함한 애플리케이션 패키지는 열두 개다.
+직접 연결과 진단 파일 구현은 다음 두 패키지를 사용한다. MCP와 OBS-01~08의 진단 구현이 존재하며 파일 분야 인수와 ARCH-06의 전체 의존 조립을 완료했다. 공통 HTTP 경계는 ARCH-07에서 인수했으며 전체 운영·호스트 인수는 각 개발 항목에서 별도로 판정한다. 기존 아홉 업무 패키지와 아래 네 패키지를 포함한 애플리케이션 패키지는 열세 개다.
 
 | 패키지 | 책임 | 허용하는 프로젝트 내부 의존 |
 |---|---|---|
@@ -271,6 +279,9 @@ DB 이미지의 재빌드에서도 같은 pgvector를 사용하도록 `Dockerfil
 | 패키지 | 책임 | 허용하는 프로젝트 내부 의존 |
 |---|---|---|
 | `relinfer` | 후보 조합·판정 입력 생성, 판정 어댑터와 대역, 출력 계약 검증, 추론 작업자 회차 | `model`, `diagnostic`; 저장·후보 검색·제공자는 주입 인터페이스 |
+| `ingest` | 대화 수집 요청·턴 검증과 구간화 작업자 | `model`, `plan`, `store`, `diagnostic` |
+
+수집 요청 처리는 `ingest` 패키지가 맡고 `model`, `plan`, `store`의 타입과 주입된 저장 경계에 의존한다. HTTP 보안과 원천 저장 계약은 [대화 수집](conversation-ingestion.md#수집-경로)을 따른다.
 
 추론 진단은 제한된 필드만 받는 `diagnostic` 관찰 경계를 주입하며 저장소·제공자 호출 경계는 독립적으로 유지한다.
 

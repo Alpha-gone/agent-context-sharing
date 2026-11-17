@@ -81,8 +81,9 @@ type GraphStore interface {
 type Config struct {
 	Diagnostics diagnostic.Observer
 	// Authorization은 로그인·세션과 분리된 OAuth 인가의 업무 경계다.
-	Authorization Authorization
-	Connections   ConnectionManagement
+	Authorization     Authorization
+	Connections       ConnectionManagement
+	IngestCredentials IngestCredentialManagement
 	// SecureCookie는 현재 요청이 애플리케이션의 TLS 판정을 통과했는지 알려 준다.
 	SecureCookie func(*http.Request) bool
 	// ClientAddress는 조립 계층에서 기존 프록시 신뢰 검사를 적용한 출처 주소다.
@@ -113,6 +114,8 @@ func New(auth Authentication, graphs GraphStore, config Config) (*Server, error)
 		"accessPath":       accessPath,
 		"connectionStatus": connectionStatus,
 		"connectionExpiry": connectionExpiry,
+		"ingestStatus":     ingestStatus,
+		"ingestExpiry":     ingestExpiry,
 	}).Parse(pageTemplates + authorizationTemplates + connectionTemplates)
 	if err != nil {
 		return nil, fmt.Errorf("웹 템플릿 해석: %w", err)
@@ -1271,6 +1274,9 @@ func (server *Server) render(writer http.ResponseWriter, status int, name string
 
 type pageData struct {
 	Connections           store.ConnectionPage
+	IngestCredentials     []store.IngestCredential
+	IngestEnabled         bool
+	IngestToken           string
 	AuthorizationClient   string
 	AuthorizationResource string
 	AuthorizationAction   string

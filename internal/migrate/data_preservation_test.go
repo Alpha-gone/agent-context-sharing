@@ -55,7 +55,7 @@ const preservationOriginals = `SELECT jsonb_build_object(
 	'grants',(SELECT jsonb_agg(to_jsonb(g) ORDER BY grant_id) FROM public.oauth_grant g),
 	'codes',(SELECT jsonb_agg(to_jsonb(c) ORDER BY code_hash) FROM public.oauth_authorization_code c),
 	'refresh',(SELECT jsonb_agg(to_jsonb(r) ORDER BY token_hash) FROM public.oauth_refresh_token r),
-	'registrations',(SELECT jsonb_agg(to_jsonb(a) ORDER BY agent_id) FROM public.agent_registration a),
+	'registrations',(SELECT jsonb_agg(to_jsonb(a)-'ingest_credential_id' ORDER BY agent_id) FROM public.agent_registration a),
 	'idempotency',(SELECT jsonb_agg(to_jsonb(i) ORDER BY actor_account_id,idempotency_key) FROM public.idempotency_record i)
 	)::text`
 
@@ -270,11 +270,14 @@ func TestData09ShapeTransitionAndPreservationIntegration(t *testing.T) {
 				if preservationQuery(t, pool, preservationMutable) != mutable || preservationQuery(t, pool, preservationOriginals) != before {
 					t.Fatal("실패한 전환이 기존 상태를 변경했다")
 				}
-				if count, err := applyTarget(t.Context(), pool, migrations.FS, target); err != nil || count != 7 {
+				if count, err := applyTarget(t.Context(), pool, migrations.FS, target); err != nil || count != 11 {
 					t.Fatalf("전환=%d: %v", count, err)
 				}
 				if preservationQuery(t, pool, preservationOriginals) != before || preservationQuery(t, pool, historySQL) != history {
 					t.Fatal("원본·업무 상태·과거 이력이 변경됐다")
+				}
+				if preservationQuery(t, pool, `SELECT count(*)::text FROM public.agent_registration WHERE ingest_credential_id IS NOT NULL OR client_id IS NULL`) != "0" {
+					t.Fatal("기존 OAuth 등록이 수집 자격에 결합됐다")
 				}
 				if preservationQuery(t, pool, `SELECT count(*)::text FROM public.context_revision`) != "0" {
 					t.Fatal("이행이 관찰하지 않은 과거 판을 추정했다")
@@ -370,7 +373,7 @@ func TestData09LegacyConfigurationBackfillAtomicIntegration(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), `UPDATE public.schema_migration SET checksum=$1 WHERE version=9`, loaded[1].Checksum); err != nil {
 		t.Fatal(err)
 	}
-	if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != 9 {
+	if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != 13 {
 		t.Fatalf("보충 후 적용=%d: %v", count, err)
 	}
 	if preservationQuery(t, pool, `SELECT count(*)::text FROM public.schema_migration WHERE render_config IS NULL`) != "0" {

@@ -314,3 +314,25 @@ func TestOBS01RejectsUnknownOptionalCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestConversationSegmentDiagnosticFields(t *testing.T) {
+	graph, task, node := uuid.NewV7().String(), uuid.NewV7().String(), uuid.NewV7().String()
+	for _, sample := range []struct {
+		kind                  Kind
+		stage, result, reason string
+		fields                Fields
+	}{
+		{Index, "segment_acquire", "completed", "completed", Fields{Identity: IdentityFields{GraphID: graph}, Index: IndexFields{TaskID: task, LeaseResult: "acquired"}}},
+		{Index, "segment_retry", "failed", "permission_denied", Fields{Identity: IdentityFields{GraphID: graph}, Index: IndexFields{TaskID: task}}},
+		{Management, "segment_skip", "skipped", "segment_frozen", Fields{Identity: IdentityFields{GraphID: graph, ContextID: node}}},
+		{Management, "segment_skip", "skipped", "segment_unassigned", Fields{Identity: IdentityFields{GraphID: graph, ContextID: node}}},
+	} {
+		event := validEvent(t, sample.kind)
+		event.Stage, event.Result, event.ReasonCode = sample.stage, sample.result, sample.reason
+		event.IdentityVerified = true
+		event.Fields = sample.fields
+		if err := event.Validate(); err != nil {
+			t.Fatalf("%s: %v", sample.stage, err)
+		}
+	}
+}

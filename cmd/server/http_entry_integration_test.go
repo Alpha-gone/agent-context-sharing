@@ -463,3 +463,13 @@ func TestARCH07KeepAliveAfterRequestDeadline(t *testing.T) {
 		}
 	}
 }
+
+func TestIngestDisabledRoute(t *testing.T) {
+	app := newApplication(nil, nil, transportSecurity{directTLS: true})
+	request := httptest.NewRequest("POST", "https://example.test/ingest/conversation", nil)
+	response := httptest.NewRecorder()
+	app.handler().ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("비활성 수집 경로 상태: %d", response.Code)
+	}
+}

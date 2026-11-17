@@ -37,7 +37,7 @@ func TestConfigReadsOnlyAllowedKeysOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := AllowedKeys()
-	if len(keys) != 50 || len(reads) != len(keys) {
+	if len(keys) != 55 || len(reads) != len(keys) {
 		t.Fatalf("허용 키·읽은 키 수 = %d·%d", len(keys), len(reads))
 	}
 	for _, key := range keys {

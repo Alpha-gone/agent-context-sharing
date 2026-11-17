@@ -351,6 +351,11 @@ RELATION_INFERENCE_INPUT_CHARS
 RELATION_INFERENCE_INDEX_WAIT
 RELATION_INFERENCE_AUTO_CONFIRM_TYPES
 RELATION_INFERENCE_ACCEPTED_PROFILE
+CONVERSATION_INGEST_ENABLED
+CONVERSATION_SEGMENT_GAP
+CONVERSATION_SEGMENT_MAX_TURNS
+CONVERSATION_SEGMENT_EXCERPT_CHARS
+CONVERSATION_SEGMENT_BODY_CHARS
 ACCOUNT_PLAN_LIMITS
 TLS_TERMINATION
 TRUSTED_PROXY_CIDRS
@@ -383,14 +388,14 @@ DIAGNOSTIC_LOG_LEVEL
 
 ### 대화 수집 구성
 
-[대화 수집](conversation-ingestion.md)의 목표 구성이다. 구현 전이므로 허용 목록과 두 환경 예시에는 아직 없으며, 구현 작업에서 허용 목록·검증·`.env.example`·`.env.prod.example`·실행 안내를 함께 갱신한다. 수치는 측정 근거가 없는 시작값이다.
+[대화 수집](conversation-ingestion.md)의 구성이다. 자격 관리, 수집 경로와 구간화 작업자의 활성 스위치를 구현했다. 수치는 측정 근거가 없는 시작값이다.
 
 | 키 | 값·검증 | 상태 |
 |---|---|---|
-| `CONVERSATION_INGEST_ENABLED` | `false`(기본)·`true`. `false`이면 수집 경로를 등록하지 않고 자격 발급 동작과 구간화 작업자를 두지 않는다 | 설계 반영 |
-| `CONVERSATION_SEGMENT_GAP` | 구간의 간격 상한. 1분~24시간, 시작값 30분 | 설계 반영 |
-| `CONVERSATION_SEGMENT_MAX_TURNS` | 구간의 턴 수 상한. 2~100, 시작값 40 | 설계 반영 |
-| `CONVERSATION_SEGMENT_EXCERPT_CHARS`, `CONVERSATION_SEGMENT_BODY_CHARS` | 발화당 발췌와 사건 본문 전체의 문자 상한. 시작값 300·2000이며 전체는 발췌 이상 8000 이하 | 설계 반영 |
+| `CONVERSATION_INGEST_ENABLED` | `false`(기본)·`true`. `false`이면 수집 경로를 등록하지 않고 자격 발급 동작과 구간화 작업자를 두지 않는다 | 구현 |
+| `CONVERSATION_SEGMENT_GAP` | 구간의 간격 상한. 1분~24시간, 시작값 30분 | 구현 |
+| `CONVERSATION_SEGMENT_MAX_TURNS` | 구간의 턴 수 상한. 2~100, 시작값 40 | 구현 |
+| `CONVERSATION_SEGMENT_EXCERPT_CHARS`, `CONVERSATION_SEGMENT_BODY_CHARS` | 발화당 발췌와 사건 본문 전체의 문자 상한. 시작값 300·2000이며 전체는 발췌 이상 8000 이하 | 구현 |
 
 비활성으로 바꿔도 발급한 자격과 저장한 원천·사건·구간 기록은 지우지 않는다. 남은 구간화 작업은 다시 활성화할 때까지 처리하지 않는다. 구간화 작업자의 배치는 `INDEX_WORKER_PLACEMENT`를 따르며 외부 제공자 키를 요구하지 않는다.
 

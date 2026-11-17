@@ -155,10 +155,11 @@ func checkRelationInference(snapshot auditSnapshot) ([]InvariantViolation, error
 		if !relation || !edge.inferenceProperties {
 			continue
 		}
-		invalid := edge.confirmedSource != "" && edge.confirmedSource != "agent" && edge.confirmedSource != "inference"
+		invalid := edge.confirmedSource != "" && edge.confirmedSource != "agent" && edge.confirmedSource != "inference" && edge.confirmedSource != "ingest"
 		invalid = invalid || ((edge.proposedBy == "inference" || edge.confirmedSource == "inference") && edge.decisionID == "")
 		invalid = invalid || (edge.confirmedSource == "inference" && edge.confirmedAgent != "")
 		invalid = invalid || (edge.state == "proposed" && edge.confirmedSource != "")
+		invalid = invalid || (edge.confirmedSource == "ingest" && (kind != model.RelationTypePrecedes || edge.proposedBy != "system" || edge.confirmedAgent == "" || edge.decisionID != ""))
 		if edge.decisionID != "" {
 			d, ok := snapshot.decisions[edge.decisionID]
 			invalid = invalid || !ok || d.graphID != edge.graphID || d.relationType != string(kind) ||

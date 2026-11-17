@@ -12,6 +12,7 @@
 | 대상 | 정본 |
 |---|---|
 | `server/` | [조립·HTTP](../spec/service/agent-context/sdd/architecture.md), [기동·종료·주기 작업](../spec/service/agent-context/sdd/operations.md) |
+| `ingest/` | [대화 수집 클라이언트](../spec/service/agent-context/sdd/conversation-ingestion.md#수집-클라이언트) |
 | `indexer/` | [색인 배치](../spec/service/agent-context/sdd/architecture.md#배치-조합), [소비·리스](../spec/service/agent-context/sdd/indexing.md#색인-작업-큐), [작업자 정리](../spec/service/agent-context/sdd/operations.md#기동과-종료) |
 | `eval/` | [평가 실행·집계·준비·정리](../spec/service/agent-context/sdd/evaluation.md), [평가 시험](../spec/service/agent-context/sdd/testing.md) |
 | `audit/` | [읽기 전용 불변식 감사](../spec/service/agent-context/sdd/data.md#그래프-불변식-규칙과-감사) |

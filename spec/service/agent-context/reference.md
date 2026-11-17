@@ -622,3 +622,11 @@
 - [Go 공식 릴리스 이력](https://go.dev/doc/devel/release#go1.27.4): Go 1.27.4(2026-11-10)는 cgo·`go` 명령·컴파일러·링커와 `net/http`의 보안 수정을 포함한다. 조회 시점에 더 새로운 1.27 판은 없었다.
 - [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859)(CVE-2026-97054, 2026-11-11 공개): HTTP/1 서버에서 `MaxBytesReader` 한도 초과 시의 `Connection: close` 헤더 설정이 동기화되지 않아 처리기가 본문을 읽으며 응답 헤더를 쓰면 panic이 날 수 있다. 영향 범위는 go1.27.0 이상 go1.27.4 미만이다.
 - `golang:1.27.4-trixie`의 다중 아키텍처 index digest는 `docker buildx imagetools inspect`로 레지스트리에서 확인했다. 조회 2026-11-14 KST. [검토 기록](reviews/2026-11-14-issue-317.md)에 적용 범위와 검증을 남긴다.
+
+
+## INGEST-04 호스트 훅 확인 (2026-11-16)
+
+- [Claude Code 훅 참조](https://code.claude.com/docs/en/hooks): `UserPromptSubmit`의 `prompt`, 공통 `session_id`·`cwd`, `Stop`의 `last_assistant_message`와 비동기 훅의 `claude -p` 종료 시 취소 가능성을 확인했다. 2026-11-16 23:49 KST 조회. 설치된 Claude Code 2.1.325에서 외부 모델 호출 없이 합성 루프백 모델 응답과 두 비동기 훅의 필드 전달을 관찰했다. 종료 직전 완료 및 실제 서비스 연결은 확인하지 않았다.
+- [Codex 고급 구성](https://learn.chatgpt.com/docs/config-file/config-advanced#notify): `notify`에 JSON 인자가 전달되고 `thread-id`, `input-messages`, `last-assistant-message`, `cwd`가 공통 필드임을 확인했다. 2026-11-16 23:49 KST 조회. Codex CLI 0.166.0을 격리 임시 설정과 합성 루프백 모델 응답으로 실행해 notify의 기본 발화·표준 입력·마지막 응답을 관찰했다. 실행 중 추가 지시를 포함한 모든 입력의 완전성은 확인하지 않았다.
+- [Go `os.CreateTemp`](https://pkg.go.dev/os#CreateTemp)와 [`golang.org/x/sys/unix` v0.49.0 `Flock`](https://pkg.go.dev/golang.org/x/sys@v0.49.0/unix#Flock): 제한된 권한의 임시 파일과 프로세스 간 배타 잠금 API를 확인했다. 2026-11-16 23:49 KST 조회. 로컬 파일의 원자 교체·동기화 및 경쟁 시험에 반영했다.
+- [Go `os.StartProcess`](https://pkg.go.dev/os#StartProcess)·[`os.Process.Release`](https://pkg.go.dev/os#Process.Release)와 [`os.ProcAttr`](https://pkg.go.dev/os#ProcAttr): 분리 프로세스의 작업 디렉터리·표준 입출력·프로세스 수명 계약을 Go 1.27.4 로컬 문서로 확인했다. 2026-11-17 KST. 수집 클라이언트의 분리 전송에 적용하고 실제 프로세스 시험을 수행했다.

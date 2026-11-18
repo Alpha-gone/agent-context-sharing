@@ -148,7 +148,7 @@ func (s *Store) RevokeAgent(ctx context.Context, account, agent model.ID) (resul
 		}
 		return err
 	}
-	result, err := tx.Exec(ctx, `UPDATE public.agent_registration SET revoked_at=COALESCE(revoked_at,$3) WHERE agent_id=$1 AND account_id=$2`, agent.String(), account.String(), time.Now().UTC())
+	result, err := tx.Exec(ctx, `UPDATE public.agent_registration SET revoked_at=COALESCE(revoked_at,$3) WHERE agent_id=$1 AND account_id=$2 AND client_id IS NOT NULL`, agent.String(), account.String(), time.Now().UTC())
 	if err != nil {
 		return storageError("agent_revoke_update", err)
 	}

@@ -59,6 +59,7 @@ type application struct {
 	oauthTokens       oauthTokenRoutes
 	oauthRegistration http.Handler
 	mcp               http.Handler
+	ingest            http.Handler
 	accepting         atomic.Bool
 }
 
@@ -116,6 +117,9 @@ func (app *application) handler() http.Handler {
 	}
 	if app.oauthRegistration != nil {
 		handleHTTPMethods(mux, "/oauth/register", app.oauthRegistration, "POST")
+	}
+	if app.ingest != nil {
+		mux.Handle("/ingest/conversation", app.ingest)
 	}
 	if app.mcp != nil {
 		mux.Handle("POST /mcp", app.mcp)
@@ -460,6 +464,8 @@ func diagnosticRoute(path string) string {
 		return "teams"
 	case "/mcp":
 		return "mcp"
+	case "/ingest/conversation":
+		return "ingest_conversation"
 	case "/healthz", "/readyz":
 		return "health"
 	}

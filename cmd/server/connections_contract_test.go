@@ -9,14 +9,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"agent_context_sharing/internal/authz"
+	"agent_context_sharing/internal/ingest"
 	"agent_context_sharing/internal/mcp"
 	"agent_context_sharing/internal/model"
+	"agent_context_sharing/internal/plan"
 	"agent_context_sharing/internal/web"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -69,12 +72,13 @@ func TestAUTH10ConnectionsTLSIntegration(t *testing.T) {
 		}
 		security := transportSecurity{directTLS: true}
 		adapter := webAuthentication{service: service}
-		screen, err := web.New(adapter, f.database, web.Config{SecureCookie: security.isTLSRequest, Connections: adapter, Authorization: adapter})
+		screen, err := web.New(adapter, f.database, web.Config{SecureCookie: security.isTLSRequest, Connections: adapter, Authorization: adapter, IngestCredentials: f.database})
 		if err != nil {
 			t.Fatal(err)
 		}
 		app := newApplication(f.database, slog.New(slog.NewJSONHandler(logs, nil)), security)
 		app.web, app.oauthTokens, app.mcp = screen, public, protected
+		app.ingest = ingest.Handler{Backend: f.database, Plans: plan.AccountPlans{}, Gap: 30 * time.Minute, CorrelationID: requestID}
 		server := httptest.NewTLSServer(app.handler())
 		t.Cleanup(server.Close)
 		server.Client().Timeout = 5 * time.Second
@@ -136,6 +140,92 @@ func TestAUTH10ConnectionsTLSIntegration(t *testing.T) {
 		}
 		return response, data
 	}
+	// 수집 자격은 OAuth 접근 토큰이나 웹 세션으로 사용할 수 없다.
+	issued, issuedBody := do(0, "POST", "/connections", url.Values{"action": {"issue_ingest"}, "label": {"synthetic"}}.Encode(), cookie, nil)
+	if issued.StatusCode != http.StatusOK {
+		t.Fatalf("수집 자격 웹 발급 상태: %d", issued.StatusCode)
+	}
+	ingestToken := regexp.MustCompile(`acs_ing_[A-Za-z0-9_-]{43}`).FindString(string(issuedBody))
+	if ingestToken == "" {
+		t.Fatal("발급 응답에 수집 자격이 없다")
+	}
+	credentials, err := f.database.ListIngestCredentials(t.Context(), f.principal.AccountID)
+	if err != nil || len(credentials) != 1 {
+		t.Fatal("수집 자격 목록", err)
+	}
+	listed, listBody := do(0, "GET", "/connections", "", cookie, nil)
+	if listed.StatusCode != 200 || bytes.Contains(listBody, []byte(ingestToken)) {
+		t.Fatal("목록에 수집 자격 원문 노출")
+	}
+	_, ingestAgent, err := f.database.ValidateIngestCredential(t.Context(), ingestToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := f.args("node_create")
+	args["agent_id"], args["layer"], args["body"], args["origin_kind"], args["occurred_at"] = ingestAgent.String(), "source", "synthetic write", "user_utterance", "2026-10-20T12:00:00Z"
+	args["source_ref"] = map[string]any{"channel": "file", "locator": "file:///ingest-forbidden"}
+	f.call(t, "node_create", args, "invalid_argument")
+	response, _ := do(0, "POST", "/mcp", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, nil, map[string]string{"Authorization": "Bearer " + ingestToken, "Origin": "https://allowed.test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list"})
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("수집 자격의 MCP 응답: %d", response.StatusCode)
+	}
+	response, _ = do(0, "GET", "/connections", "", nil, map[string]string{"Authorization": "Bearer " + ingestToken})
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/login" {
+		t.Fatalf("수집 자격의 웹 응답: %d", response.StatusCode)
+	}
+	requestBody, err := json.Marshal(map[string]any{"graph_id": f.graph.String(), "conversation_id": "합성/대화", "turns": []map[string]any{{"turn_index": 0, "speaker": "user", "occurred_at": "2026-10-20T12:00:00Z", "body": "synthetic body"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingestRequest := func(bearer string, body []byte) (*http.Response, []byte) {
+		return do(0, "POST", "/ingest/conversation", string(body), nil, map[string]string{"Authorization": "Bearer " + bearer, "Content-Type": "application/json"})
+	}
+	response, _ = ingestRequest(tokens.AccessToken, requestBody)
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("OAuth 수집 경로 응답: %d", response.StatusCode)
+	}
+	response, data := ingestRequest(ingestToken, requestBody)
+	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(`"status":"stored"`)) {
+		t.Fatalf("수집 저장: %d %s", response.StatusCode, data)
+	}
+	response, data = ingestRequest(ingestToken, requestBody)
+	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(`"status":"existing"`)) {
+		t.Fatalf("수집 재전송: %d %s", response.StatusCode, data)
+	}
+	altered := bytes.Replace(requestBody, []byte("synthetic body"), []byte("other synthetic"), 1)
+	response, data = ingestRequest(ingestToken, altered)
+	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(`"reason":"body_mismatch"`)) {
+		t.Fatalf("본문 불일치: %d %s", response.StatusCode, data)
+	}
+	batch, err := json.Marshal(map[string]any{"graph_id": f.graph.String(), "conversation_id": "합성/대화", "turns": []map[string]any{
+		{"turn_index": 0, "speaker": "user", "occurred_at": "2026-10-20T12:00:00Z", "body": "other synthetic"},
+		{"turn_index": 1, "speaker": "agent", "occurred_at": "2026-10-20T12:01:00Z", "body": "second synthetic"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, data = ingestRequest(ingestToken, batch)
+	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(`"reason":"body_mismatch"`)) || !bytes.Contains(data, []byte(`"status":"stored"`)) {
+		t.Fatalf("묶음 부분 저장: %d %s", response.StatusCode, data)
+	}
+	response, _ = do(0, "POST", "/ingest/conversation", string(requestBody), nil, map[string]string{"Authorization": "Bearer " + ingestToken, "Content-Type": "application/json", "Origin": "https://allowed.test"})
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("Origin 거부: %d", response.StatusCode)
+	}
+	response, _ = do(0, "POST", "/connections", url.Values{"action": {"revoke_ingest"}, "target_id": {credentials[0].ID.String()}}.Encode(), cookie, nil)
+	if response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("수집 자격 웹 폐기: %d", response.StatusCode)
+	}
+	response, _ = ingestRequest(ingestToken, requestBody)
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("폐기 자격의 수집 요청: %d", response.StatusCode)
+	}
+	for _, forbidden := range []string{ingestToken, "합성/대화", "synthetic body", "other synthetic", "second synthetic"} {
+		if strings.Contains(logs.String(), forbidden) {
+			t.Fatal("수집 자격 또는 원문이 로그에 노출됐다")
+		}
+	}
+
 	revoke := func(action string, target model.ID) {
 		t.Helper()
 		response, _ := do(1, "POST", "/connections", url.Values{"action": {action}, "target_id": {target.String()}}.Encode(), cookie, nil)
@@ -158,7 +248,7 @@ func TestAUTH10ConnectionsTLSIntegration(t *testing.T) {
 		}
 		return response.StatusCode, value
 	}
-	response, data := do(1, "GET", "/connections", "", cookie, nil)
+	response, data = do(1, "GET", "/connections", "", cookie, nil)
 	if response.StatusCode != 200 || !bytes.Contains(data, []byte(grant.String())) || !bytes.Contains(data, []byte(f.agent.String())) {
 		t.Fatal("own connections missing")
 	}

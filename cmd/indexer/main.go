@@ -16,6 +16,7 @@ import (
 	"agent_context_sharing/internal/config"
 	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/index"
+	"agent_context_sharing/internal/ingest"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/relinfer"
 	"agent_context_sharing/internal/store"
@@ -88,11 +89,17 @@ func runConfiguredWithClient(ctx context.Context, cfg config.Config, client *htt
 	database.SetOperationDiagnostics(managementReporter, indexReporter)
 	var worker *index.Worker
 	var inference *relinfer.Worker
+	var segmenter *ingest.SegmentWorker
 	defer func() {
 		var workerErr error
+		if segmenter != nil {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), workerShutdownTimeout)
+			workerErr = segmenter.Close(cleanup)
+			cancel()
+		}
 		if inference != nil {
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), workerShutdownTimeout)
-			workerErr = inference.Close(cleanup)
+			workerErr = errors.Join(workerErr, inference.Close(cleanup))
 			cancel()
 		}
 		if worker != nil {
@@ -133,6 +140,14 @@ func runConfiguredWithClient(ctx context.Context, cfg config.Config, client *htt
 		}
 		systemReporter.RecordFields(diagnostic.ResumeJob(ctx, ""), level, "relation_inference_configuration", "completed", reason, false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup", InferenceProfile: inferenceFingerprint, InferenceMode: cfg.RelationInference.Mode, InferenceAutoConfirm: cfg.RelationInference.Mode == "apply" && inferenceFingerprint == cfg.RelationInference.AcceptedProfile && len(cfg.RelationInference.AutoConfirmTypes) > 0}})
 		inference.Start(ctx)
+	}
+	if cfg.ConversationIngestEnabled {
+		segmenter, err = ingest.NewSegmentWorker(database, ingest.SegmentConfig{Gap: cfg.ConversationSegmentGap, MaxTurns: cfg.ConversationSegmentMaxTurns, ExcerptChars: cfg.ConversationSegmentExcerptChars, BodyChars: cfg.ConversationSegmentBodyChars}, cfg.AccountPlans, slog.Default())
+		if err != nil {
+			return fmt.Errorf("대화 구간화 작업자 준비: %w", err)
+		}
+		segmenter.SetDiagnostics(indexReporter, managementReporter)
+		segmenter.Start(ctx)
 	}
 	worker.Start(ctx)
 	<-ctx.Done()

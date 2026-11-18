@@ -18,6 +18,7 @@
 | `authz/` | [계정·세션·OAuth·키](../spec/service/agent-context/sdd/authentication.md) |
 | `index/` | [제공자·큐·세대·재색인](../spec/service/agent-context/sdd/indexing.md) |
 | `relinfer/` | [서버 관계 추론의 작업자·후보·판정](../spec/service/agent-context/sdd/relation-inference.md) |
+| `ingest/` | [대화 수집 경로](../spec/service/agent-context/sdd/conversation-ingestion.md#수집-경로) |
 | `mcp/` | [전송·도구·주입 계약](../spec/service/agent-context/sdd/mcp.md), [패키지 경계](../spec/service/agent-context/sdd/architecture.md#목표-추가-패키지와-조립) |
 | `diagnostic/` | [진단 이벤트·기록기](../spec/service/agent-context/sdd/observability.md#기록기와-소유-경계) |
 | `search/` | [채널·스냅숏·홉·흐름](../spec/service/agent-context/sdd/search.md) |

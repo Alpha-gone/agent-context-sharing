@@ -76,7 +76,7 @@ func (s *Store) ListConnections(ctx context.Context, account, before model.ID) (
 		page.Next = page.Grants[len(page.Grants)-1].ID
 	}
 	rows, err = s.pool.Query(ctx, `SELECT agent_id::text,client_id,created_at FROM public.agent_registration
-		WHERE account_id=$1 AND revoked_at IS NULL ORDER BY agent_id DESC LIMIT $2`, account.String(), activeAgentLimit+1)
+		WHERE account_id=$1 AND revoked_at IS NULL AND client_id IS NOT NULL ORDER BY agent_id DESC LIMIT $2`, account.String(), activeAgentLimit+1)
 	if err != nil {
 		return ConnectionPage{}, storageError("connections_agent_list", err)
 	}

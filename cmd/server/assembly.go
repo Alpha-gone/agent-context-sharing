@@ -13,6 +13,7 @@ import (
 	"agent_context_sharing/internal/config"
 	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/index"
+	"agent_context_sharing/internal/ingest"
 	"agent_context_sharing/internal/mcp"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/relinfer"
@@ -28,6 +29,7 @@ type serverAssembly struct {
 	database   *store.Store
 	indexer    *index.Worker
 	inference  *relinfer.Worker
+	segmenter  *ingest.SegmentWorker
 	periodic   *periodicWorker
 	recorder   *diagnostic.Recorder
 	system     *diagnostic.Reporter
@@ -125,6 +127,14 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 		}
 		a.system.RecordFields(a.jobContext, level, "relation_inference_configuration", "completed", reason, false, diagnostic.Fields{System: diagnostic.SystemFields{Job: "startup", InferenceProfile: inferenceFingerprint, InferenceMode: cfg.RelationInference.Mode, InferenceAutoConfirm: cfg.RelationInference.Mode == "apply" && inferenceFingerprint == cfg.RelationInference.AcceptedProfile && len(cfg.RelationInference.AutoConfirmTypes) > 0}})
 	}
+	if cfg.ConversationIngestEnabled {
+		a.segmenter, err = ingest.NewSegmentWorker(a.database, ingest.SegmentConfig{Gap: cfg.ConversationSegmentGap, MaxTurns: cfg.ConversationSegmentMaxTurns, ExcerptChars: cfg.ConversationSegmentExcerptChars, BodyChars: cfg.ConversationSegmentBodyChars}, cfg.AccountPlans, logger)
+		if err != nil {
+			return nil, fmt.Errorf("대화 구간화 작업자 준비: %w", err)
+		}
+		a.segmenter.SetDiagnostics(reports[diagnostic.Index], reports[diagnostic.Management])
+		a.workers = append(a.workers, a.segmenter)
+	}
 	startupReason = "embedding_schema_mismatch"
 	if err := a.database.CheckEmbeddingSchema(ctx, cfg.EmbeddingVectorType, cfg.EmbeddingDimension); err != nil {
 		return nil, fmt.Errorf("임베딩 DB 구성 확인: %w", err)
@@ -153,8 +163,12 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	authorization.SetDiagnostics(reports[diagnostic.Auth])
 	startupReason = "configuration_invalid"
 	transport := transportSecurity{directTLS: cfg.TLSMode == config.TLSModeDirect, trustedProxies: cfg.TrustedProxies}
+	var ingestCredentials web.IngestCredentialManagement
+	if cfg.ConversationIngestEnabled {
+		ingestCredentials = a.database
+	}
 	webServer, err := web.New(webAuthentication{service: authorization}, a.database, web.Config{
-		Authorization: webAuthentication{service: authorization}, Connections: webAuthentication{service: authorization},
+		Authorization: webAuthentication{service: authorization}, Connections: webAuthentication{service: authorization}, IngestCredentials: ingestCredentials,
 		Diagnostics: reports[diagnostic.Request], SecureCookie: transport.isTLSRequest, ClientAddress: transport.clientAddress, Plans: cfg.AccountPlans,
 	})
 	if err != nil {
@@ -185,6 +199,9 @@ func assembleApplication(ctx context.Context, cfg config.Config, providerClient 
 	a.app.diagnostics = reports[diagnostic.Request]
 	a.app.web, a.app.publicKeys, a.app.oauthMetadata, a.app.oauthTokens = webServer, authorizationHandler, authorizationHandler, authorizationHandler
 	a.app.mcp = mcpHandler
+	if cfg.ConversationIngestEnabled {
+		a.app.ingest = ingest.Handler{Backend: a.database, Plans: cfg.AccountPlans, Gap: cfg.ConversationSegmentGap, CorrelationID: requestID}
+	}
 	a.app.oauthRegistration = authz.NewRegistrationHandler(authorization, transport.clientAddress)
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -204,6 +221,9 @@ func (a *serverAssembly) startWorkers(ctx context.Context) {
 		a.indexer.Start(ctx)
 		if a.inference != nil {
 			a.inference.Start(ctx)
+		}
+		if a.segmenter != nil {
+			a.segmenter.Start(ctx)
 		}
 	}
 	a.periodic.Start(ctx)

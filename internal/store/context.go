@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"agent_context_sharing/internal/diagnostic"
 	"agent_context_sharing/internal/model"
 	"agent_context_sharing/internal/plan"
 	"github.com/jackc/pgx/v5"
@@ -31,9 +32,11 @@ func (s *Store) CreateContextWithOperation(ctx context.Context, graphID model.ID
 	if value.Derived != nil && value.Derived.Supersedes != nil {
 		return model.Context{}, model.FieldError{Field: "supersedes", Message: "대체 참조는 대체 생성 경로를 사용해야 한다"}
 	}
-	created, err := s.createContext(ctx, graphID, value, derivedFrom, model.ID{}, operation, limits)
+	created, err := s.createContext(ctx, graphID, value, derivedFrom, model.ID{}, operation, limits, nil)
 	if err == nil {
-		s.proposeEventRelationsAfterSave(ctx, graphID, created)
+		if operation == nil || operation.JudgmentSource != model.ConfirmationSourceIngest {
+			s.proposeEventRelationsAfterSave(ctx, graphID, created)
+		}
 		return created, nil
 	}
 	duplicate, ok := errors.AsType[*pgconn.PgError](err)
@@ -66,7 +69,7 @@ func (s *Store) CreateSupersedingContextWithOperation(ctx context.Context, graph
 	if slices.Contains(derivedFrom, supersededID) {
 		return model.Context{}, model.FieldError{Field: "derived_from", Message: "대체 대상 자체를 새 파생의 근거로 사용할 수 없다"}
 	}
-	return s.createContext(ctx, graphID, value, derivedFrom, supersededID, operation, limits)
+	return s.createContext(ctx, graphID, value, derivedFrom, supersededID, operation, limits, nil)
 }
 
 // Context는 graph_id 안에서 context_id에 해당하는 정점을 읽고 응답 격리를 재검사한다.
@@ -224,6 +227,11 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	if err := s.updateGraphActivity(ctx, tx, graphID, utf8.RuneCountInString(value.Body)-utf8.RuneCountInString(previous.Body), limits.StoredCharsPerGraph); err != nil {
 		return model.Context{}, err
 	}
+	if value.Layer == model.LayerEvent && isAgentOperation(operation) {
+		if err := freezeConversationSegment(ctx, tx, graphID, stored.ID); err != nil {
+			return model.Context{}, err
+		}
+	}
 	if err := s.recordAppliedOperation(ctx, tx, operation, stored.Version); err != nil {
 		return model.Context{}, err
 	}
@@ -236,7 +244,7 @@ func (s *Store) UpdateContextWithOperation(ctx context.Context, graphID model.ID
 	// 파생 근거는 「컨텍스트 모델」이 불변으로 두었으므로 갱신 전 값을 그대로 옮기고,
 	// 사건 구성원은 이 트랜잭션이 쓴 값을 옮긴다. 커밋 뒤 재조회는 하지 않는다.
 	stored = withReferences(stored, previousReferences(previous), value)
-	if value.Layer == model.LayerEvent && eventProposalInputChanged(previous, value) {
+	if value.Layer == model.LayerEvent && eventProposalInputChanged(previous, value) && (operation == nil || operation.JudgmentSource != model.ConfirmationSourceIngest) {
 		s.proposeEventRelationsAfterSave(ctx, graphID, stored)
 	}
 	return stored, nil
@@ -502,6 +510,11 @@ func (s *Store) changeContextDeletion(ctx context.Context, graphID, contextID mo
 			}
 		}
 	}
+	if discard && stored.Layer == model.LayerEvent && isAgentOperation(operation) {
+		if err := freezeConversationSegment(ctx, tx, graphID, stored.ID); err != nil {
+			return model.Context{}, err
+		}
+	}
 	if err := s.recordAppliedOperation(ctx, tx, operation, stored.Version); err != nil {
 		return model.Context{}, err
 	}
@@ -607,7 +620,7 @@ func (s *Store) invalidateDerivedEvidence(ctx context.Context, tx pgx.Tx, graphI
 }
 
 // createContext은 원천 중복 확인과 그래프 활동 갱신을 포함한 실제 쓰기 트랜잭션이다.
-func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits) (result model.Context, err error) {
+func (s *Store) createContext(ctx context.Context, graphID model.ID, value model.Context, derivedFrom []model.ID, supersededID model.ID, operation *OperationRecord, limits WriteLimits, ingest *ingestSourceOptions) (result model.Context, err error) {
 	ctx, observation := beginManagement(ctx, "node_create")
 	defer func() {
 		if result.ID.IsV7() {
@@ -652,7 +665,7 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 		return model.Context{}, err
 	}
 
-	if value.Layer == model.LayerSource {
+	if value.Layer == model.LayerSource && ingest == nil {
 		existing, err := s.findSourceWith(ctx, tx, graphID, value.Source.Reference.Locator)
 		if err == nil {
 			if err := requireActiveGraph(ctx, tx, graphID); err != nil {
@@ -669,6 +682,32 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 	}
 	if _, err := lockGraphs(ctx, tx, []model.ID{graphID}); err != nil {
 		return model.Context{}, err
+	}
+	if ingest != nil {
+		grade, found, err := effectiveGrade(ctx, tx, graphID, value.CreatedBy)
+		if err != nil {
+			return model.Context{}, err
+		}
+		if !found || (grade != model.GraphGradeOwner && grade != model.GraphGradeEditor) {
+			return model.Context{}, model.ErrNotFound
+		}
+		if err := requireActiveGraph(ctx, tx, graphID); err != nil {
+			return model.Context{}, err
+		}
+		existing, err := s.findConversationSourceWith(ctx, tx, graphID, value.Source.ConversationID, *value.Source.TurnIndex)
+		if err == nil {
+			if existing.Body != value.Body {
+				return model.Context{}, ErrIngestBodyMismatch
+			}
+			return existing, nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return model.Context{}, err
+		}
+		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&value.RecordedAt); err != nil {
+			return model.Context{}, storageError("ingest_recorded_at", err)
+		}
+		value.RecordedAt = value.RecordedAt.UTC()
 	}
 	var replaced *model.Context
 	if value.Layer == model.LayerDerived {
@@ -744,6 +783,38 @@ func (s *Store) createContext(ctx context.Context, graphID model.ID, value model
 			return model.Context{}, err
 		}
 	}
+	if ingest != nil {
+		taskID, err := model.NewID()
+		if err != nil {
+			return model.Context{}, err
+		}
+		var rawTask string
+		var generation time.Time
+		err = tx.QueryRow(ctx, `INSERT INTO public.conversation_segment_task (task_id, graph_id, conversation_id, trigger_account_id, trigger_agent_id, attempts, state, enqueued_at, next_attempt_at, correlation_id)
+            VALUES ($1,$2,$3,$4,$5,0,'pending',statement_timestamp(),statement_timestamp()+make_interval(secs => $6),$7)
+            ON CONFLICT (graph_id, conversation_id) DO UPDATE SET trigger_account_id=EXCLUDED.trigger_account_id,trigger_agent_id=EXCLUDED.trigger_agent_id,attempts=0,state='pending',last_error=NULL,enqueued_at=GREATEST(EXCLUDED.enqueued_at,conversation_segment_task.enqueued_at + interval '1 microsecond'),next_attempt_at=EXCLUDED.next_attempt_at,correlation_id=EXCLUDED.correlation_id RETURNING task_id::text,enqueued_at`, taskID.String(), graphID.String(), value.Source.ConversationID, value.CreatedBy.String(), value.CreatedByAgent.String(), ingest.gap.Seconds(), ingest.correlationID).Scan(&rawTask, &generation)
+		if err != nil {
+			return model.Context{}, storageError("ingest_segment_enqueue", err)
+		}
+		savedID, err := model.ParseID(rawTask)
+		if err != nil {
+			return model.Context{}, storageError("ingest_segment_task_id", err)
+		}
+		fields := diagnostic.Fields{Identity: diagnostic.IdentityFields{GraphID: graphID.String()}, Index: diagnostic.IndexFields{TaskID: savedID.String(), Generation: uint64(generation.UnixMicro())}}
+		report := func(state string) {
+			result, reason := "pending", "completed"
+			if state != "committed" {
+				result, reason = "skipped", "commit_unknown"
+			}
+			diagnostic.Observe(s.indexDiagnostics, ctx, "INFO", "segment_enqueue", result, reason, true, fields)
+		}
+		if observed, ok := tx.(*observedWriteTx); ok {
+			observed.callbacks = append(observed.callbacks, report)
+		} else {
+			report("unknown")
+		}
+
+	}
 	if err := s.updateGraphActivity(ctx, tx, graphID, utf8.RuneCountInString(value.Body), limits.StoredCharsPerGraph); err != nil {
 		return model.Context{}, err
 	}
@@ -802,6 +873,10 @@ func (s *Store) createPreviousEventRelation(ctx context.Context, tx pgx.Tx, grap
 		FromContextID: previous.ID, ToContextID: event.ID, State: model.RelationStateConfirmed,
 		ProposedBy: model.ProposalSourceAgent, ProposedAt: now, ConfirmedAt: new(now),
 		ConfirmedBy: event.CreatedBy, ConfirmedByAgent: event.CreatedByAgent}
+	if operation != nil && operation.JudgmentSource == model.ConfirmationSourceIngest {
+		relation.ProposedBy = model.ProposalSourceSystem
+		relation.ConfirmedSource = model.ConfirmationSourceIngest
+	}
 	if err := model.ValidateRelation(relation, previous, event); err != nil {
 		return model.FieldError{Field: "previous_event_id", Message: "앞 사건의 시간 순서가 올바르지 않다", Cause: err}
 	}

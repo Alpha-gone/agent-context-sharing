@@ -50,8 +50,8 @@ func packageBoundaries(t *testing.T) map[string][]string {
 		}
 		boundaries[name] = dependencies
 	}
-	if len(boundaries) != 12 {
-		t.Fatalf("설계 업무 패키지 수: %d, want 12", len(boundaries))
+	if len(boundaries) != 13 {
+		t.Fatalf("설계 업무 패키지 수: %d, want 13", len(boundaries))
 	}
 	return boundaries
 }

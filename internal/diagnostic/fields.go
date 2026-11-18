@@ -114,7 +114,7 @@ func (fields Fields) valid(kind Kind, verified bool) bool {
 		return false
 	}
 	r, a, s, i, m, y := fields.Request, fields.Auth, fields.Search, fields.Index, fields.Management, fields.System
-	return optional(r.Route, "login register logout authorize token client_registration connections graphs graph_detail graph_access graph_deletion teams audit operator_restores mcp discovery health unknown") &&
+	return optional(r.Route, "login register logout authorize token client_registration connections graphs graph_detail graph_access graph_deletion teams audit operator_restores mcp ingest_conversation discovery health unknown") &&
 		optional(r.Method, "GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE unknown") && optional(r.Tool, tools) && status(r.Status) && rpcCode(r.RPCCode) && optional(r.ValidationField, validationFields) &&
 		optional(a.ValidationField, validationFields) && optional(s.Channel, "semantic keyword time graph global_summary") && optional(s.Path, "direct local global") &&
 		optional(s.SelectionReason, "no_relevant_local event_anchor cross_channel_agreement semantic_separation ambiguous_local global_summary_absent forced legacy_auto explicit_scope") &&
@@ -159,7 +159,7 @@ func listed(value, values string) bool {
 }
 
 const results = "completed failed rejected skipped pending committed rolled_back unknown"
-const reasons = "completed invalid_argument invalid_credential authentication_unavailable database_unavailable store_unavailable target_unavailable search_failed expired individually_revoked family_revoked inactive_expired reuse_detected binding_violation permission_denied not_found constraint_violation layer_mismatch time_invalid cycle_detected commit_unknown canceled deadline_exceeded channel_unavailable provider_unavailable provider_blocked provider_resumed retry_exhausted stale_generation lease_lost queue_full file_unavailable lock_unavailable capacity_exceeded partial_write shutdown_timeout handler_panic https_required method_not_allowed payload_too_large internal_error configuration_invalid embedding_schema_mismatch provider_contract_violation dimension_mismatch output_invalid evidence_unverified target_changed candidate_changed endpoint_inactive delegation_invalid identity_settled identity_proposed relation_constraint policy_downgraded token_content_type token_query token_form token_duplicate token_missing_grant_type token_missing_code token_missing_client_id token_missing_redirect_uri token_missing_resource token_missing_code_verifier token_missing_refresh_token"
+const reasons = "completed invalid_argument invalid_credential authentication_unavailable database_unavailable store_unavailable target_unavailable search_failed expired individually_revoked family_revoked inactive_expired reuse_detected binding_violation permission_denied not_found constraint_violation layer_mismatch time_invalid cycle_detected commit_unknown canceled deadline_exceeded channel_unavailable provider_unavailable provider_blocked provider_resumed retry_exhausted stale_generation lease_lost queue_full file_unavailable lock_unavailable capacity_exceeded partial_write shutdown_timeout handler_panic https_required method_not_allowed payload_too_large internal_error configuration_invalid embedding_schema_mismatch provider_contract_violation dimension_mismatch output_invalid evidence_unverified target_changed candidate_changed endpoint_inactive delegation_invalid identity_settled identity_proposed relation_constraint segment_frozen segment_unassigned policy_downgraded token_content_type token_query token_form token_duplicate token_missing_grant_type token_missing_code token_missing_client_id token_missing_redirect_uri token_missing_resource token_missing_code_verifier token_missing_refresh_token"
 const tools = "agent_register graph_list graph_create graph_get graph_update node_create node_get node_update node_discard node_restore context_flow_get relation_list relation_confirm relation_discard"
 const operations = "graph_create graph_update node_create node_update node_supersede node_discard node_restore node_keep relation_confirm relation_discard relation_inference grade_grant grade_revoke team_create team_update team_delete team_restore restore_request operator_restore"
 const validationFields = "arguments account_id agent_id graph_id context_id relation_id from_context_id to_context_id client_id grant_id request_id username password scope work_context body layer relation_type occurred_at started_at ended_at version cursor action code redirect_uri code_verifier refresh_token"
@@ -173,9 +173,9 @@ func stages(kind Kind) string {
 	case Search:
 		return "validation channel routing hop selection budget flow write"
 	case Index:
-		return "validation enqueue acquire provider apply retry lease write relation_inference_enqueue relation_inference_acquire relation_inference_provider relation_inference_retry relation_inference_progress"
+		return "validation enqueue acquire provider apply retry lease write relation_inference_enqueue relation_inference_acquire relation_inference_provider relation_inference_retry relation_inference_progress segment_enqueue segment_acquire segment_retry"
 	case Management:
-		return "validation argument_validation actor_binding permission endpoint_load layer_check time_check cycle_check write audit commit relation_inference_apply relation_inference_reject"
+		return "validation argument_validation actor_binding permission endpoint_load layer_check time_check cycle_check write audit commit relation_inference_apply relation_inference_reject segment_skip"
 	case System:
 		return "validation startup shutdown database_ping worker migration prepare rotate cleanup flush write relation_inference_configuration"
 	default:

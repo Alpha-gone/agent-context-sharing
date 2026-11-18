@@ -2,8 +2,6 @@ package migrate_test
 
 import (
 	"testing"
-
-	"agent_context_sharing/migrations"
 )
 
 func TestRelationInferenceMigrationPreservesLegacyIntegration(t *testing.T) {
@@ -22,7 +20,7 @@ func TestRelationInferenceMigrationPreservesLegacyIntegration(t *testing.T) {
 	}
 	old := preservationQuery(t, pool, `SELECT (to_jsonb(o)-'judgment_source')::text FROM public.operation_log o`)
 	for _, want := range []int{1, 0} {
-		if count, err := applyTarget(t.Context(), pool, migrations.FS, cfg); err != nil || count != want {
+		if count, err := applyTarget(t.Context(), pool, migrationFilesBefore(t, 19), cfg); err != nil || count != want {
 			t.Fatalf("018 적용=%d want=%d: %v", count, want, err)
 		}
 		if current := preservationQuery(t, pool, `SELECT (to_jsonb(o)-'judgment_source')::text FROM public.operation_log o`); current != old {

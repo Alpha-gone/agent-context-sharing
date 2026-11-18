@@ -73,6 +73,9 @@ const (
 
 // Config는 실행 중 필요한 배포 구성의 검증된 묶음이다. 비밀값은 로그로 전달하지 않는다.
 type Config struct {
+	ConversationIngestEnabled                                                                  bool
+	ConversationSegmentGap                                                                     time.Duration
+	ConversationSegmentMaxTurns, ConversationSegmentExcerptChars, ConversationSegmentBodyChars int
 	// HTTPAddr 필드에는 HTTP 서버가 수신할 TCP 주소를 둔다.
 	HTTPAddr string
 	// DatabaseURL 필드에는 PostgreSQL 접속 문자열을 둔다.
@@ -168,6 +171,44 @@ func load(env Environment) (Config, error) {
 		TLSMode:              TLSMode(strings.TrimSpace(env("TLS_TERMINATION"))),
 		TLSCertFile:          strings.TrimSpace(env("TLS_CERT_FILE")),
 		TLSKeyFile:           strings.TrimSpace(env("TLS_KEY_FILE")),
+	}
+
+	switch strings.TrimSpace(env("CONVERSATION_INGEST_ENABLED")) {
+	case "", "false":
+	case "true":
+		cfg.ConversationIngestEnabled = true
+	default:
+		return Config{}, invalid("CONVERSATION_INGEST_ENABLED", "true 또는 false여야 한다", nil)
+	}
+
+	cfg.ConversationSegmentGap = 30 * time.Minute
+	if raw := strings.TrimSpace(env("CONVERSATION_SEGMENT_GAP")); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed < time.Minute || parsed > 24*time.Hour {
+			return Config{}, invalid("CONVERSATION_SEGMENT_GAP", "1분에서 24시간이어야 한다", nil)
+		}
+		cfg.ConversationSegmentGap = parsed
+	}
+	for _, item := range []struct {
+		key                string
+		target             *int
+		fallback, min, max int
+	}{
+		{"CONVERSATION_SEGMENT_MAX_TURNS", &cfg.ConversationSegmentMaxTurns, 40, 2, 100},
+		{"CONVERSATION_SEGMENT_EXCERPT_CHARS", &cfg.ConversationSegmentExcerptChars, 300, 1, 8000},
+		{"CONVERSATION_SEGMENT_BODY_CHARS", &cfg.ConversationSegmentBodyChars, 2000, 1, 8000},
+	} {
+		*item.target = item.fallback
+		if raw := strings.TrimSpace(env(item.key)); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < item.min || n > item.max {
+				return Config{}, invalid(item.key, "허용 범위의 정수여야 한다", nil)
+			}
+			*item.target = n
+		}
+	}
+	if cfg.ConversationSegmentBodyChars < cfg.ConversationSegmentExcerptChars {
+		return Config{}, invalid("CONVERSATION_SEGMENT_BODY_CHARS", "발췌 상한 이상이어야 한다", nil)
 	}
 
 	if err := validateAddress(env("HTTP_ADDR")); err != nil {

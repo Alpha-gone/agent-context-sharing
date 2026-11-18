@@ -64,6 +64,7 @@ type ConfirmationSource string
 const (
 	ConfirmationSourceAgent     ConfirmationSource = "agent"
 	ConfirmationSourceInference ConfirmationSource = "inference"
+	ConfirmationSourceIngest    ConfirmationSource = "ingest"
 )
 
 // Relation은 같은 그래프 안의 사건 컨텍스트 사이 관계다.
@@ -118,8 +119,11 @@ func (relation Relation) Validate() error {
 	if !slices.Contains([]ProposalSource{ProposalSourceSystem, ProposalSourceAgent, ProposalSourceInference}, relation.ProposedBy) {
 		return fieldErrorf("proposed_by", "관계 후보 출처 %q가 허용된 값이 아니다", relation.ProposedBy)
 	}
-	if !slices.Contains([]ConfirmationSource{"", ConfirmationSourceAgent, ConfirmationSourceInference}, relation.ConfirmedSource) {
+	if !slices.Contains([]ConfirmationSource{"", ConfirmationSourceAgent, ConfirmationSourceInference, ConfirmationSourceIngest}, relation.ConfirmedSource) {
 		return fieldErrorf("confirmed_source", "관계 확정 주체가 허용된 값이 아니다")
+	}
+	if relation.ConfirmedSource == ConfirmationSourceIngest && (relation.Type != RelationTypePrecedes || relation.ProposedBy != ProposalSourceSystem || !relation.InferenceDecisionID.IsZero()) {
+		return fieldErrorf("confirmed_source", "수집 관계는 시스템이 제안한 precedes여야 한다")
 	}
 	if !relation.InferenceDecisionID.IsZero() && !relation.InferenceDecisionID.IsV7() {
 		return fieldErrorf("inference_decision_id", "추론 판정 식별자는 UUIDv7이어야 한다")

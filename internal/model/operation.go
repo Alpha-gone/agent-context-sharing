@@ -57,7 +57,7 @@ func (operation ManagementOperation) Validate() error {
 		}
 	}
 	switch operation.JudgmentSource {
-	case "", ConfirmationSourceAgent:
+	case "", ConfirmationSourceAgent, ConfirmationSourceIngest:
 		if err := validateID("agent_id", operation.AgentID); err != nil {
 			return err
 		}

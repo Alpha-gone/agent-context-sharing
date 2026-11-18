@@ -136,7 +136,49 @@ curl --fail --show-error https://localhost:8080/readyz
 
 기존 DB의 벡터 타입·차원은 환경 변수만 바꿔 전환할 수 없습니다. [임베딩 전환·복귀 설계](spec/service/agent-context/sdd/indexing.md#전환복귀-경계)를 따르십시오.
 
+수집 자격 관리는 기본적으로 비활성이며 `CONVERSATION_INGEST_ENABLED=true`로 활성화합니다. 수집 경로와 구간화 작업자를 활성화할 수 있습니다. 수집 클라이언트는 아래 안내에 따라 프로젝트별로 별도 설정합니다.
+
 서버 관계 추론은 기본적으로 비활성입니다. 활성화하려면 `RELATION_INFERENCE_MODE`와 `openai` 제공자, 모델, HTTPS `/v1` 주소 및 별도 API 키를 구성합니다. 작업자는 색인 작업자와 같은 배치에서 실행됩니다. 실제 모델 호출에는 비용이 발생하며, 자동 확정은 [모델 비교](spec/service/agent-context/sdd/evaluation.md#관계-추론-모델-비교)의 합격 기준과 검증이 준비된 뒤 승인된 프로필 지문으로 설정합니다.
+
+### 대화 수집 클라이언트
+
+대화 수집 클라이언트는 macOS와 Linux를 대상으로 하며, Windows는 지원하지 않습니다. 대화 수집은 명시적으로 설정한 프로젝트에서만 실행됩니다. 서버에서 `CONVERSATION_INGEST_ENABLED=true`를 설정하고 연결 관리 화면(`/connections`)에서 수집 자격을 발급합니다. 발급 시에만 원문을 볼 수 있습니다. 수집할 그래프의 ID도 확인하십시오.
+
+```sh
+go build -o "$HOME/bin/agent-context-ingest" ./cmd/ingest
+export INGEST_SERVER_URL='https://서버-주소'
+export INGEST_CREDENTIAL_FILE="$HOME/.config/agent-context/ingest-credential"
+```
+
+`$HOME/bin`은 미리 만들고 실행 파일 경로를 아래 훅에 맞게 바꾸십시오. 자격 파일은 본인만 읽을 수 있도록 `chmod 600`으로 설정합니다. 파일 대신 환경 변수 `INGEST_CREDENTIAL`을 사용할 수도 있으며 둘을 동시에 지정하지 않습니다. 환경 변수는 호스트 프로그램을 시작하는 환경에서 설정해야 합니다. HTTPS 인증서는 시스템에서 신뢰할 수 있어야 합니다.
+
+수집할 프로젝트에 `.agent-context-ingest.json`을 직접 만들고 실제 그래프 ID를 넣습니다. 이 파일이 없거나 `enabled`가 `false`이면 전송하지 않습니다. 하위 디렉터리에서는 가장 가까운 상위 설정을 사용합니다.
+
+```json
+{"enabled": true, "graph_id": "실제-그래프-UUIDv7"}
+```
+
+Claude Code의 사용자 또는 프로젝트 훅 설정에 다음 명령을 등록할 수 있습니다. 실행 파일 경로에는 실제 절대 경로를 사용하십시오. 기존 훅이 있다면 덮어쓰지 말고 해당 배열에 추가합니다.
+
+```json
+{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"/절대/경로/agent-context-ingest hook claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"/절대/경로/agent-context-ingest hook claude"}]}]}}
+```
+
+Claude Code 훅은 동기로 로컬 대기 파일을 기록한 뒤 반환하고 네트워크 전송은 별도 프로세스가 처리합니다. 기존에 `async: true`로 등록했다면 제거해야 일시 중지 구간이 올바르게 적용됩니다. 중지 중 발화를 제출했다면 동기 훅이 끝나기 전에 다른 터미널에서 재개하지 마십시오. 훅 실행 전에 지연된 입력에는 발생 시각이 없어 중지 구간을 판별할 수 없습니다. 전송 실패나 전송 잠금 대기 시간 초과 시 항목은 남으며 다음 훅 또는 `flush`로 재시도합니다.
+
+Codex CLI의 `notify = ["/절대/경로/agent-context-ingest", "hook", "codex"]` 연동은 0.166.0과 합성 로컬 모델에서 기본 입력·마지막 응답을 확인했습니다. 실행 중 추가 지시의 완전성과 지연 알림의 일시 중지 경계는 확인하지 않아 Codex는 지원 대상으로 확정하지 않았습니다. 기록 제외를 지키기 위해 한 번 중지한 Codex 세션의 재개 명령은 거부되며, 다시 수집하려면 새 세션이 필요합니다. 기존 `notify`가 있으면 설정을 덮어쓰기 전에 함께 실행할 방법을 직접 준비해야 합니다.
+
+수집을 중지하거나 다시 시작할 때는 해당 프로젝트 디렉터리에서 호스트와 세션 ID를 지정합니다. Claude Code에서는 `claude --session-id <UUID>`로 시작할 때 직접 지정한 세션 ID를 사용할 수 있습니다. 중지 중인 턴은 로컬 대기 파일에도 기록하지 않습니다.
+
+```sh
+agent-context-ingest pause --host claude --session '세션-ID'
+agent-context-ingest resume --host claude --session '세션-ID'
+agent-context-ingest flush --host claude --session '세션-ID'
+```
+
+호스트는 `claude` 또는 `codex`입니다. 전송에 실패한 턴은 사용자 설정 디렉터리의 `agent-context/ingest`에 사용자 전용 권한으로 보관하고 다음 훅이나 `flush`에서 재전송합니다. 이 파일에는 대화 본문이 포함됩니다. 저장 위치는 `INGEST_STATE_DIR`로 바꿀 수 있으며 디렉터리는 본인만 접근할 수 있어야 합니다. 그래프나 서버 주소를 바꾸면 기존 대기 항목은 새 대상으로 전송하지 않습니다. 프로젝트에서 수집을 끄거나 설정을 제거하면 보관된 대기 항목을 자동 삭제하지 않습니다.
+
+프로젝트별 충돌을 막기 위해 대화 식별자에 프로젝트 지문을 포함합니다. 이전 시험 버전에서 같은 세션으로 이미 저장한 대화가 있다면 새 버전의 이후 턴은 별도 대화로 기록됩니다. 기존 대기 항목은 원래 식별자를 유지합니다.
 
 ### 색인 작업자 분리 실행
 
